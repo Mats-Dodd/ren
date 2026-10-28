@@ -168,7 +168,7 @@ fn main() =
 |};
   [%expect
     {|
-    (fn Stack.push : fn(inout test.Stack<T>, T) ! ..e uses ..d (self/1 x/2) ev/3
+    (fn Stack.push : fn(&test.Stack<T>, T) ! ..e uses ..d (self/1 x/2) ev/3
       (let $ref/4 (. self/1 items)
         (let $arg/5 x/2
           (let $result/6 (call ev/3 (inst Array.push T {} {..d}) &$ref/4 $arg/5)

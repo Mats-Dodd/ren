@@ -97,7 +97,7 @@ fn next() = 1
 parameters: inout, untyped, function types
 ================================================================================
 
-fn apply(inout xs: Array<Int>, f: fn(inout Array<Int>, n: Int) -> Unit, k) = f(&xs, k)
+fn apply(inout xs: Array<Int>, f: fn(&Array<Int>, n: Int) -> Unit, k) = f(&xs, k)
 
 --------------------------------------------------------------------------------
 

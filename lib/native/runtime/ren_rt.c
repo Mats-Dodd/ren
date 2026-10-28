@@ -135,6 +135,7 @@ static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
   a->h.objs = boxed_elems;
   a->len = len;
   a->cap = cap;
+  a->root = NULL;
   return &a->h;
 }
 
@@ -182,7 +183,9 @@ static ren_obj *ren_alloc_str(int64_t len) {
   s->h.nfields = 0;
   s->h.objs = 0;
   s->len = len;
-  s->data[len] = 0;
+  s->data = s->bytes;
+  s->root = NULL;
+  s->bytes[len] = 0;
   return &s->h;
 }
 
@@ -282,6 +285,12 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
   }
   case REN_TAG_ARRAY: {
     ren_array *a = (ren_array *)o;
+    if (a->root != NULL) { /* a slice: its root holds the elements */
+      ren_release(t, a->root);
+      size = sizeof(ren_array);
+      bytes = (int64_t)size;
+      break;
+    }
     if (o->objs)
       for (int64_t i = 0; i < a->len; i++)
         ren_release(t, a->data[i].o);
@@ -290,10 +299,16 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
     size = sizeof(ren_array);
     break;
   }
-  case REN_TAG_STR:
-    size = sizeof(ren_str) + (size_t)((ren_str *)o)->len + 1;
+  case REN_TAG_STR: {
+    ren_str *s = (ren_str *)o;
+    if (s->root != NULL) {
+      ren_release(t, s->root);
+      size = sizeof(ren_str);
+    } else
+      size = sizeof(ren_str) + (size_t)s->len + 1;
     bytes = (int64_t)size;
     break;
+  }
   }
 #ifdef REN_STATS
   ren_stats.frees++;
@@ -353,12 +368,16 @@ void ren_mark_shared(ren_obj *o) {
       n = x->nfields;
       break;
     case REN_TAG_ARRAY:
-      n = x->objs ? (size_t)((ren_array *)x)->len : 0;
+      if (((ren_array *)x)->root != NULL)
+        n = 1; /* a slice reaches its root, which reaches the elements */
+      else
+        n = x->objs ? (size_t)((ren_array *)x)->len : 0;
       break;
     case REN_TAG_DESC:
       n = ((ren_desc *)x)->nargs;
       break;
     case REN_TAG_STR:
+      n = ((ren_str *)x)->root != NULL;
       break;
     }
     if (len + n > cap) {
@@ -374,14 +393,19 @@ void ren_mark_shared(ren_obj *o) {
         todo[len++] = ren_fields(x)[__builtin_ctzll(m)].o;
       break;
     case REN_TAG_ARRAY:
-      for (size_t i = 0; i < n; i++)
-        todo[len++] = ((ren_array *)x)->data[i].o;
+      if (((ren_array *)x)->root != NULL)
+        todo[len++] = ((ren_array *)x)->root;
+      else
+        for (size_t i = 0; i < n; i++)
+          todo[len++] = ((ren_array *)x)->data[i].o;
       break;
     case REN_TAG_DESC:
       for (size_t i = 0; i < n; i++)
         todo[len++] = &((ren_desc *)x)->args[i]->h;
       break;
     case REN_TAG_STR:
+      if (n)
+        todo[len++] = ((ren_str *)x)->root;
       break;
     }
   }
@@ -507,7 +531,7 @@ __attribute__((noinline)) static void ren_array_grow(ren_array *arr) {
 
 void ren_array_push_taking(ren_obj **cell, ren_val v) {
   ren_obj *a = *cell;
-  if (!ren_is_unique(a)) {
+  if (!ren_array_unique(a)) {
     ren_obj *b = ren_array_copy(a, 1);
     ren_elems(b)[((ren_array *)b)->len - 1] = v;
     ren_drop(a);
@@ -548,7 +572,7 @@ void ren_array_push_taking_w(ren_obj **cell, ren_val v) {
     ren_array_push_taking(cell, v);
     return;
   }
-  if (!ren_is_unique(a)) {
+  if (!ren_array_unique(a)) {
     ren_array_push_w(cell, v);
     return;
   }
@@ -589,7 +613,7 @@ void ren_array_push_slots(ren_obj **cell, const ren_val *v) {
 void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v) {
   ren_obj *a = *cell;
   int64_t k = ren_stride(a);
-  if (!ren_is_unique(a)) {
+  if (!ren_array_unique(a)) {
     ren_obj *b = ren_array_copy(a, 1);
     memcpy(&ren_elems(b)[(((ren_array *)b)->len - 1) * k], v,
            (size_t)k * sizeof(ren_val));
@@ -607,21 +631,382 @@ void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v) {
 
 ren_obj *ren_str_of(const char *s, int64_t len) {
   ren_obj *o = ren_alloc_str(len);
-  memcpy(((ren_str *)o)->data, s, (size_t)len);
+  memcpy(((ren_str *)o)->bytes, s, (size_t)len);
   return o;
 }
 
 ren_obj *ren_str_concat(ren_obj *a, ren_obj *b) {
   int64_t la = ren_str_len(a), lb = ren_str_len(b);
   ren_obj *o = ren_alloc_str(la + lb);
-  memcpy(((ren_str *)o)->data, ren_str_data(a), (size_t)la);
-  memcpy(((ren_str *)o)->data + la, ren_str_data(b), (size_t)lb);
+  memcpy(((ren_str *)o)->bytes, ren_str_data(a), (size_t)la);
+  memcpy(((ren_str *)o)->bytes + la, ren_str_data(b), (size_t)lb);
   return o;
 }
 
 bool ren_str_eq(ren_obj *a, ren_obj *b) {
   return ren_str_len(a) == ren_str_len(b) &&
          memcmp(ren_str_data(a), ren_str_data(b), (size_t)ren_str_len(a)) == 0;
+}
+
+/* ---- slices (foundations.md, decision 17) ----
+
+   Roc's seamless slices (crates/compiler/builtins/bitcode/src/list.zig,
+   `seamlessSlice`; str.zig, `SEAMLESS_SLICE_BIT`): a slice shares its
+   root's buffer and counts the root, not each element, so making one is
+   O(1) whatever it holds. Roc tags a slice in the high bit of its
+   capacity; this runtime has room in the header for a pointer to the
+   root, which is simpler, and frees the slice's header on its own. A
+   slice's root is always an owner, so dropping a slice never walks a
+   chain of them. The checks, and what they say, are the interpreter's
+   (builtins.ml, [slice_value] and [split_halves]). */
+
+static const char *ren_sliced_what(ren_obj *a, bool str) {
+  return a->tag == REN_TAG_ARRAY ? "an array" : str ? "a string" : "bytes";
+}
+
+/* Panics unless [i..j] is a range in [a], of length [len]. */
+static void ren_slice_check(ren_obj *a, int64_t len, int64_t i, int64_t j,
+                            bool str, const ren_site *site) {
+  char msg[160];
+  if (i > j) {
+    snprintf(msg, sizeof msg,
+             "slice %" PRId64 " to %" PRId64 " ends before it starts", i, j);
+    ren_panic(site, msg);
+  }
+  if (i < 0 || j > len) {
+    snprintf(msg, sizeof msg,
+             "slice %" PRId64 " to %" PRId64
+             " is out of bounds for %s of length %" PRId64,
+             i, j, ren_sliced_what(a, str), len);
+    ren_panic(site, msg);
+  }
+}
+
+/* Whether byte [i] of a string begins a character, or is its end: UTF-8's
+   continuation bytes are 10xxxxxx. */
+static bool ren_boundary(ren_obj *s, int64_t i) {
+  return i == ren_str_len(s) ||
+         ((unsigned char)ren_str_data(s)[i] & 0xc0) != 0x80;
+}
+
+/* Panics, for a `Str`, if [i] or [j] is inside a character; [from] and
+   [to] are the range said, which a `split_at`'s is 0 to [j]. */
+static void ren_chars_check(ren_obj *s, int64_t i, int64_t j,
+                            const ren_site *site) {
+  char msg[160];
+  if (!ren_boundary(s, i)) {
+    snprintf(msg, sizeof msg,
+             "slice %" PRId64 " to %" PRId64 " starts inside a character", i,
+             j);
+    ren_panic(site, msg);
+  }
+  if (!ren_boundary(s, j)) {
+    snprintf(msg, sizeof msg,
+             "slice %" PRId64 " to %" PRId64 " ends inside a character", i, j);
+    ren_panic(site, msg);
+  }
+}
+
+/* Where element [i] of [a] is. */
+static void *ren_elem_at(ren_obj *a, int64_t i) {
+  return (char *)((ren_array *)a)->data + (size_t)i * ren_elem_bytes(a);
+}
+
+/* Whether [a] is a lent slice ([ren_array_writable]). */
+static bool ren_lent(ren_obj *a) {
+  return ((ren_array *)a)->cap < 0;
+}
+
+/* [a] not lent any more: something else sees its range now, or will. A
+   shared one, whose count another thread may be changing, is never
+   written in place anyway, and isn't written to here. */
+static void ren_unlend(ren_obj *a) {
+  ren_array *arr = (ren_array *)a;
+  if (arr->cap < 0 && ren_rc(a) > 0)
+    arr->cap = 0;
+}
+
+/* A new header for [len] of [a]'s elements from where [at] points, in
+   [a]'s buffer, counting [a]'s root; lent if [lent]. */
+static ren_obj *ren_array_view(ren_obj *a, void *at, int64_t len, bool lent) {
+  ren_array *from = (ren_array *)a;
+  ren_array *s = ren_alloc_bytes(sizeof(ren_array));
+#ifdef REN_STATS
+  ren_count_alloc((int64_t)sizeof(ren_array));
+#endif
+  s->h.rc = 1;
+  s->h.tag = REN_TAG_ARRAY;
+  s->h.nfields = a->nfields;
+  s->h.objs = a->objs;
+  s->stride = from->stride;
+  s->data = at;
+  s->len = len;
+  s->cap = lent ? -1 : 0;
+  s->root = from->root != NULL ? from->root : a;
+  ren_dup(s->root);
+  return &s->h;
+}
+
+/* [a]'s elements from [i] up to [j], in range: a slice, which ends [a]'s
+   lending, or [a] itself, counted again, for all of it. */
+static ren_obj *ren_array_part(ren_obj *a, int64_t i, int64_t j) {
+  ren_unlend(a);
+  if (i == 0 && j == ren_array_len(a)) {
+    ren_dup(a);
+    return a;
+  }
+  return ren_array_view(a, ren_elem_at(a, i), j - i, false);
+}
+
+static ren_obj *ren_str_part(ren_obj *a, int64_t i, int64_t j) {
+  ren_str *from = (ren_str *)a;
+  if (i == 0 && j == from->len) {
+    ren_dup(a);
+    return a;
+  }
+  ren_str *s = ren_alloc_bytes(sizeof(ren_str));
+#ifdef REN_STATS
+  ren_count_alloc((int64_t)sizeof(ren_str));
+#endif
+  s->h.rc = 1;
+  s->h.tag = REN_TAG_STR;
+  s->h.nfields = 0;
+  s->h.objs = 0;
+  s->len = j - i;
+  s->data = from->data + i;
+  s->root = from->root != NULL ? from->root : a;
+  ren_dup(s->root);
+  return &s->h;
+}
+
+ren_obj *ren_array_slice(ren_obj *a, int64_t i, int64_t j,
+                         const ren_site *site) {
+  ren_slice_check(a, ren_array_len(a), i, j, false, site);
+  return ren_array_part(a, i, j);
+}
+
+ren_obj *ren_str_slice(ren_obj *s, int64_t i, int64_t j, bool str,
+                       const ren_site *site) {
+  ren_slice_check(s, ren_str_len(s), i, j, str, site);
+  if (str)
+    ren_chars_check(s, i, j, site);
+  return ren_str_part(s, i, j);
+}
+
+/* Panics unless [n] is where `split_at` can split [a], of length [len]. */
+static void ren_split_check(ren_obj *a, int64_t len, int64_t n, bool str,
+                            const ren_site *site) {
+  if (n < 0 || n > len) {
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "`split_at` %" PRId64 " is out of bounds for %s of length %" PRId64,
+             n, ren_sliced_what(a, str), len);
+    ren_panic(site, msg);
+  }
+  if (str)
+    ren_chars_check(a, 0, n, site);
+}
+
+/* A `split_at`'s halves are lent, each a header of its own, if [a] is
+   writable: nothing else sees its range, and, since its place is vacant
+   while the block has them, nothing else will. A slice of either ends
+   its lending ([ren_array_part]), and so does the join after
+   ([ren_array_join]), so each lent slice is the only way to its range.
+   [ren_array_after] lends its half if [lo] was: it's made right after,
+   [a] the same, and [lo] holds a count of [a]'s root, so [a] isn't
+   writable itself any more. */
+ren_obj *ren_array_before(ren_obj *a, int64_t n, const ren_site *site) {
+  ren_split_check(a, ren_array_len(a), n, false, site);
+  if (ren_array_writable(a))
+    return ren_array_view(a, ren_elem_at(a, 0), n, true);
+  return ren_array_part(a, 0, n);
+}
+
+ren_obj *ren_array_after(ren_obj *a, int64_t n, ren_obj *lo) {
+  int64_t len = ren_array_len(a);
+  if (ren_lent(lo) && ((ren_array *)lo)->data == ((ren_array *)a)->data) {
+    ren_obj *hi = ren_array_view(a, ren_elem_at(a, n), len - n, true);
+    ren_unlend(a);
+    return hi;
+  }
+  return ren_array_part(a, n, len);
+}
+
+ren_obj *ren_str_before(ren_obj *s, int64_t n, bool str, const ren_site *site) {
+  ren_split_check(s, ren_str_len(s), n, str, site);
+  return ren_str_part(s, 0, n);
+}
+
+ren_obj *ren_str_after(ren_obj *s, int64_t n) {
+  return ren_str_part(s, n, ren_str_len(s));
+}
+
+/* Copies [n] of [from]'s elements from [i] to [to], each counted again. */
+static void ren_elems_copy(ren_obj *to, int64_t at, ren_obj *from, int64_t i,
+                           int64_t n) {
+  if (n <= 0)
+    return;
+  memcpy(ren_elem_at(to, at), ren_elem_at(from, i),
+         (size_t)n * ren_elem_bytes(from));
+  if (from->objs)
+    for (int64_t k = 0; k < n; k++)
+      ren_dup(((ren_val *)ren_elem_at(from, i + k))->o);
+}
+
+ren_obj *ren_array_splice(ren_obj *a, int64_t i, int64_t j, ren_obj *b) {
+  int64_t la = ren_array_len(a), lb = ren_array_len(b);
+  ren_obj *o = ren_alloc_array_c(la - (j - i) + lb, la - (j - i) + lb, a->objs,
+                                 (uint32_t)((ren_array *)a)->stride,
+                                 a->nfields);
+  ren_elems_copy(o, 0, a, 0, i);
+  ren_elems_copy(o, i, b, 0, lb);
+  ren_elems_copy(o, i + lb, a, j, la - j);
+  return o;
+}
+
+/* A `split_at`'s halves joined. If they're slices of one root, next to
+   each other, their elements are already in order there: all of the
+   root, if they cover it and are all that hold it, or else a slice of
+   it, lent if both were and nothing else holds either, since then
+   nothing else sees its range. Either ends the halves' lending. */
+ren_obj *ren_array_join(ren_obj *a, ren_obj *b) {
+  ren_array *x = (ren_array *)a, *y = (ren_array *)b;
+  if (x->root != NULL && x->root == y->root &&
+      (char *)x->data + (size_t)x->len * ren_elem_bytes(a) == (char *)y->data) {
+    ren_obj *root = x->root;
+    bool lent = ren_lent(a) && ren_lent(b) && ren_rc(a) == 1 && ren_rc(b) == 1;
+    ren_unlend(a);
+    ren_unlend(b);
+    if (x->data == ((ren_array *)root)->data &&
+        x->len + y->len == ren_array_len(root) && ren_rc(root) == 2) {
+      ren_dup(root);
+      return root;
+    }
+    return ren_array_view(a, x->data, x->len + y->len, lent);
+  }
+  int64_t la = ren_array_len(a);
+  return ren_array_splice(a, la, la, b);
+}
+
+ren_obj *ren_str_splice(ren_obj *s, int64_t i, int64_t j, ren_obj *b) {
+  int64_t ls = ren_str_len(s), lb = ren_str_len(b);
+  ren_obj *o = ren_alloc_str(ls - (j - i) + lb);
+  char *to = ((ren_str *)o)->bytes;
+  memcpy(to, ren_str_data(s), (size_t)i);
+  memcpy(to + i, ren_str_data(b), (size_t)lb);
+  memcpy(to + i + lb, ren_str_data(s) + j, (size_t)(ls - j));
+  return o;
+}
+
+/* Strings never change, so their halves are never lent: joined, they're
+   their root, or a slice of it, if they're next to each other in it. */
+ren_obj *ren_str_join(ren_obj *a, ren_obj *b) {
+  ren_str *x = (ren_str *)a, *y = (ren_str *)b;
+  if (x->root != NULL && x->root == y->root && x->data + x->len == y->data) {
+    ren_obj *root = x->root;
+    if (x->data == ((ren_str *)root)->data &&
+        x->len + y->len == ren_str_len(root)) {
+      ren_dup(root);
+      return root;
+    }
+    ren_str *s = ren_alloc_bytes(sizeof(ren_str));
+#ifdef REN_STATS
+    ren_count_alloc((int64_t)sizeof(ren_str));
+#endif
+    s->h = x->h;
+    s->h.rc = 1;
+    s->len = x->len + y->len;
+    s->data = x->data;
+    s->root = root;
+    ren_dup(root);
+    return &s->h;
+  }
+  return ren_str_concat(a, b);
+}
+
+ren_obj *ren_str_split(ren_obj *s, ren_obj *sep, const ren_site *site) {
+  int64_t n = ren_str_len(s), m = ren_str_len(sep);
+  const char *d = ren_str_data(s), *p = ren_str_data(sep);
+  if (m == 0)
+    ren_panic(site, "`split` needs a separator that isn't empty");
+  /* the parts: one more than the separators found, left to right */
+  int64_t parts = 1;
+  for (int64_t i = 0; i + m <= n;)
+    if (memcmp(d + i, p, (size_t)m) == 0) {
+      parts++;
+      i += m;
+    } else
+      i++;
+  ren_obj *out = ren_alloc_array(parts, true);
+  ren_val *xs = ren_elems(out);
+  int64_t from = 0, k = 0;
+  for (int64_t i = 0; i + m <= n;)
+    if (memcmp(d + i, p, (size_t)m) == 0) {
+      xs[k++].o = ren_str_part(s, from, i);
+      i += m;
+      from = i;
+    } else
+      i++;
+  xs[k].o = ren_str_part(s, from, n);
+  return out;
+}
+
+static bool ren_trimmed(char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+ren_obj *ren_str_trim(ren_obj *s) {
+  int64_t i = 0, j = ren_str_len(s);
+  const char *d = ren_str_data(s);
+  while (i < j && ren_trimmed(d[i]))
+    i++;
+  while (j > i && ren_trimmed(d[j - 1]))
+    j--;
+  return ren_str_part(s, i, j);
+}
+
+ren_obj *ren_array_copied(ren_obj *a) {
+  if (((ren_array *)a)->root == NULL) {
+    ren_dup(a);
+    return a;
+  }
+  return ren_array_copy(a, 0);
+}
+
+ren_obj *ren_str_copied(ren_obj *s) {
+  if (((ren_str *)s)->root == NULL) {
+    ren_dup(s);
+    return s;
+  }
+  return ren_str_of(ren_str_data(s), ren_str_len(s));
+}
+
+int64_t ren_bytes_at(ren_obj *b, int64_t i, const ren_site *site) {
+  int64_t n = ren_str_len(b);
+  if (i < 0 || i >= n) {
+    char msg[128];
+    snprintf(msg, sizeof msg,
+             "index %" PRId64 " is out of bounds for bytes of length %" PRId64,
+             i, n);
+    ren_panic(site, msg);
+  }
+  return (unsigned char)ren_str_data(b)[i];
+}
+
+ren_obj *ren_bytes_of(ren_obj *a, const ren_site *site) {
+  int64_t n = ren_array_len(a);
+  ren_obj *o = ren_alloc_str(n);
+  for (int64_t i = 0; i < n; i++) {
+    int64_t x = ren_elems(a)[i].i;
+    if (x < 0 || x > 255) {
+      char msg[96];
+      snprintf(msg, sizeof msg, "%" PRId64 " isn't a byte, 0 to 255", x);
+      ren_drop(o);
+      ren_panic(site, msg);
+    }
+    ((ren_str *)o)->bytes[i] = (char)x;
+  }
+  return o;
 }
 
 ren_obj *ren_show_int(int64_t n) {
@@ -1048,6 +1433,17 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
   case REN_D_STR:
     ren_put_quoted(b, v.o);
     break;
+  case REN_D_BYTES: { /* value.ml's `show`: each byte in hex */
+    ren_puts(b, "<bytes");
+    for (int64_t i = 0; i < ren_str_len(v.o); i++) {
+      char hex[8];
+      snprintf(hex, sizeof hex, " %02x",
+               (unsigned char)ren_str_data(v.o)[i]);
+      ren_puts(b, hex);
+    }
+    ren_puts(b, ">");
+    break;
+  }
   case REN_D_ARRAY: {
     ren_array *a = (ren_array *)v.o;
     ren_puts(b, "[");
@@ -1154,6 +1550,7 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     ren_walk_float(w, b.f);
     return a.f == b.f;
   case REN_D_STR:
+  case REN_D_BYTES:
     return ren_str_eq(a.o, b.o);
   case REN_D_ARRAY: {
     ren_array *x = (ren_array *)a.o, *y = (ren_array *)b.o;
@@ -1234,7 +1631,8 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
     ren_walk_float(w, a.f);
     ren_walk_float(w, b.f);
     return REN_CMP(a.f, b.f);
-  case REN_D_STR: {
+  case REN_D_STR:
+  case REN_D_BYTES: {
     int64_t la = ren_str_len(a.o), lb = ren_str_len(b.o);
     int c = memcmp(ren_str_data(a.o), ren_str_data(b.o),
                    (size_t)(la < lb ? la : lb));

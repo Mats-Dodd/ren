@@ -54,7 +54,6 @@ type t =
   | Set_includes
   | Set_len
   | Str_len
-  | Str_slice
   | Str_index
   | Str_split
   | Str_trim
@@ -63,6 +62,14 @@ type t =
   | Str_bytes
   | Str_from_utf8
   | Bytes_len
+  | Bytes_at
+  | Bytes_of
+  | Array_copy
+  | Str_copy
+  | Bytes_copy
+  | Array_split_at
+  | Str_split_at
+  | Bytes_split_at
   | Int_wrapping_add
   | Int_wrapping_sub
   | Int_wrapping_mul
@@ -138,7 +145,6 @@ let path x =
   | Set_includes -> member "Set" "includes"
   | Set_len -> member "Set" "len"
   | Str_len -> member "Str" "len"
-  | Str_slice -> member "Str" "slice"
   | Str_index -> member "Str" "index"
   | Str_split -> member "Str" "split"
   | Str_trim -> member "Str" "trim"
@@ -147,6 +153,14 @@ let path x =
   | Str_bytes -> member "Str" "bytes"
   | Str_from_utf8 -> member "Str" "from_utf8"
   | Bytes_len -> member "Bytes" "len"
+  | Bytes_at -> member "Bytes" "at"
+  | Bytes_of -> member "Bytes" "of"
+  | Array_copy -> member "Array" "copy"
+  | Str_copy -> member "Str" "copy"
+  | Bytes_copy -> member "Bytes" "copy"
+  | Array_split_at -> member "Array" "split_at"
+  | Str_split_at -> member "Str" "split_at"
+  | Bytes_split_at -> member "Bytes" "split_at"
   | Int_wrapping_add -> member "Int" "wrapping_add"
   | Int_wrapping_sub -> member "Int" "wrapping_sub"
   | Int_wrapping_mul -> member "Int" "wrapping_mul"

@@ -520,9 +520,9 @@ let%expect_test "a string's length, slices and search, in bytes" =
 fn main() =
   let s = "héllo, wörld"
   print(s.len())
-  print(s.slice(0, 3))
-  print(s.slice(8, 14))
-  print(s.slice(4, 4) == "")
+  print(s[0..3])
+  print(s[8..14])
+  print(s[4..4] == "")
   print(s.index("w"))
   print(s.index("ö"))
   print(s.index(""))
@@ -542,57 +542,57 @@ fn main() =
 
 let%expect_test "a slice out of bounds panics, as an index does" =
   run {|
-fn main() = "Ren".slice(1, 4)
+fn main() = "Ren"[1..4]
 |};
   [%expect
     {|
     error: panic: slice 1 to 4 is out of bounds for a string of length 3
       ┌─ test.ren:1:13
-    1 │ fn main() = "Ren".slice(1, 4)
-      │             ^^^^^^^^^^^^^^^^^
+    1 │ fn main() = "Ren"[1..4]
+      │             ^^^^^^^^^^^
     |}];
   run {|
-fn main() = "Ren".slice(-1, 2)
+fn main() = "Ren"[-1..2]
 |};
   [%expect
     {|
     error: panic: slice -1 to 2 is out of bounds for a string of length 3
       ┌─ test.ren:1:13
-    1 │ fn main() = "Ren".slice(-1, 2)
-      │             ^^^^^^^^^^^^^^^^^^
+    1 │ fn main() = "Ren"[-1..2]
+      │             ^^^^^^^^^^^^
     |}];
   run {|
-fn main() = "Ren".slice(2, 1)
+fn main() = "Ren"[2..1]
 |};
   [%expect
     {|
     error: panic: slice 2 to 1 ends before it starts
       ┌─ test.ren:1:13
-    1 │ fn main() = "Ren".slice(2, 1)
-      │             ^^^^^^^^^^^^^^^^^
+    1 │ fn main() = "Ren"[2..1]
+      │             ^^^^^^^^^^^
     |}]
 
 (* a slice that cut a character would make a string that isn't UTF-8 *)
 let%expect_test "a slice inside a character panics" =
   run {|
-fn main() = "né".slice(0, 2)
+fn main() = "né"[0..2]
 |};
   [%expect
     {|
     error: panic: slice 0 to 2 ends inside a character
       ┌─ test.ren:1:13
-    1 │ fn main() = "né".slice(0, 2)
-      │             ^^^^^^^^^^^^^^^^^
+    1 │ fn main() = "né"[0..2]
+      │             ^^^^^^^^^^^
     |}];
   run {|
-fn main() = "né".slice(2, 3)
+fn main() = "né"[2..3]
 |};
   [%expect
     {|
     error: panic: slice 2 to 3 starts inside a character
       ┌─ test.ren:1:13
-    1 │ fn main() = "né".slice(2, 3)
-      │             ^^^^^^^^^^^^^^^^^
+    1 │ fn main() = "né"[2..3]
+      │             ^^^^^^^^^^^
     |}]
 
 let%expect_test "split, trim, starts_with and concat" =
@@ -832,15 +832,15 @@ fn main() =
 let%expect_test "a panic in a built-in called last is where it's called" =
   run_error
     {|
-fn cut(s: Str) -> Str = s.slice(3, 1)
+fn cut(s: Str) -> Str = s[3..1]
 fn main() = print(cut("abc"))
 |};
   [%expect
     {|
     error: panic: slice 3 to 1 ends before it starts
       ┌─ test.ren:1:25
-    1 │ fn cut(s: Str) -> Str = s.slice(3, 1)
-      │                         ^^^^^^^^^^^^^
+    1 │ fn cut(s: Str) -> Str = s[3..1]
+      │                         ^^^^^^^
     |}]
 
 (* An `Int` is 64 bits, and overflowing it panics (operators.md, "`Int`

@@ -1164,6 +1164,13 @@ and prim env sc (e : expr) op args =
     | Con (p, [ t ]) when p = Path.prelude "Array" -> t
     | t -> fail env loc (sprintf "an array operation on a `%s`" (show t))
   in
+  (* what can be sliced: an [Array], a [Str] or [Bytes] *)
+  let sliced (a : expr) =
+    match reveal env a.ty with
+    | Con (p, [ _ ]) when p = Path.prelude "Array" -> ()
+    | Con (p, []) when p = Path.prelude "Str" || p = Path.prelude "Bytes" -> ()
+    | t -> fail env loc (sprintf "a slice of a `%s`" (show t))
+  in
   (* a number, an [Int] or a [Float], once revealed, or a `with numeric`
      type, and what it's represented as: the language's own operators are
      on those *)
@@ -1261,6 +1268,31 @@ and prim env sc (e : expr) op args =
       int i;
       same env v.loc "a new element" v.ty (elem a);
       is "an updated array" a.ty
+  | Slice Range, [ a; i; j ] ->
+      int i;
+      int j;
+      sliced a;
+      is "a slice" a.ty
+  | Slice Before, [ a; n ] ->
+      int n;
+      sliced a;
+      is "a half" a.ty
+  | Slice After, [ a; n; lo ] ->
+      int n;
+      sliced a;
+      same env lo.loc "the first half" lo.ty a.ty;
+      is "a half" a.ty
+  | Splice, [ a; i; j; b ] ->
+      int i;
+      int j;
+      sliced a;
+      same env b.loc "what replaces a range" b.ty a.ty;
+      is "a spliced array" a.ty
+  | Join, [ a; b ] ->
+      sliced a;
+      same env b.loc "the second half" b.ty a.ty;
+      is "two halves joined" a.ty
+  | Vacant, [ a ] -> is "a place lent out" a.ty
   | New_cell, [ v ] -> is "a new cell" (cell_ty v.ty)
   | Get_cell, [ c ] -> is "what a cell holds" (held env c)
   | Set_cell, [ c; v ] ->

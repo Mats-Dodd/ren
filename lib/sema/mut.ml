@@ -62,7 +62,15 @@ let name_of = function
 let rec place_of (e : expr) =
   match e.kind with
   | Var x -> Some { root = x; rloc = e.loc }
-  | Field (r, _) | Index (r, _) -> place_of r
+  | Field (r, _) | Index (r, _) | Slice (r, _, _) -> place_of r
+  | _ -> None
+
+(* The range in a place, `xs[a..b]`, if there's one: what only `&`
+   changes, as a call's argument or a `for`'s array. *)
+let rec range_in (e : expr) =
+  match e.kind with
+  | Slice _ -> Some e
+  | Field (r, _) | Index (r, _) -> range_in r
   | _ -> None
 
 (* Whether a local can change, and if not, what it is and how to get one
@@ -164,21 +172,24 @@ let writable cx (e : expr) ~what
             (sprintf "`%s` is %s, so it can't be changed" x is)
       | Mutable -> ())
 
-(* A block's parameters, which can't be `inout` yet. *)
+(* The parameters of a handler's arm or its `finally`, which are given
+   values: a block's may be `&` (compiler.md, "Blocks with `inout`
+   parameters"), but these aren't called with `&`. *)
 let no_inout cx (ps : param list) =
   List.iter
     (fun (p : param) ->
       if p.pmode = Inout then
         Diag.report cx.sink
-          (Diag.make p.pname.ident.loc ~help:"use a top-level function for this"
-             "blocks can't take `inout` parameters yet"))
+          (Diag.make p.pname.ident.loc ~help:"remove the `&`"
+             "an arm's parameters are the operation's arguments, which it \
+              can't change"))
     ps
 
 let rec walk cx (e : expr) =
   match e.kind with
   | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Tag_set _ -> ()
   | Named (_, a) -> walk cx a
-  | Var _ | Field _ | Index _ -> (
+  | Var _ | Field _ | Index _ | Slice _ -> (
       match place_of e with
       | Some _ -> walk_indices cx e
       | None -> (
@@ -187,6 +198,10 @@ let rec walk cx (e : expr) =
           | Index (a, i) ->
               walk cx a;
               walk cx i
+          | Slice (a, lo, hi) ->
+              walk cx a;
+              walk cx lo;
+              walk cx hi
           | _ -> ()))
   | Ref { kind = Call ({ kind = Field (r, _); _ }, args); _ } ->
       (* `&s.push(1)`: the receiver is changed, as if passed with `&` *)
@@ -250,9 +265,7 @@ let rec walk cx (e : expr) =
   | Call (f, args) ->
       walk cx f;
       List.iter (arg cx) args
-  | Lambda (ps, body) ->
-      no_inout cx ps;
-      walk cx body
+  | Lambda (_, body) -> walk cx body
   | Inline_handler l ->
       walk { cx with inline = Some (bound_in l) } l
   | Handler { state; arms; _ } ->
@@ -274,7 +287,18 @@ let rec walk cx (e : expr) =
   | Array xs | Tuple xs -> List.iter (walk cx) xs
   | Assign { target; value; _ } ->
       guard cx (fun () ->
-          writable cx target ~what:"this can't be assigned to" ());
+          writable cx target ~what:"this can't be assigned to" ();
+          match range_in target with
+          | Some r ->
+              let x = Option.value (cx.source r) ~default:"xs[a..b]" in
+              Diag.error r.loc
+                ~help:
+                  (sprintf
+                     "pass it to a function that changes it, `f(&%s)`, or \
+                      change each element, `for x in &%s`"
+                     x x)
+                "a range of an array is changed through `&`"
+          | None -> ());
       walk_indices cx target;
       walk cx value
   | For { over = Each { kind = Ref a; _ }; body; _ } ->
@@ -326,6 +350,10 @@ and walk_indices cx (e : expr) =
   | Index (a, i) ->
       walk_indices cx a;
       walk cx i
+  | Slice (a, lo, hi) ->
+      walk_indices cx a;
+      walk cx lo;
+      walk cx hi
   | Field (r, _) -> walk_indices cx r
   | _ -> ()
 

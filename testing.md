@@ -355,7 +355,7 @@ account> &a.freeze()
 account> a
 Account(id: AccountId(1), balance: Money(0), frozen: true, statement: []) : Account
 account> :t Account.credit
-fn(inout Account, Money, Movement) ! Frozen(AccountId) uses Clock
+fn(&Account, Money, Movement) ! Frozen(AccountId) uses Clock
 ```
 
 - **It opens inside a module.** Its private items, and its opaque types'

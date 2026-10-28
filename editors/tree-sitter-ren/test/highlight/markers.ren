@@ -281,3 +281,11 @@ fn fetch(on: Tags) -> Int =
 //                              ^ constructor
 //                                      ^ constructor
     v => v
+
+fn halves(xs: Array<Int>, f: fn(&Array<Int>) -> Int) -> Int =
+//                              ^ keyword.mutation
+  var ys = xs[1..3]
+//             ^ operator
+  &ys.split_at(1) fn(&lo, &hi) => f(&lo) + hi.len()
+//                   ^ keyword.mutation
+//                    ^ variable.parameter

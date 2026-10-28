@@ -468,8 +468,9 @@ packs `Bool`s (compiler.md, "Sized storage").
 
 `a..b` is the `Int`s from `a` up to, but not including, `b`. There's one
 kind: half-open, so `0..xs.len()` is every index, and two ranges that
-meet, `0..n` and `n..m`, don't overlap. A range is a `for`'s, not a
-value: it can't be kept in a `let` or passed, and it has no methods.
+meet, `0..n` and `n..m`, don't overlap. A range is a `for`'s, and an
+index's, which slices (below), not a value: it can't be kept in a `let`
+or passed, and it has no methods.
 
 ```ren
 // the elements after each one, paired with it
@@ -533,6 +534,48 @@ index that may not be there. They say different things: `[i]` says it's
 there, `get` asks. An index past the end is almost always a bug, and a
 default hides it. `xs[i]` is also a place, `xs[i] = v` and
 `&xs[i].credit(m)`, which an `Option` can't be.
+
+### Slices
+
+`xs[a..b]`, on an `Array<T>`, a `Str` or `Bytes`, is its elements, or
+bytes, from `a` up to, but not including, `b`, a value of the same type
+(foundations.md, decision 17): there's no `Slice` type. It panics, in
+every build at the same point, if `b` comes before `a` (`slice 3 to 1
+ends before it starts`), if the range isn't all in `xs` (`slice 2 to 5
+is out of bounds for an array of length 3`), or, on a `Str`, if it cuts
+a character (`slice 0 to 2 starts inside a character`); `Bytes` never
+checks. `Str.slice(a, b)` is gone: `s[a..b]`.
+
+```ren
+let mid = xs[2..6]
+let name = line[0..colon].trim()
+```
+
+A slice is a value like any other: compared, shown, stored and returned
+as its type is, and nothing tells it from a copy but its cost. A native
+build shares the buffer it was cut from, so making one copies nothing,
+and keeps all of that buffer alive while it lives: `xs.copy()`, on each
+of the three, gives one a buffer of its own, and costs nothing on a
+value that already has one. `split` and `trim` return slices of the
+string they're given.
+
+A range is a place too. `f(&xs[a..b])` passes it with `&`: a write of
+`xs` for the call, as `&xs[i]` is, and what `f` leaves there replaces
+the range, so a range that grew moves what follows. `for x in
+&xs[a..b]` changes that range. Two ranges of one array in one call may
+overlap, as two indexes may, so `f(&xs[0..2], &xs[2..4])` is an error,
+whose help is `split_at`, which gives a block both halves as places of
+its own:
+
+```ren
+&xs.split_at(n) fn(&lo, &hi) =>
+  sort(&lo)
+  sort(&hi)
+```
+
+When the block returns, or fails, `xs` is `lo` followed by `hi`. A
+native build changes the halves in place when nothing else holds `xs`.
+`xs[a..b] = ys` is an error: a range is changed through `&`.
 
 ## The collection methods
 

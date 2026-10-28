@@ -126,14 +126,14 @@ let mismatch_notes ?help ?(type_params = true) ~found ~expected () =
     match clash with
     | Some Inout ->
         [
-          "a function that changes its argument (`inout`) can't stand in for \
+          "a function that changes its argument (`&`) can't stand in for \
            one that only reads it: its caller wouldn't pass the argument with \
            `&`, so the change would be lost";
         ]
     | Some Read ->
         [
           "a function that only reads its argument can't stand in for one that \
-           changes it (`inout`)";
+           changes it (`&`)";
         ]
     | None -> []
   in
@@ -141,7 +141,7 @@ let mismatch_notes ?help ?(type_params = true) ~found ~expected () =
     match (help, clash) with
     | None, Some Inout ->
         Some
-          "pass it only where the parameter's type says `fn(inout ...)`, or \
+          "pass it only where the parameter's type says `fn(&...)`, or \
            call it directly"
     | h, _ -> h
   in
@@ -870,6 +870,11 @@ let element_before f x =
 
 let not_indexable f _ =
   sprintf "only an `Array` can be indexed, but this is %s" (article f)
+
+(* `x[a..b]` of what isn't an `Array`, a `Str` or `Bytes` *)
+let not_sliceable f _ =
+  sprintf "only an `Array`, a `Str` or `Bytes` can be sliced, but this is %s"
+    (article f)
 
 (* `m[k]`, where [m] is a `Map`: [map] and [key] as they're written, if
    they can be printed. *)
@@ -2907,7 +2912,7 @@ let other_names =
 
 (* `s.grow()`, where `s`'s type [shown] is the module's own, or built in,
    and has no `grow`. [methods] are the ones it has. *)
-let no_method (m : Ast.ident) ~shown ~own ~type_name methods =
+let no_method ?slice (m : Ast.ident) ~shown ~own ~type_name methods =
   let renamed =
     List.find_opt
       (fun (other, ren) -> other = m.name && List.mem ren methods)
@@ -2915,6 +2920,10 @@ let no_method (m : Ast.ident) ~shown ~own ~type_name methods =
   in
   let help =
     match (renamed, methods) with
+    | _ when m.name = "slice" && slice <> None ->
+        (* `s.slice(a, b)`, which `s[a..b]` replaced (foundations.md,
+           decision 17): [slice] is it, as written *)
+        Some (sprintf "slice it: `%s`" (Option.get slice))
     | Some ("find", ren), _ ->
         Some
           (sprintf

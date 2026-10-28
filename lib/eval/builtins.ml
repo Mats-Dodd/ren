@@ -165,20 +165,87 @@ let find_from s sub from =
    of the bytes after a character's first, which are 0b10xxxxxx. *)
 let boundary s i = i = String.length s || Char.code s.[i] land 0xc0 <> 0x80
 
-let slice s from to_ =
-  let n = Int64.of_int (String.length s) in
+(* ---- slices (foundations.md, decision 17) ----
+
+   A slice is a value of the type it slices. A native build shares its
+   root's buffer, which value semantics make impossible to tell from the
+   copy the interpreter makes here (String.sub, Array.sub), so this is
+   what every build does. *)
+
+(* What's sliced, as a panic says it, and its length. *)
+let sliced = function
+  | VArray v -> ("an array", v.len)
+  | VStr s -> ("a string", String.length s)
+  | VBytes b -> ("bytes", String.length b)
+  | _ -> failwith "bug: a slice of what isn't an array, a string or bytes"
+
+(* [v]'s part from [i] up to [j], both in bounds, and for a string at
+   character boundaries. *)
+let part v i j =
+  match v with
+  | VArray xs -> array (Array.sub xs.store.items i (j - i))
+  | VStr s -> VStr (String.sub s i (j - i))
+  | VBytes b -> VBytes (String.sub b i (j - i))
+  | _ -> failwith "bug: a slice of what isn't an array, a string or bytes"
+
+(* For a string, that [i] and [j] are at characters' boundaries, as
+   [slice] says. *)
+let check_chars v from to_ i j =
+  match v with
+  | VStr s ->
+      let fail fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
+      if not (boundary s i) then
+        fail "slice %Ld to %Ld starts inside a character" from to_;
+      if not (boundary s j) then
+        fail "slice %Ld to %Ld ends inside a character" from to_
+  | _ -> ()
+
+(* `v[from..to]`: panics if the range ends before it starts, isn't in
+   [v], or, in a string, cuts a character. *)
+let slice_value v from to_ =
+  let what, n = sliced v in
   let fail fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
   if from > to_ then fail "slice %Ld to %Ld ends before it starts" from to_;
-  if from < 0L || to_ > n then
-    fail "slice %Ld to %Ld is out of bounds for a string of length %Ld" from to_
-      n;
-  (* in bounds, so each fits in an OCaml [int] *)
+  if from < 0L || to_ > Int64.of_int n then
+    fail "slice %Ld to %Ld is out of bounds for %s of length %d" from to_ what n;
   let i = Int64.to_int from and j = Int64.to_int to_ in
-  if not (boundary s i) then
-    fail "slice %Ld to %Ld starts inside a character" from to_;
-  if not (boundary s j) then
-    fail "slice %Ld to %Ld ends inside a character" from to_;
-  String.sub s i (j - i)
+  check_chars v from to_ i j;
+  part v i j
+
+(* The halves of `v.split_at(n)`, `v[0..n]` and `v[n..len]`: panics if
+   [n] isn't in [v], or in a string, if it's inside a character, as the
+   first half's slice would. *)
+let split_halves v n =
+  let what, len = sliced v in
+  if n < 0L || n > Int64.of_int len then
+    raise
+      (Panic
+         (Printf.sprintf "`split_at` %Ld is out of bounds for %s of length %d" n
+            what len));
+  let k = Int64.to_int n in
+  check_chars v 0L n 0 k;
+  (part v 0 k, part v k len)
+
+(* [v] with its part from [i] up to [j] replaced by [w], of the same type:
+   what `&v[i..j]` writes back. The range is one a slice of [v] read. *)
+let splice v i j w =
+  let i = Int64.to_int i and j = Int64.to_int j in
+  let _, n = sliced v in
+  let before = part v 0 i and after = part v j n in
+  match (before, w, after) with
+  | VArray a, VArray b, VArray c ->
+      Value.array (Array.concat [ items a; items b; items c ])
+  | VStr a, VStr b, VStr c -> VStr (a ^ b ^ c)
+  | VBytes a, VBytes b, VBytes c -> VBytes (a ^ b ^ c)
+  | _ -> failwith "bug: a splice of different kinds of values"
+
+(* [a] followed by [b]: what a `split_at` writes back. *)
+let join a b =
+  match (a, b) with
+  | VArray a, VArray b -> Value.array (Array.append (items a) (items b))
+  | VStr a, VStr b -> VStr (a ^ b)
+  | VBytes a, VBytes b -> VBytes (a ^ b)
+  | _ -> failwith "bug: a join of different kinds of values"
 
 let split s sep =
   if sep = "" then raise (Panic "`split` needs a separator that isn't empty");
@@ -444,11 +511,6 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   (* in bytes *)
   | Str_len ->
       pure (function [ VStr s ] -> int (String.length s) | _ -> bug x)
-  (* the bytes from [from] up to, but not including, [to] *)
-  | Str_slice ->
-      pure (function
-        | [ VStr s; VInt from; VInt to_ ] -> VStr (slice s from to_)
-        | _ -> bug x)
   (* where [s] first starts *)
   | Str_index ->
       pure (function
@@ -484,6 +546,34 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
         | _ -> bug x)
   | Bytes_len ->
       pure (function [ VBytes b ] -> int (String.length b) | _ -> bug x)
+  | Bytes_at ->
+      pure (function
+        | [ VBytes b; VInt i ] ->
+            if i < 0L || i >= Int64.of_int (String.length b) then
+              raise
+                (Panic
+                   (Printf.sprintf
+                      "index %Ld is out of bounds for bytes of length %d" i
+                      (String.length b)));
+            int (Char.code b.[Int64.to_int i])
+        | _ -> bug x)
+  | Bytes_of ->
+      pure (function
+        | [ VArray v ] ->
+            VBytes
+              (String.init v.len (fun i ->
+                   match nth v i with
+                   | VInt n when n >= 0L && n <= 255L -> Char.chr (Int64.to_int n)
+                   | VInt n ->
+                       raise
+                         (Panic (Printf.sprintf "%Ld isn't a byte, 0 to 255" n))
+                   | _ -> bug x))
+        | _ -> bug x)
+  (* a value is its own here: the interpreter's slices are copies *)
+  | Array_copy | Str_copy | Bytes_copy ->
+      pure (function [ v ] -> v | _ -> bug x)
+  (* lowering writes each call out (lower.ml, [split_at]) *)
+  | Array_split_at | Str_split_at | Bytes_split_at -> bug x
   | Str_lower -> pure (function [ VStr s ] -> VStr (lower s) | _ -> bug x)
   (* wrapping arithmetic at 64 bits, as [Int64]'s is *)
   | Int_wrapping_add ->

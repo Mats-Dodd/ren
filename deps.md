@@ -856,9 +856,9 @@ error: `with` can't tell what `c` installs
   its right: `attempt f() == x` is `(attempt f()) == x`, so a test can
   compare what it kept. Arithmetic is still inside it, `attempt a() +
   b()`.
-- **A string stays UTF-8.** A literal that isn't is an error, and
-  `slice` panics at an offset inside a character, as well as out of
-  bounds, so no `Str` can hold bytes `from_utf8` would refuse.
+- **A string stays UTF-8.** A literal that isn't is an error, and a
+  slice, `s[a..b]`, panics at an offset inside a character, as well as
+  out of bounds, so no `Str` can hold bytes `from_utf8` would refuse.
 - **`split("")` panics**, since there's nothing to split on.
 - **`Path.join` takes a `Str`**, `src.join("main.ren")`, and a name that
   starts at the root, `/etc`, replaces the path, as in most languages.

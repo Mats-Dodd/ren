@@ -3784,6 +3784,64 @@ error: a range, `a..b`, is written only after a `for`'s `in`, or in an index: it
   help: a range is for counting, `for i in 0..n`, and for slicing, `xs[a..b]`
 ```
 
+Where it differed from its plan:
+
+- **A slice is an object, not a small value.** The runtime's `ren_array`
+  and `ren_str` (which `Bytes` is too) gained a `data` pointer and a
+  `root`: an owner's `root` is NULL and its `data` its own buffer or
+  bytes; a slice is a header of its own whose `data` points into its
+  root's, counting the root (ren_rt.h; research/slices.md's
+  representation A, Roc's seamless slices at list.zig:574-591 with a
+  pointer where Roc steals a bit). Every reader already went through
+  `data`, so none changed but a string's, one load more. The plan's
+  two- or three-word value kept inline isn't built: `Str` and `Array`
+  are one word everywhere, in fields, array elements, a type variable's
+  words and descriptors, and decision 14's small values are, as built
+  in step 10, release-only and never a field, a counted element or a
+  word. Making them three words is a representation change across the
+  backend, not this step's; RESULTS.md, "Slices", prices what it would
+  save. For the same reason a slice of a borrowed parameter still counts
+  its root: without a frame for the header (stack.ml went in decision
+  14), not counting it would leave a header that outlives the call
+  holding a root nothing counts.
+- **Writes check `ren_array_writable`,** unique and an owner or a lent
+  slice, and growth `ren_array_unique`, unique and an owner, since a
+  lent half's next elements are its neighbour's. `ren_array_take` asks
+  the first, as the write it pairs with does. Both read only `cap`: an
+  owner's is at least 1, a slice's 0 and a lent slice's -1, since
+  reading `root` on every push made blocks' `map` 14% slower in
+  cycles.
+- **`split_at` lends through a vacant place.** Core reads the place,
+  writes `Vacant` there (a scalar natively, the value itself in the
+  interpreter: nothing reads it, since the call writes the place), and
+  cuts the halves: `ren_array_before` lends its half, `cap` -1, if what
+  it's cut from is writable, and `ren_array_after` its own if the first
+  was. A slice of a lent slice ends its lending, and so does the join;
+  so a lent slice is the only way to its range, and is written in place
+  when its count is 1. The join gives back the root itself when the
+  halves are still next to each other in it, cover it and are all that
+  hold it, a lent slice of the two when they're next to each other in a
+  part of it (a split inside a split), and otherwise a new owner: a half
+  that's been replaced copies both, not only itself. A quicksort by
+  `split_at` over 200,000 `Int`s allocates headers only, its peak the
+  array's 1.6 MB.
+- **`&xs[a..b]` copies.** The callee gets a slice, which its first write
+  copies, and the range is spliced back into a new owner: O(n) of `xs`,
+  where `split_at` is O(1).
+- **A block's `inout` argument is its cell's address in the block's
+  argument words,** which the code reads as the cell it is (to_mem.ml,
+  `lambda`); a block given to a block is passed the same way, by its
+  address, since a block outlives no call it's given to, which took the
+  native slice's old "a block passed to a block" limit off (10d/slices.ren's
+  handler arm takes one). A block's `inout` parameter of a type
+  variable's type isn't native yet, as a function's isn't.
+- **`split` and `trim` return slices natively** (`ren_str_split`,
+  `ren_str_trim`), and `Bytes` is native: its layout is a string's, its
+  descriptor `REN_D_BYTES`, `==` compares bytes, and `show` writes each
+  in hex as the interpreter does.
+- **No debug report of roots kept by small slices** (the plan's
+  optional part). RESULTS.md measures retention instead.
+
 ### Where 10d may differ from foundations.md
 
 Choices this specification made where the record is silent, each to
@@ -3857,7 +3915,11 @@ rules, adoption, and the freeze rules:
 - **U, uniqueness.** `ren_is_unique` decides every change in place:
   reuse, `Array_own`, swap-out's take, `map_into`, a fill's chain. It's
   true only for a local count of 1, or an arena count of one in an open
-  chunk.
+  chunk. An array's elements change in place only if it's
+  also an owner or a lent slice (`ren_array_writable`), and it grows in
+  place only if it's an owner (`ren_array_unique`): a slice shares its
+  root's buffer, and a lent one is a `split_at`'s half, the one way to
+  its range (Stage 10d, "Blocks with `inout` parameters, and slices").
 - **B, borrows.** A reference that isn't counted has a counted holder
   upstream that outlives it and doesn't change it meanwhile; a part is
   counted before what it's part of is consumed. Perceus gives this in a

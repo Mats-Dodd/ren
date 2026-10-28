@@ -244,11 +244,11 @@ fn main() =
 |};
   [%expect
     {|
-    error: blocks can't take `inout` parameters yet
+    error: a block's parameter that it changes is written `&x`
       ┌─ test.ren:2:20
     2 │   let f = fn(inout x) => x
       │                    ^
-      help: use a top-level function for this
+      help: write `fn(&x) => ...`
     |}]
 
 let%expect_test "a for & loop locks its array" =
@@ -305,11 +305,11 @@ fn main() =
 |};
   [%expect
     {|
-    error: blocks can't take `inout` parameters yet
+    error: a block's parameter that it changes is written `&n`
       ┌─ test.ren:2:20
     2 │   let f = fn(inout n) => n += 1
       │                    ^
-      help: use a top-level function for this
+      help: write `fn(&n) => ...`
     |}]
 
 let%expect_test "a help writes not and && back as they're written" =

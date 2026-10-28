@@ -63,9 +63,13 @@ let sprintf = Printf.sprintf
 
 type kind = Read | Write
 
-(* A step of a place's path: a field, or an index, as it's written if it
-   can be shown, for messages. *)
-type step = SField of string | SIndex of string option
+(* A step of a place's path: a field, an index, or a range of them,
+   `xs[a..b]`, as it's written if it can be shown, for messages. A range is
+   indices, so it may overlap any other (foundations.md, decision 17). *)
+type step =
+  | SField of string
+  | SIndex of string option
+  | SRange of string option * string option
 
 (* Code a help can move before the call, and a name for its `let`. *)
 type hoisted = (string * string) option
@@ -181,6 +185,15 @@ let rec place_of cx (e : expr) =
         (fun p ->
           { p with ppath = p.ppath @ [ SIndex (cx.source i) ]; ploc = e.loc })
         (place_of cx a)
+  | Slice (a, lo, hi) ->
+      Option.map
+        (fun p ->
+          {
+            p with
+            ppath = p.ppath @ [ SRange (cx.source lo, cx.source hi) ];
+            ploc = e.loc;
+          })
+        (place_of cx a)
   | _ -> None
 
 let access ?(loc : Loc.t option) (p : place) kind why =
@@ -197,7 +210,7 @@ let access ?(loc : Loc.t option) (p : place) kind why =
 let rec overlap a b =
   match (a, b) with
   | [], _ | _, [] -> true
-  | SIndex _ :: a, SIndex _ :: b -> overlap a b
+  | (SIndex _ | SRange _) :: a, (SIndex _ | SRange _) :: b -> overlap a b
   | SField f :: a, SField g :: b -> f = g && overlap a b
   | _ -> false
 
@@ -221,7 +234,10 @@ let show_path x path =
          (function
            | SField f -> "." ^ f
            | SIndex (Some i) -> "[" ^ i ^ "]"
-           | SIndex None -> "[...]")
+           | SIndex None -> "[...]"
+           | SRange (a, b) ->
+               let s = Option.value ~default:"..." in
+               "[" ^ s a ^ ".." ^ s b ^ "]")
          path)
 
 let show a = show_path a.var.ident.name a.path
@@ -236,6 +252,7 @@ let hoist cx (e : expr) : hoisted =
         | Call ({ kind = Field (_, m); _ }, _) -> m.name
         | Field (_, f) -> f.name
         | Index _ -> "item"
+        | Slice _ -> "part"
         | _ -> "before"
       in
       (code, name))
@@ -370,12 +387,23 @@ let conflict cx (a, va) (b, vb) =
       let indices =
         match (List.rev f.path, List.rev o.path) with
         | SIndex (Some i) :: before, SIndex (Some j) :: _ ->
-            Some (show_path x (List.rev before), i, j)
-        | _ -> None
+            `Two (show_path x (List.rev before), i, j)
+        | SRange (_, hi) :: before, SRange _ :: _
+        | SRange (_, hi) :: before, SIndex _ :: _
+        | SIndex _ :: before, SRange (_, hi) :: _ ->
+            `Ranges (show_path x (List.rev before), hi)
+        | _ -> `Other
       in
       let notes, help =
         match indices with
-        | Some (xs, i, j) ->
+        | `Ranges (xs, hi) ->
+            ( [ only_way; sprintf "`%s` and `%s` may overlap" (show f) (show o) ],
+              sprintf
+                "to change two parts of one array, split it: `&%s.split_at(%s) \
+                 fn(&lo, &hi) => ...`"
+                xs
+                (Option.value hi ~default:"n") )
+        | `Two (xs, i, j) ->
             ( [
                 only_way;
                 sprintf "`%s` and `%s` may be the same element" (show f)
@@ -385,7 +413,7 @@ let conflict cx (a, va) (b, vb) =
                 "to exchange them, write `%s.swap(%s, %s)`; otherwise change \
                  one, then the other"
                 xs i j )
-        | None ->
+        | `Other ->
             ( [ only_way ],
               sprintf
                 "pass `%s` with `&` once; a second value it changes needs a \
@@ -531,7 +559,7 @@ let param_use cx (b : binder) loc why =
 let rec walk cx (e : expr) =
   match e.kind with
   | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> ()
-  | Var _ | Field _ | Index _ -> (
+  | Var _ | Field _ | Index _ | Slice _ -> (
       match place_of cx e with
       | Some p ->
           walk_indices cx e;
@@ -615,6 +643,10 @@ and walk_indices cx (e : expr) =
   | Index (a, i) ->
       walk_indices cx a;
       walk cx i
+  | Slice (a, lo, hi) ->
+      walk_indices cx a;
+      walk cx lo;
+      walk cx hi
   | Field (r, _) -> walk_indices cx r
   | _ -> ()
 

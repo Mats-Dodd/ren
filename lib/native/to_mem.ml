@@ -180,6 +180,7 @@ let dep_id cx dep = number cx.deps dep
 
 let array_path = match Ty.array Ty.int with Con (p, _) -> p | _ -> bug "Array"
 let cell_path = match C.cell_ty Ty.int with Con (p, _) -> p | _ -> bug "Cell"
+let bytes_ty = Ty.Con (Path.prelude "Bytes", [])
 let is_struct (l : layout) = match l with Struct _ -> true | _ -> false
 
 let is_cell (t : Ty.ty) =
@@ -474,7 +475,7 @@ and plain_layout cx loc (t : Ty.ty) : layout =
   | _ when t = Ty.bool -> Bool
   | _ when t = Ty.unit -> Unit
   | Con (p, []) when Sized.of_path p <> None -> Sized (Option.get (Sized.of_path p))
-  | _ when t = Ty.str -> Boxed
+  | _ when t = Ty.str || t = bytes_ty -> Boxed
   | Con (p, [ e ]) when p = array_path ->
       (* an array's elements are counted as words are, or never: a struct
          that holds an object is kept boxed instead *)
@@ -695,6 +696,7 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         | _ when t = Ty.bool -> (D_bool, [])
         | _ when t = Ty.unit -> (D_unit, [])
         | _ when t = Ty.str -> (D_str, [])
+        | _ when t = bytes_ty -> (D_bytes, [])
         | Con (p, []) when Sized.of_path p <> None ->
             (D_sized (Option.get (Sized.of_path p)), [])
         | Con (p, [ e ]) when p = array_path -> (D_array, [ arg e ])
@@ -710,7 +712,7 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
       in
       let counted =
         match kind with
-        | D_str | D_array | D_tuple | D_errors | D_handler -> true
+        | D_str | D_bytes | D_array | D_tuple | D_errors | D_handler -> true
         | D_named k -> (
             match (Hashtbl.find cx.decl_bodies k).dbody with
             | Record_decl _ -> true
@@ -1801,6 +1803,12 @@ and alloc_taking fs env (sh : shape) fields =
   in
   owned fs env "$new" Boxed (Alloc { tag = sh.tag; fields; words; at = None })
 
+(* What a value of type [t] that's sliced is, for the runtime. *)
+and sliced (t : Ty.ty) : sliced =
+  if t = Ty.str then Of_str
+  else if t = bytes_ty then Of_bytes
+  else Of_array_elems
+
 and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
@@ -1858,7 +1866,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       | Int | Float | Bool | Unit | Enum | Sized _ ->
           check_nan what x y;
           owned fs env "$eq" Bool (Compare (c, x, y))
-      | Boxed when a.ty = Ty.str ->
+      | Boxed when a.ty = Ty.str || a.ty = bytes_ty ->
           let same =
             owned fs env "$eq" Bool (Runtime (Str_eq, [ x; y ], None))
           in
@@ -1898,6 +1906,51 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let n = owned fs env "$len" Int (Runtime (Array_len, [ x ], None)) in
       drop fs env x;
       n
+  (* slices (foundations.md, decision 17; ren_rt.c, "slices"): each a
+     new header sharing its root's buffer, or, for a write back, a new
+     owner *)
+  | C.Slice how, a :: rest ->
+      let x = expr fs env a in
+      let ys = List.map (expr fs env) rest in
+      let part, at =
+        match how with
+        | Range -> (Range, Some (site ()))
+        | Before -> (Before, Some (site ()))
+        | After -> (After, None)
+      in
+      let r =
+        owned fs env "$slice" Boxed
+          (Runtime (Slice (sliced a.ty, part), x :: ys, at))
+      in
+      List.iter (drop fs env) (x :: ys);
+      r
+  | Splice, [ a; i; j; w ] ->
+      let x = expr fs env a in
+      let i = expr fs env i in
+      let j = expr fs env j in
+      let y = expr fs env w in
+      let r =
+        owned fs env "$spliced" Boxed
+          (Runtime (Splice (sliced a.ty), [ x; i; j; y ], None))
+      in
+      drop fs env x;
+      drop fs env y;
+      r
+  | Join, [ a; b ] ->
+      let x = expr fs env a in
+      let y = expr fs env b in
+      let r =
+        owned fs env "$joined" Boxed
+          (Runtime (Join (sliced a.ty), [ x; y ], None))
+      in
+      drop fs env x;
+      drop fs env y;
+      r
+  | Vacant, [ a ] ->
+      let x = expr fs env a in
+      let r = owned fs env "$vacant" Boxed (Runtime (Vacant, [ x ], None)) in
+      drop fs env x;
+      r
   | Get_index b, [ a; i ] ->
       let x = expr fs env a in
       let i = expr fs env i in
@@ -2215,7 +2268,17 @@ and call fs env (e : C.expr) (f : C.expr) args ev =
         List.map
           (function
             | C.Value a -> expr fs env a
-            | Ref _ -> unsupported_at fs e.loc "a block's `inout` parameter")
+            (* what a block changes is passed as its cell's address, in a
+               word, as a function's is; the block's code reads it out as
+               the cell it is ([lambda]) *)
+            | Ref v -> (
+                let m = mem_var env v in
+                match m.layout with
+                | Cell (Word _) | Word _ ->
+                    unsupported_at fs e.loc
+                      "a block's `inout` parameter of a type variable's type"
+                | Cell _ -> Var m
+                | l -> borrowed fs ("&" ^ v.name) (Cell l) (Addr m)))
           args
       in
       List.iter (consume env) xs;
@@ -2237,11 +2300,21 @@ and take_word fs env (r : atom) (l : layout) : atom =
       owned fs env "$unword" l (Of_word (r, l))
   | _ -> r
 
+(* A block given to a block, two words, passed as its address, a cell's:
+   a block doesn't outlive the call it's given to, so it's on the
+   caller's stack for all of it, and the code reads it out ([lambda]). *)
+and block_arg fs (x : atom) =
+  match x with
+  | Var ({ layout = Block; _ } as m) ->
+      borrowed fs ("&" ^ m.name) (Cell Block) (Addr m)
+  | x -> x
+
 (* Call the block [b] with the caller's evidence [ev] and the arguments
    [xs], which it takes; its value is of layout [result]. If its type
    says it can fail, its error is raised here. *)
 and call_block ?(borrowed = 0) fs env ~result ~fails b ev xs =
   List.iter (fun x -> word_only fs.cx (atom_layout x)) xs;
+  let xs = List.map (block_arg fs) xs in
   word_only fs.cx result;
   let r = fresh fs "$result" result in
   let error = fresh fs "$error" Boxed in
@@ -2339,6 +2412,17 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
       | _ -> bug "a `push` without `&`")
   | Str_len, _, _ -> runtime Str_len
   | Str_concat, _, _ -> runtime Str_concat
+  | Str_split, _, _ -> runtime ~site:(site ()) Str_split
+  | Str_trim, _, _ -> runtime Str_trim
+  | Array_copy, _, _ -> runtime (Copied Of_array_elems)
+  | Str_copy, _, _ -> runtime (Copied Of_str)
+  | Bytes_copy, _, _ -> runtime (Copied Of_bytes)
+  | Bytes_len, _, _ -> runtime Str_len
+  (* a `Str`'s UTF-8 is the same string, as `Bytes` *)
+  | Str_bytes, _, _ -> (
+      match values () with [ v ] -> v | _ -> bug "a `bytes` of no string")
+  | Bytes_at, _, _ -> runtime ~site:(site ()) Bytes_at
+  | Bytes_of, _, _ -> runtime ~site:(site ()) Bytes_of
   | Float_of, _, _ -> runtime Float_of_int
   | Float_sqrt, _, _ ->
       runtime ~site:(new_site cx ~made:(Nan.where e.loc) e.loc) Float_sqrt
@@ -2553,16 +2637,38 @@ and lambda fs env ~name ~(params : C.param list) ~ev ~outer ~given ~captures
     fst
       (List.fold_left
          (fun (cenv, i) (p : C.param) ->
-           if p.mode = Inout then
-             unsupported_at code body.loc "a block's `inout` parameter";
            let l = layout_at code body.loc p.var.ty in
-           if not (match l with Block | Cell _ -> false | _ -> true) then
-             unsupported_at code body.loc "a block passed to a block";
-           word_only cx l;
-           let x = let_var code p.var.name l (Arg (args, i)) in
-           own cenv x;
-           if typed && i = 0 then code.words <- (n, x) :: code.words;
-           (bind cenv p.var x, i + 1))
+           if p.mode = Inout then (
+             (match l with
+             | Word _ ->
+                 unsupported_at code body.loc
+                   "a block's `inout` parameter of a type variable's type"
+             | Block | Cell _ ->
+                 unsupported_at code body.loc "a block passed to a block"
+             | _ -> ());
+             word_only cx l;
+             (* its caller's cell, whose address is the word: not owned
+                here, as a function's `inout` parameter's isn't *)
+             let x = let_var code p.var.name (Cell l) (Arg (args, i)) in
+             (bind cenv p.var x, i + 1))
+           else if l = Block then (
+             (* its caller's block, whose address is the word
+                ([call_block]) *)
+             let c =
+               let_var code ("&" ^ p.var.name) (Cell Block) (Arg (args, i))
+             in
+             let x = let_var code p.var.name Block (Load c) in
+             (bind cenv p.var x, i + 1))
+           else (
+             (match l with
+             | Cell _ ->
+                 unsupported_at code body.loc "a block passed to a block"
+             | _ -> ());
+             word_only cx l;
+             let x = let_var code p.var.name l (Arg (args, i)) in
+             own cenv x;
+             if typed && i = 0 then code.words <- (n, x) :: code.words;
+             (bind cenv p.var x, i + 1)))
          (cenv, 0) params)
   in
   let go () = lift fs env ~name ~captures ~enter body in

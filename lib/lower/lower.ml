@@ -398,6 +398,9 @@ type step =
       (** a field of a record of type [Path.t]; the field's type *)
   | SIndex of C.expr * Ty.ty * Loc.t
       (** an index (an atom); the element type *)
+  | SRange of C.expr * C.expr * Ty.ty * Loc.t
+      (** a range of indices, `xs[a..b]` (atoms); the type of what's sliced,
+          which a slice is too (foundations.md, decision 17) *)
 
 type place = { root : C.var; steps : step list }
 
@@ -420,6 +423,8 @@ let rec read_from (base : C.expr) steps =
       read_from (mk (Field (base, p, f)) ty loc) rest
   | SIndex (i, ty, loc) :: rest ->
       read_from (mk (Prim (Get_index Checked, [ base; i ])) ty loc) rest
+  | SRange (a, b, ty, loc) :: rest ->
+      read_from (mk (Prim (Slice Range, [ base; a; b ])) ty loc) rest
 
 let read pl loc = read_from (local pl.root loc) pl.steps
 
@@ -434,10 +439,31 @@ let rec update (base : C.expr) steps (v : C.expr) =
   | SIndex (i, ty, loc) :: rest ->
       let inner = update (mk (Prim (Get_index Checked, [ base; i ])) ty loc) rest v in
       mk (Prim (Set_index Checked, [ base; i; inner ])) base.ty loc
+  | SRange (a, b, ty, loc) :: rest ->
+      (* what the range holds is replaced, whatever its length now *)
+      let inner = update (mk (Prim (Slice Range, [ base; a; b ])) ty loc) rest v in
+      mk (Prim (Splice, [ base; a; b; inner ])) base.ty loc
 
 (* Write [v] to the place. *)
 let write pl (v : C.expr) loc =
   mk (Assign (pl.root, update (local pl.root loc) pl.steps v)) Ty.unit loc
+
+(* A place with a range in it, `xs[a..b].f`, split after its last range:
+   the place of the range, and the steps after it. A loop that changes
+   what's in a range changes a copy of it, written back once. *)
+let split_range pl =
+  let rec last_range i = function
+    | [] -> None
+    | SRange _ :: rest -> (
+        match last_range (i + 1) rest with None -> Some i | j -> j)
+    | _ :: rest -> last_range (i + 1) rest
+  in
+  match last_range 0 pl.steps with
+  | None -> None
+  | Some i ->
+      let before = List.filteri (fun j _ -> j <= i) pl.steps
+      and after = List.filteri (fun j _ -> j > i) pl.steps in
+      Some ({ pl with steps = before }, after)
 
 (* ---- expressions ---- *)
 
@@ -695,6 +721,10 @@ and expr_of cx (e : expr) : C.expr =
   | Index (a, i) ->
       let a = expr cx a in
       here (Prim (Get_index Checked, [ a; expr cx i ]))
+  | Slice (a, lo, hi) ->
+      let a = expr cx a in
+      let lo = expr cx lo in
+      here (Prim (Slice Range, [ a; lo; expr cx hi ]))
   | Ref ({ kind = Call (f, args); _ } as c) -> call cx ~changed:true c f args
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value; onode } -> assign cx e ~onode target op value
@@ -1448,6 +1478,15 @@ and place cx (e : expr) =
       let hold_i, i = hold cx "index" (expr cx i) in
       ( binds @ hold_i,
         { pl with steps = pl.steps @ [ SIndex (i, ty_of cx e.node, e.loc) ] } )
+  | Slice (a, lo, hi) ->
+      let binds, pl = place cx a in
+      let hold_lo, lo = hold cx "from" (expr cx lo) in
+      let hold_hi, hi = hold cx "to" (expr cx hi) in
+      ( binds @ hold_lo @ hold_hi,
+        {
+          pl with
+          steps = pl.steps @ [ SRange (lo, hi, ty_of cx e.node, e.loc) ];
+        } )
   | _ -> bug "an assignment to something that isn't a place"
 
 (* `x = v` stays as it is. Anything else finds the place, then evaluates
@@ -1596,8 +1635,14 @@ and call cx ?(changed = false) (e : expr) f args =
   | Var (Global p) when List.exists is_named args ->
       tags_call cx ~changed e f p args
   | Field (r, _) -> (
-      match (node cx f.node).found with
-      | Some (Calls_op { key; from; op }) -> desc_method cx e r key from op args
+      match ((node cx f.node).found, args) with
+      | Some (Calls_op { key; from; op }), _ -> desc_method cx e r key from op args
+      | Some (Method_of p), [ n; body ]
+        when changed
+             && List.mem (Prelude.find p)
+                  [ Some Array_split_at; Some Str_split_at; Some Bytes_split_at ]
+        ->
+          split_at cx e r n body
       | _ -> plain_call cx ~changed e f args)
   | _ -> plain_call cx ~changed e f args
 
@@ -1688,6 +1733,45 @@ and desc_method cx (e : expr) (r : expr) key from op args =
             body;
           })
        ty e.loc)
+
+(* `&xs.split_at(n) fn(&lo, &hi) => ...`, [e]: the block given the halves
+   of the place [r], `xs[0..n]` and `xs[n..len]`, each in a variable of
+   its own, which it changes, as an argument passed with `&` is; then
+   [r] is the first followed by the second, even if the block fails
+   (compiler.md, "Blocks with `inout` parameters, and slices"). The place
+   is read, and written back, once, so the block can't see [r] (excl.ml:
+   the call writes it), and holds [Vacant] meanwhile. What the block
+   gives is the call's. *)
+and split_at cx (e : expr) (r : expr) n body =
+  let loc = e.loc in
+  let ty = ty_of cx e.node and self = ty_of cx r.node in
+  let binds, pl = place cx r in
+  let hold_n, n = hold cx "n" (expr cx n) in
+  let hold_b, body = hold cx "body" (expr cx body) in
+  let whole = temp cx "whole" self in
+  let lo = temp cx "lo" self and hi = temp cx "hi" self in
+  let half which args =
+    mk (Prim (Slice which, local whole loc :: n :: args)) self loc
+  in
+  let call = mk (Call (body, [ Ref lo; Ref hi ], cx.ev)) ty loc in
+  let back =
+    write pl (mk (Prim (Join, [ local lo loc; local hi loc ])) self loc) loc
+  in
+  lets
+    (binds @ hold_n @ hold_b
+    @ [
+        (whole, read pl loc);
+        (* the place is vacant while the block has its halves, which a
+           native build can then change in place *)
+        (temp cx "vacant" Ty.unit,
+         write pl (mk (Prim (Vacant, [ local whole loc ])) self loc) loc);
+        (lo, half Before []);
+        (hi, half After [ local lo loc ]);
+      ])
+    (if C.fails body.ty then mk (Finally (call, back)) ty loc
+     else
+       let result = temp cx "result" ty in
+       lets [ (result, call) ] (seq back (local result loc)))
 
 and plain_call cx ~changed ?callee (e : expr) f args =
   let inout (p : expr) ty =
@@ -1942,24 +2026,44 @@ and array_loop cx (e : expr) idx (pat : pattern) (iter : expr) body =
       (mk (While (binop Lt index (local n loc) Ty.bool, pass)) Ty.unit loc)
   in
   match (iter.kind, pat.pkind) with
-  | Ref p, PVar b ->
+  | Ref p, PVar b -> (
       let binds, pl = place cx p in
-      let at =
-        { pl with steps = pl.steps @ [ SIndex (index, elem, iter.loc) ] }
-      in
       let x = bind cx b elem in
-      let pass () =
-        let body = expr cx body in
-        (* the element is written back after the body, even if it fails *)
-        let write = write at (local x loc) loc in
-        let rest =
-          if C.can_fail body || breaks body then
-            seq (mk (Finally (body, write)) body.ty loc) step
-          else seq body (seq write step)
+      let changing pl =
+        let at =
+          { pl with steps = pl.steps @ [ SIndex (index, elem, iter.loc) ] }
         in
-        mk (Let (x, read at iter.loc, rest)) Ty.unit loc
+        let pass () =
+          let body = expr cx body in
+          (* the element is written back after the body, even if it fails *)
+          let write = write at (local x loc) loc in
+          let rest =
+            if C.can_fail body || breaks body then
+              seq (mk (Finally (body, write)) body.ty loc) step
+            else seq body (seq write step)
+          in
+          mk (Let (x, read at iter.loc, rest)) Ty.unit loc
+        in
+        loop ~start:(read pl iter.loc) ~pass:(numbered pass)
       in
-      lets binds (loop ~start:(read pl iter.loc) ~pass:(numbered pass))
+      match split_range pl with
+      | None -> lets binds (changing pl)
+      | Some (range, after) ->
+          (* `for x in &xs[a..b]`: the range is read once, changed, and
+             written back once, even if the loop fails, as `&xs[a..b]`
+             passed to a call is *)
+          let ty =
+            match List.rev range.steps with
+            | SRange (_, _, t, _) :: _ -> t
+            | _ -> bug "a range's place that doesn't end in one"
+          in
+          let t = temp cx "range" ty in
+          let looped = changing { root = t; steps = after } in
+          let back = write range (local t loc) loc in
+          lets
+            (binds @ [ (t, read range iter.loc) ])
+            (if C.can_fail looped then mk (Finally (looped, back)) Ty.unit loc
+             else seq looped back))
   | Ref _, _ -> bug "a `for` with `&` that takes its element apart"
   | _ ->
       let xs = temp cx "xs" array_ty in
@@ -2202,6 +2306,7 @@ let max_binder (f : fn_def) =
     | While { cond = a; body = b } ->
         go a;
         go b
+    | Slice (a, lo, hi) -> List.iter go [ a; lo; hi ]
     | Fail (_, args) -> List.iter (fun (_, a) -> go a) args
     | If (c, t, f) -> List.iter go (c :: t :: Option.to_list f)
     | Call (f, args) -> List.iter go (f :: args)

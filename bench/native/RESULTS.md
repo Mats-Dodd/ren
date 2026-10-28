@@ -34,6 +34,97 @@ handlers; interp's `eval` calls through the tag too, recursion through
 didn't move: handlers, blocks, rbtree, deriv, nbody and stack are within
 1% in cycles.
 
+## Slices (foundations.md, decision 17; compiler.md, step 6)
+
+Slices are built as representation A: a slice is a header like its
+owner's, the same type, with a pointer into the root's buffer and the
+root counted (Roc's seamless slices). `split_at` lends its halves, so a
+quicksort by `split_at` sorts in place. B, a slice inline in its
+container, and the uncounted view of a borrowed root are not built
+(compiler.md, step 6, "Where it differed from its plan").
+
+**The other programs**, release at main.ren's size, against 695b3a8 in
+the same run. Hyperfine, 10 runs, in ms; cycles and instructions the
+median of 5 interleaved runs under `/usr/bin/time -l`; load average
+about 5.
+
+| program | 695b3a8 | after | cycles 10⁶, before / after | ratio | instructions 10⁶ |
+|---|---|---|---|---|---|
+| rbtree | 580.4 ± 3.7 | 574.5 ± 4.0 | 2277 / 2254 | 0.990 | 12744 / 12748 |
+| deriv | 482.4 ± 4.9 | 476.0 ± 3.4 | 1869 / 1849 | 0.990 | 9164 / 9193 |
+| nqueens | 483.2 ± 5.5 | 479.3 ± 6.4 | 1905 / 1881 | 0.988 | 5225 / 5229 |
+| cfold | 54.4 ± 0.9 | 54.1 ± 0.6 | 208 / 206 | 0.994 | 843 / 844 |
+| binary-trees | 5289.6 ± 150.8 | 5183.3 ± 89.8 | 20789 / 20340 | 0.978 | 102208 / 102798 |
+| nbody | 1802.0 ± 3.6 | 1819.0 ± 4.9 | 7089 / 7153 | 1.009 | 26230 / 26429 |
+| fannkuch | 1802.6 ± 7.9 | 1769.9 ± 6.2 | 7085 / 6956 | 0.982 | 20774 / 21650 |
+| nested | 722.5 ± 6.9 | 726.1 ± 6.9 | 2835 / 2858 | 1.008 | 14082 / 14283 |
+| bytes | 541.2 ± 1.2 | 542.1 ± 1.1 | 2129 / 2131 | 1.001 | 2342 / 2346 |
+| vec | 1122.7 ± 3.1 | 1118.3 ± 2.4 | 4417 / 4398 | 0.996 | 16115 / 16122 |
+| blocks | 1141.5 ± 9.6 | 1137.9 ± 16.9 | 4492 / 4497 | 1.001 | 26413 / 26819 |
+| inout | 1481.4 ± 4.9 | 1517.6 ± 5.5 | 5823 / 5967 | 1.025 | 48095 / 48103 |
+| handlers | 939.6 ± 7.4 | 939.3 ± 4.8 | 3699 / 3698 | 1.000 | 24027 / 24027 |
+| stack | 657.3 ± 2.2 | 657.5 ± 0.9 | 2583 / 2587 | 1.002 | 6125 / 6126 |
+| dispatch | 345.8 ± 6.6 | 341.5 ± 6.0 | 1352 / 1335 | 0.988 | 5301 / 5303 |
+
+The first build read `root` in `ren_array_unique` and
+`ren_array_writable`, on every push and every write in place: blocks
+was 1.038 in cycles, its `map` kernel alone 14% (720 against 820
+Mcycles), one more dependent load a push. `cap` now says what kind an
+array is, at least 1 for an owner, 0 for a slice and -1 for a lent one,
+so both tests read the count and `cap` as before. inout's program C is
+the same before and after, and so are its instructions; it calls
+`ren_array_own` twice a round of a thousand elements, so its 2.5% is
+where the loop landed, not work.
+
+**The parsing kernels** (research/slices.md, section 2): bench.ren's
+`logs`, `json` and `pages`, each with slices and with offsets (`_r`), and
+Rust's and Go's twins, each alone at 200,000 for 20 rounds (build.sh's
+`slices-<kernel>`). Per pass, the input's generation (0 rounds)
+subtracted; cycles the median of 10 runs. Rust's slices are `&[u8]`,
+Go's `[]byte`; `_r` is offsets in each language.
+
+| kernel | Ren slices | Ren offsets | Rust slices | Rust offsets | Go slices | Go offsets | Ren slices / Rust slices |
+|---|---|---|---|---|---|---|---|
+| logs, Mcyc a pass | 59.6 | 38.3 | 26.8 | 33.7 | 34.1 | 35.7 | 2.23× |
+| json | 224.6 | 210.3 | 105.7 | 72.3 | 496.3 | 104.0 | 2.12× |
+| pages | 19.7 | 10.2 | 7.5 | 4.3 | 39.1 | 5.5 | 2.64× |
+
+| kernel | allocations a pass | dups a pass | instructions 10⁶ a pass, slices / offsets |
+|---|---|---|---|
+| logs | 1.2M (one a field) | 1.2M | 387 / 271 |
+| json | 6.4M (token and slice) | 8.8M | 1197 / 575 |
+| pages | 611k | 814k | 110 / 31 |
+
+The offsets twins allocate nothing in their loops. These are the
+research's A-heap numbers (logs 55.3 Mcyc a pass, json 196, pages
+17.8; the same allocations and dups exactly), on a machine about as
+loaded; Rust's json ran 1.5× slower than the research's here, so json's
+row is the noisiest. What A costs is a header allocated, the root
+counted, and the header freed, per slice: in logs 21 Mcyc a pass over
+offsets, in pages 9.5.
+
+What B would save, by the research's hand-written B: json 196 to 143
+Mcyc a pass, pages 17.8 to 8.5, within 1.2× of offsets; and the
+uncounted view of a borrowed root, logs 55.3 to 35.7. Both need a
+slice of two or three words held where Ren holds one: in a field, an
+array element, a word of a type variable's value. Step 10's small
+values are release-only and never any of those, and stack.ml's frames,
+where A-frame kept a header, went in decision 14. Until then, offsets
+are the fast way to parse, and slices the clear one at about 2×.
+
+**Writing in place through `split_at`.** A quicksort that recurses on
+the halves of a `split_at`, which are lent, as bench/10d/slices_lent.ren's
+does: 200,000 `Int`s sort in 20 ms, allocating a header for each half and no copy of
+an element, peak 2.1 MB, the array's 1.6 MB and its headers.
+
+**Retention.** The research's program, bench.ren's `retain` (build.sh's
+`retain_slice` and `retain_copy`), eight 8 MiB inputs keeping a
+thousand ten-byte keys each: kept as slices, peak live 134.5 MB, every
+input alive to the end; kept as `.copy()`, 75.9 MB, the generator's
+own. `copy()` of an owner is the owner, counted. The debug report of a
+small slice keeping a large root alive (research/slices.md, section 3)
+is not built.
+
 ## Frames and late overflow cut (foundations.md, decisions 14 and 15)
 
 stack.ml's frames (H8) and late.ml's late overflow removed, against

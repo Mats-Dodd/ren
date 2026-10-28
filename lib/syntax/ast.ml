@@ -53,7 +53,8 @@ type 't ty =
           installing one can fail with, [Sql ! DbDown]: what its state and its
           `finally` fail with (handlers.md, "State that can fail to start") *)
   | TyInout of 't ty * Loc.t
-      (** [inout Int], a parameter of a function type: [fn(inout Int)] *)
+      (** [&Int], a parameter of a function type that the function changes,
+          [fn(&Int)], as a call passes it *)
   | TyErrors of 't errors
       (** [! Short | Frozen], an error set as a type argument, which only
           [Result<T, ! ...>] takes (errors.md, "Keeping an error") *)
@@ -222,6 +223,11 @@ and ('v, 'b, 't) expr_kind =
       (** [(k, v)]: two or three values passed together, taken apart only by
           patterns (operators.md, "Tuples") *)
   | Index of ('v, 'b, 't) expr * ('v, 'b, 't) expr  (** [xs[i]] *)
+  | Slice of ('v, 'b, 't) expr * ('v, 'b, 't) expr * ('v, 'b, 't) expr
+      (** [xs[a..b]]: the elements of an [Array], or the bytes of a [Str] or
+          [Bytes], from [a] up to, but not including, [b], a value of the same
+          type (foundations.md, decision 17). After [&], a place: that range of
+          the array, which the call replaces *)
   | Ref of ('v, 'b, 't) expr
       (** [&scores]: an argument the call changes, or the array a [for] loop
           changes; or, before a method call, [&s.push(1)], the receiver the call
@@ -600,6 +606,7 @@ let children (e : ('v, 'b, 't) expr) =
       [ a ]
   | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
       [ a; b ]
+  | Slice (a, lo, hi) -> [ a; lo; hi ]
   | If (c, t, f) -> c :: t :: Option.to_list f
   | Call (f, args) -> f :: args
   | Array xs | Tuple xs -> xs
@@ -807,7 +814,7 @@ let rec show_ty : ty -> string = function
         | t -> show_ty t
       in
       show_tyname name ^ "<" ^ String.concat ", " (List.map arg args) ^ ">"
-  | TyInout (t, _) -> "inout " ^ show_ty t
+  | TyInout (t, _) -> "&" ^ show_ty t
   | TyFn (params, ret, errs, uses, _) ->
       let ret = match ret with Some r -> " -> " ^ show_ty r | None -> "" in
       let errs =
@@ -919,6 +926,7 @@ let rec show_expr (e : expr) =
   | Array xs -> parens ("array" :: List.map show_expr xs)
   | Tuple xs -> parens ("tuple" :: List.map show_expr xs)
   | Index (a, i) -> parens [ "index"; show_expr a; show_expr i ]
+  | Slice (a, lo, hi) -> parens [ "slice"; show_expr a; show_expr lo; show_expr hi ]
   | Ref a -> parens [ "&"; show_expr a ]
   | Assign { target; op; value; _ } ->
       let op =
@@ -1225,6 +1233,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Call (f, args) -> left 8 f ^ "(" ^ list args ^ ")"
     | Field (r, f) -> left 8 r ^ "." ^ f.name
     | Index (a, i) -> left 8 a ^ "[" ^ go i ^ "]"
+    | Slice (a, lo, hi) -> left 8 a ^ "[" ^ go lo ^ ".." ^ go hi ^ "]"
     | Array xs -> "[" ^ list xs ^ "]"
     | Tuple xs -> "(" ^ list xs ^ ")"
     | Ref a -> "&" ^ go a

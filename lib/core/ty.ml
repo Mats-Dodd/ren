@@ -539,7 +539,9 @@ and shown_needs (i : impl) =
     }
 
 and show_param pr p =
-  match p.mode with Inout -> "inout " ^ show pr p.ty | Read -> show pr p.ty
+  (* a function type's parameter it changes is written as a call passes
+     it, `&Int` (compiler.md, "Blocks with `inout` parameters") *)
+  match p.mode with Inout -> "&" ^ show pr p.ty | Read -> show pr p.ty
 
 (* Whether [t], shown, ends in a `uses` list. *)
 and ends_in_uses pr t =

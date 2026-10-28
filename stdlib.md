@@ -107,6 +107,17 @@ When the body's turn ends, the chunk's reference count reaches zero, its buffer 
 
 Today a cursor's `next` can't fail or use a dependency, so `Fs.line_reader` and `Net.chunks` wait: they need a `next` that fails and uses `Fs` or `Net`, which waits for generators (stage 11c, [foundations.md](foundations.md#12-frames-and-generators)), a `gen fn` being the easy way to write a cursor. A producer can still own the loop and take a block, `Fs.each_line(path) fn(line) => ...`, but there's no `for` sugar for it: a `break` in the body would have to leave the producer's loop, and a block can't. **`Async.pull(seq)`**, which runs a producer on a task and hands back a cursor, is only for a producer that recurses, like a tree walk, and waits for 11a.
 
+### Slices: views without a view type
+
+A parser takes a `Str` or `Bytes` apart without copying it, and without a type that borrows: a slice, `s[a..b]`, is a value of the type it's cut from, which shares that buffer and keeps it alive ([foundations.md](foundations.md#17-slices-are-values), [operators.md](operators.md#slices)). So the library's splitters return slices of what they're given: `s.split(";")` is an array of slices of `s`, and `s.trim()` a slice of it, cut where they found a separator or a space, so neither checks for a character it cut. A record that keeps a slice keeps the whole buffer, so code that keeps a few small slices of a large input calls `copy()` on them, which costs nothing on a value that already has its own buffer:
+
+```ren
+let fields = line.trim().split(" ")        // slices of `line`, no copies
+&index.push(fields[0].copy())              // a key kept past the file it came from
+```
+
+A function that changes parts of an array in place takes them as places, `&xs.split_at(n) fn(&lo, &hi) => ...`, which is how a sort or a parallel loop divides its work.
+
 ### `Time` and `Instant`
 
 Go's `time.Time` hides a monotonic reading inside a wall-clock time. The reading is lost when the value is serialized, and subtracting two times can then go silently wrong. Ren uses two types, as Rust does:

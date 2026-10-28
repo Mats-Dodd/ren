@@ -47,8 +47,10 @@ prints to this one's stdout itself. `run` uses only `Console` and
 of that out.
 
 **A string's indices are bytes.** `parse` splits the text on `"\n"`, and
-cuts a recipe's line at the offset `index(":")` gives, with `slice`. There's
-no way to land inside a character: `index` gives where a whole match starts.
+cuts a recipe's line at the offset `index(":")` gives, `t[0..colon]`, a
+slice of the line, which shares its bytes. There's no way to land inside a
+character: `index` gives where a whole match starts, and a slice that cut
+one would panic.
 Bytes come in only at the edge: `Fs.read_str` reads them and turns them
 into a `Str` with `Str.from_utf8`, which fails with `InvalidUtf8`, so
 `main` can.

@@ -22,7 +22,7 @@ and it runs on the test implementations of the built-ins:
   account> a
   Account(id: AccountId(1), balance: Money(0), frozen: true, statement: []) : Account
   account> :t Account.credit
-  fn(inout Account, Money, Movement) ! Frozen(AccountId) uses Clock
+  fn(&Account, Money, Movement) ! Frozen(AccountId) uses Clock
   account> attempt &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
   Err(Frozen(AccountId(1))) : Result<Unit, ! Frozen(AccountId)>
   account> Clock.now()

@@ -1109,7 +1109,7 @@ fn main() uses Console =
 
 let%expect_test "[s5 reject] call.forward() at most once" =
   check_error
-        {|
+    {|
 handler twice() over any =
   call =>
     let _ = attempt call.forward()
@@ -1130,7 +1130,7 @@ let%expect_test "[s5 reject] call is only used through" =
      can't call `call.forward()`, since that would be a second way to
      call it twice *)
   check_error
-        {|
+    {|
 handler kept() over any =
   call =>
     let c = call
@@ -1149,7 +1149,7 @@ fn main() = 1
 
 let%expect_test "[s5 reject] call.args can't be taken apart" =
   check_error
-        {|
+    {|
 handler peek() over any =
   call =>
     let (a, b) = call.args
@@ -1168,7 +1168,7 @@ fn main() = 1
 
 let%expect_test "[s5 reject] an over any handler is installed with over" =
   check_error
-        {|
+    {|
 dep Users =
   get: fn(id: Int) -> Int
 
@@ -1443,17 +1443,8 @@ fn main() uses Console =
 (* ---- s6: blocks with `inout` parameters, and slices (decision 17) ---- *)
 
 let%expect_test "[s6 accept] blocks that take inout parameters (M3)" =
-  until "s6"
-    ~want:{|
-(11, 0)
-[1, 20, 3]
-12
-15
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int)) = try f(&a, &b)
 
 fn modify(inout xs: Array<Int>, i: Int, f: fn(&Int)) = try f(&xs[i])
@@ -1489,112 +1480,63 @@ fn main() uses Console =
     Tally.change(1) fn(&c) => c += 5
     Tally.change(1) fn(&c) => c = c * 3
     print(Tally.get(1))
-|});
+|};
   [%expect {|
-    (until s6)
-    error: expected a name, found `&`
-      ┌─ test.ren:1:43
-    1 │ fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int)) = try f(&a, &b)
-      │                                           ^
-
-    error: expected a name, found `&`
-      ┌─ test.ren:3:47
-    3 │ fn modify(inout xs: Array<Int>, i: Int, f: fn(&Int)) = try f(&xs[i])
-      │                                               ^
-
-    error: expected a name, found `&`
-      ┌─ test.ren:6:28
-    6 │   change: fn(k: Int, f: fn(&Int))
-      │                            ^
-
-    error: expected a name, found `&`
-       ┌─ test.ren:22:19
-    22 │   both(&x, &y) fn(&a, &b) =>
-       │                   ^
+    (11, 0)
+    [1, 20, 3]
+    12
+    15
+    ()
     |}]
 
 let%expect_test "[s6 accept] a function type writes an inout parameter &T" =
-  until "s6" ~checks:true
-    ~says:[ "f: fn(&Int, &Int)" ]
-    (fun () ->
-      types
-        {|
+  types
+    {|
 fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int)) = try f(&a, &b)
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s6)
-    error: expected a name, found `&`
-      ┌─ test.ren:1:43
-    1 │ fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int)) = try f(&a, &b)
-      │                                           ^
+    fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int))
+    fn main() -> Int
     |}]
 
 let%expect_test "[s6 reject] a block's inout parameter is written &x" =
   (* test_mut.ml's "blocks can't take inout parameters" becomes this *)
-  until "s6"
-    ~says:
-      [
-        "error: a block's parameter that it changes is written `&n`";
-        "help: write `fn(&n) => ...`";
-      ]
-    (fun () ->
-      check_error {|
+  check_error {|
 fn main() =
   let f = fn(inout n) => n += 1
   ()
-|});
+|};
   [%expect {|
-    (until s6)
-    error: blocks can't take `inout` parameters yet
+    error: a block's parameter that it changes is written `&n`
       ┌─ test.ren:2:20
     2 │   let f = fn(inout n) => n += 1
       │                    ^
-      help: use a top-level function for this
+      help: write `fn(&n) => ...`
     |}]
 
 let%expect_test "[s6 reject] a block can't read what the call it's given to changes" =
   (* exclusivity, unchanged: the receiver `&xs` is a write of `xs` for
      the call, and the block reads it *)
-  until "s6"
-    ~says:
-      [
-        "error: `xs` is read by this block while the call changes it";
-        "help: read it first: `let item = xs[3]`, and use `item` in the block";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() =
   var xs = [1, 2, 3, 4]
   &xs.split_at(2) fn(&lo, &hi) => lo[0] = xs[3]
-|});
+|};
   [%expect {|
-    (until s6)
-    error: expected a name, found `&`
-      ┌─ test.ren:3:22
+    error: `xs` is read by this block while the call changes it
+      ┌─ test.ren:3:43
     3 │   &xs.split_at(2) fn(&lo, &hi) => lo[0] = xs[3]
-      │                      ^
+      │                                           ^^^^^ read here
+      │    -- changed for the whole call
+      = a block runs during the call it's passed to
+      help: read it first: `let item = xs[3]`, and use `item` in the block
     |}]
 
 let%expect_test "[s6 accept] slices are values of the type they slice (M6)" =
-  until "s6"
-    ~want:
-      {|
-[2, 3, 4, 5]
-4
-[3, 4]
-true
-0
-true
-[70, 8, 9, 10]
-[7, 8, 9]
-true
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   let mid = xs[2..6]
@@ -1610,30 +1552,25 @@ fn main() uses Console =
   print(ys)
   print(xs[7..10])
   print(ys.copy() == ys)
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-      ┌─ test.ren:3:17
-    3 │   let mid = xs[2..6]
-      │                 ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+    [2, 3, 4, 5]
+    4
+    [3, 4]
+    true
+    0
+    true
+    [70, 8, 9, 10]
+    [7, 8, 9]
+    true
+    ()
     |}]
 
 let%expect_test "[s6 accept] & on a range changes that range" =
   (* as `&xs[i]` changes an element: what the call leaves in its
      parameter replaces the range, so a longer one moves what follows *)
-  until "s6"
-    ~want:
-      {|
-[1, 4, 6, 4, 5]
-[1, 4, 0, 6, 4, 5]
-[1, 4, 0, 106, 104, 105]
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn double(inout ys: Array<Int>) =
   for i in 0..ys.len()
     ys[i] = ys[i] * 2
@@ -1649,28 +1586,17 @@ fn main() uses Console =
   for z in &zs[3..6]
     z = z + 100
   print(zs)
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-      ┌─ test.ren:9:15
-    9 │   double(&zs[1..3])
-      │               ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+    [1, 4, 6, 4, 5]
+    [1, 4, 0, 6, 4, 5]
+    [1, 4, 0, 106, 104, 105]
+    ()
     |}]
 
 let%expect_test "[s6 accept] split_at gives a block two places of its own" =
-  until "s6"
-    ~want:
-      {|
-[6, 8, 10, 12, 100, 6, 7, 8]
-6
-[6, 8, 0, 10, 12, 100, 6, 7, 8]
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn add(inout dst: Array<Int>, src: Array<Int>) =
   for i in 0..dst.len()
     dst[i] = dst[i] + src[i]
@@ -1686,36 +1612,19 @@ fn main() uses Console =
     hi.len()
   print(n)
   print(ws)
-|});
+|};
   [%expect {|
-    (until s6)
-    error: expected a name, found `&`
-      ┌─ test.ren:7:22
-    7 │   &ws.split_at(4) fn(&lo, &hi) =>
-      │                      ^
+    [6, 8, 10, 12, 100, 6, 7, 8]
+    6
+    [6, 8, 0, 10, 12, 100, 6, 7, 8]
+    ()
     |}]
 
 let%expect_test "[s6 accept] Str and Bytes slices" =
   (* a `Str`'s offsets are bytes, as `len` counts them; `split` and `trim`
      give slices of what they're given *)
-  until "s6"
-    ~want:
-      {|
-héllo
-wörld
-6
-true
-["héllo", "wörld"]
-true
-3
-true
-Ok("bcd")
-true
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let s = "héllo, wörld"
   print(s[0..6])
@@ -1729,101 +1638,79 @@ fn main() uses Console =
   print(b[1..4] == "bcd".bytes())
   print(attempt Str.from_utf8(b[1..4]))
   print(b.copy() == b)
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-      ┌─ test.ren:3:12
-    3 │   print(s[0..6])
-      │            ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+    héllo
+    wörld
+    6
+    true
+    ["héllo", "wörld"]
+    true
+    3
+    true
+    Ok("bcd")
+    true
+    ()
     |}]
 
 let%expect_test "[s6 reject] slices that panic" =
-  until "s6"
-    ~says:[ "panic: slice 2 to 5 is out of bounds for an array of length 3" ]
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let xs = [1, 2, 3]
   let n = 5
   print(xs[2..n])
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-      ┌─ test.ren:4:13
+    error: panic: slice 2 to 5 is out of bounds for an array of length 3
+      ┌─ test.ren:4:9
     4 │   print(xs[2..n])
-      │             ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+      │         ^^^^^^^^
     |}];
-  until "s6"
-    ~says:[ "panic: slice 3 to 1 ends before it starts" ]
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let xs = [1, 2, 3]
   let a = 3
   print(xs[a..1])
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-      ┌─ test.ren:4:13
+    error: panic: slice 3 to 1 ends before it starts
+      ┌─ test.ren:4:9
     4 │   print(xs[a..1])
-      │             ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+      │         ^^^^^^^^
     |}];
-  until "s6"
-    ~says:[ "panic: slice 0 to 2 ends inside a character" ]
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let s = "héllo"
   print(s[0..2])
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-      ┌─ test.ren:3:12
+    error: panic: slice 0 to 2 ends inside a character
+      ┌─ test.ren:3:9
     3 │   print(s[0..2])
-      │            ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+      │         ^^^^^^^
     |}];
-  until "s6"
-    ~says:[ "panic: `split_at` 5 is out of bounds for an array of length 3" ]
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   var xs = [1, 2, 3]
   &xs.split_at(5) fn(&lo, &hi) => lo[0] = 0
   print(xs)
-|});
+|};
   [%expect {|
-    (until s6)
-    error: expected a name, found `&`
-      ┌─ test.ren:3:22
+    error: panic: `split_at` 5 is out of bounds for an array of length 3
+      ┌─ test.ren:3:4
     3 │   &xs.split_at(5) fn(&lo, &hi) => lo[0] = 0
-      │                      ^
+      │    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s6 reject] two ranges of one array in one call" =
   (* two ranges may overlap, as two indices may, so no rule changes; the
      help says how to change both *)
-  until "s6"
-    ~says:
-      [
-        "error: `xs` is passed with `&` twice in this call";
-        "help: to change two parts of one array, split it: \
-         `&xs.split_at(2) fn(&lo, &hi) => ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn add(inout dst: Array<Int>, src: Array<Int>) =
   for i in 0..dst.len()
     dst[i] = dst[i] + src[i]
@@ -1834,50 +1721,44 @@ fn both(inout a: Array<Int>, inout b: Array<Int>) =
 fn main() =
   var xs = [1, 2, 3, 4]
   both(&xs[0..2], &xs[2..4])
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
-       ┌─ test.ren:10:13
+    error: `xs` is passed with `&` twice in this call
+       ┌─ test.ren:10:19
     10 │   both(&xs[0..2], &xs[2..4])
-       │             ^^
-       help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+       │                   ^^^^^^^^^
+       │        --------- passed with `&` here
+       = an argument passed with `&` has to be the only way the call can reach that value
+       = `xs[0..2]` and `xs[2..4]` may overlap
+       help: to change two parts of one array, split it: `&xs.split_at(2) fn(&lo, &hi) => ...`
     |}]
 
 let%expect_test "[s6 reject] Str.slice is a slice now" =
-  until "s6"
-    ~says:
-      [ "error: `Str` has no method named `slice`"; "help: slice it: `s[0..2]`" ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console =
   let s = "hello"
   print(s.slice(0, 2))
-|});
+|};
   [%expect {|
-    (until s6)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `Str` has no method named `slice`
+      ┌─ test.ren:3:11
+    3 │   print(s.slice(0, 2))
+      │           ^^^^^
+      help: slice it: `s[0..2]`
     |}]
 
 let%expect_test "[s6 reject] a range is a value only in a for and an index" =
   (* test_collections.ml's range test changes its help to this *)
-  until "s6"
-    ~says:
-      [
-        "help: a range is for counting, `for i in 0..n`, and for slicing, \
-         `xs[a..b]`";
-      ]
-    (fun () -> check_error {|
+  check_error {|
 fn main() =
   let r = 0..3
   ()
-|});
+|};
   [%expect {|
-    (until s6)
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
+    error: a range, `a..b`, is written only after a `for`'s `in`, or in an index: it isn't a value
       ┌─ test.ren:2:12
     2 │   let r = 0..3
       │            ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+      help: a range is for counting, `for i in 0..n`, and for slicing, `xs[a..b]`
     |}]

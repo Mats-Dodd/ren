@@ -448,11 +448,11 @@ fn main() =
 |};
   [%expect
     {|
-    error: a range, `a..b`, is written only after a `for`'s `in`: it isn't a value
+    error: a range, `a..b`, is written only after a `for`'s `in`, or in an index: it isn't a value
       ┌─ test.ren:2:12
     2 │   let r = 0..3
       │            ^^
-      help: a range is for counting, `for i in 0..n`; to keep some of an array, use `take` and `drop`
+      help: a range is for counting, `for i in 0..n`, and for slicing, `xs[a..b]`
     |}];
   check_error {|
 fn main() =

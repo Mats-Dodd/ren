@@ -427,3 +427,78 @@ fn f(m) =
               (parameter
                 (identifier)))
             (identifier)))))))
+
+================================================================================
+slices, and `&` on a range
+================================================================================
+
+fn f() = g(xs[1..n], &ys[a + 1..len(ys)])
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (call_expression
+      (identifier)
+      (arguments
+        (index_expression
+          (identifier)
+          (range
+            (number)
+            (identifier)))
+        (reference
+          (index_expression
+            (identifier)
+            (range
+              (binary_expression
+                (identifier)
+                (number))
+              (call_expression
+                (identifier)
+                (arguments
+                  (identifier))))))))))
+
+================================================================================
+blocks with parameters they change
+================================================================================
+
+fn f() = &xs.split_at(2) fn(&lo, &hi: Array<Int>) => lo.len() + hi.len()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (reference
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments
+          (number))
+        (lambda
+          (parameters
+            (parameter
+              (inout)
+              (identifier))
+            (parameter
+              (inout)
+              (identifier)
+              (named_type
+                (type_name
+                  (type_identifier))
+                (type_arguments
+                  (named_type
+                    (type_name
+                      (type_identifier)))))))
+          (binary_expression
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (arguments))
+            (method_call_expression
+              (identifier)
+              (identifier)
+              (arguments))))))))

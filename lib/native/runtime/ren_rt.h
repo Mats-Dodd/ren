@@ -153,13 +153,32 @@ typedef struct {
   ren_val fields[];
 } ren_ctor;
 
+/* An array, or a slice of one (foundations.md, decision 17): Roc's
+   seamless slices, a slice the same type as what it slices. An owner
+   holds its buffer, [data], and [root] is NULL. A slice's [data] points
+   into its root's buffer, [len] elements from where it starts, and
+   [root] is the owner, counted: a slice keeps its whole root alive, and
+   a slice of a slice has the first one's root, so roots never chain.
+   Readers can't tell one from the other, since each reads through
+   [data].
+
+   An owner whose count is 1 is changed in place ([ren_array_unique]);
+   so is a slice whose count is 1 if it's lent ([ren_array_writable]): a
+   half of a `split_at` of a value nothing else held, the range of which
+   nothing else sees. Writing to any other slice copies its range first,
+   into an owner of its own. An owner's [cap] is at least 1, a slice's
+   is 0, and a lent slice's is -1, so the tests of both read [cap] and
+   not [root]: reading [root] on every push and write made blocks' map
+   14% slower in cycles, and inout's array kernels 2% (RESULTS.md,
+   "Slices"). */
 typedef struct {
   ren_obj h;
   int64_t len;
-  int64_t cap;
+  int64_t cap;    /* an owner's room, at least 1; a slice's 0, -1 if lent */
   ren_val *data;
   int64_t stride; /* words an element, 1 but for an array of structs; 1
                      for one of a sized type, whose width its kind says */
+  ren_obj *root;  /* NULL, or the owner of the buffer [data] is in */
 } ren_array;
 
 /* The kinds of an array's elements: words, or a sized type's, each kept
@@ -220,10 +239,17 @@ static inline ren_val ren_sized_word(uint8_t kind, uint64_t bits) {
   return v;
 }
 
+/* A `Str` or `Bytes`, the same in memory: an owner, whose [data] is its
+   own [bytes], [len] of them then a 0, and whose [root] is NULL; or a
+   slice, whose [data] points into its root's bytes, not followed by a 0,
+   and whose [root] is that owner, counted, as an array's is. Nothing
+   writes a string's bytes once it's made, so a slice is never copied. */
 typedef struct {
   ren_obj h;
   int64_t len;
-  char data[]; /* [len] bytes, then a 0 */
+  const char *data;
+  ren_obj *root;
+  char bytes[];
 } ren_str;
 
 /* Where a panic is, and what it prints: the compiler renders `ren run`'s
@@ -662,9 +688,22 @@ static inline void ren_array_check(ren_obj *a, int64_t i, const ren_site *site) 
    reference is dropped. */
 ren_obj *ren_array_unshare(ren_obj *a);
 
-/* [a], taken, made unique: itself if its count is 1, else a copy. */
+/* Whether [a] can grow in place: unique, and an owner, not a slice of
+   another's buffer, which another slice's elements may follow. */
+static inline bool ren_array_unique(ren_obj *a) {
+  return ren_rc(a) == 1 && ((ren_array *)a)->cap > 0;
+}
+
+/* Whether [a]'s elements can be changed in place: unique, and an owner or
+   a lent slice. Every change in place of an element asks this. */
+static inline bool ren_array_writable(ren_obj *a) {
+  return ren_rc(a) == 1 && ((ren_array *)a)->cap != 0;
+}
+
+/* [a], taken, made writable: itself if it is, else a copy, which a
+   slice's write makes of its range. */
 static inline ren_obj *ren_array_own(ren_obj *a) {
-  return __builtin_expect(ren_rc(a) == 1, 1) ? a : ren_array_unshare(a);
+  return __builtin_expect(ren_array_writable(a), 1) ? a : ren_array_unshare(a);
 }
 
 /* Element [i], counted again if it's an object: panics if [i] is out of
@@ -689,7 +728,7 @@ static inline ren_val ren_array_get_s(ren_obj *a, int64_t i, const ren_site *sit
    it doesn't copy it (Lean's swap-out, `Array.modify`'s `swapAt` and
    `mapMUnsafe`'s `uset i default`, Init/Data/Array/Basic.lean:774).
    [a] is unique exactly when the write after would change it in place,
-   which tests the count the same way ([ren_array_own]), so nothing but
+   which tests the same way ([ren_array_own]), so nothing but
    that write sees the scalar. Otherwise it's counted again, as
    [ren_array_get] does. */
 static inline ren_val ren_array_take(ren_obj *a, int64_t i, const ren_site *site) {
@@ -697,7 +736,7 @@ static inline ren_val ren_array_take(ren_obj *a, int64_t i, const ren_site *site
   ren_val *at = &((ren_array *)a)->data[i];
   ren_val v = *at;
   if (a->objs) {
-    if (__builtin_expect(ren_rc(a) == 1, 1))
+    if (__builtin_expect(ren_array_writable(a), 1))
       at->o = ren_box(0);
     else
       ren_dup(v.o);
@@ -968,6 +1007,58 @@ static inline const char *ren_str_data(ren_obj *s) { return ((ren_str *)s)->data
 ren_obj *ren_str_concat(ren_obj *a, ren_obj *b);
 bool ren_str_eq(ren_obj *a, ren_obj *b);
 
+/* ---- slices (foundations.md, decision 17) ----
+
+   Each borrows what it's given and counts what it keeps, as the rest of
+   the runtime's functions do. [str] says a string's slice is a `Str`'s,
+   which checks it doesn't cut a character, and not `Bytes`'; both are
+   [ren_str]s. The panics are the interpreter's (builtins.ml,
+   [slice_value] and [split_halves]). */
+
+/* `a[i..j]`: a slice of [a]'s root, counting it; panics if the range
+   ends before it starts, isn't in [a], or cuts a `Str`'s character. */
+ren_obj *ren_array_slice(ren_obj *a, int64_t i, int64_t j, const ren_site *site);
+ren_obj *ren_str_slice(ren_obj *s, int64_t i, int64_t j, bool str,
+                       const ren_site *site);
+
+/* The halves of `a.split_at(n)`, `a[0..n]` and `a[n..len]`: the first
+   panics if [n] isn't in [a], or cuts a `Str`'s character, which the
+   second, made right after it, and given it, [lo], doesn't check again.
+   An array's halves are lent if [a] can be changed in place, which its
+   place, vacant meanwhile, doesn't stop (Core's [Vacant]). */
+ren_obj *ren_array_before(ren_obj *a, int64_t n, const ren_site *site);
+ren_obj *ren_array_after(ren_obj *a, int64_t n, ren_obj *lo);
+ren_obj *ren_str_before(ren_obj *s, int64_t n, bool str, const ren_site *site);
+ren_obj *ren_str_after(ren_obj *s, int64_t n);
+
+/* [a] with its range from [i] up to [j] replaced by [b]'s elements, or
+   bytes: what `&a[i..j]` writes back, a new owner; and [a] followed by
+   [b], what a `split_at` writes back: if they're still next to each
+   other in one root, what they're slices of, without a copy, else a new
+   owner. None of them is taken. */
+ren_obj *ren_array_splice(ren_obj *a, int64_t i, int64_t j, ren_obj *b);
+ren_obj *ren_str_splice(ren_obj *s, int64_t i, int64_t j, ren_obj *b);
+ren_obj *ren_array_join(ren_obj *a, ren_obj *b);
+ren_obj *ren_str_join(ren_obj *a, ren_obj *b);
+
+/* `s.split(sep)`, an array of slices of [s], panicking as the
+   interpreter does on an empty [sep]; and `s.trim()`, a slice of [s]
+   without the spaces, tabs and newlines at its ends (OCaml's
+   `String.trim`, builtins.ml's). Neither checks its cuts: they're next to
+   bytes it found, which no character continues. */
+ren_obj *ren_str_split(ren_obj *s, ren_obj *sep, const ren_site *site);
+ren_obj *ren_str_trim(ren_obj *s);
+
+/* `copy()`: [a] with a buffer of its own, counted again if it already
+   has one (an owner), else a copy of its range. */
+ren_obj *ren_array_copied(ren_obj *a);
+ren_obj *ren_str_copied(ren_obj *s);
+
+/* `Bytes`' byte [i], 0 to 255, panicking as `b.at(i)` does if it isn't
+   one; and `Bytes.of(xs)`, panicking at an element that isn't a byte. */
+int64_t ren_bytes_at(ren_obj *b, int64_t i, const ren_site *site);
+ren_obj *ren_bytes_of(ren_obj *a, const ren_site *site);
+
 /* What `show` makes of a scalar, as Ren writes it; a NaN can't be shown,
    and panics at [site] (nan.ml). */
 ren_obj *ren_show_int(int64_t n);
@@ -1233,6 +1324,7 @@ enum {
   REN_D_UNKNOWN, /* a type variable nothing decided: no value has it */
   REN_D_SIZED,   /* a sized type's, [var] its kind, [REN_ELEM_U8]... */
   REN_D_HANDLER, /* a handler's description, an object nothing looks into */
+  REN_D_BYTES,   /* `Bytes`, a string the walk shows each byte of */
 };
 
 struct ren_decl;

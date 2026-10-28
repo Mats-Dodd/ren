@@ -1790,6 +1790,10 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Index (a, i) ->
         let a = go a in
         Index (a, go i)
+    | Slice (a, lo, hi) ->
+        let a = go a in
+        let lo = go lo in
+        Slice (a, lo, go hi)
     | Ref a -> Ref (go a)
     | Assign
         {

@@ -973,7 +973,7 @@ let%expect_test "inout in signatures" =
     {|
 fn bump(inout n) =
   n += 1
-fn apply(f: fn(inout Int), inout x: Int) =
+fn apply(f: fn(&Int), inout x: Int) =
   try f(&x)
 fn main() =
   var a = 1
@@ -982,7 +982,7 @@ fn main() =
   [%expect
     {|
     fn bump(inout n: Int)
-    fn apply(f: fn(inout Int), inout x: Int)
+    fn apply(f: fn(&Int), inout x: Int)
     fn main()
     |}]
 
@@ -1000,12 +1000,12 @@ fn main() =
 |};
   [%expect
     {|
-    error: expected `fn(_) -> _`, found `fn(inout Array<Int>)`
+    error: expected `fn(_) -> _`, found `fn(&Array<Int>)`
       ┌─ test.ren:5:6
     5 │   ap(bump, &xs)
       │      ^^^^
-      = a function that changes its argument (`inout`) can't stand in for one that only reads it: its caller wouldn't pass the argument with `&`, so the change would be lost
-      help: pass it only where the parameter's type says `fn(inout ...)`, or call it directly
+      = a function that changes its argument (`&`) can't stand in for one that only reads it: its caller wouldn't pass the argument with `&`, so the change would be lost
+      help: pass it only where the parameter's type says `fn(&...)`, or call it directly
 
     error: `ap` doesn't change this argument
       ┌─ test.ren:5:12
@@ -1016,18 +1016,18 @@ fn main() =
     |}];
   run
     {|
-fn apply(f: fn(inout Int), inout x: Int) = try f(&x)
+fn apply(f: fn(&Int), inout x: Int) = try f(&x)
 fn main() =
   var a = 1
   apply(fn(n) => (), &a)
 |};
   [%expect
     {|
-    error: expected `fn(inout Int)`, found `fn(_)`
+    error: expected `fn(&Int)`, found `fn(_)`
       ┌─ test.ren:4:9
     4 │   apply(fn(n) => (), &a)
       │         ^^^^^^^^^^^
-      = a function that only reads its argument can't stand in for one that changes it (`inout`)
+      = a function that only reads its argument can't stand in for one that changes it (`&`)
     |}]
 
 let%expect_test "an inout argument needs &" =

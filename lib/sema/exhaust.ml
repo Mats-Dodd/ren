@@ -399,6 +399,7 @@ let rec check_expr env (e : expr) =
   | Binop (_, a, b, _) | Index (a, b) ->
       check_expr env a;
       check_expr env b
+  | Slice (a, lo, hi) -> List.iter (check_expr env) [ a; lo; hi ]
   | If (c, t, f) -> List.iter (check_expr env) (c :: t :: Option.to_list f)
   | Array xs | Tuple xs -> List.iter (check_expr env) xs
   | Assign { target; value; _ } -> List.iter (check_expr env) [ target; value ]

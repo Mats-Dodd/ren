@@ -1,0 +1,131 @@
+// The inputs the slices benchmark parses (research/slices.md), which its
+// Rust and Go twins make byte for byte: log lines, a JSON-ish array of
+// objects, and pages of records.
+
+pub fn next(inout seed: Int) -> Int =
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  seed
+
+fn push_str(inout out: Array<Int>, s: Str) =
+  let b = s.bytes()
+  for i in 0..b.len()
+    &out.push(b.at(i))
+
+fn push_int(inout out: Array<Int>, n: Int) =
+  if n >= 10 then push_int(&out, n / 10)
+  &out.push(48 + n % 10)
+
+fn digits(n: Int) -> Int = if n < 10 then 1 else 1 + digits(n / 10)
+
+// "<ts> <LEVEL> <service> <latency> /api/v<k>/<resource>/<id>\n"
+pub fn logs(lines: Int) -> Bytes =
+  var seed = 42
+  var out: Array<Int> = []
+  let levels = ["ERROR", "WARN", "INFO", "INFO", "INFO", "INFO", "INFO", "INFO", "INFO", "INFO"]
+  let services = ["auth", "billing", "search", "cart"]
+  let resources = ["users", "orders", "items", "carts", "sessions"]
+  for i in 0..lines
+    push_int(&out, 1700000000 + i)
+    &out.push(32)
+    push_str(&out, levels[next(&seed) % 10])
+    &out.push(32)
+    push_str(&out, services[next(&seed) % 4])
+    &out.push(32)
+    push_int(&out, next(&seed) % 5000)
+    &out.push(32)
+    push_str(&out, "/api/v")
+    push_int(&out, next(&seed) % 3)
+    &out.push(47)
+    push_str(&out, resources[next(&seed) % 5])
+    &out.push(47)
+    push_int(&out, next(&seed) % 100000)
+    &out.push(10)
+  Bytes.of(out)
+
+fn key(inout out: Array<Int>, k: Str) =
+  &out.push(34)
+  push_str(&out, k)
+  push_str(&out, "\":")
+
+// [{"id":1,"name":"user_17","email":"u17@example.com","tags":["a","bb"],"score":42,"active":true}, ...]
+pub fn json(n: Int) -> Bytes =
+  var seed = 7
+  var out: Array<Int> = []
+  let tags = ["red", "green", "blue", "admin", "beta", "x"]
+  &out.push(91)
+  for i in 0..n
+    if i > 0 then push_str(&out, ",\n")
+    &out.push(123)
+    key(&out, "id")
+    push_int(&out, i)
+    &out.push(44)
+    key(&out, "name")
+    push_str(&out, "\"user_")
+    push_int(&out, next(&seed) % 100000)
+    &out.push(34)
+    &out.push(44)
+    key(&out, "email")
+    push_str(&out, "\"u")
+    push_int(&out, next(&seed) % 100000)
+    push_str(&out, "@example.com\",")
+    key(&out, "tags")
+    &out.push(91)
+    let k = next(&seed) % 4
+    for t in 0..k
+      if t > 0 then &out.push(44)
+      &out.push(34)
+      push_str(&out, tags[next(&seed) % 6])
+      &out.push(34)
+    &out.push(93)
+    &out.push(44)
+    key(&out, "score")
+    push_int(&out, next(&seed) % 10000)
+    &out.push(44)
+    key(&out, "active")
+    push_str(&out, if next(&seed) % 2 == 0 then "true" else "false")
+    &out.push(125)
+  &out.push(93)
+  Bytes.of(out)
+
+// Pages of 4096 bytes: a count (2 bytes, little end first), then each
+// record's offset (2 bytes), then the records, each a key's length (1
+// byte), the key, a value's length (2 bytes) and the value.
+pub fn pages(count: Int) -> Bytes =
+  var seed = 3
+  var out: Array<Int> = []
+  var id = 0
+  for _ in 0..count
+    // the records that fit, chosen first
+    var keys: Array<Int> = []
+    var lens: Array<Int> = []
+    var used = 2
+    var full = false
+    while not full
+      let k = next(&seed) % 1000000
+      let v = 8 + next(&seed) % 120
+      let size = 2 + 1 + 1 + digits(k) + 2 + v
+      if used + size > 4096 then full = true
+      else
+        &keys.push(k)
+        &lens.push(v)
+        used += size
+    let n = keys.len()
+    &out.push(n % 256)
+    &out.push(n / 256)
+    var off = 2 + 2 * n
+    for r in 0..n
+      &out.push(off % 256)
+      &out.push(off / 256)
+      off += 1 + 1 + digits(keys[r]) + 2 + lens[r]
+    for r in 0..n
+      &out.push(1 + digits(keys[r]))
+      &out.push(107)
+      push_int(&out, keys[r])
+      &out.push(lens[r] % 256)
+      &out.push(lens[r] / 256)
+      for i in 0..lens[r]
+        &out.push(97 + (id + i) % 26)
+      id += 1
+    for _ in off..4096
+      &out.push(0)
+  Bytes.of(out)

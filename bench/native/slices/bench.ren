@@ -1,0 +1,337 @@
+// Slices (foundations.md, decision 17; research/slices.md): three
+// parsers, each written with slices, `b[i..j]`, and with offsets into
+// the buffer, two `Int`s, its twin. `logs` splits lines into fields it
+// reads and drops; `json` keeps a token array whose texts are slices;
+// `pages` keeps records whose key and value are. Each prints the size of
+// its input and both twins' checksums, which are the same.
+import gen
+
+// ---- (a) log lines, split into fields ----
+
+type Stats = { errors: Int, warns: Int, error_latency: Int, path_bytes: Int, search: Int }
+
+fn total(st: Stats) -> Int =
+  st.errors + st.warns * 3 + st.error_latency + st.path_bytes * 7 + st.search * 11
+
+fn parse_int(b: Bytes) -> Int =
+  var n = 0
+  for i in 0..b.len()
+    n = n * 10 + b.at(i) - 48
+  n
+
+// the fields of one line, each a slice of it
+fn line(l: Bytes, inout st: Stats) =
+  var start = 0
+  var f = 0
+  var is_error = false
+  for k in 0..l.len() + 1
+    if k == l.len() || l.at(k) == 32 then
+      let field = l[start..k]
+      if f == 1 then
+        if field == "ERROR".bytes() then
+          st.errors += 1
+          is_error = true
+        else if field == "WARN".bytes() then st.warns += 1
+      else if f == 2 then
+        if field == "search".bytes() then st.search += 1
+      else if f == 3 then
+        if is_error then st.error_latency += parse_int(field)
+      else if f == 4 then st.path_bytes += field.len()
+      f += 1
+      start = k + 1
+
+pub fn logs(buf: Bytes) -> Int =
+  var st = Stats { errors: 0, warns: 0, error_latency: 0, path_bytes: 0, search: 0 }
+  var i = 0
+  for j in 0..buf.len()
+    if buf.at(j) == 10 then
+      line(buf[i..j], &st)
+      i = j + 1
+  total(st)
+
+// the same, each field a range of the buffer
+fn parse_int_r(b: Bytes, from: Int, to: Int) -> Int =
+  var n = 0
+  for i in from..to
+    n = n * 10 + b.at(i) - 48
+  n
+
+fn equal(b: Bytes, from: Int, to: Int, s: Bytes) -> Bool =
+  var same = to - from == s.len()
+  var i = 0
+  while same && i < s.len()
+    same = b.at(from + i) == s.at(i)
+    i += 1
+  same
+
+fn line_r(b: Bytes, from: Int, to: Int, inout st: Stats) =
+  var start = from
+  var f = 0
+  var is_error = false
+  for k in from..to + 1
+    if k == to || b.at(k) == 32 then
+      if f == 1 then
+        if equal(b, start, k, "ERROR".bytes()) then
+          st.errors += 1
+          is_error = true
+        else if equal(b, start, k, "WARN".bytes()) then st.warns += 1
+      else if f == 2 then
+        if equal(b, start, k, "search".bytes()) then st.search += 1
+      else if f == 3 then
+        if is_error then st.error_latency += parse_int_r(b, start, k)
+      else if f == 4 then st.path_bytes += k - start
+      f += 1
+      start = k + 1
+
+pub fn logs_r(buf: Bytes) -> Int =
+  var st = Stats { errors: 0, warns: 0, error_latency: 0, path_bytes: 0, search: 0 }
+  var i = 0
+  for j in 0..buf.len()
+    if buf.at(j) == 10 then
+      line_r(buf, i, j, &st)
+      i = j + 1
+  total(st)
+
+// ---- (b) a JSON-ish tokenizer, its tokens kept, then walked ----
+
+// 1 { 2 } 3 [ 4 ] 5 : 6 , 7 string 8 number 9 true 10 false
+fn punct(c: Int) -> Int =
+  if c == 123 then 1
+  else if c == 125 then 2
+  else if c == 91 then 3
+  else if c == 93 then 4
+  else if c == 58 then 5
+  else if c == 44 then 6
+  else 0
+
+fn space(c: Int) -> Bool = c == 32 || c == 10 || c == 9 || c == 13
+
+type Tok = { kind: Int, text: Bytes }
+
+fn tokens(b: Bytes) -> Array<Tok> =
+  var out: Array<Tok> = []
+  var i = 0
+  let n = b.len()
+  while i < n
+    let c = b.at(i)
+    let p = punct(c)
+    if p > 0 then
+      &out.push(Tok { kind: p, text: b[i..i + 1] })
+      i += 1
+    else if c == 34 then
+      var j = i + 1
+      while b.at(j) != 34
+        j += 1
+      &out.push(Tok { kind: 7, text: b[i + 1..j] })
+      i = j + 1
+    else if c == 116 then
+      &out.push(Tok { kind: 9, text: b[i..i + 4] })
+      i += 4
+    else if c == 102 then
+      &out.push(Tok { kind: 10, text: b[i..i + 5] })
+      i += 5
+    else if space(c) then i += 1
+    else
+      var j = i
+      while j < n && b.at(j) >= 48 && b.at(j) <= 57
+        j += 1
+      &out.push(Tok { kind: 8, text: b[i..j] })
+      i = j
+  out
+
+fn walk(toks: Array<Tok>) -> Int =
+  var score = 0
+  var names = 0
+  var tag_bytes = 0
+  var trues = 0
+  var in_tags = false
+  for i in 0..toks.len() - 2
+    let t = toks[i]
+    if t.kind == 7 && toks[i + 1].kind == 5 then
+      let v = toks[i + 2]
+      if t.text == "score".bytes() then score += parse_int(v.text)
+      else if t.text == "name".bytes() then names += 1
+      else if t.text == "tags".bytes() then in_tags = true
+      else if t.text == "active".bytes() && v.kind == 9 then trues += 1
+    else if in_tags && t.kind == 7 then tag_bytes += t.text.len()
+    else if t.kind == 4 then in_tags = false
+  score + names * 3 + tag_bytes * 7 + trues * 11 + toks.len() * 13
+
+pub fn json(buf: Bytes) -> Int = walk(tokens(buf))
+
+// the same as an offset tape, simdjson's way: each token a kind and a
+// range of the input, three `Int`s, kept unboxed in the array
+type TokR = { kind: Int, start: Int, stop: Int }
+
+fn tokens_r(b: Bytes) -> Array<TokR> =
+  var out: Array<TokR> = []
+  var i = 0
+  let n = b.len()
+  while i < n
+    let c = b.at(i)
+    let p = punct(c)
+    if p > 0 then
+      &out.push(TokR { kind: p, start: i, stop: i + 1 })
+      i += 1
+    else if c == 34 then
+      var j = i + 1
+      while b.at(j) != 34
+        j += 1
+      &out.push(TokR { kind: 7, start: i + 1, stop: j })
+      i = j + 1
+    else if c == 116 then
+      &out.push(TokR { kind: 9, start: i, stop: i + 4 })
+      i += 4
+    else if c == 102 then
+      &out.push(TokR { kind: 10, start: i, stop: i + 5 })
+      i += 5
+    else if space(c) then i += 1
+    else
+      var j = i
+      while j < n && b.at(j) >= 48 && b.at(j) <= 57
+        j += 1
+      &out.push(TokR { kind: 8, start: i, stop: j })
+      i = j
+  out
+
+fn walk_r(b: Bytes, toks: Array<TokR>) -> Int =
+  var score = 0
+  var names = 0
+  var tag_bytes = 0
+  var trues = 0
+  var in_tags = false
+  for i in 0..toks.len() - 2
+    let t = toks[i]
+    if t.kind == 7 && toks[i + 1].kind == 5 then
+      let v = toks[i + 2]
+      if equal(b, t.start, t.stop, "score".bytes()) then
+        score += parse_int_r(b, v.start, v.stop)
+      else if equal(b, t.start, t.stop, "name".bytes()) then names += 1
+      else if equal(b, t.start, t.stop, "tags".bytes()) then in_tags = true
+      else if equal(b, t.start, t.stop, "active".bytes()) && v.kind == 9 then
+        trues += 1
+    else if in_tags && t.kind == 7 then tag_bytes += t.stop - t.start
+    else if t.kind == 4 then in_tags = false
+  score + names * 3 + tag_bytes * 7 + trues * 11 + toks.len() * 13
+
+pub fn json_r(buf: Bytes) -> Int = walk_r(buf, tokens_r(buf))
+
+// ---- (c) pages parsed into records, kept, then queried ----
+
+fn u16(b: Bytes, i: Int) -> Int = b.at(i) + 256 * b.at(i + 1)
+
+type Rec = { key: Bytes, value: Bytes }
+
+fn page(b: Bytes, base: Int, inout out: Array<Rec>) =
+  let n = u16(b, base)
+  for r in 0..n
+    let at = base + u16(b, base + 2 + 2 * r)
+    let klen = b.at(at)
+    let vat = at + 1 + klen
+    let vlen = u16(b, vat)
+    &out.push(Rec { key: b[at + 1..vat], value: b[vat + 2..vat + 2 + vlen] })
+
+fn records(b: Bytes) -> Array<Rec> =
+  var out: Array<Rec> = []
+  for p in 0..b.len() / 4096
+    page(b, p * 4096, &out)
+  out
+
+fn query(recs: Array<Rec>) -> Int =
+  var k1 = 0
+  var sevens = 0
+  var vowels = 0
+  for r in recs
+    if r.key.at(1) == 49 then k1 += 1
+    if r.key.at(r.key.len() - 1) == 55 then sevens += r.value.len()
+    if r.value.at(0) == 97 then vowels += 1
+  k1 + sevens * 3 + vowels * 7 + recs.len() * 11
+
+pub fn pages(buf: Bytes) -> Int = query(records(buf))
+
+// the same, each record's key and value ranges of the buffer
+type RecR = { key: Int, klen: Int, value: Int, vlen: Int }
+
+fn page_r(b: Bytes, base: Int, inout out: Array<RecR>) =
+  let n = u16(b, base)
+  for r in 0..n
+    let at = base + u16(b, base + 2 + 2 * r)
+    let klen = b.at(at)
+    let vat = at + 1 + klen
+    &out.push(RecR { key: at + 1, klen: klen, value: vat + 2, vlen: u16(b, vat) })
+
+fn records_r(b: Bytes) -> Array<RecR> =
+  var out: Array<RecR> = []
+  for p in 0..b.len() / 4096
+    page_r(b, p * 4096, &out)
+  out
+
+fn query_r(b: Bytes, recs: Array<RecR>) -> Int =
+  var k1 = 0
+  var sevens = 0
+  var vowels = 0
+  for r in recs
+    if b.at(r.key + 1) == 49 then k1 += 1
+    if b.at(r.key + r.klen - 1) == 55 then sevens += r.vlen
+    if b.at(r.value) == 97 then vowels += 1
+  k1 + sevens * 3 + vowels * 7 + recs.len() * 11
+
+pub fn pages_r(buf: Bytes) -> Int = query_r(buf, records_r(buf))
+
+// ---- retention: a slice keeps its whole root alive ----
+
+// eight 8 MiB "files", each read, 1,000 ten-byte keys kept from it, and
+// dropped: kept as slices, the keys keep every file alive; kept as
+// copies, `copy()`, only themselves (build.sh's `retain` kernels)
+fn file(k: Int) -> Bytes =
+  var xs: Array<Int> = []
+  for i in 0..8388608
+    &xs.push(97 + (i * 7 + k) % 26)
+  Bytes.of(xs)
+
+pub fn retain(copied: Bool) -> Int =
+  var kept: Array<Bytes> = []
+  for k in 0..8
+    let f = file(k)
+    for j in 0..1000
+      let at = j * 8000
+      &kept.push(if copied then f[at..at + 10].copy() else f[at..at + 10])
+  var total = 0
+  for b in kept
+    total += b.at(0) + b.len()
+  total
+
+// ---- the inputs, and each kernel run [rounds] times ----
+
+pub fn logs_input(n: Int) -> Bytes = gen.logs(n)
+pub fn json_input(n: Int) -> Bytes = gen.json(n / 2)
+pub fn pages_input(n: Int) -> Bytes = gen.pages(n / 50)
+
+pub fn run(n: Int, rounds: Int) uses Console =
+  let a = logs_input(n)
+  var x = 0
+  var y = 0
+  for _ in 0..rounds
+    x += logs(a)
+    y += logs_r(a)
+  print(a.len())
+  print(x)
+  print(y)
+  let b = json_input(n)
+  x = 0
+  y = 0
+  for _ in 0..rounds
+    x += json(b)
+    y += json_r(b)
+  print(b.len())
+  print(x)
+  print(y)
+  let c = pages_input(n)
+  x = 0
+  y = 0
+  for _ in 0..rounds
+    x += pages(c)
+    y += pages_r(c)
+  print(c.len())
+  print(x)
+  print(y)

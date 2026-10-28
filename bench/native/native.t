@@ -56,6 +56,16 @@ change here is a change in what the program computes.
   92
   == rbtree
   100
+  == slices
+  47437
+  287592
+  287592
+  58208
+  5414172
+  5414172
+  81920
+  23252
+  23252
   == stack
   22446
   33334

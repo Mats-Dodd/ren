@@ -69,6 +69,10 @@ kernel() {
   k=$out/kernels/$1-$2
   mkdir -p "$k"
   { cat "$here/$1/bench.ren"; printf '\n%s\n' "$3"; } >"$k/main.ren"
+  # the modules bench.ren imports, beside it
+  for m in "$here/$1"/*.ren; do
+    case $(basename "$m") in bench.ren | main.ren | small.ren) ;; *) cp "$m" "$k/" ;; esac
+  done
   build_all "$k" "$1-$2"
 }
 
@@ -126,4 +130,21 @@ dk shapes32 "shapes32(65_536, 100)"
 dk db "db(100, 104_857_600)"
 dk router "router(65_536, 100)"
 dk interp "interp(25_600)"
+# decision 17's slices (research/slices.md): each of `slices`' parsers
+# alone, at main.ren's size, with slices and with offsets; the twins run
+# one given its name, `slices-rust 200000 20 logs_r`
+for k in logs json pages; do
+  for v in "" _r; do
+    kernel slices "$k$v" "fn main() uses Console =
+  let b = ${k}_input(200_000)
+  var x = 0
+  for _ in 0..20
+    x += $k$v(b)
+  print(b.len())
+  print(x)"
+  done
+done
+# a slice keeps its root alive: keys kept as slices, then as copies
+kernel slices retain_slice "fn main() uses Console = print(retain(false))"
+kernel slices retain_copy "fn main() uses Console = print(retain(true))"
 echo "built in $out"

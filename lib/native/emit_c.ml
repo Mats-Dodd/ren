@@ -195,13 +195,13 @@ let word_of (l : layout) c =
   | Word _ -> c
   | Float -> sprintf "(ren_val){.f = %s}" c
   | Boxed | Desc -> sprintf "(ren_val){.o = %s}" c
-  | Ptr | Ev -> sprintf "(ren_val){.p = (void*)%s}" c
+  | Ptr | Ev | Cell _ -> sprintf "(ren_val){.p = (void*)%s}" c
   | Int | Bool | Unit | Enum -> sprintf "(ren_val){.i = (int64_t)%s}" c
   (* a sized type's value as a word is the number it is *)
   | Sized F32 -> sprintf "(ren_val){.f = (double)%s}" c
   | Sized _ -> sprintf "(ren_val){.i = (int64_t)%s}" c
-  | Block | Cell _ | Token | Struct _ ->
-      bug "a block, a cell, a token or a struct as a word"
+  | Block | Token | Struct _ ->
+      bug "a block, a token or a struct as a word"
 
 let to_val (x : atom) = word_of (atom_layout x) (atom x)
 
@@ -212,13 +212,14 @@ let of_val l v =
   | Float -> sprintf "%s.f" v
   | Boxed | Desc -> sprintf "%s.o" v
   | Ptr -> sprintf "%s.p" v
+  | Cell _ as l -> sprintf "((%s)%s.p)" (ctype l) v
   | Ev -> sprintf "((const ren_ev*)%s.p)" v
   | Int -> sprintf "%s.i" v
   | Bool | Unit | Enum -> sprintf "(%s)%s.i" (ctype l) v
   | Sized F32 -> sprintf "((float)%s.f)" v
   | Sized k -> sprintf "((%s)%s.i)" (sized_ctype k) v
-  | Block | Cell _ | Token | Struct _ ->
-      bug "a word as a block, a cell, a token or a struct"
+  | Block | Token | Struct _ ->
+      bug "a word as a block, a token or a struct"
 
 (* Each site's C name's number, by its [sid]: one site for all those
    whose pieces are the same, set by [program]. *)
@@ -441,6 +442,33 @@ let runtime rt args site_arg =
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
+  (* slices (ren_rt.c, "slices"): a `Str`'s and `Bytes`' are strings, a
+     `Str`'s checked not to cut a character *)
+  | Slice (Of_array_elems, Range) ->
+      sprintf "ren_array_slice(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (site ())
+  | Slice (s, Range) ->
+      sprintf "ren_str_slice(%s, %s, %s, %b, %s)" (a 0) (a 1) (a 2) (s = Of_str)
+        (site ())
+  | Slice (Of_array_elems, Before) ->
+      sprintf "ren_array_before(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Slice (s, Before) ->
+      sprintf "ren_str_before(%s, %s, %b, %s)" (a 0) (a 1) (s = Of_str)
+        (site ())
+  | Slice (Of_array_elems, After) ->
+      sprintf "ren_array_after(%s, %s, %s)" (a 0) (a 1) (a 2)
+  | Slice (_, After) -> sprintf "ren_str_after(%s, %s)" (a 0) (a 1)
+  | Splice Of_array_elems ->
+      sprintf "ren_array_splice(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (a 3)
+  | Splice _ -> sprintf "ren_str_splice(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (a 3)
+  | Join Of_array_elems -> sprintf "ren_array_join(%s, %s)" (a 0) (a 1)
+  | Join _ -> sprintf "ren_str_join(%s, %s)" (a 0) (a 1)
+  | Vacant -> "ren_box(0)"
+  | Str_split -> sprintf "ren_str_split(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Str_trim -> sprintf "ren_str_trim(%s)" (a 0)
+  | Copied Of_array_elems -> sprintf "ren_array_copied(%s)" (a 0)
+  | Copied _ -> sprintf "ren_str_copied(%s)" (a 0)
+  | Bytes_at -> sprintf "ren_bytes_at(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Bytes_of -> sprintf "ren_bytes_of(%s, %s)" (a 0) (site ())
   | Show_int -> sprintf "ren_show_int(%s)" (a 0)
   | Show_float -> sprintf "ren_show_float(%s, %s)" (a 0) (site ())
   | Show_bool -> sprintf "ren_show_bool(%s)" (a 0)
@@ -1373,6 +1401,7 @@ let dkind_c (k : dkind) =
   | D_bool -> "REN_D_BOOL"
   | D_unit -> "REN_D_UNIT"
   | D_str -> "REN_D_STR"
+  | D_bytes -> "REN_D_BYTES"
   | D_named _ -> "REN_D_NAMED"
   | D_array -> "REN_D_ARRAY"
   | D_tuple -> "REN_D_TUPLE"
@@ -1610,9 +1639,10 @@ let parts ~restrict ~release ~site_pieces (p : program) =
       let n = String.length s in
       add
         (sprintf
-           "%sstruct ren_lit_%d { ren_obj h; int64_t len; char data[%d]; } \
-            ren_lit_%d = { { 0, REN_TAG_STR, 0, 0 }, %d, %s };\n"
-           !linkage i (n + 1) i n (c_string s)))
+           "%sstruct ren_lit_%d { ren_obj h; int64_t len; const char *data; \
+            ren_obj *root; char bytes[%d]; } ren_lit_%d = { { 0, REN_TAG_STR, \
+            0, 0 }, %d, ren_lit_%d.bytes, 0, %s };\n"
+           !linkage i (n + 1) i n i (c_string s)))
     p.strings;
   (* a [Caller] site is [ren_here], none of its own *)
   let site_defs =

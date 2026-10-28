@@ -81,7 +81,7 @@ let rec unify st a b =
     when List.length p1 = List.length p2 ->
       List.iter2
         (fun a b ->
-          (* `fn(inout Int)` and `fn(Int)` are different types *)
+          (* `fn(&Int)` and `fn(Int)` are different types *)
           if a.mode <> b.mode then raise Mismatch;
           unify st a.ty b.ty)
         p1 p2;

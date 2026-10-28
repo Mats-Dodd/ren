@@ -27,7 +27,8 @@
               |  [IDENT "."] UIDENT                (a named error set)
      payload  := [IDENT ":"] type
      param    := ["inout"] (IDENT | "self") [":" type]
-     lparam   := param
+     lparam   := ["&"] IDENT [":" type]             (`&`: one the block
+                                                     changes)
               |  "(" pattern, ... ")" [":" type]     (a tuple taken apart:
                                                      names, `_` and tuples)
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [members]
@@ -72,7 +73,7 @@
                                              installing it can fail with and
                                              what it needs; not right after
                                              `->`)
-              |  "fn" "(" ["inout"] [IDENT ":"] type, ... ")" ["->" type]
+              |  "fn" "(" ["&"] [IDENT ":"] type, ... ")" ["->" type]
                  [errors] [uses]           (the innermost function type's)
               |  "(" type ")"
               |  "(" type "," type ["," type] ")"   (a tuple's)
@@ -469,13 +470,22 @@ and impl_rest p ~uses ~arg ~start ~over names =
    `fn(id: UserId) -> User`. The name doesn't affect the type. *)
 and parse_fn_ty_param p =
   let start = loc p in
-  let inout = peek p = INOUT in
+  (* one the function changes is written as a call passes it, `&Int`
+     (compiler.md, "Blocks with `inout` parameters") *)
+  let inout = peek p = AMP in
   if inout then advance p;
   (match (peek p, peek2 p) with
   | IDENT name, COLON when not (is_upper name) ->
       advance p;
       advance p
   | _ -> ());
+  if peek p = INOUT then (
+    let at = loc p in
+    advance p;
+    let t = parse_ty p in
+    Diag.error at
+      ~help:(Printf.sprintf "write `&%s`" (show_ty t))
+      "a function type's parameter that it changes is written `&T`");
   let t = parse_ty p in
   if inout then TyInout (t, Loc.span start (last_loc p)) else t
 
@@ -1049,9 +1059,9 @@ and parse_expr p =
   if peek p = DOTDOT then
     Diag.error (loc p)
       ~help:
-        "a range is for counting, `for i in 0..n`; to keep some of an array, \
-         use `take` and `drop`"
-      "a range, `a..b`, is written only after a `for`'s `in`: it isn't a value";
+        "a range is for counting, `for i in 0..n`, and for slicing, `xs[a..b]`"
+      "a range, `a..b`, is written only after a `for`'s `in`, or in an index: \
+       it isn't a value";
   e
 
 (* `a over b` where it isn't an item of a `with`, whose first link
@@ -1216,9 +1226,18 @@ and parse_postfix p =
             loop (mk (Field (e, f)) start p))
     | LBRACKET ->
         advance p;
-        let i = parse_expr p in
-        expect p RBRACKET;
-        loop (mk (Index (e, i)) start p)
+        (* an index, `xs[i]`, or a range of them, `xs[a..b]`, a slice *)
+        let first = p.i in
+        let i = parse_orelse p in
+        if peek p = DOTDOT then (
+          advance p;
+          let hi = parse_orelse p in
+          expect p RBRACKET;
+          loop (mk (Slice (e, i, hi)) start p))
+        else (
+          if peek p = OVER then chain_not_value p first;
+          expect p RBRACKET;
+          loop (mk (Index (e, i)) start p))
     | LPAREN ->
         advance p;
         let args = sep_list p ~close:RPAREN parse_call_arg in
@@ -1471,6 +1490,24 @@ and parse_lambda_param p =
       let pname = { name = Printf.sprintf "$%d" pat.pnode; loc = pat.ploc } in
       let value = node p (Var (Bare pname.name)) pat.ploc in
       ({ pname; pty; pmode = Read }, Some (Let_tuple { pat; value }))
+  | AMP ->
+      (* `fn(&lo, &hi) => ...`: one the block changes, written as a call
+         passes it (compiler.md, "Blocks with `inout` parameters") *)
+      advance p;
+      let param = parse_param p in
+      if param.pmode = Inout then
+        Diag.error (loc p) ~help:"write `&` alone"
+          "a block's parameter that it changes is written `&n`";
+      ({ param with pmode = Inout }, None)
+  | INOUT ->
+      advance p;
+      let name =
+        match peek p with IDENT n -> n | SELF -> "self" | _ -> "n"
+      in
+      Diag.error (loc p)
+        ~help:(Printf.sprintf "write `fn(&%s) => ...`" name)
+        (Printf.sprintf "a block's parameter that it changes is written `&%s`"
+           name)
   | _ -> (parse_param p, None)
 
 (* A constructor's arguments, in parentheses. *)

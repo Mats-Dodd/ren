@@ -19,5 +19,6 @@
   (glob_files nested/*.ren)
   (glob_files nqueens/*.ren)
   (glob_files rbtree/*.ren)
+  (glob_files slices/*.ren)
   (glob_files stack/*.ren)
   (glob_files vec/*.ren)))

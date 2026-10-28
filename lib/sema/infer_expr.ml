@@ -618,6 +618,24 @@ and synth env cx (e : expr) : ty =
           in
           want_int env Indexing i (infer env cx i);
           if ok then elem else TError)
+  | Slice (a, lo, hi) -> (
+      (* `xs[a..b]`: a value of the type it slices (foundations.md,
+         decision 17) *)
+      let ta = infer env cx a in
+      want_int env Indexing lo (infer env cx lo);
+      want_int env Indexing hi (infer env cx hi);
+      match reveal env.st ta with
+      | TCon (p, []) when p = Path.prelude "Str" || p = Path.prelude "Bytes" ->
+          ta
+      | TError -> TError
+      | _ ->
+          let elem = fresh_var env.st in
+          if
+            unifies env
+              (explain ~msg:not_sliceable ())
+              (result_loc a) ~found:ta ~expected:(array elem)
+          then array elem
+          else TError)
   | Ref ({ kind = Call (f, args); _ } as call) ->
       (* `&s.push(1)`: a method call that changes its receiver *)
       let t = infer_call env cx ~changed:e.loc call f args in
@@ -1611,8 +1629,23 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                   ((if own env p then Iface.members else Iface.public_members)
                      td)
               in
+              (* an `Array`, a `Str` or `Bytes` is sliced with an index,
+                 `s[0..2]`, as `s.slice(0, 2)` once was *)
+              let slice =
+                match (env.source r, List.map env.source args) with
+                | Some sr, [ Some a; Some b ]
+                  when List.mem p.name [ "Array"; "Str"; "Bytes" ]
+                       && p.home = Path.prelude_home ->
+                    let sr =
+                      match r.kind with
+                      | Var _ | Field _ | Index _ | Slice _ | Call _ | Str _ -> sr
+                      | _ -> "(" ^ sr ^ ")"
+                    in
+                    Some (sprintf "%s[%s..%s]" sr a b)
+                | _ -> None
+              in
               report env
-                (no_method m ~shown ~own:(own env p)
+                (no_method ?slice m ~shown ~own:(own env p)
                    ~type_name:(type_name env p) methods));
           nothing ()
       | None, TVar _

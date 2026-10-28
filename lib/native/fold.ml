@@ -70,7 +70,8 @@ let rt h (r : rt) : rt =
   | Buf_set_field (n, k, l) -> Buf_set_field (h.st n, k, lay h l)
   | Array_reserve l -> Array_reserve (lay h l)
   | ( Array_len | Array_check | Array_own | Array_data | Buf_check | Str_len
-    | Str_concat | Str_eq | Show_int | Show_float | Show_bool | Float_of_int
+    | Str_concat | Str_eq | Slice _ | Splice _ | Join _ | Copied _ | Str_split | Str_trim | Vacant | Bytes_at
+    | Bytes_of | Show_int | Show_float | Show_bool | Float_of_int
     | Float_sqrt | Float_round | Float_truncate | Wrapping _ | Wrapping_neg
     | Bits _ | Shift _ | Widen | Narrow _ | Wrap_to _
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _

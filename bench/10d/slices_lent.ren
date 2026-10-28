@@ -1,0 +1,106 @@
+// Stage 10d, step 6, natively: what slices cost and when they are written
+// in place. A `split_at`'s halves are lent, changed in place where nothing
+// else can see them, and copied where something can; `split` and `trim`
+// return slices; `Bytes` slices and reads (compiler.md, "What a slice is").
+
+
+fn qsort(inout xs: Array<Int>) =
+  let n = xs.len()
+  if n > 1 then
+    let p = xs[n - 1]
+    var i = 0
+    for j in 0..n - 1
+      if xs[j] < p then
+        let t = xs[i]
+        xs[i] = xs[j]
+        xs[j] = t
+        i += 1
+    xs[n - 1] = xs[i]
+    xs[i] = p
+    &xs.split_at(i) fn(&lo, &hi) =>
+      qsort(&lo)
+      &hi.split_at(1) fn(&_p, &rest) => qsort(&rest)
+
+fn main() uses Console =
+  var xs: Array<Int> = []
+  var s = 7
+  for _ in 0..40
+    s = (s * 1103515245 + 12345) % 1000
+    &xs.push(s)
+  let before = xs
+  qsort(&xs)
+  print(xs)
+  print(before.len())
+  print(before[0])
+  // a slice made of a lent half sees the half as it was
+  var ys = [1, 2, 3, 4, 5, 6]
+  var kept: Array<Int> = []
+  &ys.split_at(3) fn(&lo, &hi) =>
+    kept = lo[0..2]
+    lo[0] = 100
+    hi[0] = 400
+  print(ys)
+  print(kept)
+  // a half kept past the call sees itself as it was
+  var zs = [1, 2, 3, 4]
+  var held: Array<Int> = []
+  &zs.split_at(2) fn(&lo, &hi) =>
+    held = lo
+    hi[1] = 9
+  zs[0] = 50
+  print(zs)
+  print(held)
+  // a copy of a half, then the half changed
+  var ws = [1, 2, 3, 4]
+  &ws.split_at(2) fn(&lo, &hi) =>
+    let c = lo
+    lo[1] = 20
+    print(c)
+    &hi.push(5)
+  print(ws)
+  // shared before the split: the halves copy
+  var vs = [1, 2, 3]
+  let alias = vs
+  &vs.split_at(1) fn(&lo, &hi) =>
+    lo[0] = 10
+    hi[0] = 20
+  print(vs)
+  print(alias)
+  // nested splits
+  var us = [1, 2, 3, 4, 5, 6, 7, 8]
+  &us.split_at(4) fn(&a, &b) =>
+    &a.split_at(2) fn(&c, &d) =>
+      c[0] = 10
+      d[1] = 40
+    &b.split_at(2) fn(&e, &f) =>
+      let g = f
+      e[0] = 50
+      f[0] = 70
+      print(g)
+  print(us)
+  // strings
+  var t = "hello, world"
+  let n = &t.split_at(5) fn(&a, &b) => a.len() + b.len()
+  print(t)
+  print(n)
+  &t.split_at(5) fn(&a, &b) => b = "!"
+  print(t)
+  // `split` and `trim` give slices, which compare and show as copies do
+  let line = "  key = value ; other = 2  "
+  let parts = line.trim().split(";")
+  print(parts)
+  print(parts[0].trim().split("=")[1].trim() == "value")
+  print("a,,b,".split(","))
+  print("".split(","))
+  print("   ".trim().len())
+  // `Bytes`: slices, reads, `copy()` and `==`
+  let b = Bytes.of([104, 105, 33, 0, 255])
+  print(b)
+  print(b[1..4])
+  print(b[1..4] == Bytes.of([105, 33, 0]))
+  print(b[3..5].copy().at(1))
+  print("héllo".bytes()[1..3])
+  var parts2 = [b[0..2], b[2..5]]
+  &parts2.push(b.copy())
+  print(parts2.len())
+  print(parts2[2] == b)

@@ -141,6 +141,17 @@ let rt_sig (rt : rt) : layout list * layout =
   | Str_len -> ([ Boxed ], Int)
   | Str_concat -> ([ Boxed; Boxed ], Boxed)
   | Str_eq -> ([ Boxed; Boxed ], Bool)
+  | Slice (_, Range) -> ([ Boxed; Int; Int ], Boxed)
+  | Slice (_, Before) -> ([ Boxed; Int ], Boxed)
+  | Slice (_, After) -> ([ Boxed; Int; Boxed ], Boxed)
+  | Vacant -> ([ Boxed ], Boxed)
+  | Str_split -> ([ Boxed; Boxed ], Boxed)
+  | Str_trim -> ([ Boxed ], Boxed)
+  | Splice _ -> ([ Boxed; Int; Int; Boxed ], Boxed)
+  | Join _ -> ([ Boxed; Boxed ], Boxed)
+  | Copied _ -> ([ Boxed ], Boxed)
+  | Bytes_at -> ([ Boxed; Int ], Int)
+  | Bytes_of -> ([ Boxed ], Boxed)
   | Show_int -> ([ Int ], Boxed)
   | Show_float -> ([ Float ], Boxed)
   | Show_bool -> ([ Bool ], Boxed)
@@ -456,6 +467,9 @@ let rec stmt env (s : stmt) : env =
       let l = rhs env r in
       known_handler env v r;
       (match r with
+      (* a block's argument may be a cell, its address, which its caller
+         passed for one it changes or a block it gives *)
+      | Arg _ when (match v.layout with Cell _ -> true | _ -> false) -> ()
       | Field _ | Arg _ | Arg_borrowed _ ->
           if not (wordable v.layout) then
             fail env
@@ -557,7 +571,11 @@ let rec stmt env (s : stmt) : env =
       if borrowed < 0 || borrowed > List.length xs then
         fail env (sprintf "a block call borrowing %d of its arguments" borrowed);
       operand env "the caller's evidence" Ev ev;
-      List.iter (word env "an argument") xs;
+      (* an argument it changes is its cell's address, a word too *)
+      List.iter
+        (fun x ->
+          match atom env x with Cell _ -> () | _ -> word env "an argument" x)
+        xs;
       if not (wordable result.layout) then
         fail env (sprintf "a block giving %s" (show_layout result.layout));
       expect env (show_var error) Boxed error.layout;
@@ -1317,6 +1335,19 @@ let rc_let env st (v : var) (r : rhs) =
       let st = take env st "reset" x in
       let st = List.fold_left (fun st (_, k) -> keep_part env st x k) st kept in
       { st with tokens = Ids.add v.id st.tokens }
+  (* a cell a block's caller lent it, as [Env_get]'s *)
+  | Arg _ when (match v.layout with Cell _ -> true | _ -> false) -> (
+      match v.layout with
+      | Cell l when counted l && l <> Desc ->
+          let slot = - !(env.next) in
+          incr env.next;
+          let st, b = bundle env st ~count:1 B_owned (show_var v) in
+          {
+            st with
+            cells = IM.add v.id slot st.cells;
+            lent = IM.add slot b st.lent;
+          }
+      | _ -> fresh_var env st v ~count:0 B_borrowed)
   | Arg _ -> fresh_var env st v B_owned
   | Arg_borrowed _ -> fresh_var env st v ~count:0 B_borrowed
   | r ->

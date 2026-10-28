@@ -216,6 +216,30 @@ type rt =
   | Str_len
   | Str_concat
   | Str_eq
+  | Slice of sliced * part
+      (** a slice of an array, a `Str` or `Bytes` (foundations.md, decision
+          17), sharing its root's buffer and counting the root: [Range] of
+          two [Int]s, `xs[a..b]`, and the halves of a `split_at` of one, which
+          panic as the interpreter does at their site; [After]'s, made after
+          [Before]'s, doesn't check again, and has none, and is given the
+          first half too, after the [Int] *)
+  | Splice of sliced
+      (** a new owner: the first with its range from the first [Int] up to
+          the second replaced by the last, what `&xs[a..b]` writes back *)
+  | Join of sliced  (** a new owner, the two given one after the other *)
+  | Copied of sliced
+      (** `copy()`: the value with a buffer of its own, itself counted again
+          if it has one *)
+  | Str_split
+      (** `s.split(sep)`: an array of slices of [s], at the separators it
+          found, so none is checked; panics at its site on an empty one *)
+  | Str_trim  (** `s.trim()`: a slice of [s] without the spaces at its ends *)
+  | Vacant
+      (** what a place holds while a `split_at` lends its value out (Core's
+          [Vacant]): a scalar, which nothing reads, so the halves are what
+          hold the value *)
+  | Bytes_at  (** `Bytes`' byte at an [Int], which panics if it isn't one *)
+  | Bytes_of  (** `Bytes.of(xs)`, which panics at an element that isn't a byte *)
   | Show_int
   | Show_float
   | Show_bool
@@ -270,6 +294,12 @@ type rt =
       *)
 
 and new_desc = Of_decl of int | Of_array | Of_tuple
+
+(* What a slice is of: a `Str` and `Bytes` are both the runtime's strings,
+   but a `Str`'s slice can't cut a character. *)
+and sliced = Of_array_elems | Of_str | Of_bytes
+
+and part = Range | Before | After
 
 (* What a [Let] computes. *)
 type rhs =
@@ -512,6 +542,7 @@ type dkind =
   | D_bool
   | D_unit
   | D_str
+  | D_bytes
   | D_named of int  (** the program's [decls]'s n-th *)
   | D_array
   | D_tuple

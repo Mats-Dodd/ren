@@ -46,7 +46,6 @@ type t =
   | Set_includes
   | Set_len
   | Str_len
-  | Str_slice
   | Str_index
   | Str_split
   | Str_trim
@@ -55,6 +54,14 @@ type t =
   | Str_bytes
   | Str_from_utf8
   | Bytes_len
+  | Bytes_at
+  | Bytes_of
+  | Array_copy
+  | Str_copy
+  | Bytes_copy
+  | Array_split_at
+  | Str_split_at
+  | Bytes_split_at
   | Int_wrapping_add
   | Int_wrapping_sub
   | Int_wrapping_mul

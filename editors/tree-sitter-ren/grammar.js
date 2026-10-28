@@ -621,7 +621,7 @@ module.exports = grammar({
         ),
       ),
 
-    // fn(inout Array<Int>, id: UserId) -> User ! NotFound uses Clock. The
+    // fn(&Array<Int>, id: UserId) -> User ! NotFound uses Clock. The
     // `! ...` and `uses ...` belong to the innermost function type that can
     // take them
     function_type: ($) =>
@@ -637,9 +637,11 @@ module.exports = grammar({
         ),
       ),
 
+    // a parameter the function changes is written as a call passes it,
+    // `&Int`
     function_type_parameter: ($) =>
       seq(
-        optional($.inout),
+        optional(alias('&', $.inout)),
         optional(seq(field('name', $.identifier), ':')),
         field('type', $._type),
       ),
@@ -709,7 +711,7 @@ module.exports = grammar({
       ),
 
     // 0..n: the `Int`s from the first up to, but not including, the
-    // second; only a `for` goes over one
+    // second; only a `for` goes over one, and an index slices with one
     range: ($) =>
       prec.left(
         PREC.prefix - 1,
@@ -822,10 +824,16 @@ module.exports = grammar({
         seq(field('value', $._postfix), '.', field('field', $.identifier)),
       ),
 
+    // xs[i], and a slice, xs[a..b]
     index_expression: ($) =>
       prec(
         PREC.postfix,
-        seq(field('value', $._postfix), '[', field('index', $._expression), ']'),
+        seq(
+          field('value', $._postfix),
+          '[',
+          field('index', choice($._expression, $.range)),
+          ']',
+        ),
       ),
 
     // f(x), s.push(x), and with a trailing lambda, twice() fn() => ...
@@ -948,9 +956,23 @@ module.exports = grammar({
     // its parameters the operation's; what it reads from here is copied
     inline_handler: ($) => seq('handler', field('lambda', $.lambda)),
 
-    // a lambda's parameter can take a tuple apart, fn((k, v)) => ...
+    // a lambda's parameter can take a tuple apart, fn((k, v)) => ..., and
+    // one it changes is written as a call passes it, fn(&lo, &hi) => ...
     lambda_parameters: ($) =>
-      seq('(', commaSep(choice($.parameter, $.tuple_parameter)), ')'),
+      seq(
+        '(',
+        commaSep(
+          choice(alias($._lambda_parameter, $.parameter), $.tuple_parameter),
+        ),
+        ')',
+      ),
+
+    _lambda_parameter: ($) =>
+      seq(
+        optional(alias('&', $.inout)),
+        field('name', choice($.identifier, $.self)),
+        optional(seq(':', field('type', $._type))),
+      ),
 
     tuple_parameter: ($) =>
       seq(

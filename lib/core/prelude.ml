@@ -740,6 +740,12 @@ let scheme (x : Intrinsic.t) =
     scheme_of ?reqs (Fun (params, ret, open_row 0, open_row 1))
   in
   let inout ty = { mode = Inout; ty } in
+  (* `split_at` on [self], giving the block's [r]: what the block fails
+     with and uses, the call does *)
+  let split_at self r =
+    let body = Fun ([ inout self; inout self ], r, open_row 0, open_row 1) in
+    scheme_of (Fun ([ inout self; read int; read body ], r, open_row 0, open_row 1))
+  in
   (* a key, or a member of a set, is found by its hash, with the `==` it
      agrees with: what `hash` of [Var 0] is *)
   let hashed = [ (0, "hash") ] in
@@ -863,9 +869,6 @@ let scheme (x : Intrinsic.t) =
      (builtins.ml, "strings and bytes"). *)
   (* fn(self: Str) -> Int, in bytes *)
   | Str_len -> fn [ read str ] int
-  (* fn(self: Str, from: Int, to: Int) -> Str: the bytes from [from] up
-     to, but not including, [to] *)
-  | Str_slice -> fn [ read str; read int; read int ] str
   (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
   | Str_index ->
       fn [ read str; read str ] (Con (Path.prelude "Option", [ int ]))
@@ -890,6 +893,25 @@ let scheme (x : Intrinsic.t) =
              open_row 0 ))
   (* fn(self: Bytes) -> Int *)
   | Bytes_len -> fn [ read bytes ] int
+  (* fn(self: Bytes, i: Int) -> Int: byte [i], 0 to 255 *)
+  | Bytes_at -> fn [ read bytes; read int ] int
+  (* fn(xs: Array<Int>) -> Bytes, each 0 to 255 *)
+  | Bytes_of -> fn [ read (array int) ] bytes
+  (* fn(self) -> Self: a value equal to [self] that holds its own buffer,
+     not a slice of another's (foundations.md, decision 17); [self] itself
+     if it already does *)
+  | Array_copy -> fn [ read (array (Var 0)) ] (array (Var 0))
+  | Str_copy -> fn [ read str ] str
+  | Bytes_copy -> fn [ read bytes ] bytes
+  (* fn<R>(inout self, n: Int, body: fn(&Self, &Self) -> R) -> R: [body]
+     given `self[0..n]` and `self[n..len]`, each a place of its own,
+     after which [self] is the first followed by the second, if it
+     returns or fails (compiler.md, "Blocks with `inout` parameters, and
+     slices"). Whatever [body] fails with and uses, so does the call.
+     Lowering writes it out (lower.ml, [split_at]) *)
+  | Array_split_at -> split_at (array (Var 0)) (Var 1)
+  | Str_split_at -> split_at str (Var 0)
+  | Bytes_split_at -> split_at bytes (Var 0)
   (* fn(self: Int, n: Int) -> Int: wrapping arithmetic at 64 bits,
      instead of panicking (operators.md, "`Int` and `Float`") *)
   | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul ->
@@ -948,9 +970,10 @@ let reaches (x : Intrinsic.t) =
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum
   | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
-  | Array_len | Array_push | Str_len | Str_slice | Str_index | Str_split
+  | Array_len | Array_push | Str_len | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
-  | Bytes_len | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
+  | Bytes_len | Bytes_at | Bytes_of | Array_copy | Str_copy | Bytes_copy
+  | Array_split_at | Str_split_at | Bytes_split_at | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
   | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower ->
@@ -1073,12 +1096,12 @@ let types =
      done in what they're read as *)
   @ List.map (fun k -> t (Sized.name k)) Sized.all
   @ [
-    t "Array" ~arity:1 ~methods:[ Array_len; Array_push; Array_sort ];
+    t "Array" ~arity:1
+      ~methods:[ Array_len; Array_push; Array_sort; Array_copy; Array_split_at ];
     t "Str"
       ~methods:
         [
           Str_len;
-          Str_slice;
           Str_index;
           Str_split;
           Str_trim;
@@ -1086,9 +1109,13 @@ let types =
           Str_concat;
           Str_bytes;
           Str_lower;
+          Str_copy;
+          Str_split_at;
         ]
       ~functions:[ Str_from_utf8 ];
-    t "Bytes" ~methods:[ Bytes_len ];
+    t "Bytes"
+      ~methods:[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at ]
+      ~functions:[ Bytes_of ];
     (* a set of error tags, given by name at a call, `on: Flaky | Broken`,
        which the function it's given to matches with `fail on`: never a
        value, since each function that takes one is made for each set it's

@@ -209,6 +209,16 @@ let prim loc op args (at : expr list) =
       let ys = items xs in
       ys.(Int64.to_int i) <- x;
       array ys
+  | Slice Range, [ v; VInt a; VInt b ] ->
+      (try Builtins.slice_value v a b
+       with Builtins.Panic msg -> panic loc msg)
+  | Slice Before, [ v; VInt n ] ->
+      (try fst (Builtins.split_halves v n)
+       with Builtins.Panic msg -> panic loc msg)
+  | Slice After, [ v; VInt n; _ ] -> snd (Builtins.split_halves v n)
+  | Splice, [ v; VInt a; VInt b; w ] -> Builtins.splice v a b w
+  | Join, [ a; b ] -> Builtins.join a b
+  | Vacant, [ v ] -> v
   | New_cell, [ v ] -> VCell (ref v)
   | Get_cell, [ VCell c ] -> !c
   | Set_cell, [ VCell c; v ] ->

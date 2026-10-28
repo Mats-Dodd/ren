@@ -285,7 +285,7 @@ pub fn touch(id: UserId) ! NotFound | Conflict
 
 A dependency call takes no marker: the capitalised `Users.` already shows it. Its errors are marked as any call's, `try Users.save(u)`. A private function's `uses` is inferred, and a public one's is checked against its body, with the error pointing at the call that uses what the signature leaves out. `Users.x` means exactly one thing: an operation and a member can't share a name.
 
-The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Async` and `Net` (stage 11a), `Alloc` (stage 15) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it. Stage 9 renames `s.find(":")` to `s.index(":")`, as `Array.index`: `index` finds where something is, and `find` takes a function.
+The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc` today, then `Async` and `Net` (stage 11a), `Alloc` (stage 15) and `Unsafe`. There is no catch-all `Io`. Even `print` goes through one: it's an ordinary prelude function, `Console.write(show(x))`. `Time`, `Instant` and `Duration` come with `Clock`, and `Str` arrives at its smallest: literals, `==` and `show`. Stage 8 gives it methods, and `Bytes` and `Path` with it. Stage 9 renames `s.find(":")` to `s.index(":")`, as `Array.index`: `index` finds where something is, and `find` takes a function. Stage 10d gives slices, `s[a..b]` on a `Str`, `Bytes` or an `Array`, a value of the same type that shares what it was cut from ([operators.md](operators.md#slices)); `split` and `trim` return slices, and `copy()` gives one a buffer of its own.
 
 The runtime installs exactly the built-ins `main` lists in its `uses`, outermost. Any other dependency has to be installed inside `main`, and leaving it out is a compile error, `nothing installs Users before main`, with a help that says how.
 
@@ -495,6 +495,15 @@ error: `xs` is read by this block while the call changes it
   │        --- changed for the whole call
   = a block runs during the call it's passed to
   help: read it first: `let len = xs.len()`, and use `len` in the block
+```
+
+A range of an array is a place too, and a block can take places of its own, written as a call passes them: `&xs.split_at(n) fn(&lo, &hi) => ...` gives it the two halves, changed in place, and `xs` is `lo` followed by `hi` after it ([operators.md](operators.md#slices)):
+
+```ren
+double(&scores[0..10])                 // changes the first ten
+&scores.split_at(mid) fn(&lo, &hi) =>  // two halves, each a place of its own
+  sort(&lo)
+  sort(&hi)
 ```
 
 A function body uses exactly two markers: `try` means a call can fail, and `&` means a call changes something.

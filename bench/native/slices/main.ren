@@ -1,0 +1,5 @@
+import bench
+
+// research/slices.md's sizes: 200,000 log lines, 100,000 objects and
+// 4,000 pages, each parsed 20 times
+fn main() uses Console = bench.run(200000, 20)

@@ -118,6 +118,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | While { cond; body } -> go [ cond; body ]
     | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
         go [ a; b ]
+    | Slice (a, lo, hi) -> go [ a; lo; hi ]
     | If (c, t, f) -> go (c :: t :: Option.to_list f)
     | Call (f, args) -> go (f :: args)
     | Lambda (ps, body) ->
@@ -1810,6 +1811,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     | Unop (_, a, _) | Ref a | Assert a | Index (a, _) -> (
         walk (Kept Elsewhere) a;
         match e.kind with Index (_, i) -> walk (Kept Elsewhere) i | _ -> ())
+    | Slice (a, lo, hi) -> all Elsewhere [ a; lo; hi ]
     | Field (a, _) -> walk Receiver a
     | Assign { target; value; _ } ->
         (* a `var` or a field that holds a block is reported where it's

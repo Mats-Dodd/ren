@@ -81,6 +81,9 @@ type dkey = { kpath : Path.t; kargs : desc list }
    interpreter checks it anyway, and a native build doesn't. *)
 type bounds = Checked | In_bounds
 
+(* Which part a [Slice] is: a range, or a half of a `split_at`. *)
+type slicing = Range | Before | After
+
 type prim =
   | Neg
   | Not  (** on a [Bool] *)
@@ -113,6 +116,29 @@ type prim =
   | Set_index of bounds
       (** [xs] with element [i] replaced: a new array; panics if [i] is out of
           bounds *)
+  | Slice of slicing
+      (** part of an [Array], a [Str] or [Bytes], of the same type
+          (foundations.md, decision 17): with [Range], [xs[a..b]], from [a] up
+          to, but not including, [b], of operands [xs; a; b]; with [Before],
+          of operands [xs; n], and [After], of operands [xs; n; lo], the
+          halves of `xs.split_at(n)`, [xs[0..n]] and [xs[n..len]], [lo] the
+          [Before] just made, which a native build lends [After]'s
+          exclusivity through (ren_rt.c, "slices"). [Range] and [Before]
+          panic where the range isn't in [xs], or, for a [Str], cuts a
+          character; [After] comes right after its [Before], which has
+          checked [n] *)
+  | Splice
+      (** [xs] with its range from [a] up to [b] replaced by [ys], of operands
+          [xs; a; b; ys], which may be longer or shorter: what `&xs[a..b]` writes
+          back. Its range is the one a [Slice] of [xs] read, so it's in [xs] *)
+  | Join  (** [lo] followed by [hi]: what a `split_at` writes back *)
+  | Vacant
+      (** what a place holds while a `split_at` has lent its value out, of
+          operand [xs], the value read from it, and of its type: nothing reads
+          it, since the call writes the place (excl.ml), and the place is
+          written again after. The interpreter keeps [xs] there; a native
+          build a scalar, so the halves are all that hold [xs] and can be
+          changed in place (ren_rt.c, "slices") *)
   | New_cell
       (** a new cell holding a value: a `var` of a handler's state, which its
           instance's operations share (see [Handler]). Nothing else holds a
