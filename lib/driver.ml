@@ -1018,12 +1018,7 @@ let replay ?lint ?load ?trace ~(journal : Journal.t) ~file src =
         pass "eval" (fun () -> Eval.run ~start:(Replay journal) ?trace modules))
   in
   (* what's said is at the journal's next call, or its end *)
-  let line =
-    match (journal.calls, journal.ending) with
-    | c :: _, _ -> c.line
-    | [], Some (_, l) -> l
-    | [], None -> 1
-  in
+  let line = Journal.next_line journal in
   (try Journal.finish_replay journal ending
    with Journal.Differs differs ->
      raise

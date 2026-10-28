@@ -330,15 +330,26 @@ let read_journal file =
     exit 1);
   read file
 
+(* The journal in [file], whose text is [text], or how it can't be
+   read. One of version 1 is said without a place in it, since it's the
+   whole journal that can't be. *)
+let loaded ~file text =
+  try Journal.load ~file text with
+  | Journal.Version_1 { file; program } ->
+      let said, note, help = Journal.version_1_said ~file ~program in
+      prerr_endline ("error: " ^ said);
+      prerr_endline ("  = " ^ note);
+      prerr_endline ("  help: " ^ help);
+      exit 1
+  | e -> fail ~known:[ (file, text) ] e
+
 (* `ren test --keep <file.journal>` (handlers.md, "A journal as a test
    fixture"): the journal, moved to the `tests` folder next to the
    program it recorded, and a test that replays it, added to the
    program's file. *)
 let keep file =
   let text = read_journal file in
-  let journal =
-    try Journal.load ~file text with e -> fail ~known:[ (file, text) ] e
-  in
+  let journal = loaded ~file text in
   let program = joined (Filename.dirname file) journal.header.program in
   let src =
     try In_channel.with_open_bin program In_channel.input_all
@@ -646,9 +657,7 @@ let replay args =
         exit 2
   in
   let text = read_journal file in
-  let journal =
-    try Journal.load ~file text with e -> fail ~known:[ (file, text) ] e
-  in
+  let journal = loaded ~file text in
   let path = joined (Filename.dirname file) journal.header.program in
   let src =
     try In_channel.with_open_bin path In_channel.input_all
@@ -672,7 +681,7 @@ let replay args =
       replayed "";
       if v <> VUnit then print_endline (Value.show v)
   | exception ((Eval.Panic _ | Eval.Assert_failed _ | Eval.Uncaught _) as e)
-    when journal.calls = [] && journal.ending <> None ->
+    when Journal.replayed_all journal && journal.ending <> None ->
       (* it ended as the recording did *)
       print_trace trace;
       replayed

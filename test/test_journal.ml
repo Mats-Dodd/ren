@@ -47,10 +47,15 @@ let replay file =
     ignore
       (Driver.replay ~lint:true ~journal ~file:"main.ren" (read "main.ren"));
     Printf.printf "replayed %d calls\n" journal.made
-  with e -> show_error e
+  with
+  | Journal.Version_1 { file; program } ->
+      (* as `ren replay` says it (main.ml) *)
+      let said, note, help = Journal.version_1_said ~file ~program in
+      Printf.printf "error: %s\n  = %s\n  help: %s\n" said note help
+  | e -> show_error e
 
-(* `ren test main.ren`. *)
-let test () =
+(* `ren test main.ren`, each test under [seeds] seeds from 1. *)
+let test ?(seeds = 1) () =
   try
     let suite =
       Driver.suite ~lint:true ~dir:"." [ ("main.ren", read "main.ren") ]
@@ -65,7 +70,7 @@ let test () =
              exact = false;
              seed = Some 1;
              list = false;
-             seeds = 1;
+             seeds;
              timings = false;
            }
          ~sources suite)
@@ -91,13 +96,13 @@ fn main() ! FsError | InvalidUtf8 uses Fs, Os, Console =
     a"b	c
 
     done
-    # ren journal 1 · main.ren · deps: Console Fs Os
-    1 Os.args() → ["x y"]
-    2 Fs.write("out.txt", "a\"b\tc\n")
-    3 Fs.read("out.txt") → Ok("a\"b\tc\n")
-    4 Console.write("a\"b\tc\n")
-    5 Console.error("done")
-    6 exit 0
+    # ren journal 2 · main.ren · deps: Console Fs Os
+    1 main Os.args() → ["x y"]
+    2 main Fs.write("out.txt", "a\"b\tc\n")
+    3 main Fs.read("out.txt") → Ok("a\"b\tc\n")
+    4 main Console.write("a\"b\tc\n")
+    5 main Console.error("done")
+    6 main exit 0
     |}]
 
 let%expect_test "a run that fails, or panics, ends its journal so" =
@@ -127,17 +132,17 @@ fn main() uses Console =
   [%expect
     {|
     error: NoSuchFile(nothing)
-    # ren journal 1 · main.ren · deps: Fs
-    1 Fs.read("nothing") → Err(NoSuchFile("nothing"))
-    2 error NoSuchFile("nothing")
+    # ren journal 2 · main.ren · deps: Fs
+    1 main Fs.read("nothing") → Err(NoSuchFile("nothing"))
+    2 main error NoSuchFile("nothing")
     1
     error: panic: index 3 is out of bounds for an array of length 1
       ┌─ main.ren:4:9
     4 │   print(xs[3])
       │         ^^^^^
-    # ren journal 1 · main.ren · deps: Console
-    1 Console.write("1")
-    2 panic main.ren:4:9 "index 3 is out of bounds for an array of length 1"
+    # ren journal 2 · main.ren · deps: Console
+    1 main Console.write("1")
+    2 main panic main.ren:4:9 "index 3 is out of bounds for an array of length 1"
     |}]
 
 let%expect_test "bytes that aren't UTF-8 are written with \\x, and read back" =
@@ -159,10 +164,10 @@ fn main() ! FsError uses Fs, Console =
   [%expect
     {|
     4
-    # ren journal 1 · main.ren · deps: Console Fs
-    1 Fs.read("in.bin") → Ok("\xff\x01ok")
-    2 Console.write("4")
-    3 exit 0
+    # ren journal 2 · main.ren · deps: Console Fs
+    1 main Fs.read("in.bin") → Ok("\xff\x01ok")
+    2 main Console.write("4")
+    3 main exit 0
     4
     replayed 2 calls
     |}]
@@ -196,15 +201,15 @@ test "the recording replays" =
 let reader_journal ?(calls = []) () =
   String.concat "\n"
     ([
-       "# ren journal 1 · main.ren · deps: Clock Console Fs";
-       {|1 Fs.read("a") → Ok("one")|};
-       {|2 Clock.now() → 10|};
-       {|3 Console.write("one")|};
-       {|4 Fs.read("b") → Ok("two")|};
-       {|5 Clock.now() → 15|};
-       {|6 Console.write("two")|};
-       {|7 Console.error("done")|};
-       {|8 exit 0|};
+       "# ren journal 2 · main.ren · deps: Clock Console Fs";
+       {|1 main Fs.read("a") → Ok("one")|};
+       {|2 main Clock.now() → 10|};
+       {|3 main Console.write("one")|};
+       {|4 main Fs.read("b") → Ok("two")|};
+       {|5 main Clock.now() → 15|};
+       {|6 main Console.write("two")|};
+       {|7 main Console.error("done")|};
+       {|8 main exit 0|};
      ]
     |> List.filter (fun l ->
         not
@@ -346,9 +351,9 @@ let%expect_test "an entry that can't be read fails the test, at its line" =
       ( "run.journal",
         String.concat "\n"
           [
-            "# ren journal 1 · main.ren · deps: Clock Console Fs";
-            {|1 Fs.read("a") → Ok(<redacted>)|};
-            "2 exit 0";
+            "# ren journal 2 · main.ren · deps: Clock Console Fs";
+            {|1 main Fs.read("a") → Ok(<redacted>)|};
+            "2 main exit 0";
           ] );
     ]
     test;
@@ -358,9 +363,9 @@ let%expect_test "an entry that can't be read fails the test, at its line" =
       ( "run.journal",
         String.concat "\n"
           [
-            "# ren journal 1 · main.ren · deps: Clock Console Fs";
-            {|1 Fs.read("a") → Ok(5)|};
-            "2 exit 0";
+            "# ren journal 2 · main.ren · deps: Clock Console Fs";
+            {|1 main Fs.read("a") → Ok(5)|};
+            "2 main exit 0";
           ] );
     ]
     test;
@@ -371,7 +376,7 @@ let%expect_test "an entry that can't be read fails the test, at its line" =
 
     ──── the recording replays ── run.journal:2
       │
-    2 │ 1 Fs.read("a") → Ok(<redacted>)
+    2 │ 1 main Fs.read("a") → Ok(<redacted>)
       │ ^
       │
       error: what this call gave was left out when it was recorded, so it can't be given back
@@ -385,7 +390,7 @@ let%expect_test "an entry that can't be read fails the test, at its line" =
 
     ──── the recording replays ── run.journal:2
       │
-    2 │ 1 Fs.read("a") → Ok(5)
+    2 │ 1 main Fs.read("a") → Ok(5)
       │ ^
       │
       error: this entry can't be read as a `Result<Bytes, ! FsFailed(Path, Str) | IsAFolder(Path) | NoSuchFile(Path) | NotAllowed(Path)>`
@@ -421,32 +426,57 @@ let%expect_test "a journal's lines that can't be read are said at their line" =
       Option.iter print_string
         (Driver.render_error ~sources:(fun _ -> Some (clean text)) e)
   in
-  load "# ren journal 2 · main.ren · deps: Clock\n";
-  load "# ren journal 1 · main.ren · deps: Clock\n1 Clock.now( → 5\n";
-  load "# ren journal 1 · main.ren · deps: Clock\n1 now() → 5\n";
-  load "# ren journal 1 · main.ren · deps: Clock\n1 panic\n";
+  load "# ren journal 3 · main.ren · deps: Clock\n";
+  load "# ren journal 2 · main.ren · deps: Clock\n1 main Clock.now( → 5\n";
+  load "# ren journal 2 · main.ren · deps: Clock\n1 main now() → 5\n";
+  load "# ren journal 2 · main.ren · deps: Clock\n1 main panic\n";
+  (* a version 1 line, which names no task *)
+  load "# ren journal 2 · main.ren · deps: Clock\n1 Clock.now() → 5\n";
+  (* what a call gave, with no call waiting for it *)
+  load "# ren journal 2 · main.ren · deps: Clock\n1 main → 5\n2 main exit 0\n";
+  (* a call while its task waits in another *)
+  load
+    "# ren journal 2 · main.ren · deps: Clock\n\
+     1 main Clock.sleep(5) …\n\
+     2 main Clock.now() → 5\n\
+     3 main exit 0\n";
   [%expect
     {|
-    error: run.journal is a journal of version 2, and this ren reads version 1
+    error: run.journal is a journal of version 3, and this ren reads version 2
       ┌─ run.journal:1:1
-    1 │ # ren journal 2 · main.ren · deps: Clock
+    1 │ # ren journal 3 · main.ren · deps: Clock
       │ ^
       help: record it again with this ren
     error: this line of run.journal isn't a call or how the run ended
       ┌─ run.journal:2:1
-    2 │ 1 Clock.now( → 5
+    2 │ 1 main Clock.now( → 5
       │ ^
-      help: a call is written `Dep.op(arguments) → what it gave`, and the last line `exit 0`, `error` and the error, or `panic`, where, and what it said in quotes
+      help: a call is written `task Dep.op(arguments) → what it gave`, and the last line `main exit 0`, `main error` and the error, or `main panic`, where, and what it said in quotes
     error: this line of run.journal isn't a call or how the run ended
       ┌─ run.journal:2:1
-    2 │ 1 now() → 5
+    2 │ 1 main now() → 5
       │ ^
-      help: a call is written `Dep.op(arguments) → what it gave`, and the last line `exit 0`, `error` and the error, or `panic`, where, and what it said in quotes
+      help: a call is written `task Dep.op(arguments) → what it gave`, and the last line `main exit 0`, `main error` and the error, or `main panic`, where, and what it said in quotes
     error: this line of run.journal isn't a call or how the run ended
       ┌─ run.journal:2:1
-    2 │ 1 panic
+    2 │ 1 main panic
       │ ^
-      help: a call is written `Dep.op(arguments) → what it gave`, and the last line `exit 0`, `error` and the error, or `panic`, where, and what it said in quotes
+      help: a call is written `task Dep.op(arguments) → what it gave`, and the last line `main exit 0`, `main error` and the error, or `main panic`, where, and what it said in quotes
+    error: this line of run.journal isn't a call or how the run ended
+      ┌─ run.journal:2:1
+    2 │ 1 Clock.now() → 5
+      │ ^
+      help: a call is written `task Dep.op(arguments) → what it gave`, and the last line `main exit 0`, `main error` and the error, or `main panic`, where, and what it said in quotes
+    error: main isn't waiting in a call here
+      ┌─ run.journal:2:1
+    2 │ 1 main → 5
+      │ ^
+      help: a line `task → what it gave` ends the task's call that waits, whose first line ends `…`
+    error: main makes this call while it waits in another
+      ┌─ run.journal:3:1
+    3 │ 2 main Clock.now() → 5
+      │ ^
+      help: a task's call that waits ends before its next one
     |}]
 
 let%expect_test "the diff of a test's outputs" =
@@ -584,8 +614,8 @@ fn main() ! Broke(Str) uses Console =
   let text =
     String.concat "\n"
       [
-        "# ren journal 1 · main.ren · deps: Console";
-        "1 "
+        "# ren journal 2 · main.ren · deps: Console";
+        "1 main "
         ^ Journal.ending_text (Panicked { at = "main.ren:3:3"; msg = "a\nb" });
       ]
   in
@@ -597,13 +627,13 @@ fn main() ! Broke(Str) uses Console =
     {|
     1
     error: Broke("two\nlines")
-    # ren journal 1 · main.ren · deps: Console
-    1 Console.write("1")
-    2 error Broke("two\nlines")
+    # ren journal 2 · main.ren · deps: Console
+    1 main Console.write("1")
+    2 main error Broke("two\nlines")
     1
     error: Broke("two\nlines")
-    # ren journal 1 · main.ren · deps: Console
-    1 panic main.ren:3:3 "a\nb"
+    # ren journal 2 · main.ren · deps: Console
+    1 main panic main.ren:3:3 "a\nb"
     read back: a
     b
     |}]
@@ -627,9 +657,9 @@ test "the rest are the test's" =
       );
       ( "run.journal",
         {|
-# ren journal 1 · main.ren · deps: Console
-1 Console.write("hi")
-2 exit 0
+# ren journal 2 · main.ren · deps: Console
+1 main Console.write("hi")
+2 main exit 0
 |}
       );
     ]
@@ -650,9 +680,9 @@ fn main() uses Console, Clock =
 |});
       ( "run.journal",
         {|
-# ren journal 1 · main.ren · deps: Console
-1 Console.write("hi")
-2 exit 0
+# ren journal 2 · main.ren · deps: Console
+1 main Console.write("hi")
+2 main exit 0
 |}
       );
     ]
@@ -661,7 +691,7 @@ fn main() uses Console, Clock =
     {|
     error: run.journal recorded a `main` that uses `Console`, and this one uses `Clock` and `Console`
       ┌─ run.journal:1:1
-    1 │ # ren journal 1 · main.ren · deps: Console
+    1 │ # ren journal 2 · main.ren · deps: Console
       │ ^
       help: the code changed since this was recorded; record it again
     |}]
@@ -708,9 +738,9 @@ let%expect_test "a test of a bug's recording passes once the bug is fixed" =
       ┌─ main.ren:4:9
     4 │   print(xs[3])
       │         ^^^^^
-    # ren journal 1 · main.ren · deps: Clock Console
-    1 Console.write("1")
-    2 panic main.ren:4:9 "index 3 is out of bounds for an array of length 1"
+    # ren journal 2 · main.ren · deps: Clock Console
+    1 main Console.write("1")
+    2 main panic main.ren:4:9 "index 3 is out of bounds for an array of length 1"
     main.ren
       ✗ replays the bug
 
@@ -744,4 +774,359 @@ let%expect_test "a test of a bug's recording passes once the bug is fixed" =
       seed 1 · rerun: ren test main.ren --only "replays the" --seed 1
 
     0 passed, 1 failed
+    |}]
+
+(* ---- tasks: journal version 2 ---- *)
+
+(* [s] cut at each [sep]. *)
+let split_on sep s =
+  let n = String.length sep in
+  let rec go from i acc =
+    if i + n > String.length s then List.rev (String.sub s from (String.length s - from) :: acc)
+    else if String.sub s i n = sep then go (i + n) (i + n) (String.sub s from (i - from) :: acc)
+    else go from (i + 1) acc
+  in
+  go 0 0 []
+
+(* Two tasks that sleep, the second for less time, so it wakes first. *)
+let sleepers =
+  {|
+fn work(name: Str, ms: Int) uses Console, Clock =
+  Console.error(name)
+  Clock.sleep(Duration.ms(ms))
+  print(name)
+
+pub fn main() uses Console, Clock, Async =
+  Async.scope fn(s) =>
+    s.spawn fn() => work("slow", 40)
+    s.spawn fn() => work("fast", 5)
+  print("done")
+
+test "the recording replays" =
+  with replay("run.journal") in
+    main()
+|}
+
+let%expect_test "each entry names its task, and a call that waits is two lines" =
+  in_folder [ ("main.ren", sleepers) ] (fun () ->
+      record ();
+      replay "run.journal");
+  [%expect
+    {|
+    slow
+    fast
+    fast
+    slow
+    done
+    # ren journal 2 · main.ren · deps: Clock Console
+    1 main/main:0 Console.error("slow")
+    2 main/main:0 Clock.sleep(40) …
+    3 main/main:1 Console.error("fast")
+    4 main/main:1 Clock.sleep(5) …
+    5 poll main/main:1
+    6 main/main:1 →
+    7 main/main:1 Console.write("fast")
+    8 poll main/main:0
+    9 main/main:0 →
+    10 main/main:0 Console.write("slow")
+    11 main Console.write("done")
+    12 main exit 0
+    slow
+    fast
+    fast
+    slow
+    done
+    replayed 7 calls
+    |}]
+
+(* the same run, but with its polls the other way round *)
+let swapped =
+  {|# ren journal 2 · main.ren · deps: Clock Console
+1 main/main:0 Console.error("slow")
+2 main/main:0 Clock.sleep(40) …
+3 main/main:1 Console.error("fast")
+4 main/main:1 Clock.sleep(5) …
+5 poll main/main:0
+6 main/main:0 →
+7 main/main:0 Console.write("slow")
+8 poll main/main:1
+9 main/main:1 →
+10 main/main:1 Console.write("fast")
+11 main Console.write("done")
+12 main exit 0
+|}
+
+let%expect_test "a replay follows the recording's polls, not the clock" =
+  in_folder [ ("main.ren", sleepers); ("run.journal", swapped) ] (fun () ->
+      replay "run.journal");
+  [%expect
+    {|
+    slow
+    fast
+    slow
+    fast
+    done
+    replayed 7 calls
+    |}]
+
+let%expect_test "a poll that wakes a task that isn't waiting went differently" =
+  let text =
+    String.concat "\n"
+      (List.map
+         (fun l -> if l = "8 poll main/main:1" then "8 poll main/main:0" else l)
+         (String.split_on_char '\n' swapped))
+  in
+  in_folder [ ("main.ren", sleepers); ("run.journal", text) ] (fun () ->
+      replay "run.journal");
+  [%expect
+    {|
+    slow
+    fast
+    slow
+    error: the replay went differently at call 6 of 7
+      ┌─ run.journal:9:1
+    9 │ 8 poll main/main:0
+      │ ^
+      = the recording has: poll main/main:0
+      = this program has: main/main:0 waiting for nothing a poll ends
+      help: the code changed since this was recorded; record it again
+    |}]
+
+let%expect_test "a replay that makes a call of another task went differently" =
+  let text =
+    String.concat "\n"
+      (List.map
+         (fun l ->
+           if l = "1 main/main:0 Console.error(\"slow\")" then
+             "1 main/main:1 Console.error(\"slow\")"
+           else l)
+         (String.split_on_char '\n' swapped))
+  in
+  in_folder [ ("main.ren", sleepers); ("run.journal", text) ] (fun () ->
+      replay "run.journal");
+  [%expect
+    {|
+    error: the replay went differently at call 1 of 7
+      ┌─ main.ren:2:3
+    2 │   Console.error(name)
+      │   ^^^^^^^^^^^^^^^^^^^
+      = the recording has: main/main:1 Console.error("slow")
+      = this program made: main/main:0 Console.error("slow")
+      help: the code changed since this was recorded; record it again
+    |}]
+
+let%expect_test "a test of the recording follows its order, and keys answers by task" =
+  in_folder [ ("main.ren", sleepers); ("run.journal", swapped) ] (fun () ->
+      test ~seeds:100 ());
+  [%expect {|
+    main.ren
+      ✓ the recording replays
+
+    1 passed, each under 100 seeds
+    |}]
+
+let%expect_test "a test's outputs are compared task by task" =
+  in_folder
+    [
+      ( "main.ren",
+        String.concat "print(name.concat(\"!\"))" (split_on "print(name)" sleepers)
+      );
+      ("run.journal", swapped);
+    ]
+    test;
+  [%expect {|
+    main.ren
+      ✗ the recording replays
+
+    ──── the recording replays ── main.ren:13
+       │
+    13 │   with replay("run.journal") in
+       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       the outputs differ from the recording's
+         main/main:0 Console.error("slow")
+         main/main:0 Clock.sleep(40)
+       - main/main:0 Console.write("slow")
+       + main/main:0 Console.write("slow!")
+         main/main:1 Console.error("fast")
+         main/main:1 Clock.sleep(5)
+       - main/main:1 Console.write("fast")
+       + main/main:1 Console.write("fast!")
+         Console.write("done")
+       help: if the change is what you meant, record the run again, or edit the journal
+
+       seed 1 · rerun: ren test main.ren --only "the recording" --seed 1
+
+    0 passed, 1 failed
+    |}]
+
+(* Two tasks that take turns at a counter: which gets 1 depends only on
+   the order they ran in. *)
+let turns journal =
+  {|
+dep Count =
+  bump: fn() -> Int
+
+handler counter() for Count =
+  var n = 0
+  bump() =>
+    n = n + 1
+    n
+
+fn turn(name: Str) uses Console, Count =
+  Console.error(name)
+  print((name, Count.bump()))
+
+pub fn main() uses Console, Async =
+  with counter() in
+    Async.scope fn(s) =>
+      s.spawn fn() => turn("a")
+      s.spawn fn() => turn("b")
+
+test "the recording replays" =
+  with replay("|} ^ journal ^ {|") in
+    main()
+|}
+
+let%expect_test "a test runs in the recorded order while it can" =
+  in_folder [ ("main.ren", turns "run.journal") ] (fun () ->
+      record ();
+      test ~seeds:300 ());
+  [%expect {|
+    a
+    ("a", 1)
+    b
+    ("b", 2)
+    # ren journal 2 · main.ren · deps: Console
+    1 main/main:0 Console.error("a")
+    2 main/main:0 Console.write("(\"a\", 1)")
+    3 main/main:1 Console.error("b")
+    4 main/main:1 Console.write("(\"b\", 2)")
+    5 main exit 0
+    main.ren
+      ✓ the recording replays
+
+    1 passed, each under 300 seeds
+    |}]
+
+let%expect_test "then the seeded tape takes over" =
+  (* `b` went first here, which `single`'s order never does, so the order
+     isn't the recording's from its first call, and each seed's is its
+     own: some pass, and some fail *)
+  let journal =
+    {|# ren journal 2 · main.ren · deps: Console
+1 main/main:1 Console.error("b")
+2 main/main:1 Console.write("(\"b\", 1)")
+3 main/main:0 Console.error("a")
+4 main/main:0 Console.write("(\"a\", 2)")
+5 main exit 0
+|}
+  in
+  in_folder [ ("main.ren", turns "b.journal"); ("b.journal", journal) ] (fun () ->
+      test ~seeds:300 ());
+  [%expect {|
+    main.ren
+      ✗ the recording replays
+
+    ──── the recording replays ── main.ren:21
+       │
+    21 │   with replay("b.journal") in
+       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       the outputs differ from the recording's
+         main/main:1 Console.error("b")
+       - main/main:1 Console.write("(\"b\", 1)")
+       + main/main:1 Console.write("(\"b\", 2)")
+         main/main:0 Console.error("a")
+       - main/main:0 Console.write("(\"a\", 2)")
+       + main/main:0 Console.write("(\"a\", 1)")
+       help: if the change is what you meant, record the run again, or edit the journal
+
+       seed 1 · rerun: ren test main.ren --only "the recording" --seed 1
+
+    0 passed, 1 failed
+    |}]
+
+let%expect_test "a timeout's cancel, and a failure while cancelled, are recorded" =
+  in_folder
+    [
+      ( "main.ren",
+        {|
+fn nap(name: Str, ms: Int) uses Console, Clock, Async =
+  let r = attempt Async.timeout(Duration.ms(20)) fn() =>
+    Clock.sleep(Duration.ms(ms))
+  match r
+    Ok(_) => print(name.concat(" in time"))
+    Err(_) => print(name.concat(" late"))
+
+fn fails(ms: Int) ! Broke uses Clock =
+  Clock.sleep(Duration.ms(ms))
+  fail Broke
+
+fn main() ! Broke uses Console, Clock, Async =
+  let _ = Async.both(fn() => nap("a", 5), fn() => nap("b", 60))
+  let _ = try Async.both(fn() => try fails(5), fn() => try fails(5))
+  print("not reached")
+|} );
+    ]
+    (fun () ->
+      record ();
+      replay "run.journal");
+  [%expect {|
+    a in time
+    b late
+    warning: main/main:3 failed too, with `Broke`, while it was being cancelled
+    error: Broke
+      = from the task main/main:2
+    # ren journal 2 · main.ren · deps: Clock Console
+    1 main/main:0 Clock.sleep(5) …
+    2 main/main:1 Clock.sleep(60) …
+    3 poll main/main:0
+    4 main/main:0 →
+    5 main/main:0 Console.write("a in time")
+    6 poll main/main:1
+    7 main/main:1 cancelled
+    8 main/main:1 Console.write("b late")
+    9 main/main:2 Clock.sleep(5) …
+    10 main/main:3 Clock.sleep(5) …
+    11 poll main/main:2 main/main:3
+    12 main/main:2 →
+    13 main/main:3 →
+    # warning: main/main:3 failed too, with `Broke`, while it was being cancelled
+    14 main error Broke
+    a in time
+    b late
+    warning: main/main:3 failed too, with `Broke`, while it was being cancelled
+    error: Broke
+      = from the task main/main:2
+    |}]
+
+let%expect_test "a version 1 journal is refused" =
+  in_folder
+    [
+      ("main.ren", reader ());
+      ( "run.journal",
+        "# ren journal 1 · main.ren · deps: Clock Console Fs\n1 exit 0\n" );
+    ]
+    (fun () ->
+      test ();
+      replay "run.journal");
+  [%expect {|
+    main.ren
+      ✗ the recording replays
+
+    ──── the recording replays ── run.journal:1
+      │
+    1 │ # ren journal 1 · main.ren · deps: Clock Console Fs
+      │ ^
+      │
+      error: `run.journal` is a version 1 journal, which this `ren` doesn't read
+      help: record it again: `ren run --record run.journal main.ren`
+
+      seed 1 · rerun: ren test main.ren --only "the recording" --seed 1
+
+    0 passed, 1 failed
+    error: `run.journal` is a version 1 journal, which this `ren` doesn't read
+      = version 2 names the task that made each call
+      help: record it again: `ren run --record run.journal main.ren`
     |}]

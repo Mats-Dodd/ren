@@ -1,10 +1,10 @@
-# ren journal 1 · ../main.ren · deps: Console Fs Os Proc
-1 Fs.read("justfile") → Ok("# What `ren run main.ren` runs, from the folder this is in.\n\n# the first recipe, so the one that runs with no args\nall: build test\n  echo all done\n\nbuild: base\n  echo building\n  echo built\n\ntest: base\n  echo testing\n\nbase:\n  echo base\n\n# exits with 3 halfway through, so its last line never runs\nbroken: base\n  echo trying\n  exit 3\n  echo never\n")
-2 Os.args() → ["build"]
-3 Console.error("echo base")
-4 Proc.run("sh", ["-c", "echo base"]) → Ok(0)
-5 Console.error("echo building")
-6 Proc.run("sh", ["-c", "echo building"]) → Ok(0)
-7 Console.error("echo built")
-8 Proc.run("sh", ["-c", "echo built"]) → Ok(0)
-9 exit 0
+# ren journal 2 · ../main.ren · deps: Console Fs Os Proc
+1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, from the folder this is in.\n\n# the first recipe, so the one that runs with no args\nall: build test\n  echo all done\n\nbuild: base\n  echo building\n  echo built\n\ntest: base\n  echo testing\n\nbase:\n  echo base\n\n# exits with 3 halfway through, so its last line never runs\nbroken: base\n  echo trying\n  exit 3\n  echo never\n")
+2 main Os.args() → ["build"]
+3 main Console.error("echo base")
+4 main Proc.run("sh", ["-c", "echo base"]) → Ok(0)
+5 main Console.error("echo building")
+6 main Proc.run("sh", ["-c", "echo building"]) → Ok(0)
+7 main Console.error("echo built")
+8 main Proc.run("sh", ["-c", "echo built"]) → Ok(0)
+9 main exit 0

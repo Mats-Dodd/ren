@@ -159,9 +159,16 @@ type action =
   | Raise of exn
 
 (* A timer: when it's due, in the order it was set among those due at
-   once, what it does then, and whether it's still wanted, which it isn't
-   once the wait it was for has ended some other way. *)
-type timer = { at : float; seq : int; fire : unit -> unit; live : unit -> bool }
+   once, the task it wakes, what it does then, which says whether it woke
+   it, and whether it's still wanted, which it isn't once the wait it was
+   for has ended some other way. *)
+type timer = {
+  at : float;
+  seq : int;
+  wakes : task;
+  fire : unit -> bool;
+  live : unit -> bool;
+}
 
 (* A task waiting in `Async.until`, in its wait [id], until [holds]; and
    how many of the instance's operations it was in when it let go of it,
@@ -191,6 +198,37 @@ type policy = Single | Sim of { mutable tape : int64; mutable clock : float }
    or ended. *)
 type ticker = { mutable pending : task list; woken : unit -> bool }
 
+(* A journal being recorded or replayed (journal.ml, compiler.md,
+   "Journal version 2"), as the scheduler sees it: what it's told, and,
+   replaying, what it says the scheduler does. Recording, it's told when
+   a task waits, which makes a call to the world that's running then a
+   call that waits, written in two lines ([waits]); which tasks a poll
+   woke, in their order ([polled]); and when a task sees a cancel
+   ([saw_cancel]), or a second failure is said ([note]).
+
+   Replaying, while it [follows] the recording, the scheduler runs in the
+   recorded order: `single`'s, first in first out, whatever the policy;
+   no timer fires on its own; and when no task can run, the recording's
+   next poll says which waits end, in what order ([poll]: each task's
+   path, and whether it's woken to see a cancel). A task sees a cancel
+   that time would have made, a timeout's or a cleanup deadline's, only
+   where the recording says it did ([cancel_here]); one a task asked
+   for, deterministic, it sees as it would. [astray] is a poll's task that
+   isn't waiting, which the journal says is a replay gone differently, or
+   the end of following. [path_of] is a task's path as the journal writes
+   it. *)
+type journal = {
+  path_of : task -> string;
+  follows : unit -> bool;
+  waits : task -> unit;
+  polled : task list -> unit;
+  poll : unit -> (string * bool) list option;
+  cancel_here : task -> bool;
+  saw_cancel : task -> unit;
+  astray : string -> unit;
+  note : string -> unit;
+}
+
 (* The scheduler of a run: its queue, its timers, the task running, and
    the root, whose end is the run's. *)
 type t = {
@@ -216,6 +254,8 @@ type t = {
   locks : (int, lock) Hashtbl.t;
       (** the exclusive instances a spawned task can reach, the shared ones
           ([share]), each with its lock, by its number *)
+  mutable journal : journal option;
+      (** the journal being recorded or replayed, if one is ([watch]) *)
 }
 
 (* The scheduler running, if one is: a run is one program, or one test,
@@ -256,8 +296,19 @@ let current_path () =
    which resumes it once something wakes it. *)
 type _ Effect.t += Suspend : unit Effect.t
 
-let add_timer s ~at ~live fire =
-  let tm = { at; seq = fresh s; fire; live } in
+(* Whether a journal being replayed says the order, now. *)
+let following s = match s.journal with Some j -> j.follows () | None -> false
+
+(* The scheduler's time moves on to [at], if it's later: what a replay
+   does where the recording says a task saw a cancel that time made, so a
+   timeout reaching it sees its deadline passed, as the recording did. *)
+let jump s at =
+  let d = at -. now () in
+  if d > 0. then
+    match s.policy with Sim v -> v.clock <- v.clock +. d | Single -> s.skew <- s.skew +. d
+
+let add_timer s ~at ~wakes ~live fire =
+  let tm = { at; seq = fresh s; wakes; fire; live } in
   let rec insert = function
     | x :: rest when x.at <= at -> x :: insert rest
     | rest -> tm :: rest
@@ -280,9 +331,26 @@ let cancel_due t =
       match due with Some x -> Some (Float.min x at) | None -> Some at)
     asked t.deadlines
 
-(* Whether [t] sees a cancel now. *)
+(* Whether [t] sees a cancel now. Following a recording, one that time
+   makes is seen only where the recording says, and the time moves on to
+   when it's due ([journal]). *)
 let sees_cancel t =
-  match cancel_due t with Some at -> now () >= at | None -> false
+  match !running with
+  | Some ({ journal = Some j; _ } as s) when j.follows () -> (
+      (t.asked && t.shield = 0)
+      ||
+      match cancel_due t with
+      | Some at when j.cancel_here t ->
+          jump s at;
+          true
+      | _ -> false)
+  | _ -> ( match cancel_due t with Some at -> now () >= at | None -> false)
+
+(* [t] is about to see a cancel, which a journal is told. *)
+let seen t =
+  match !running with
+  | Some { journal = Some j; _ } -> j.saw_cancel t
+  | _ -> ()
 
 (* End [t]'s wait [id], if it's still the one it's in, to resume it with
    [action]. A waker of a wait that's over gives [false]. *)
@@ -302,13 +370,16 @@ let rec wake_first = function [] -> [] | w :: rest -> if w () then rest else wak
    deadline). *)
 let interrupt_when s t =
   if t.wait <> 0 && t.cancellable then
+    (* following a recording, only a cancel the task asked for is now:
+       one time makes waits for the poll that says it *)
+    let now_ at = if following s then t.asked && t.shield = 0 else at <= now () in
     match cancel_due t with
-    | Some at when at <= now () -> ignore (wake s t t.wait Interrupt)
+    | Some at when now_ at -> ignore (wake s t t.wait Interrupt)
     | Some at ->
         let id = t.wait in
-        add_timer s ~at
+        add_timer s ~at ~wakes:t
           ~live:(fun () -> t.wait = id)
-          (fun () -> ignore (wake s t id Interrupt))
+          (fun () -> wake s t id Interrupt)
     | None -> ()
 
 (* Wait, as the task running, until [register]'s waker is called, which
@@ -321,19 +392,27 @@ let interrupt_when s t =
 let wait ?(cancellable = true) ?at what register =
   let s = sched () in
   let t = s.current in
-  if cancellable && sees_cancel t then raise Cancelled;
+  if cancellable && sees_cancel t then begin
+    seen t;
+    raise Cancelled
+  end;
   let id = fresh s in
   t.wait <- id;
   t.what <- (match at with Some at -> what ^ " at " ^ at | None -> what);
   t.cancellable <- cancellable;
   interrupt_when s t;
   register (fun () -> wake s t id Resume);
+  Option.iter (fun j -> j.waits t) s.journal;
   Effect.perform Suspend
 
 (* Raise [Cancelled] if the task running sees a cancel: what a dependency
    call does first. *)
 let check () =
-  match current () with Some t when sees_cancel t -> raise Cancelled | _ -> ()
+  match current () with
+  | Some t when sees_cancel t ->
+      seen t;
+      raise Cancelled
+  | _ -> ()
 
 (* [f ()], in a `finally`: a cancel isn't seen meanwhile, until the
    cleanup deadline. *)
@@ -440,7 +519,7 @@ let draw = function
 let take s =
   match s.policy with
     | Single -> Queue.take_opt s.queue
-    | Sim _ when Queue.length s.queue <= 1 -> Queue.take_opt s.queue
+    | Sim _ when Queue.length s.queue <= 1 || following s -> Queue.take_opt s.queue
     | Sim _ ->
         let n = Queue.length s.queue in
         let i = Int64.to_int (Int64.unsigned_rem (draw s.policy) (Int64.of_int n)) in
@@ -463,7 +542,9 @@ let step s (t, action) =
       t.state <- Running;
       match action with
       | Resume -> Effect.Deep.continue k ()
-      | Interrupt -> Effect.Deep.discontinue k Cancelled
+      | Interrupt ->
+          seen t;
+          Effect.Deep.discontinue k Cancelled
       | Raise e -> Effect.Deep.discontinue k e
       | Start _ -> ())
 
@@ -511,12 +592,37 @@ let came_from err path =
 
 let origin err = List.find_map (fun (e, p) -> if e == err then Some p else None) !origins
 
-(* Fire each timer that's due now, in the order they're due. *)
+(* Fire each timer that's due now, in the order they're due. A journal
+   being recorded is told the tasks they woke, in that order: a poll. *)
 let fire_due s =
   let at = now () in
   let due, later = List.partition (fun tm -> tm.at <= at) s.timers in
   s.timers <- later;
-  List.iter (fun tm -> if tm.live () then tm.fire ()) due
+  let woke = List.filter (fun tm -> tm.live () && tm.fire ()) due in
+  match (woke, s.journal) with
+  | _ :: _, Some j -> j.polled (List.map (fun tm -> tm.wakes) woke)
+  | _ -> ()
+
+(* Following a recording, no task can run: its next poll ends the waits
+   it says, in its order ([journal]), and gives [true]; or it has none
+   next, and gives [false]. *)
+let replay_poll s (j : journal) =
+  match j.poll () with
+  | None -> false
+  | Some woken ->
+      List.iter
+        (fun (p, cancels) ->
+          match List.find_opt (fun u -> j.path_of u = p && u.wait <> 0) s.alive with
+          | Some t when cancels -> (
+              match cancel_due t with
+              | Some at when t.cancellable ->
+                  jump s at;
+                  ignore (wake s t t.wait Interrupt)
+              | _ -> j.astray p)
+          | Some t -> ignore (wake s t t.wait Resume)
+          | None -> j.astray p)
+        woken;
+      true
 
 (* Run [f] as the root task of a scheduler, its path [root], `main` or
    `test`: what it gives, or what it raises, once it has ended, which it
@@ -541,6 +647,7 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
       count = 0;
       waiters = Hashtbl.create 8;
       locks = Hashtbl.create 8;
+      journal = None;
     }
   in
   let rec loop () =
@@ -549,9 +656,12 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
       | Some next ->
           step s next;
           loop ()
+      | None when following s && replay_poll s (Option.get s.journal) -> loop ()
       | None -> (
           s.timers <- List.filter (fun tm -> tm.live ()) s.timers;
-          match s.timers with
+          (* following a recording that has no poll next, it ends as it
+             did: no timer fired then *)
+          match if following s then [] else s.timers with
           | first :: _ ->
               (match s.policy with
               | Sim v ->
@@ -584,6 +694,23 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
   | exception e ->
       running := before;
       raise e
+
+(* ---- journals ---- *)
+
+(* The journal [j] is recorded or replayed in this run from now on, or,
+   [None], none is: the one before it, which it gives back. *)
+let watch j =
+  match !running with
+  | Some s ->
+      let before = s.journal in
+      s.journal <- j;
+      before
+  | None -> None
+
+(* A journal being recorded is told [line], a second failure's warning,
+   which it keeps as a comment. *)
+let note line =
+  match !running with Some { journal = Some j; _ } -> j.note line | _ -> ()
 
 (* ---- scopes and tasks ---- *)
 
@@ -704,9 +831,9 @@ let sleep ?at ms =
         wait ?at "sleeps" (fun wake ->
             let id = s.current.wait in
             let t = s.current in
-            add_timer s ~at:(now () +. secs)
+            add_timer s ~at:(now () +. secs) ~wakes:t
               ~live:(fun () -> t.wait = id)
-              (fun () -> ignore (wake ())))
+              wake)
 
 (* ---- runtimes ---- *)
 
@@ -795,6 +922,7 @@ let tick ?at () =
   let s = sched () in
   match s.policy with
   | Single -> wait ?at "waits in `Async.tick`" (fun wake -> ignore (wake ()))
+  | Sim _ when following s -> wait ?at "waits in `Async.tick`" (fun wake -> ignore (wake ()))
   | Sim _ ->
       let pending = List.of_seq (Seq.map fst (Queue.to_seq s.queue)) in
       wait ?at "waits in `Async.tick`" (fun wake ->
@@ -809,7 +937,7 @@ let tick ?at () =
    happens ("`sim`'s choices"). *)
 let point ?at () =
   match !running with
-  | Some ({ policy = Sim _; _ } as s) ->
+  | Some ({ policy = Sim _; _ } as s) when not (following s) ->
       wait ?at "yields" (fun wake ->
           s.current.pointed <- true;
           ignore (wake ()))

@@ -507,6 +507,15 @@ let share_reach v =
    waits there (Sched.wait). *)
 let where (loc : Loc.t) = sprintf "%s:%d:%d" loc.file loc.start.line loc.start.col
 
+(* A task's path as a journal writes it: a test's root is `main`, the
+   root of the run the journal recorded, so a test's replay of it names
+   its tasks as the recording did. *)
+let journal_path path =
+  if path = "test" then "main"
+  else if String.starts_with ~prefix:"test/" path then
+    "main" ^ String.sub path 4 (String.length path - 4)
+  else path
+
 (* The program's call the prelude's code running was reached from, if
    it's known ([ctx]'s [call]). *)
 let at_call cx = Option.map where cx.call
@@ -535,11 +544,15 @@ let task_of = function
    payload's types, so it's shown by them. *)
 let failed_too cx path err =
   let shown = Shown.value ~own:(fun _ _ _ -> Shown.Declared) cx.types Ty.Error err in
+  let line =
+    sprintf "warning: %s failed too, with `%s`, while it was being cancelled"
+      path shown
+  in
   flush stdout;
-  prerr_string
-    (sprintf "warning: %s failed too, with `%s`, while it was being cancelled\n"
-       path shown);
-  flush stderr
+  prerr_endline line;
+  flush stderr;
+  (* a journal being recorded keeps it as a comment *)
+  Sched.note line
 
 let rec eval cx env (e : expr) =
   match e.kind with
@@ -570,8 +583,9 @@ let rec eval cx env (e : expr) =
          its descriptors stand for (compiler.md, "Generic dependencies") *)
       let args = eval_all cx env args in
       (* a task asked to stop stops here, before the call (async.md,
-         "Cancellation") *)
-      Sched.check ();
+         "Cancellation"), where a replay that went differently says so *)
+      (try Sched.check ()
+       with Journal.Differs differs -> raise (Went_differently { loc = e.loc; differs }));
       let what = Printf.sprintf "a call of `%s.%s`" dep.name op in
       let tys = List.map (type_of env) dargs in
       match
@@ -1593,7 +1607,8 @@ and journal cx (x : Intrinsic.t) tys args =
   in
   let made name ta a =
     let dep, op = Journal.split_call name in
-    Journal.made ~dep ~op ~args:(Journal.write_args cx.types ta a)
+    Journal.made ~task:(journal_path (Sched.current_path ())) ~dep ~op
+      ~args:(Journal.write_args cx.types ta a)
   in
   let option name args = VCon { ty = Path.prelude "Option"; name; args } in
   match (x, tys, args) with
@@ -1627,7 +1642,11 @@ and journal cx (x : Intrinsic.t) tys args =
               prerr_endline line
           | _ -> ())
         ~nothing:(Journal.nothing tr)
+        ~wait:(fun register ->
+          Sched.wait ?at:(at_call cx) "waits for its recorded call to end" register)
   | Journal_outputs, [], [ j ] ->
+      (* the test's `with replay(...)` ends: the journal is done with *)
+      ignore (Sched.watch None);
       Journal.outputs (find j);
       VUnit
   | Journal_load, [], [ VStr file ] -> load_journal cx file
@@ -1640,7 +1659,7 @@ and answered cx (j : Journal.t) (tr : Ty.ty) (e : Journal.call) =
     raise
       (Diag.Error
          (Diag.make
-            (Loc.point ~file:j.file e.line 1)
+            (Loc.point ~file:j.file e.gave_line 1)
             msg
             ~help:"record the run again, or write the value as it's recorded"))
   in
@@ -1679,13 +1698,25 @@ and load_journal cx file =
   | exception Sys_error _ ->
       raise (Builtins.Panic (sprintf "there's no journal at %s" path))
   | text ->
-      let j = Journal.load ~file:path text in
+      let j =
+        try Journal.load ~file:path text
+        with Journal.Version_1 { file; program } ->
+          let said, note, help = Journal.version_1_said ~file ~program in
+          raise (Diag.Error (Diag.make (Loc.point ~file 1 1) said ~notes:[ note ] ~help))
+      in
       let j = Journal.for_test j ~gives_nothing:(gives_nothing cx) in
+      (* its schedule prefix: the test runs in the recorded order while it
+         can (compiler.md, "Journal version 2") *)
+      ignore (Sched.watch (Some (watched j)));
       VInt (Int64.of_int (Journal.register j))
 
 (* Whether the call [c]'s operation gives nothing, `()`, by its
    dependency's declaration, which [load] looked at once: an output. *)
 and gives_nothing cx (c : Journal.call) = Hashtbl.mem cx.outputs (c.dep, c.op)
+
+(* The journal [j] as the scheduler is told of it, and asks it
+   (Journal.watcher). *)
+and watched j = Journal.watcher j ~path_of:(fun (t : Sched.task) -> journal_path t.path)
 
 (* A call of [dep]'s operation [op], of type [fty], with [args], made by
    [call] and added to the trace [t] (trace.ml): its arguments and what
@@ -2060,6 +2091,7 @@ let run ?(start = Real) ?trace (modules : program list) =
         let h = Journal.register j in
         ( Path.make entry.home "main",
           fun () ->
+            ignore (Sched.watch (Some (watched j)));
             runtime ()
             @ List.map
                 (fun r -> recorded cx h r what)
@@ -2069,6 +2101,7 @@ let run ?(start = Real) ?trace (modules : program list) =
         let deps = List.map Path.prelude j.header.deps in
         ( Path.make entry.home "main",
           fun () ->
+            ignore (Sched.watch (Some (watched j)));
             let runtime = runtime () in
             let impls, excl =
               prelude_instance cx "replaying" [ VInt (Int64.of_int h) ] [] what
@@ -2090,6 +2123,15 @@ let run ?(start = Real) ?trace (modules : program list) =
   | Ok v -> v
   | Error err -> raise (uncaught ?from:(Sched.origin err) cx fn err)
   | exception Sched.Cancelled -> raise cancelled_main
+  (* a replay that went differently where no call was made, at a poll:
+     said at the journal's entry it had come to *)
+  | exception Journal.Differs differs -> (
+      match start with
+      | Replay j ->
+          raise
+            (Went_differently
+               { loc = Loc.point ~file:j.file (Journal.next_line j) 1; differs })
+      | Real | Record _ -> raise (Journal.Differs differs))
   | exception (Stack_overflow | Too_deep) -> raise (overflowed cx fn)
 
 (* ---- tests ---- *)

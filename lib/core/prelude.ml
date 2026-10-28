@@ -766,8 +766,9 @@ type Journal = opaque Int
 
 // The recorder, over any built-in dependency: each operation gives back
 // what a line the console kept was given, if it's one of those, or else
-// calls the one under it, and writes down what it gave. The runtime
-// installs it over each one `main` uses.
+// calls the one under it, and writes down what it gave, with the task
+// that called it; a call its task waits in is written in two lines. The
+// runtime installs it over each one `main` uses.
 handler recorder(j: Journal) over any =
   call =>
     let r = journal_kept(j, call.name, call.args) orelse journal_gave(j, call.name, call.args, attempt call.forward())
@@ -883,7 +884,8 @@ let scheme (x : Intrinsic.t) =
      as `show` is. *)
   (* fn<A, R>(j: Journal, call: Str, args: A) -> Option<R>: what a line
      the console kept was given, if this call is one of its, which isn't
-     asked again *)
+     asked again; recording, the call has begun, and is written once its
+     task waits in it, or once it's given back *)
   | Journal_kept -> fn [ read journal; read str; read (Var 0) ] (option (Var 1))
   (* fn<A, R>(j: Journal, call: Str, args: A, result: R) -> R: writes the
      call down, with what it gave, and gives that back *)
@@ -1386,7 +1388,8 @@ let types =
 let world_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
 
 (* `Async`, the runtime itself, isn't the world: the journal records
-   none of its calls (until journal version 2, stage 11a's step 6) *)
+   none of its calls, but the order they made, in its task column, its
+   polls and its cancels (journal.ml) *)
 let runtime_deps = world_deps @ [ "Async" ]
 
 (* The dependencies a `uses` can name that aren't declared anywhere yet:

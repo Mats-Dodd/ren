@@ -21,7 +21,7 @@ cd bench/11a/tasks/server && ren test --seeds 1000
 | `transfer` | a transfer under `Async.timeout`, inside a transaction installed with `try with`, whose commit in its `finally` overruns the timeout and is still reported | step 5, landed: [examples/transfer](../../../examples/transfer) |
 | `refresh` | prices refreshed by a task spawned beside the `with`, which cancels it when its body ends | step 5, landed (it needed only virtual time): [examples/refresh](../../../examples/refresh) |
 | `lost_update` | the milestone: two deposits, each a read and then a write, one of them lost under some seeds, which `ren test --sim --seeds 200` finds and `--seed` replays; the same with one operation, which can't lose one; and the README's `cached`, which can't race any more | holds since step 5 (bench/tasks.t's `milestone`); it stays here, since its first test fails on purpose |
-| `journal` | a version 1 journal, refused once journals are version 2 | step 6 |
+| `journal` | a version 1 journal, refused once journals are version 2 | step 6 (as specified) |
 
 ## What to look at
 

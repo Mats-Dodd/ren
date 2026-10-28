@@ -67,4 +67,4 @@ was recorded by `ren run --record v1.journal hello.ren -- a b` before
   $ (cd 11a/tasks/journal && { ren replay v1.journal > spec.out 2>&1; echo "exit $?" >> spec.out; } &&
   >  if cmp -s spec.out v1.expected; then echo "v1.journal: as specified"; else echo "v1.journal: not yet"; fi;
   >  rm -f spec.out)
-  v1.journal: not yet
+  v1.journal: as specified

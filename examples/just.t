@@ -86,16 +86,16 @@ says what it recorded, and that the journal holds what the program read:
   recorded 8 calls to build.journal (Console 3, Fs 1, Os 1, Proc 3)
   warning: build.journal holds everything the program read, files and arguments included: read it before you share it
   $ sed 's/Ok(".*")$/Ok("...")/' build.journal
-  # ren journal 1 · main.ren · deps: Console Fs Os Proc
-  1 Fs.read("justfile") → Ok("...")
-  2 Os.args() → ["build"]
-  3 Console.error("echo base")
-  4 Proc.run("sh", ["-c", "echo base"]) → Ok(0)
-  5 Console.error("echo building")
-  6 Proc.run("sh", ["-c", "echo building"]) → Ok(0)
-  7 Console.error("echo built")
-  8 Proc.run("sh", ["-c", "echo built"]) → Ok(0)
-  9 exit 0
+  # ren journal 2 · main.ren · deps: Console Fs Os Proc
+  1 main Fs.read("justfile") → Ok("...")
+  2 main Os.args() → ["build"]
+  3 main Console.error("echo base")
+  4 main Proc.run("sh", ["-c", "echo base"]) → Ok(0)
+  5 main Console.error("echo building")
+  6 main Proc.run("sh", ["-c", "echo building"]) → Ok(0)
+  7 main Console.error("echo built")
+  8 main Proc.run("sh", ["-c", "echo built"]) → Ok(0)
+  9 main exit 0
 
 `ren replay` runs it again on what the journal says each call gave: with
 no justfile, and no `sh` to find, it shows what the run showed, and
@@ -180,7 +180,7 @@ its journal to `tests/` and adds a test that replays it:
   added the test "replays bug.journal" to main.ren
   run it with `ren test main.ren --only "replays bug.journal"`: it fails while the program ends as the recording did, and passes once it goes on past there, with the same outputs to there
   $ head -1 tests/bug.journal
-  # ren journal 1 · ../main.ren · deps: Console Fs Os Proc
+  # ren journal 2 · ../main.ren · deps: Console Fs Os Proc
   $ tail -3 main.ren
   test "replays bug.journal" =
     with replay("tests/bug.journal") in

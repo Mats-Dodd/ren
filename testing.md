@@ -348,7 +348,16 @@ test "a recorded run of build replays" =
   ```
 
   `ren replay`, outside tests, is strict and stops at the first call
-  that differs. The journal is found from the folder of the test's
+  that differs.
+- **With tasks, answers are each task's** (journal version 2, in
+  [handlers.md](handlers.md#what-an-entry-holds)): each task's inputs
+  come from its own entries, and its outputs are compared with its own,
+  so a test doesn't depend on the order its tasks happen to run in.
+  While the test's calls are the journal's next entries, it runs in the
+  recorded order, `single`'s, its polls ending the waits they ended:
+  that's its schedule prefix, which reproduces a race the run hit. From
+  the first call that isn't, or once the journal has none left, the
+  seeded tape takes over, and `--seeds` explores from there. The journal is found from the folder of the test's
   file. `replay(file)` implements only the built-ins the journal's
   header names, so the others are the test implementations, and a
   `with` can install them too. [examples/just](examples/just) has one,

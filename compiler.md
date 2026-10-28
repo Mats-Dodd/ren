@@ -3972,7 +3972,7 @@ tests are meant to fail.
 | `transfer` | a transfer under a timeout, commit in `finally` | 5 (needs virtual time: see "Step 3, as built"); landed |
 | `refresh` | prices refreshed by a task beside the `with` | 8; landed in 5, since it needed only virtual time |
 | `lost_update` | the milestone: a lost update between two operations, found by `--seeds` and replayed by `--seed`; and the README's `cached`, which can't race any more | 8; holds since 5 |
-| `journal` | a version 1 journal, recorded before 11a, which `ren replay` refuses with a help | 6 |
+| `journal` | a version 1 journal, recorded before 11a, which `ren replay` refuses with a help | 6; landed |
 
 `lost_update`'s first test fails on purpose under some seeds, so it has
 no `expected`: bench/tasks.t's `milestone` runs `ren test --sim --seeds 200`
@@ -4709,8 +4709,8 @@ real clock asked for the world.
 1 main Os.args() → ["all"]
 2 main/run_all:0 Console.error("echo base")
 3 main/run_all:1 Console.error("echo lint")
-4 main/run_all:0 Proc.run("sh", ["-c", "echo base"])
-5 main/run_all:1 Proc.run("sh", ["-c", "echo lint"])
+4 main/run_all:0 Proc.run("sh", ["-c", "echo base"]) …
+5 main/run_all:1 Proc.run("sh", ["-c", "echo lint"]) …
 6 poll main/run_all:1 main/run_all:0
 7 main/run_all:1 → Ok(0)
 8 main/run_all:0 → Ok(0)
@@ -4718,8 +4718,8 @@ real clock asked for the world.
 ```
 
 - **Each entry names its task.** A call that waits is written in two
-  lines, its start and, after the poll that completed it, what it gave:
-  a line of only a task and `→`. A call that doesn't wait is one line,
+  lines, its start, ending `…`, and, after the poll that completed it,
+  what it gave: a line of only a task and `→`, then the value. A call that doesn't wait is one line,
   as in version 1.
 - **`poll`** lines are the scheduler's polls that woke tasks, under
   `single`: the tasks whose waits completed, in the order they were
@@ -4888,6 +4888,16 @@ revisit if a step finds it wrong:
 - **`sim`'s virtual time starts at 0** (step 5), so a seed runs the same
   whenever it's run; and **a scheduling point isn't a wait** for `tick`,
   so `tick` under `sim` means what it does under `single`.
+- **A call that waits ends its first line with `…`** (step 6), and the
+  end of a run is a line of `main`'s, `9 main exit 0`. A call that gives
+  nothing and one whose task waited in it would otherwise both be
+  `task Dep.op(args)`.
+- **A test's root task is `main` to its journal** (step 6): `test/...`
+  paths are written `main/...`, so a test that calls `main()` names its
+  tasks as the recorded run did.
+- **A replay sees a cancel that time made only where its journal says**
+  (step 6), at the task's first point after its entry before; time moves
+  on to when that cancel was due, so a timeout reaching it is `Timeout`.
 
 ### Step 1, as built
 
@@ -5346,6 +5356,90 @@ What step 5 settled where the text above is silent, or differs from it:
   it now runs under `with sim.scheduler(1)` and `sim.clock()`, and checks
   the deadline exactly, 5005 ms of virtual time.
 
+### Step 6, as built
+
+What step 6 settled where "Journal version 2" above is silent, or
+differs from it:
+
+- **The format** (journal.ml). Every line after the header is numbered,
+  and every one but a poll starts with its task's path: `n path
+  Dep.op(args) → gave` for a call that didn't wait; `n path Dep.op(args)
+  …` and later `n path → gave` (or `n path →`, for `()`) for one its task
+  waited in; `n poll p q`; `n path cancelled`; and the end, `n main exit
+  0`, `n main error E` or `n main panic at "msg"`. A `#` line is a
+  comment: a second failure's warning is one. `ren run`'s "recorded N
+  calls" counts calls, a call that waits once, at its first line, so a
+  cancelled sleep is counted. Reading checks that a task's call that waits
+  ends before its next call, and that a `→` line ends one. A message
+  shows a call with its task, but `main`'s without, so a journal of a
+  program with no tasks says what it said before 11a.
+- **Recording** (eval.ml's `journal`, journal.ml's `kept`, `gave` and
+  `watcher`): `journal_kept` notes, per task, the call that has begun;
+  the scheduler (sched.ml, its `journal` hooks, set by `Sched.watch`)
+  says when a task waits, which writes that call's first line, ending `…`;
+  `journal_gave` then writes its `→` line, or the call in one line. The
+  scheduler says which tasks each `fire_due` woke, the poll line; and
+  each task that sees a cancel (`Sched.seen`, at a dependency call's
+  check, a wait's, and a resume by `Interrupt`), the `cancelled` line.
+  `Eval.failed_too` gives its warning to `Sched.note`, the comment.
+  Under `single` with real time, timers are the only polls until step
+  7's I/O; `Proc.run` still blocks the thread (step 8), so it's one line.
+- **Replaying, following the recording.** A replayed journal keeps its
+  entries, which it has come to (`consumed`) and the first it hasn't
+  (`cursor`). While it `follows`, which `ren replay` always does and a
+  test does until it can't, the scheduler runs in `single`'s order
+  whatever the policy (no tape, no scheduling point, `tick` as
+  `single`'s), no timer fires on its own, and when no task can run the
+  recording's next poll ends the waits it names, in its order: a task
+  waiting in a replayed call that waits (`awaiting`), or one whose next
+  entry is `cancelled`, woken by `Interrupt`. A cancel the task asked for
+  (asked, not shielded) is seen as it would be; one time makes, a
+  timeout's or the cleanup deadline's, only where the next entry says the
+  task saw one, and the scheduler's time moves on to when it was due
+  (`Sched.jump`), so `Async.timeout` makes it `Timeout` as the recording
+  did. A replayed call whose recording waits waits too, for its poll, and
+  then its `→` line is the entry the replay comes to.
+- **`ren replay` is strict:** each call, its `→` line, each poll and
+  each cancel has to be the next entry, its task's, or the replay went
+  differently: "the replay went differently at call N of M", with what the
+  recording has and what the program made or has. One found where no
+  call is made, at a poll, is said at the journal's line (Eval.run).
+  When no task can run and the next entry isn't a poll, the recording
+  ended there too, so it's the deadlock panic, or the mismatch at the end.
+- **A journal as a test** (`Test`): each task's inputs are answered from
+  its own calls to that dependency, in order, and each task's outputs are
+  compared with its own; the diff shows them task by task, the
+  recording's tasks in the order they first made one. While each call
+  the test makes is the journal's next entry, the test follows it, its
+  schedule prefix; the first call that isn't, a poll that names a task
+  not waiting for it, a cancel the journal doesn't have, or the journal's
+  last entry reached, ends the prefix for good (`unfollow`): the tasks
+  waiting for a poll are woken, and `sim`'s tape and virtual time take
+  over. test_journal.ml checks both: a counter two tasks bump passes
+  under 300 seeds while the prefix holds, and a journal whose order
+  `single` never runs ends the prefix at once, so seeds differ.
+- **Version 1** is `Journal.Version_1`, raised by the header: `ren
+  replay` and `ren test --keep` say it as specified, with the program
+  found from the journal's folder (`ren run --record tests/build.journal
+  main.ren`), and a test's `replay(file)` as an error at the journal's
+  first line. bench/11a/tasks/journal is as specified.
+  examples/just/tests/build.journal is re-recorded, and every journal in
+  the tests is version 2.
+- **Byte for byte:** examples/journal.t records a level of recipes run at
+  once by `Async.each`, each sleeping first, and diffs `ren run`'s
+  output with `ren replay`'s: they differ only in the last line, which
+  says recorded or replayed; the same with a failing recipe, whose
+  siblings' cancels are lines. The `just` itself runs recipes at once in
+  step 8, on this.
+- **Limits:** a cancel that time made is seen, replaying, at the task's
+  first point that can see one after its previous entry; a recording that
+  saw it at a later one, past a dependency call of the program's own
+  that wasn't recorded, replays differently, and strict replay says so.
+  A recording made while time-based decisions depended on how late the
+  recording saw them (a timeout whose cleanup deadline had passed too)
+  can replay as the earlier. Low; recording the time on poll and cancel
+  lines would close both.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5356,6 +5450,16 @@ What step 5 settled where the text above is silent, or differs from it:
 | 3 | 7766c4a | `until`, `tick`, `yield`, `timeout`, `race`, `isolate`, `map`, `each` and `both` in the interpreter; instances numbered and released at each operation's end; `until` letting go of the arm's copy of the state (Lower); the checks on where `until` is written, its condition and `isolate`'s block; `each`'s block giving a value; `par_map`'s help; `= from the task` and the "failed too" warning; release builds knowing no handler that uses `Async`; natively `yield`, `tick` and the deadlock of `until`; test_tasks.ml's s3 tests on, and more; bench/11a/alone and alone_panic as specified and in the native loops | `transfer` (step 5, virtual time); steps 4 to 9 |
 | 4 | 1d05a68 | operations that don't interleave: Core's `Instance` says whether its handler is `exclusive` (a `var`, or a resource of an opaque type of the program's); spawns, `map`, `each`, `both` and `race` share what their block can reach; a shared, exclusive instance's callers queue, first in first out, a waiter whose condition holds first; `Async.until` lets go of it and has it back, before its `finally` too; a call back into the instance a task holds is a panic; Infer's no-deadlock rule for a block passed to an operation; release builds know no handler in a program that starts tasks; test_tasks.ml's s4 tests on, and more | `transfer` (step 5); steps 5 to 9 |
 | 5 | 1e6bbf0 | the runtime as a handler: the scheduler's policy, `single` or `sim`, set by `Async.single()` and `sim.scheduler(seed)` for their `with`'s body, a panic if other tasks run; `sim`'s seeded tape (splitmix64) at every wait and at each call of a shared, exclusive instance, its virtual time from 0, and `tick` under it; the standard library (lib/core/std_lib.ml) and its `sim` module, `scheduler` and `clock()`, linked into every program, `import sim`, and a program's own `sim` refused; a test on `sim.scheduler(seed)` and `sim.clock()`; `Random` per task; `ren test --seeds N` and `--sim`; `transfer` and `refresh` landed in examples/, and the milestone holds; test_tasks.ml's s5 tests on, and more | steps 6 to 9 |
+| 6 | this commit | journal version 2: a task column, a call that waits in two lines, poll lines, cancel lines, second failures as comments (journal.ml, the scheduler's `journal` hooks); `ren replay` following the polls, strict about each entry's task and order, byte for byte for a concurrent run (examples/journal.t); a journal as a test keyed by task, with a schedule prefix, then the tape; version 1 refused with a help; examples/just/tests/build.journal re-recorded; bench/11a/tasks/journal as specified | steps 7 to 9 |
+
+Notes for step 7 on: a journal's polls are `Sched.fire_due`'s wakes,
+given to the journal's `polled`; I/O that `Unix.select` completes has to
+be told to it the same way, its tasks in the order they're woken, and a
+replay's poll then ends each such wait: a replayed `Net` call that waits
+is an `awaiting` one, as `Clock.sleep` is. A signal that cancels `main`
+is a cancel the task didn't ask for, so a replay sees it only where the
+journal's `cancelled` line is, which the recording writes as it is. A
+read's bytes are a `Bytes` value, written as a string.
 
 Notes for step 6 on: a test's runtime is `sim.scheduler(seed)`, whose
 policy is `Sched.policy` (`Sim`'s tape and clock), and its choices are

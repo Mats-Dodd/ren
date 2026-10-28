@@ -40,19 +40,27 @@ open Value
 let sprintf = Printf.sprintf
 
 (* The version of the format, which a reader checks. *)
-let version = 1
+let version = 2
 
 (* ---- calls ---- *)
 
-(* A call, as it's written: its dependency and operation, its arguments,
-   and what it gave, [None] for `()` or `Ok(())`. [line] is where it is
-   in its journal's file, 0 for one not read from a file. *)
+(* A call, as it's written: the task that made it, by its path (`main`,
+   `main/run_all:0`), its dependency and operation, its arguments, and
+   what it gave, [None] for `()` or `Ok(())`. A call that [waits], which
+   the task waited in, is written in two lines, its start and, after the
+   poll that completed it, what it gave. [line] is where it is in its
+   journal's file, and [gave_line] where what it gave is, 0 for one not
+   read from a file. What a call that waits gave is read from its second
+   line, once its first has been ([load]). *)
 type call = {
+  task : string;
   dep : string;
   op : string;
   args : string;
-  gave : string option;
+  mutable gave : string option;
+  waits : bool;
   line : int;
+  mutable gave_line : int;
 }
 
 (* `Fs.read("justfile")` *)
@@ -61,6 +69,10 @@ let call_text c = sprintf "%s.%s(%s)" c.dep c.op c.args
 (* the same, with what it gave *)
 let entry_text c =
   match c.gave with None -> call_text c | Some g -> call_text c ^ " → " ^ g
+
+(* The same call, with its task, but for `main`'s, which a program that starts
+   no task has all of: how a message shows it. *)
+let shown c = if c.task = "main" then call_text c else c.task ^ " " ^ call_text c
 
 (* Two calls are the same if their dependency, operation and arguments
    are. *)
@@ -418,6 +430,7 @@ let nothing (tr : Ty.ty) : Value.t =
   if tr = Ty.unit then VUnit
   else VCon { ty = Path.prelude "Result"; name = "Ok"; args = [ VUnit ] }
 
+
 (* ---- a journal's file ---- *)
 
 type header = { program : string; deps : string list }
@@ -427,10 +440,36 @@ let header_text h =
     (String.concat " " h.deps)
 
 (* What a journal's first line is, for a message. *)
-let header_shape = "# ren journal 1 · <program> · deps: <dependencies>"
+let header_shape = "# ren journal 2 · <program> · deps: <dependencies>"
 
-(* A line after the header. *)
-type entry = Call of call | End of ending * int  (** and its line *)
+(* A line after the header: a call, or the second line of one that waits
+   ([Gave], its task's), a poll that woke tasks, by their paths, in the
+   order it woke them, a task that saw a cancel, or how the run ended;
+   each with its line. *)
+type entry =
+  | Call of call
+  | Gave of string * string option * int
+  | Poll of string list * int
+  | Cancel of string * int
+  | End of ending * int
+
+(* The task an entry is a task's, if it is one's. *)
+let entry_task = function
+  | Call c -> Some c.task
+  | Gave (p, _, _) | Cancel (p, _) -> Some p
+  | Poll _ | End _ -> None
+
+let entry_line = function
+  | Call c -> c.line
+  | Gave (_, _, l) | Poll (_, l) | Cancel (_, l) | End (_, l) -> l
+
+(* How a message shows an entry. *)
+let entry_shown = function
+  | Call c -> shown c
+  | Gave (p, _, _) -> p ^ " →, the end of its call"
+  | Poll (ps, _) -> "poll " ^ String.concat " " ps
+  | Cancel (p, _) -> p ^ " cancelled"
+  | End (e, _) -> ending_said e
 
 (* An entry that can't be read, at its line of [file]: a message that
    shows it. *)
@@ -468,63 +507,117 @@ let closing s from =
   in
   go from 0 false
 
-(* One line of a journal, after its number: a call, or how it ended. *)
+(* [text]'s first word, and the rest after the space. *)
+let first_word text =
+  match String.index_opt text ' ' with
+  | Some i -> (String.sub text 0 i, String.sub text (i + 1) (String.length text - i - 1))
+  | None -> (text, "")
+
+(* Whether [w] can be a task's path, `main/accept:7/handle.op:0`. *)
+let is_path w =
+  w <> ""
+  && String.for_all
+       (function
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '/' | ':' | '.' -> true
+         | _ -> false)
+       w
+
+(* The mark a call's first line ends with when the call waits: what it
+   gave is on a line of its own, later. *)
+let waiting = "…"
+
+(* One line of a journal, after its number: a call, the end of one that
+   waited, a poll, a cancel, or how the run ended. *)
 let parse_entry ~file line text =
   let bad () =
     raise
       (unreadable ~file line
          (sprintf "this line of %s isn't a call or how the run ended" file)
          ~help:
-           "a call is written `Dep.op(arguments) → what it gave`, and the last \
-            line `exit 0`, `error` and the error, or `panic`, where, and what \
-            it said in quotes"
+           "a call is written `task Dep.op(arguments) → what it gave`, and the \
+            last line `main exit 0`, `main error` and the error, or `main \
+            panic`, where, and what it said in quotes"
          ())
   in
-  let word, rest =
-    match String.index_opt text ' ' with
-    | Some i ->
-        ( String.sub text 0 i,
-          String.sub text (i + 1) (String.length text - i - 1) )
-    | None -> (text, "")
-  in
+  let word, rest = first_word text in
   match word with
-  | "exit" when rest = "0" -> End (Exited, line)
-  | "error" when rest <> "" -> End (Errored rest, line)
-  | "panic" -> (
-      match String.index_opt rest ' ' with
-      | Some i -> (
-          let r = { text = rest; at = i + 1 } in
-          match quoted r with
-          | msg when r.at = String.length rest ->
-              End (Panicked { at = String.sub rest 0 i; msg }, line)
-          | _ | (exception Unreadable) -> bad ())
-      | None -> bad ())
-  | _ -> (
-      match (String.index_opt text '.', String.index_opt text '(') with
-      | Some dot, Some paren when dot < paren -> (
-          match closing text paren with
-          | Some close ->
-              let after =
-                String.trim
-                  (String.sub text (close + 1) (String.length text - close - 1))
-              in
-              let gave =
-                if after = "" then None
-                else
-                  match cut "→" after with
-                  | Some ("", g) -> Some (String.trim g)
-                  | _ -> bad ()
-              in
-              Call
-                {
-                  dep = String.sub text 0 dot;
-                  op = String.sub text (dot + 1) (paren - dot - 1);
-                  args = String.sub text (paren + 1) (close - paren - 1);
-                  gave;
-                  line;
-                }
+  | "poll" when rest <> "" ->
+      Poll (List.filter (( <> ) "") (String.split_on_char ' ' rest), line)
+  | task when not (is_path task) -> bad ()
+  | task -> (
+      let word, after = first_word rest in
+      match word with
+      | "cancelled" when after = "" -> Cancel (task, line)
+      | "→" -> Gave (task, (if after = "" then None else Some after), line)
+      | "exit" when after = "0" -> End (Exited, line)
+      | "error" when after <> "" -> End (Errored after, line)
+      | "panic" -> (
+          match String.index_opt after ' ' with
+          | Some i -> (
+              let r = { text = after; at = i + 1 } in
+              match quoted r with
+              | msg when r.at = String.length after ->
+                  End (Panicked { at = String.sub after 0 i; msg }, line)
+              | _ | (exception Unreadable) -> bad ())
           | None -> bad ())
-      | _ -> bad ())
+      | _ -> (
+          match (String.index_opt rest '.', String.index_opt rest '(') with
+          | Some dot, Some paren when dot < paren -> (
+              match closing rest paren with
+              | Some close ->
+                  let after =
+                    String.trim
+                      (String.sub rest (close + 1) (String.length rest - close - 1))
+                  in
+                  let gave, waits =
+                    if after = "" then (None, false)
+                    else if after = waiting then (None, true)
+                    else
+                      match cut "→" after with
+                      | Some ("", g) -> (Some (String.trim g), false)
+                      | _ -> bad ()
+                  in
+                  Call
+                    {
+                      task;
+                      dep = String.sub rest 0 dot;
+                      op = String.sub rest (dot + 1) (paren - dot - 1);
+                      args = String.sub rest (paren + 1) (close - paren - 1);
+                      gave;
+                      waits;
+                      line;
+                      gave_line = line;
+                    }
+              | None -> bad ())
+          | _ -> bad ()))
+
+(* A journal of version 1, which this `ren` doesn't read: its file, as it
+   was named, and its program, from the folder [file] is in. *)
+exception Version_1 of { file : string; program : string }
+
+(* What `ren replay` says of one, and a test that replays one: how to
+   record it again, its program found from where it's run, as `ren run`
+   would be given it. *)
+let version_1_said ~file ~program =
+  ( sprintf "`%s` is a version 1 journal, which this `ren` doesn't read" file,
+    "version 2 names the task that made each call",
+    sprintf "record it again: `ren run --record %s %s`" file program )
+
+(* [path], from the folder [dir]: `tests/../main.ren` is `main.ren`. *)
+let from_folder dir path =
+  if not (Filename.is_relative path) then path
+  else
+    let parts =
+      List.fold_left
+        (fun acc name ->
+          match (name, acc) with
+          | ("" | "."), _ -> acc
+          | "..", m :: rest when m <> ".." -> rest
+          | n, _ -> n :: acc)
+        []
+        (String.split_on_char '/' (Filename.concat dir path))
+    in
+    String.concat "/" (List.rev parts)
 
 (* The header, from the journal's first line. *)
 let parse_header ~file first =
@@ -541,7 +634,24 @@ let parse_header ~file first =
     String.sub first (String.length prefix)
       (String.length first - String.length prefix)
   in
+  let fields () =
+    match cut " · " rest with
+    | Some (_, rest) -> (
+        match cut " · deps:" rest with
+        | Some (program, deps) ->
+            {
+              program;
+              deps = List.filter (( <> ) "") (String.split_on_char ' ' deps);
+            }
+        | None -> wrong ())
+    | None -> wrong ()
+  in
   match String.split_on_char ' ' rest with
+  | "1" :: _ ->
+      let h = fields () in
+      raise
+        (Version_1
+           { file; program = from_folder (Filename.dirname file) h.program })
   | v :: _
     when int_of_string_opt v <> Some version && int_of_string_opt v <> None ->
       raise
@@ -550,17 +660,7 @@ let parse_header ~file first =
               "%s is a journal of version %s, and this ren reads version %d"
               file v version)
            ~help:"record it again with this ren" ())
-  | _ -> (
-      match cut " · " rest with
-      | Some (_, rest) -> (
-          match cut " · deps:" rest with
-          | Some (program, deps) ->
-              {
-                program;
-                deps = List.filter (( <> ) "") (String.split_on_char ' ' deps);
-              }
-          | None -> wrong ())
-      | None -> wrong ())
+  | _ -> fields ()
 
 (* ---- a journal ---- *)
 
@@ -580,29 +680,45 @@ type session = {
 
 (* Why a journal is open: to record a run, written to [out] as it goes;
    to replay one strictly ([Strict], `ren replay`); to stand in for the
-   world in a test, answering inputs from each dependency's calls in
-   order and keeping the outputs it's given, to compare at the end
-   ([Test]); or as a console session's ([Session]). *)
+   world in a test ([Test]), answering each task's inputs from its own
+   calls to each dependency, in order, and keeping each task's outputs,
+   to compare with its own at the end; or as a console session's
+   ([Session]). [inputs] and [outputs] are the entries' numbers in
+   [entries], by task and dependency, and by task. *)
 type mode =
   | Record of out_channel
   | Strict
   | Test of {
-      inputs : (string, call Queue.t) Hashtbl.t;
-      outputs : call array;
+      inputs : (string * string, int Queue.t) Hashtbl.t;
+      outputs : (string, int array) Hashtbl.t;
       mutable made : call list;  (** the latest first *)
     }
   | Session of session
 
+(* A journal. Recording one, [begun] is each task's call to the world
+   that's running, by its path, and whether its first line is written
+   yet: it is once the task waits in it. Replaying one, [entries] are its
+   lines, [consumed] those the replay has come to, and [cursor] the first
+   it hasn't; while it [follows] the recording, which `ren replay` always
+   does, and a test does until it can't (its schedule prefix), the
+   scheduler runs in the recorded order (sched.ml, [journal]), and
+   [awaiting] are the tasks waiting in a call that waits for the poll
+   that ends it, each with what wakes it. *)
 type t = {
   file : string;  (** its file, as it was named, for a message *)
   mutable header : header;
   mode : mode;
-  mutable calls : call list;
-      (** recorded: those made so far, the latest first; replayed: those to come
-      *)
+  mutable calls : call list;  (** recorded: those made so far, the latest first *)
   mutable made : int;  (** how many calls have been made *)
+  mutable lines : int;  (** recorded: how many numbered lines are written *)
   total : int;  (** replayed: how many calls the recording has *)
   ending : (ending * int) option;  (** replayed: how the recording ended *)
+  entries : entry array;
+  consumed : bool array;
+  mutable cursor : int;
+  mutable follows : bool;
+  begun : (string, call * bool) Hashtbl.t;
+  awaiting : (string, unit -> bool) Hashtbl.t;
 }
 
 (* A replay went differently from the recording: what to say, without
@@ -649,18 +765,28 @@ let at_place ~at (loc : Loc.t) =
   let here = place loc in
   here = at || String.ends_with ~suffix:("/" ^ at) here
 
-(* A journal to record a run in, written to [out]: its header once it's
-   known what `main` uses ([start]). *)
-let recording ~file ~out ~program =
+(* A journal with no entries, open for [mode]. *)
+let opened ~file ~program mode =
   {
     file;
     header = { program; deps = [] };
-    mode = Record out;
+    mode;
     calls = [];
     made = 0;
+    lines = 0;
     total = 0;
     ending = None;
+    entries = [||];
+    consumed = [||];
+    cursor = 0;
+    follows = false;
+    begun = Hashtbl.create 4;
+    awaiting = Hashtbl.create 4;
   }
+
+(* A journal to record a run in, written to [out]: its header once it's
+   known what `main` uses ([start]). *)
+let recording ~file ~out ~program = opened ~file ~program (Record out)
 
 let start j ~deps =
   j.header <- { j.header with deps };
@@ -695,13 +821,38 @@ let load ~file text =
              | _ -> [ parse_entry ~file (i + 1) "" ])
          lines)
   in
-  let calls =
-    List.filter_map (function Call c -> Some c | End _ -> None) entries
-  in
+  (* each call that waits gets what it gave from its task's next line,
+     which is what it gave, or that it saw a cancel, or nothing, if the
+     run ended first *)
+  let open_calls = Hashtbl.create 4 in
+  List.iter
+    (function
+      | Call c ->
+          if Hashtbl.mem open_calls c.task then
+            raise
+              (unreadable ~file c.line
+                 (sprintf "%s makes this call while it waits in another" c.task)
+                 ~help:"a task's call that waits ends before its next one" ());
+          if c.waits then Hashtbl.replace open_calls c.task c
+      | Gave (p, gave, line) -> (
+          match Hashtbl.find_opt open_calls p with
+          | Some c ->
+              Hashtbl.remove open_calls p;
+              c.gave <- gave;
+              c.gave_line <- line
+          | None ->
+              raise
+                (unreadable ~file line
+                   (sprintf "%s isn't waiting in a call here" p)
+                   ~help:
+                     "a line `task → what it gave` ends the task's call that \
+                      waits, whose first line ends `…`"
+                   ()))
+      | Cancel (p, _) -> Hashtbl.remove open_calls p
+      | Poll _ | End _ -> ())
+    entries;
   let ending =
-    List.find_map
-      (function End (e, l) -> Some (e, l) | Call _ -> None)
-      entries
+    List.find_map (function End (e, l) -> Some (e, l) | _ -> None) entries
   in
   (* a recording that was stopped, or cut short, doesn't say how the run
      ended, so a replay couldn't say whether it ended the same way *)
@@ -715,18 +866,19 @@ let load ~file text =
          (sprintf "%s doesn't say how the run ended" file)
          ~notes:
            [
-             "its last line is how the run ended: `exit 0`, `error ...` or \
-              `panic ...`";
+             "its last line is how the run ended: `main exit 0`, `main error \
+              ...` or `main panic ...`";
            ]
          ~help:"record the run again, to its end" ());
+  let entries = Array.of_list entries in
   {
-    file;
+    (opened ~file ~program:header.program Strict) with
     header;
-    mode = Strict;
-    calls;
-    made = 0;
-    total = List.length calls;
+    total = Array.fold_left (fun n e -> match e with Call _ -> n + 1 | _ -> n) 0 entries;
     ending;
+    entries;
+    consumed = Array.make (Array.length entries) false;
+    follows = true;
   }
 
 (* The header of the journal in the file [path], if there's one there
@@ -735,45 +887,51 @@ let load ~file text =
 let header_at path =
   match In_channel.with_open_bin path In_channel.input_line with
   | Some first -> (
-      try Some (parse_header ~file:path first) with Diag.Error _ -> None)
+      try Some (parse_header ~file:path first)
+      with Diag.Error _ | Version_1 _ -> None)
   | None | (exception Sys_error _) -> None
 
 (* The same journal, standing in for the world in a test: each call is an
    input or an output by what its operation's declared type gives,
    which [gives_nothing] says from the program's types. *)
 let for_test (j : t) ~gives_nothing =
-  let inputs = Hashtbl.create 8 in
-  let outputs =
-    List.filter
-      (fun c ->
-        if gives_nothing c then true
-        else
+  let inputs = Hashtbl.create 8 and outputs = Hashtbl.create 4 in
+  Array.iteri
+    (fun i e ->
+      match e with
+      | Call c when gives_nothing c ->
+          let outs = Option.value (Hashtbl.find_opt outputs c.task) ~default:[] in
+          Hashtbl.replace outputs c.task (i :: outs)
+      | Call c ->
           let q =
-            match Hashtbl.find_opt inputs c.dep with
+            match Hashtbl.find_opt inputs (c.task, c.dep) with
             | Some q -> q
             | None ->
                 let q = Queue.create () in
-                Hashtbl.replace inputs c.dep q;
+                Hashtbl.replace inputs (c.task, c.dep) q;
                 q
           in
-          Queue.push c q;
-          false)
-      j.calls
+          Queue.push i q
+      | _ -> ())
+    j.entries;
+  let outputs =
+    Hashtbl.fold
+      (fun p is acc -> (p, Array.of_list (List.rev is)) :: acc)
+      outputs []
   in
-  { j with mode = Test { inputs; outputs = Array.of_list outputs; made = [] } }
+  {
+    j with
+    mode = Test { inputs; outputs = Hashtbl.of_seq (List.to_seq outputs); made = [] };
+    consumed = Array.make (Array.length j.entries) false;
+    (* a recording with no calls has no order to follow *)
+    follows = (match j.entries with [||] | [| End _ |] -> false | _ -> true);
+  }
 
 (* A console session's journal, which has the real implementation of
    [real] (testing.md, "The console"). *)
 let session ~real =
-  {
-    file = "<console>";
-    header = { program = ""; deps = [] };
-    mode = Session { real; kept = [||]; at = 0; replayed = false; fresh = [] };
-    calls = [];
-    made = 0;
-    total = 0;
-    ending = None;
-  }
+  opened ~file:"<console>" ~program:""
+    (Session { real; kept = [||]; at = 0; replayed = false; fresh = [] })
 
 (* ---- the journals open ----
 
@@ -792,10 +950,11 @@ let find n =
   | Some j -> j
   | None -> failwith (sprintf "bug: there's no journal %d" n)
 
-(* ---- what the recorder and the replayer do (prelude.ml) ---- *)
+(* ---- recording ---- *)
 
-(* The call [dep.op] makes with [args], as it's written. *)
-let made ~dep ~op ~args = { dep; op; args; gave = None; line = 0 }
+(* The call [dep.op] the task [task] makes with [args], as it's written. *)
+let made ~task ~dep ~op ~args =
+  { task; dep; op; args; gave = None; waits = false; line = 0; gave_line = 0 }
 
 (* [call], `Fs.read`, as its dependency and operation. *)
 let split_call call =
@@ -803,6 +962,12 @@ let split_call call =
   | Some i ->
       (String.sub call 0 i, String.sub call (i + 1) (String.length call - i - 1))
   | None -> failwith ("bug: a journal's call `" ^ call ^ "` without a `.`")
+
+(* A recording's next line, numbered. *)
+let write_line j out text =
+  j.lines <- j.lines + 1;
+  Printf.fprintf out "%d %s\n" j.lines text;
+  flush out
 
 (* A console session: the kept line [c] is in, and that the run went
    differently there. *)
@@ -819,7 +984,9 @@ let session_differs (s : session) ~expected ~got =
    the lines it kept again, the next of them must be [c]. What it gave
    is given back for a dependency it has the real one of, which isn't
    asked again; a test one is asked again ([None]), which rebuilds its
-   state. Otherwise, and in any other journal, [None]. *)
+   state. Otherwise, and in any other journal, [None]; recording, [c]
+   has begun, and is written once it waits, or once it's given back
+   ([gave]). *)
 let kept j c =
   match j.mode with
   | Session s when s.at < Array.length s.kept ->
@@ -831,22 +998,38 @@ let kept j c =
       else (
         s.replayed <- true;
         None)
+  | Record _ ->
+      Hashtbl.replace j.begun c.task (c, false);
+      None
   | _ -> None
 
-(* `journal_gave`: [c] gave [v]. A recording writes it down. A console
-   session keeps it, past the lines it kept, and shows it as it happens:
-   a line given to the test `Console`, as the real one would print it,
-   [line], and any other call as a journal writes it, with what it
-   gave. *)
+(* `journal_gave`: [c] gave [v]. A recording writes it down: in one
+   line, or, if its task waited in it, on the second of its two. A
+   console session keeps it, past the lines it kept, and shows it as it
+   happens: a line given to the test `Console`, as the real one would
+   print it, [line], and any other call as a journal writes it, with what
+   it gave. *)
 let gave j c v ~line =
-  j.made <- j.made + 1;
   match j.mode with
   | Record out ->
-      j.calls <- c :: j.calls;
-      Printf.fprintf out "%d %s\n" j.made (entry_text c);
-      flush out
-  | Session s when s.replayed -> s.replayed <- false
+      (* one whose first line is written was counted then *)
+      if Hashtbl.find_opt j.begun c.task |> Option.map snd <> Some true then begin
+        j.made <- j.made + 1;
+        j.calls <- c :: j.calls
+      end;
+      let text =
+        match Hashtbl.find_opt j.begun c.task with
+        | Some (_, true) -> (
+            c.task ^ " →" ^ match c.gave with Some g -> " " ^ g | None -> "")
+        | _ -> c.task ^ " " ^ entry_text c
+      in
+      Hashtbl.remove j.begun c.task;
+      write_line j out text
+  | Session s when s.replayed ->
+      j.made <- j.made + 1;
+      s.replayed <- false
   | Session s ->
+      j.made <- j.made + 1;
       s.fresh <- (c, v) :: s.fresh;
       (match (c.dep, c.op) with
       | "Console", _ when List.mem "Console" s.real -> ()
@@ -856,7 +1039,7 @@ let gave j c v ~line =
           prerr_endline (line ())
       | _ -> print_endline ("  " ^ entry_text c));
       flush stdout
-  | Strict | Test _ -> ()
+  | Strict | Test _ -> j.made <- j.made + 1
 
 (* ---- replaying ---- *)
 
@@ -896,6 +1079,57 @@ let diff a b =
 
 let recorded_again = "the code changed since this was recorded; record it again"
 
+(* The entry the replay has come to, if one's left: the first not
+   consumed, or how the run ended. *)
+let next_entry j =
+  if j.cursor < Array.length j.entries then Some j.entries.(j.cursor) else None
+
+(* A test stops following the recording (its schedule prefix ends): the
+   seeded tape takes over, and the tasks waiting for a poll to end their
+   calls are woken, since none will come. *)
+let unfollow j =
+  if j.follows then begin
+    j.follows <- false;
+    let woken = Hashtbl.fold (fun _ wake acc -> wake :: acc) j.awaiting [] in
+    Hashtbl.reset j.awaiting;
+    List.iter (fun wake -> ignore (wake ())) woken
+  end
+
+(* The replay has come to the entry numbered [i]. A test that has come
+   to the recording's end stops following it: the seeded tape takes
+   over. *)
+let consume j i =
+  j.consumed.(i) <- true;
+  while j.cursor < Array.length j.entries && j.consumed.(j.cursor) do
+    j.cursor <- j.cursor + 1
+  done;
+  match (j.mode, next_entry j) with
+  | Test _, (Some (End _) | None) -> unfollow j
+  | _ -> ()
+
+(* The first entry not consumed that's the task [p]'s, if one is. *)
+let next_of j p =
+  let rec go i =
+    if i >= Array.length j.entries then None
+    else if (not j.consumed.(i)) && entry_task j.entries.(i) = Some p then
+      Some j.entries.(i)
+    else go (i + 1)
+  in
+  go j.cursor
+
+(* A strict replay went differently at the entry it's come to: at the
+   call it's making, the [made + 1]th, or past them all. *)
+let went_differently ?has ?(verb = "made") j ~made =
+  let has =
+    match has with
+    | Some h -> h
+    | None -> (
+        match next_entry j with Some e -> entry_shown e | None -> "nothing more")
+  in
+  differs ~help:recorded_again
+    ~notes:[ "the recording has: " ^ has; sprintf "this program %s: %s" verb made ]
+    (sprintf "the replay went differently at call %d of %d" (j.made + 1) j.total)
+
 (* A call past the recording's last: what [instead] gives, unless the
    recording ended in a panic, which this call may be where it was
    ([Recorded_panic]). *)
@@ -911,19 +1145,52 @@ let failing j =
   | Some ((Errored _ | Panicked _), _) -> true
   | Some (Exited, _) | None -> false
 
-(* In a test, the outputs made so far, if they aren't the recording's: all
-   of them, or, for a bug's, those it made before it ended, which a fixed
-   program can make more after. *)
+(* The call the entry numbered [i] is. *)
+let call_at j i =
+  match j.entries.(i) with Call c -> c | _ -> failwith "bug: an entry that isn't a call"
+
+(* In a test, the outputs made so far, if they aren't the recording's:
+   all of them, or, for a bug's, those it made before it ended, which a
+   fixed program can make more after. Each task's are compared with its
+   own, so the order two tasks' outputs came in doesn't matter: they're
+   shown task by task, in the order the recording's tasks first made
+   one. *)
 let outputs_differ j =
   match j.mode with
   | Test t ->
-      let recorded = List.map call_text (Array.to_list t.outputs)
-      and made = List.rev_map call_text t.made in
-      let made =
-        if failing j then
-          List.filteri (fun i _ -> i < List.length recorded) made
-        else made
+      (* each task's outputs, the recording's and the test's *)
+      let recorded =
+        Hashtbl.fold
+          (fun p is acc -> (p, Array.to_list (Array.map (call_at j) is)) :: acc)
+          t.outputs []
       in
+      let made = List.rev t.made in
+      (* the recording's tasks, by the line of their first output, then
+         those only the test has, in the order they made one *)
+      let first (p, cs) =
+        match cs with (c : call) :: _ -> (c.line, p) | [] -> (max_int, p)
+      in
+      let tasks =
+        List.fold_left
+          (fun acc p -> if List.mem p acc then acc else acc @ [ p ])
+          []
+          (List.map snd (List.sort compare (List.map first recorded))
+          @ List.map (fun (c : call) -> c.task) made)
+      in
+      let pairs =
+        List.map
+          (fun p ->
+            let theirs = Option.value (List.assoc_opt p recorded) ~default:[] in
+            let ours = List.filter (fun (c : call) -> c.task = p) made in
+            let ours =
+              if failing j then
+                List.filteri (fun i _ -> i < List.length theirs) ours
+              else ours
+            in
+            (List.map shown theirs, List.map shown ours))
+          tasks
+      in
+      let recorded = List.concat_map fst pairs and made = List.concat_map snd pairs in
       if recorded = made then None
       else
         Some
@@ -939,35 +1206,53 @@ let outputs_differ j =
           }
   | _ -> None
 
+(* The task [task] made a call that waits, whose first line the replay
+   has come to: while it follows the recording, it waits, by [wait], for
+   the poll that ends it, and then its second line is the one the replay
+   comes to. One that doesn't follow, a test past its schedule prefix,
+   goes on at once. *)
+let waited j task ~wait =
+  if j.follows then begin
+    (try wait (fun wake -> Hashtbl.replace j.awaiting task wake)
+     with e ->
+       Hashtbl.remove j.awaiting task;
+       raise e);
+    Hashtbl.remove j.awaiting task;
+    if j.follows then
+      match next_entry j with
+      | Some (Gave (p, _, _)) when p = task -> consume j j.cursor
+      | _ -> (
+          match j.mode with
+          | Strict -> went_differently j ~made:(task ^ " →, the end of its call")
+          | _ -> unfollow j)
+  end
+
 (* `journal_answer`: what the recording says [c] gave, read by [read].
    In a strict replay (`ren replay`), [c] has to be the recording's next
-   call, and a `Console` line is printed, by [print], so the replay shows
-   what the recording printed. In a test, an [output] is kept, to
-   compare at the end, and gets what the recording's output at the same
-   place got, if that's the same call, or else [nothing]; an input is
-   answered from its dependency's calls, in order, and has to be the
-   next of them. *)
-let answer j c ~output ~read ~print ~nothing =
+   entry, its task's and the same call, and a `Console` line is printed,
+   by [print], so the replay shows what the recording printed. In a test,
+   an [output] is kept, to compare at the end, and gets what the
+   recording's output at the same place among its task's got, if that's
+   the same call, or else [nothing]; an input is answered from its task's
+   calls to its dependency, in order, and has to be the next of them.
+   While the replay follows the recording, a call that waited there waits
+   for its poll here ([waited]); a test that makes a call that isn't the
+   recording's next stops following it. *)
+let answer j c ~output ~read ~print ~nothing ~wait =
   match j.mode with
   | Strict -> (
-      match j.calls with
-      | expected :: rest when same expected c ->
-          (* read first: an entry that can't be read isn't replayed *)
-          let v = read expected in
-          j.calls <- rest;
+      match next_entry j with
+      | Some (Call e) when e.task = c.task && same e c ->
+          (* read first: an entry that can't be read isn't replayed; one
+             that waits is read once it's been waited for, since it may
+             have been cancelled *)
+          let v = if e.waits then None else Some (read e) in
+          consume j j.cursor;
           j.made <- j.made + 1;
-          print expected;
-          v
-      | expected :: _ ->
-          differs ~help:recorded_again
-            ~notes:
-              [
-                "the recording has: " ^ call_text expected;
-                "this program made: " ^ call_text c;
-              ]
-            (sprintf "the replay went differently at call %d of %d" (j.made + 1)
-               j.total)
-      | [] ->
+          print e;
+          if e.waits then waited j c.task ~wait;
+          (match v with Some v -> v | None -> read e)
+      | Some (End _) | None ->
           past_the_end j (fun () ->
               Differs
                 {
@@ -987,58 +1272,176 @@ let answer j c ~output ~read ~print ~nothing =
                       match j.ending with
                       | Some (e, _) -> ending_said e
                       | None -> "nothing more");
-                      "this program made: " ^ call_text c;
+                      "this program made: " ^ shown c;
                     ];
                   help = Some recorded_again;
                   diff = None;
                   line = None;
-                }))
-  | Test t when output ->
-      let at = List.length t.made in
-      t.made <- c :: t.made;
-      j.made <- j.made + 1;
-      if at < Array.length t.outputs && same t.outputs.(at) c then
-        read t.outputs.(at)
-      else nothing
+                })
+      | Some _ -> went_differently j ~made:(shown c))
   | Test t -> (
-      let help =
-        "the code changed since this was recorded: record it again, or edit \
-         the journal"
+      (* the entry the replay has come to, if it follows the recording and
+         it's this call *)
+      let here =
+        match next_entry j with
+        | Some (Call e) when j.follows && e.task = c.task && same e c -> Some j.cursor
+        | _ ->
+            unfollow j;
+            None
       in
-      match Option.bind (Hashtbl.find_opt t.inputs c.dep) Queue.take_opt with
-      | Some expected when same expected c ->
-          j.made <- j.made + 1;
-          read expected
-      | Some expected ->
-          differs ~help
-            ~notes:
-              [
-                "the recording has: " ^ call_text expected;
-                "this program made: " ^ call_text c;
-              ]
-            (sprintf "this isn't the call to `%s` the recording has next" c.dep)
-      | None ->
-          (* past a bug's end, the bug is fixed if the outputs to there
-             are the recording's *)
-          past_the_end j (fun () ->
-              if failing j then
-                match outputs_differ j with
-                | Some d -> Differs d
-                | None -> Went_past
-              else
-                Differs
-                  {
-                    said =
-                      (if Hashtbl.mem t.inputs c.dep then
-                         sprintf "the recording has no more calls to `%s`" c.dep
-                       else sprintf "the recording has no calls to `%s`" c.dep);
-                    notes = [ "this program made: " ^ call_text c ];
-                    help = Some help;
-                    diff = None;
-                    line = None;
-                  }))
+      let came i =
+        if here = Some i then consume j i else unfollow j
+      in
+      if output then (
+        let outs = Option.value (Hashtbl.find_opt t.outputs c.task) ~default:[||] in
+        let at = List.length (List.filter (fun (m : call) -> m.task = c.task) t.made) in
+        t.made <- c :: t.made;
+        j.made <- j.made + 1;
+        if at < Array.length outs && same (call_at j outs.(at)) c then (
+          let e = call_at j outs.(at) in
+          came outs.(at);
+          if e.waits then waited j c.task ~wait;
+          read e)
+        else (
+          unfollow j;
+          nothing))
+      else
+        let help =
+          "the code changed since this was recorded: record it again, or edit \
+           the journal"
+        in
+        let from = if c.task = "main" then "" else " from " ^ c.task in
+        match Option.bind (Hashtbl.find_opt t.inputs (c.task, c.dep)) Queue.take_opt with
+        | Some i when same (call_at j i) c ->
+            let e = call_at j i in
+            came i;
+            j.made <- j.made + 1;
+            if e.waits then waited j c.task ~wait;
+            read e
+        | Some i ->
+            unfollow j;
+            differs ~help
+              ~notes:
+                [
+                  "the recording has: " ^ shown (call_at j i);
+                  "this program made: " ^ shown c;
+                ]
+              (sprintf "this isn't the call to `%s` the recording has next%s" c.dep from)
+        | None ->
+            unfollow j;
+            (* past a bug's end, the bug is fixed if the outputs to there
+               are the recording's *)
+            past_the_end j (fun () ->
+                if failing j then
+                  match outputs_differ j with
+                  | Some d -> Differs d
+                  | None -> Went_past
+                else
+                  Differs
+                    {
+                      said =
+                        (if Hashtbl.mem t.inputs (c.task, c.dep) then
+                           sprintf "the recording has no more calls to `%s`%s" c.dep from
+                         else sprintf "the recording has no calls to `%s`%s" c.dep from);
+                      notes = [ "this program made: " ^ shown c ];
+                      help = Some help;
+                      diff = None;
+                      line = None;
+                    }))
   | Record _ | Session _ ->
       failwith "bug: an answer from a journal that isn't a recording's"
+
+(* ---- the scheduler's part (sched.ml, [journal]) ---- *)
+
+(* What the scheduler is told of, and asks, the journal [j]: recording,
+   it writes each poll, each cancel a task sees, each second failure's
+   warning as a comment, and a call's first line once its task waits in
+   it; replaying, it says the order while it follows the recording.
+   [path_of] is a task's path as the journal writes it. *)
+let watcher j ~path_of : Sched.journal =
+  let ignore_ _ = () in
+  match j.mode with
+  | Record out ->
+      {
+        path_of;
+        follows = (fun () -> false);
+        waits =
+          (fun t ->
+            let p = path_of t in
+            match Hashtbl.find_opt j.begun p with
+            | Some (c, false) ->
+                Hashtbl.replace j.begun p (c, true);
+                j.made <- j.made + 1;
+                j.calls <- c :: j.calls;
+                write_line j out (p ^ " " ^ call_text c ^ " " ^ waiting)
+            | _ -> ());
+        polled =
+          (fun ts -> write_line j out ("poll " ^ String.concat " " (List.map path_of ts)));
+        poll = (fun () -> None);
+        cancel_here = (fun _ -> false);
+        saw_cancel =
+          (fun t ->
+            let p = path_of t in
+            Hashtbl.remove j.begun p;
+            write_line j out (p ^ " cancelled"));
+        astray = ignore_;
+        note =
+          (fun line ->
+            Printf.fprintf out "# %s\n" (String.trim line);
+            flush out);
+      }
+  | _ ->
+      let strict = j.mode = Strict in
+      (* the replay went differently: a strict one says so, and a test
+         stops following *)
+      let astray ?has ?verb made =
+        if strict then went_differently ?has ?verb j ~made else unfollow j
+      in
+      {
+        path_of;
+        follows = (fun () -> j.follows);
+        waits = ignore_;
+        polled = ignore_;
+        poll =
+          (fun () ->
+            match next_entry j with
+            | Some (Poll (ps, _) as poll) -> (
+                (* each task it woke is waiting in a call it ends, or to
+                   see a cancel *)
+                let woken p =
+                  match next_of j p with
+                  | Some (Cancel _) -> Some (p, true)
+                  | _ when Hashtbl.mem j.awaiting p -> Some (p, false)
+                  | _ -> None
+                in
+                match List.find_opt (fun p -> woken p = None) ps with
+                | Some p ->
+                    astray ~has:(entry_shown poll) ~verb:"has"
+                      (p ^ " waiting for nothing a poll ends");
+                    None
+                | None ->
+                    consume j j.cursor;
+                    Some (List.filter_map woken ps))
+            | Some (End _) | None -> None
+            | Some _ ->
+                astray ~verb:"has" "every task waiting";
+                None);
+        cancel_here =
+          (fun t ->
+            match next_entry j with
+            | Some (Cancel (p, _)) -> p = path_of t
+            | _ -> false);
+        saw_cancel =
+          (fun t ->
+            let p = path_of t in
+            Hashtbl.remove j.awaiting p;
+            if j.follows then
+              match next_entry j with
+              | Some (Cancel (q, _)) when q = p -> consume j j.cursor
+              | _ -> astray ~verb:"has" (p ^ " seeing a cancel"));
+        astray = (fun p -> astray ~verb:"has" (p ^ " waiting for nothing a poll ends"));
+        note = ignore_;
+      }
 
 (* ---- a test's outputs ---- *)
 
@@ -1053,26 +1456,37 @@ let outputs j =
 (* A recording, once the run has ended [e]: its last line. *)
 let finish_recording j e =
   match j.mode with
-  | Record out ->
-      Printf.fprintf out "%d %s\n" (j.made + 1) (ending_text e);
-      flush out
+  | Record out -> write_line j out ("main " ^ ending_text e)
   | _ -> ()
+
+(* The line of a strict replay's next entry, or of its end: where a
+   message about the replay's end is said. *)
+let next_line j =
+  match (next_entry j, j.ending) with
+  | Some e, _ -> entry_line e
+  | None, Some (_, l) -> l
+  | None, None -> 1
+
+(* Whether a strict replay has come to every entry but how the run
+   ended. *)
+let replayed_all j =
+  match next_entry j with Some (End _) | None -> true | Some _ -> false
 
 (* A strict replay, once the program has ended [e]: the recording ended
    the same way, after the same calls. *)
 let finish_replay j e =
-  match (j.calls, j.ending) with
-  | expected :: _, _ ->
-      differs ~help:recorded_again
-        ~notes:[ "the recording has: " ^ call_text expected; ended_instead e ]
-        (sprintf "the replay went differently after call %d of %d" j.made
-           j.total)
-  | [], Some (recorded, _) when recorded <> e ->
+  match (next_entry j, j.ending) with
+  | Some (End _), Some (recorded, _) when recorded <> e ->
       differs ~help:recorded_again
         ~notes:[ "the recording has: " ^ ending_said recorded; ended_instead e ]
         (sprintf "the replay went differently after call %d of %d" j.made
            j.total)
-  | _ -> ()
+  | (Some (End _) | None), _ -> ()
+  | Some expected, _ ->
+      differs ~help:recorded_again
+        ~notes:[ "the recording has: " ^ entry_shown expected; ended_instead e ]
+        (sprintf "the replay went differently after call %d of %d" j.made
+           j.total)
 
 (* How many calls a recording has made to each dependency of its
    header, in its order. *)

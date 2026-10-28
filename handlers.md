@@ -527,19 +527,42 @@ trace is for reading, and replay doesn't need them.
 ### What an entry holds
 
 ```
-# ren journal 1 · main.ren · deps: Console Fs Os Proc
-1 Fs.read("justfile") → Ok("# What `ren run main.ren` runs, ...\n")
-2 Os.args() → ["build"]
-3 Console.error("echo base")
-4 Proc.run("sh", ["-c", "echo base"]) → Ok(0)
+# ren journal 2 · main.ren · deps: Console Fs Os Proc
+1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, ...\n")
+2 main Os.args() → ["build"]
+3 main Console.error("echo base")
+4 main Proc.run("sh", ["-c", "echo base"]) → Ok(0)
 ...
-9 exit 0
+9 main exit 0
 ```
 
-That's what 10b writes: a number, the call, and what it gave after `→`,
-left out when it's `()` or `Ok(())`; the last line is how the run ended,
-`exit 0`, `error` and what `main` failed with, written as a value is,
-or `panic`, where, and what it said, in quotes. The header names the
+That's version 2, stage 11a's (compiler.md, "Journal version 2"): a
+number, the task that made the call, `main` or a spawned task's path
+(`main/run_all:0`), the call, and what it gave after `→`, left out when
+it's `()` or `Ok(())`; the last line is how the run ended, `exit 0`,
+`error` and what `main` failed with, written as a value is, or `panic`,
+where, and what it said, in quotes. With tasks, three more kinds of
+line keep the order the tasks ran in:
+
+```
+4 main/main:0 Clock.sleep(30) …
+7 poll main/main:1 main/main:0
+8 main/main:1 →
+11 main/main:2 cancelled
+# warning: main/main:3 failed too, with `Broke`, while it was being cancelled
+```
+
+A call its task waited in is two lines, its start, ending `…`, and,
+after the poll that woke it, a line of its task and `→` with what it
+gave; a `poll` names the tasks the scheduler woke when no task could
+run, in the order it woke them; a task that saw a cancel is a line;
+and a second failure's warning is a comment. `ren replay` follows the
+polls and is strict about every entry's task and order, so a concurrent
+run replays byte for byte. A test that replays a journal answers each
+task's calls from its own entries, compares each task's outputs with its
+own, and runs in the recorded order while it can, its schedule prefix,
+before the seeded tape takes over. A version 1 journal, from before
+11a, is refused, with how to record it again. The header names the
 program from the journal's folder, or absolutely if that's more than
 two folders up, and the dependencies `main` uses. What follows is where it's going;
 [Where 10b differed](#where-10b-differed) says what isn't there yet.
@@ -551,9 +574,8 @@ with the flight recorder, where size matters. The format is to be
 revisited once real journals exist. The shape is `runtime-io.md`'s, a
 submission and its completion:
 
-- **`task` and `seq`** say who made the call and in what order. There's
-  one task until `Async`, but the field is there from the start, so the
-  format doesn't change when concurrency arrives.
+- **`task` and `seq`** say who made the call and in what order: the
+  task column, and the line's number (version 2, above).
 - **Names, not positions.** A journal starts with a table of the
   dependencies, operations, types and field names it uses, and its
   entries refer to that table. A journal recorded on one build can be
