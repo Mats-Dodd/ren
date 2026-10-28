@@ -846,6 +846,9 @@ and parse_line p =
     | PLUSEQ -> Some (Some Add)
     | MINUSEQ -> Some (Some Sub)
     | STAREQ -> Some (Some Mul)
+    | PLUSPERCENTEQ -> Some (Some Wrap_add)
+    | MINUSPERCENTEQ -> Some (Some Wrap_sub)
+    | STARPERCENTEQ -> Some (Some Wrap_mul)
     | _ -> None
   in
   match op with
@@ -1059,10 +1062,20 @@ and left_assoc ops next p =
   in
   loop (next p)
 
-and parse_add p = left_assoc [ (PLUS, Add); (MINUS, Sub) ] parse_mul p
+and parse_add p =
+  left_assoc
+    [
+      (PLUS, Add);
+      (MINUS, Sub);
+      (PLUSPERCENT, Wrap_add);
+      (MINUSPERCENT, Wrap_sub);
+    ]
+    parse_mul p
 
 and parse_mul p =
-  left_assoc [ (STAR, Mul); (SLASH, Div); (PERCENT, Mod) ] parse_unary p
+  left_assoc
+    [ (STAR, Mul); (SLASH, Div); (PERCENT, Mod); (STARPERCENT, Wrap_mul) ]
+    parse_unary p
 
 and parse_unary p =
   match peek p with

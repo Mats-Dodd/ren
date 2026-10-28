@@ -168,6 +168,20 @@ let element loc (xs : vec) i =
          xs.len)
   else nth xs (Int64.to_int i)
 
+(* [v] stored as a value of the sized type [k] (sized.ml): an `Int` or a
+   `Float`, checked that it fits, or with [wrap], an `Int`'s low bits. *)
+let stored loc ~wrap k v =
+  match (v, wrap) with
+  | VInt n, true -> VInt (Sized.wrap k n)
+  | VInt n, false ->
+      if Sized.fits k n then v
+      else panic loc (Sized.doesnt_fit k (Int64.to_string n))
+  | VFloat f, false -> (
+      match Sized.float32 f with
+      | Some r -> VFloat r
+      | None -> panic loc (Sized.doesnt_fit k (Ast.show_float f)))
+  | _ -> bug "a sized value that isn't a number"
+
 (* [op] on [args], whose expressions are [at]. *)
 let prim loc op args (at : expr list) =
   match (op, args) with
@@ -464,6 +478,12 @@ let rec eval cx env (e : expr) =
       match dict cx env d with
       | Const v -> v
       | _ -> bug "an associated value through a dictionary that isn't one")
+  (* a sized type's value is the number it holds: read, it's itself *)
+  | Prim (Widen, [ a ]) -> eval cx env a
+  | Prim (((Narrow | Wrap) as op), [ a ]) -> (
+      match Sized.of_ty e.ty with
+      | Some k -> stored e.loc ~wrap:(op = Wrap) k (eval cx env a)
+      | None -> bug "a value stored into a type that isn't sized")
   | Prim (op, args) -> prim e.loc op (eval_all cx env args) args
   | Let (v, value, body) ->
       let x = eval cx env value in

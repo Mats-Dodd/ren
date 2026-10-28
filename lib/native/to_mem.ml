@@ -192,7 +192,7 @@ let struct_ty cx n =
   | None -> bug "a struct that isn't there"
 
 let scalar (l : layout) =
-  match l with Int | Float | Bool | Unit | Enum -> true | _ -> false
+  match l with Int | Float | Bool | Unit | Enum | Sized _ -> true | _ -> false
 
 (* Whether the type [p]'s declaration reaches [p] again, through the
    types of its fields and theirs, whatever their arguments: a recursive
@@ -227,6 +227,108 @@ let recursive cx (p : Path.t) =
       let r = List.exists reaches (mentions p) in
       Hashtbl.replace cx.recursive p r;
       r
+
+(* Where a field of an object is kept: a word of its own, [Slot n], or
+   [bits] bits from bit [at] of word [n], which it shares with other small
+   scalars ([Bits (n, at, bits)]). *)
+type place = Slot of int | Bits of int * int * int
+
+(* Where each field of a constructor goes, in the order they're declared:
+   its place, and its layout; and how many words the object has. A
+   field's word is the one of its number, whatever its type is given, so
+   generic code finds a field where any other does, and the object's
+   header says which hold objects (ren_rt.h, [ren_obj]); but a type with
+   no parameters may pack its small scalars ([pack]). *)
+type shape = { tag : int; places : (place * layout) list; words : int }
+
+let shape tag layouts =
+  {
+    tag;
+    places = List.mapi (fun i l -> (Slot i, l)) layouts;
+    words = List.length layouts;
+  }
+
+(* How many bits a field of type [t] takes if it's a small scalar that can
+   share a word: a [Bool] or a [Unit], a byte, or a sum none of whose
+   constructors has fields, an [Enum], a byte for up to 256 of them (as
+   Koka sizes one, Kind/Repr.hs, [createMaxDataDef]). *)
+let rec small_bits cx (t : Ty.ty) =
+  match t with
+  | _ when t = Ty.bool || t = Ty.unit -> Some 8
+  (* a sized type's at its width, but a `UInt64`, which takes a word *)
+  | Con (p, []) when Sized.of_path p <> None ->
+      let k = Option.get (Sized.of_path p) in
+      if Sized.bits k < 64 then Some (Sized.bits k) else None
+  | Con (p, args) -> (
+      match Hashtbl.find_opt cx.types p with
+      | Some { body = Sum cs; _ }
+        when cs <> [] && List.for_all (fun (c : Iface.ctor) -> c.cfields = []) cs
+        ->
+          let n = List.length cs in
+          Some (if n <= 256 then 8 else if n <= 65536 then 16 else 32)
+      | Some { body = Opaque (Rep r); _ } -> small_bits cx (subst args r)
+      | _ -> None)
+  | _ -> None
+
+(* Where the fields of a constructor or a record, of types [tys], go if
+   its small scalars are packed, and how many words it then has: the
+   other fields first, a word each, in the order they're declared, then
+   the small scalars, the widest first, each in the first word with room
+   for it. Lean keeps its scalar fields after the objects, packed by
+   size (lean.h:592-612, [lean_ctor_get_uint8] and the rest, and
+   [ctor_set_uint*]); Ren's header masks which words hold objects, so the
+   order of the rest needn't change. [None] if packing saves no word. *)
+let pack cx (tys : Ty.ty list) : (place list * int) option =
+  let small =
+    List.filter_map
+      (fun (i, t) -> Option.map (fun b -> (i, b)) (small_bits cx t))
+      (List.mapi (fun i t -> (i, t)) tys)
+  in
+  let widest = List.stable_sort (fun (_, a) (_, b) -> compare b a) small in
+  (* the bits used of each packed word, by its number among them *)
+  let used = ref [||] and where = Hashtbl.create 8 in
+  List.iter
+    (fun (i, b) ->
+      let rec fit k =
+        if k = Array.length !used then (
+          used := Array.append !used [| b |];
+          Hashtbl.replace where i (k, 0))
+        else if !used.(k) + b <= 64 then (
+          Hashtbl.replace where i (k, !used.(k));
+          !used.(k) <- !used.(k) + b)
+        else fit (k + 1)
+      in
+      fit 0)
+    widest;
+  let packed = Array.length !used in
+  if packed >= List.length small then None
+  else
+    let plain = List.length tys - List.length small in
+    let next = ref 0 in
+    let places =
+      List.mapi
+        (fun i _ ->
+          match (Hashtbl.find_opt where i, List.assoc_opt i small) with
+          | Some (k, at), Some b -> Bits (plain + k, at, b)
+          | _ ->
+              let n = !next in
+              incr next;
+              Slot n)
+        tys
+    in
+    Some (places, plain + packed)
+
+(* Whether a small value of the record type [t], fields of types
+   [tys], packs its small scalars, and where they go: a record with no
+   type parameters whose fields are all scalars, the same records an
+   object of packs ([packs]). *)
+let packed_struct cx (t : Ty.ty) tys =
+  match t with
+  | Con (p, _) when not (Ty.is_tuple p) -> (
+      match Hashtbl.find_opt cx.types p with
+      | Some { body = Record _; params = []; _ } -> pack cx tys
+      | _ -> None)
+  | _ -> None
 
 let rec layout cx loc (t : Ty.ty) : layout =
   match t with
@@ -268,7 +370,22 @@ and small cx loc p args : (strukt * int list list) option =
     let slots = [ List.mapi (fun i _ -> i) tys ] in
     let plain = List.map (plain_layout cx loc) tys in
     if Copied.is ~types:(Hashtbl.find_opt cx.types) t && List.for_all scalar plain
-    then Some ({ sfields = plain; skind = Product }, slots)
+    then
+      (* a record's small scalars packed, as an object's are, if that
+         saves a word ([packed_struct]): its words' layouts *)
+      match packed_struct cx t tys with
+      | Some (places, words) ->
+          let word w =
+            match
+              List.find_opt
+                (fun (pl, _) -> pl = Slot w)
+                (List.combine places plain)
+            with
+            | Some (_, l) -> l
+            | None -> Int
+          in
+          Some ({ sfields = List.init words word; skind = Product }, slots)
+      | None -> Some ({ sfields = plain; skind = Product }, slots)
     else
       match simple tys with
       | Some ls when List.length ls <= 4 ->
@@ -337,6 +454,7 @@ and plain_layout cx loc (t : Ty.ty) : layout =
   | _ when t = Ty.float -> Float
   | _ when t = Ty.bool -> Bool
   | _ when t = Ty.unit -> Unit
+  | Con (p, []) when Sized.of_path p <> None -> Sized (Option.get (Sized.of_path p))
   | _ when t = Ty.str -> Boxed
   | Con (p, [ e ]) when p = array_path ->
       (* an array's elements are counted as words are, or never: a struct
@@ -372,92 +490,6 @@ let with_words cx n f =
   cx.nwords <- n;
   Fun.protect ~finally:(fun () -> cx.nwords <- saved) f
 
-(* Where a field of an object is kept: a word of its own, [Slot n], or
-   [bits] bits from bit [at] of word [n], which it shares with other small
-   scalars ([Bits (n, at, bits)]). *)
-type place = Slot of int | Bits of int * int * int
-
-(* Where each field of a constructor goes, in the order they're declared:
-   its place, and its layout; and how many words the object has. A
-   field's word is the one of its number, whatever its type is given, so
-   generic code finds a field where any other does, and the object's
-   header says which hold objects (ren_rt.h, [ren_obj]); but a type with
-   no parameters may pack its small scalars ([pack]). *)
-type shape = { tag : int; places : (place * layout) list; words : int }
-
-let shape tag layouts =
-  {
-    tag;
-    places = List.mapi (fun i l -> (Slot i, l)) layouts;
-    words = List.length layouts;
-  }
-
-(* How many bits a field of type [t] takes if it's a small scalar that can
-   share a word: a [Bool] or a [Unit], a byte, or a sum none of whose
-   constructors has fields, an [Enum], a byte for up to 256 of them (as
-   Koka sizes one, Kind/Repr.hs, [createMaxDataDef]). *)
-let rec small_bits cx (t : Ty.ty) =
-  match t with
-  | _ when t = Ty.bool || t = Ty.unit -> Some 8
-  | Con (p, args) -> (
-      match Hashtbl.find_opt cx.types p with
-      | Some { body = Sum cs; _ }
-        when cs <> [] && List.for_all (fun (c : Iface.ctor) -> c.cfields = []) cs
-        ->
-          let n = List.length cs in
-          Some (if n <= 256 then 8 else if n <= 65536 then 16 else 32)
-      | Some { body = Opaque (Rep r); _ } -> small_bits cx (subst args r)
-      | _ -> None)
-  | _ -> None
-
-(* Where the fields of a constructor or a record, of types [tys], go if
-   its small scalars are packed, and how many words it then has: the
-   other fields first, a word each, in the order they're declared, then
-   the small scalars, the widest first, each in the first word with room
-   for it. Lean keeps its scalar fields after the objects, packed by
-   size (lean.h:592-612, [lean_ctor_get_uint8] and the rest, and
-   [ctor_set_uint*]); Ren's header masks which words hold objects, so the
-   order of the rest needn't change. [None] if packing saves no word. *)
-let pack cx (tys : Ty.ty list) : (place list * int) option =
-  let small =
-    List.filter_map
-      (fun (i, t) -> Option.map (fun b -> (i, b)) (small_bits cx t))
-      (List.mapi (fun i t -> (i, t)) tys)
-  in
-  let widest = List.stable_sort (fun (_, a) (_, b) -> compare b a) small in
-  (* the bits used of each packed word, by its number among them *)
-  let used = ref [||] and where = Hashtbl.create 8 in
-  List.iter
-    (fun (i, b) ->
-      let rec fit k =
-        if k = Array.length !used then (
-          used := Array.append !used [| b |];
-          Hashtbl.replace where i (k, 0))
-        else if !used.(k) + b <= 64 then (
-          Hashtbl.replace where i (k, !used.(k));
-          !used.(k) <- !used.(k) + b)
-        else fit (k + 1)
-      in
-      fit 0)
-    widest;
-  let packed = Array.length !used in
-  if packed >= List.length small then None
-  else
-    let plain = List.length tys - List.length small in
-    let next = ref 0 in
-    let places =
-      List.mapi
-        (fun i _ ->
-          match (Hashtbl.find_opt where i, List.assoc_opt i small) with
-          | Some (k, at), Some b -> Bits (plain + k, at, b)
-          | _ ->
-              let n = !next in
-              incr next;
-              Slot n)
-        tys
-    in
-    Some (places, plain + packed)
-
 (* The layout of a field of type [t] of an object: a word, which a
    [Struct] can't be, so its type is kept boxed instead. *)
 let slot cx loc (t : Ty.ty) =
@@ -491,13 +523,23 @@ let rec decl cx loc (t : Ty.ty) =
 
 (* Whether an object of the type declared [d], [t], packs its small
    scalars: only a type with no parameters, and one that's an object. *)
-let packs cx loc (d : Iface.type_decl) (t : Ty.ty) =
-  d.params = [] && with_words cx 0 (fun () -> layout cx loc t) = Boxed
+let packs cx loc (d : Iface.type_decl) (t : Ty.ty) tys =
+  d.params = []
+  &&
+  match with_words cx 0 (fun () -> layout cx loc t) with
+  | Boxed -> true
+  (* a small value whose record [small] packed: it has fewer words than
+     fields *)
+  | Struct (n, _) -> (
+      match d.body with
+      | Record _ -> List.length (struct_of cx n).sfields < List.length tys
+      | _ -> false)
+  | _ -> false
 
 (* The shape of an object of [t], declared [d], whose fields, of types
    [tys], are given [layouts]: packed if it can be ([pack]). *)
 let placed cx loc d t tag tys layouts =
-  match if packs cx loc d t then pack cx tys else None with
+  match if packs cx loc d t tys then pack cx tys else None with
   | Some (places, words) ->
       { tag; places = List.combine places layouts; words }
   | None -> shape tag layouts
@@ -601,6 +643,8 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         | _ when t = Ty.bool -> (D_bool, [])
         | _ when t = Ty.unit -> (D_unit, [])
         | _ when t = Ty.str -> (D_str, [])
+        | Con (p, []) when Sized.of_path p <> None ->
+            (D_sized (Option.get (Sized.of_path p)), [])
         | Con (p, [ e ]) when p = array_path -> (D_array, [ arg e ])
         | Con (p, parts) when Ty.is_tuple p -> (D_tuple, List.map arg parts)
         | Con (p, args) -> (D_named (decl_id cx loc p), List.map arg args)
@@ -685,7 +729,7 @@ and decl_id cx loc (p : Path.t) : int =
       (* where each field is, for the walks, as [placed] puts it *)
       let places (fs : Iface.field list) =
         let tys = List.map (fun (f : Iface.field) -> f.fty) fs in
-        match if packs cx loc d (Con (p, [])) then pack cx tys else None with
+        match if packs cx loc d (Con (p, [])) tys then pack cx tys else None with
         | None -> None
         | Some (places, _) ->
             Some
@@ -819,7 +863,7 @@ let field_var fs name (x : atom) ((place, l) : place * layout) words : var =
   match place with
   | Slot n -> get name l (field_rhs x n words)
   | Bits (n, at, bits) ->
-      let w = get "$packed" Int (Field (x, n, words)) in
+      let w = get "$packed" Int (field_rhs x n words) in
       get name l (Unpack (Var w, at, bits))
 
 (* The descriptor of the type variable [n], a word here. *)
@@ -929,6 +973,10 @@ let rec dummy fs env (l : layout) : atom =
   | Bool -> Bool false
   | Unit -> Unit
   | Enum -> Enum_tag 0
+  | Sized k ->
+      let zero : atom = if Sized.is_float k then Float 0. else Int 0L in
+      owned fs env "$never" l
+        (Runtime (Narrow k, [ zero ], Some (new_site fs.cx fs.here)))
   | Boxed -> Scalar_ctor 0
   | Word _ -> owned fs env "$never" l (To_word Unit)
   | Desc -> Desc_lit 0
@@ -1380,8 +1428,9 @@ let rec expr fs env (e : C.expr) : atom =
       let decl_fields = record_fields cx (at fs e.loc) e.ty in
       let values = List.map (fun (f, x) -> (f, expr fs env x)) fields in
       let xs = List.map (fun (f, _) -> List.assoc f values) decl_fields in
+      let words = packed_words fs (record_shape cx (at fs e.loc) e.ty) xs in
       List.iter (consume env) xs;
-      owned fs env "$struct" (lay e.ty) (Make_struct xs)
+      owned fs env "$struct" (lay e.ty) (Make_struct words)
   | Tuple xs when is_struct (lay e.ty) ->
       let xs = List.map (expr fs env) xs in
       List.iter (consume env) xs;
@@ -1422,7 +1471,8 @@ let rec expr fs env (e : C.expr) : atom =
       in
       let r =
         match atom_layout x with
-        | Struct _ as l -> owned fs env "$struct" l (Make_struct parts)
+        | Struct _ as l ->
+            owned fs env "$struct" l (Make_struct (packed_words fs sh parts))
         | _ -> alloc_taking fs env sh parts
       in
       consume env y;
@@ -1542,6 +1592,26 @@ and break_out fs env =
   in
   go env.frames
 
+(* The words of an object, or a small value, of shape [sh] whose fields
+   are [fields], in the order they're declared: each a field, or the
+   small scalars packed in it. *)
+and packed_words fs (sh : shape) fields =
+  let words = Array.make sh.words [] in
+  List.iter2
+    (fun ((place : place), _) x ->
+      match place with
+      | Slot n -> words.(n) <- [ (x, -1, 0) ]
+      | Bits (n, at, bits) -> words.(n) <- words.(n) @ [ (x, at, bits) ])
+    sh.places fields;
+  Array.to_list
+    (Array.map
+       (function
+         | [ (x, -1, _) ] -> x
+         | packed ->
+             borrowed fs "$packed" Int
+               (Pack (List.sort (fun (_, a, _) (_, b, _) -> compare a b) packed)))
+       words)
+
 (* A new object of shape [sh], which takes [fields], given in the order
    they're declared. *)
 and alloc fs env sh fields =
@@ -1555,25 +1625,7 @@ and alloc_taking fs env (sh : shape) fields =
   if sh.words > 64 then
     unsupported fs.here
       "a record, a tuple, a constructor or an error of more than 64 fields";
-  (* each word: a field, or the small scalars packed in it *)
-  let words = Array.make sh.words [] in
-  List.iter2
-    (fun ((place : place), _) x ->
-      match place with
-      | Slot n -> words.(n) <- [ (x, -1, 0) ]
-      | Bits (n, at, bits) -> words.(n) <- words.(n) @ [ (x, at, bits) ])
-    sh.places fields;
-  let fields =
-    Array.to_list
-      (Array.map
-         (function
-           | [ (x, -1, _) ] -> x
-           | packed ->
-               borrowed fs "$packed" Int
-                 (Pack
-                    (List.sort (fun (_, a, _) (_, b, _) -> compare a b) packed)))
-         words)
-  in
+  let fields = packed_words fs sh fields in
   let words =
     List.filter_map
       (fun x ->
@@ -1616,7 +1668,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let x = expr fs env a in
       let y = expr fs env b in
       match lay a.ty with
-      | Int | Float | Bool | Unit | Enum ->
+      | Int | Float | Bool | Unit | Enum | Sized _ ->
           owned fs env "$eq" Bool (Compare (c, x, y))
       | Boxed when a.ty = Ty.str ->
           let same =
@@ -1635,6 +1687,21 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
           in
           List.iter (drop fs env) [ x; y; d ];
           if c = Eq then same else owned fs env "$ne" Bool (Not same))
+  (* a sized type's value read as the number it is, and a number stored
+     as one, checked, or wrapped (sized.ml) *)
+  | Widen, [ a ] ->
+      let x = expr fs env a in
+      owned fs env "$wide" (lay e.ty) (Runtime (Widen, [ x ], None))
+  | Narrow, [ a ] -> (
+      let x = expr fs env a in
+      match lay e.ty with
+      | Sized k -> owned fs env "$narrow" (Sized k) (Runtime (Narrow k, [ x ], Some (site ())))
+      | _ -> bug "a narrowing into what isn't sized")
+  | Wrap, [ a ] -> (
+      let x = expr fs env a in
+      match lay e.ty with
+      | Sized k -> owned fs env "$wrap" (Sized k) (Runtime (Wrap_to k, [ x ], None))
+      | _ -> bug "a wrap into what isn't sized")
   | Length, [ a ] ->
       let x = expr fs env a in
       let n = owned fs env "$len" Int (Runtime (Array_len, [ x ], None)) in
@@ -1743,7 +1810,17 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
           _;
         };
       ] )
-    when av.id = av'.id && iv.id = iv'.id && is_struct (lay ty) && pure w ->
+    when av.id = av'.id && iv.id = iv'.id && is_struct (lay ty) && pure w
+         (* a field packed with others is written by building the
+            element again, below *)
+         && (match
+               List.assoc f
+                 (List.combine
+                    (List.map fst (record_fields cx (at fs e.loc) ty))
+                    (record_shape cx (at fs e.loc) ty).places)
+             with
+            | Slot _, _ -> true
+            | Bits _, _ -> false) ->
       let n = match lay ty with Struct (n, _) -> n | _ -> bug "a struct" in
       let fields = record_fields cx (at fs e.loc) ty in
       let sh = record_shape cx (at fs e.loc) ty in
@@ -1946,6 +2023,11 @@ and call_block fs env ~result ~fails b ev xs =
 and show fs env loc t (d : C.desc) x =
   match layout_at fs loc t with
   | Boxed when t = Ty.str -> x
+  (* a sized type's value is shown as the number it is *)
+  | Sized k ->
+      show fs env loc (Sized.wide k) d
+        (owned fs env "$wide" (layout_at fs loc (Sized.wide k))
+           (Runtime (Widen, [ x ], None)))
   | l ->
       let rt =
         match l with
@@ -2023,6 +2105,7 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   | Int_wrapping_sub, _, _ -> runtime (Wrapping Sub)
   | Int_wrapping_mul, _, _ -> runtime (Wrapping Mul)
   | Int_wrapping_neg, _, _ -> runtime Wrapping_neg
+  | (Int_xor | Int_bit_and | Int_bit_or), _, _ -> runtime (Bits x)
   (* `map`'s own (prelude.ml) *)
   | Array_reserve, [ t ], [ d ] -> (
       match values () with

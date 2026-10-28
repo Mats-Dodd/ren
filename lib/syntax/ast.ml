@@ -102,13 +102,18 @@ and 't uses = { deps : 't list; dtail : ident option; uloc : Loc.t }
 (* [And] and [Or] are `&&` and `||`, which evaluate their right side only
    when the left doesn't already decide the answer (lower.ml makes them
    `if`s). [Orelse] is `x orelse e`: the value in the `Option` [x], or else
-   [e], which is evaluated only if [x] is `None`, and is usually a `fail`. *)
+   [e], which is evaluated only if [x] is `None`, and is usually a `fail`.
+   [Wrap_add], [Wrap_sub] and [Wrap_mul] are `+%`, `-%` and `*%`, `Int`'s
+   wrapping arithmetic (sized.ml). *)
 type binop =
   | Add
   | Sub
   | Mul
   | Div
   | Mod
+  | Wrap_add
+  | Wrap_sub
+  | Wrap_mul
   | Eq
   | Neq
   | Lt
@@ -684,6 +689,9 @@ let binop_to_string = function
   | Mul -> "*"
   | Div -> "/"
   | Mod -> "%"
+  | Wrap_add -> "+%"
+  | Wrap_sub -> "-%"
+  | Wrap_mul -> "*%"
   | Eq -> "=="
   | Neq -> "!="
   | Lt -> "<"
@@ -703,7 +711,21 @@ let binop_method = function
   | Mul -> Some "mul"
   | Div -> Some "div"
   | Mod -> Some "rem"
-  | Eq | Neq | Lt | Le | Gt | Ge | And | Or | Orelse -> None
+  | Wrap_add | Wrap_sub | Wrap_mul | Eq | Neq | Lt | Le | Gt | Ge | And | Or
+  | Orelse ->
+      None
+
+(* Whether [op] is a wrapping operator, `+%`, `-%` or `*%`: `Int`'s
+   arithmetic modulo 2^64, whose result stored into a sized integer wraps
+   to its width (sized.ml) *)
+let is_wrapping = function Wrap_add | Wrap_sub | Wrap_mul -> true | _ -> false
+
+(* The method a wrapping operator is: `+%` is `Int.wrapping_add`. *)
+let wrapping_method = function
+  | Wrap_add -> Some "wrapping_add"
+  | Wrap_sub -> Some "wrapping_sub"
+  | Wrap_mul -> Some "wrapping_mul"
+  | _ -> None
 
 let parens words = "(" ^ String.concat " " words ^ ")"
 
@@ -1049,8 +1071,8 @@ let precedence = function
   | Or -> 1
   | And -> 2
   | Eq | Neq | Lt | Le | Gt | Ge -> 4
-  | Add | Sub -> 5
-  | Mul | Div | Mod -> 6
+  | Add | Sub | Wrap_add | Wrap_sub -> 5
+  | Mul | Div | Mod | Wrap_mul -> 6
 
 let source ~type_name ~value_name (e : Resolved.expr) =
   (* [exception Exit] is raised by anything that isn't printed, and caught

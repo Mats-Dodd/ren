@@ -1,0 +1,13 @@
+// A store into a sized type that doesn't fit panics, with what `ren run`
+// says (ren_rt.c, [ren_narrow_panic]), here into an array of bytes that
+// the loop changes in place.
+
+fn main() uses Console =
+  var xs: Array<UInt8> = []
+  for i in 0..10
+    &xs.push(i * 25)
+  var i = 0
+  while i < xs.len()
+    xs[i] = xs[i] * 2
+    i += 1
+  print(xs)

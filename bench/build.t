@@ -33,8 +33,9 @@ deep, which is left out. `values_panic` panics where objects are alive,
 which a panic leaves as they are, and so do `swap_panic`, after a row
 was moved out of its grid, `swap_order`, and `trmc_panic`, with the
 cells a loop built where a recursion would have built none yet.
+`sized_panic` panics storing a number too big for a `UInt8`.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -63,6 +64,10 @@ cells a loop built where a recursion would have built none yet.
   trmc.ren, naive: the same, exit 0, objects live at exit 0
   trmc_panic.ren, perceus: the same, exit 1, objects live at exit 11
   trmc_panic.ren, naive: the same, exit 1, objects live at exit 1
+  sized.ren, perceus: the same, exit 0, objects live at exit 0
+  sized.ren, naive: the same, exit 0, objects live at exit 0
+  sized_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  sized_panic.ren, naive: the same, exit 1, objects live at exit 2
 
 Every native benchmark, at its small size:
 
@@ -71,6 +76,8 @@ Every native benchmark, at its small size:
   native/binary-trees/small.ren, naive: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/bytes/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/bytes/small.ren, naive: the same, exit 0, objects live at exit 0
   native/cfold/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/cfold/small.ren, naive: the same, exit 0, objects live at exit 0
   native/deriv/small.ren, perceus: the same, exit 0, objects live at exit 0
@@ -207,7 +214,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -222,9 +229,12 @@ prints what `ren run` prints, and ends with no object alive; so does
   swap_order.ren, release: the same, exit 1, objects live at exit 4
   trmc.ren, release: the same, exit 0, objects live at exit 0
   trmc_panic.ren, release: the same, exit 1, objects live at exit 11
+  sized.ren, release: the same, exit 0, objects live at exit 0
+  sized_panic.ren, release: the same, exit 1, objects live at exit 2
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
+  native/bytes/small.ren, release: the same, exit 0, objects live at exit 0
   native/cfold/small.ren, release: the same, exit 0, objects live at exit 0
   native/deriv/small.ren, release: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren, release: the same, exit 0, objects live at exit 0

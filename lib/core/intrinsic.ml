@@ -65,6 +65,9 @@ type t =
   | Int_wrapping_sub
   | Int_wrapping_mul
   | Int_wrapping_neg
+  | Int_xor
+  | Int_bit_and
+  | Int_bit_or
   | Int_add
   | Int_sub
   | Int_mul
@@ -142,6 +145,9 @@ let path x =
   | Int_wrapping_sub -> member "Int" "wrapping_sub"
   | Int_wrapping_mul -> member "Int" "wrapping_mul"
   | Int_wrapping_neg -> member "Int" "wrapping_neg"
+  | Int_xor -> member "Int" "xor"
+  | Int_bit_and -> member "Int" "bit_and"
+  | Int_bit_or -> member "Int" "bit_or"
   | Int_add -> member "Int" "add"
   | Int_sub -> member "Int" "sub"
   | Int_mul -> member "Int" "mul"

@@ -110,33 +110,40 @@ void *ren_alloc_slow(size_t words) {
   return p;
 }
 
+/* The bytes an element of [a] takes: a sized type's width, or its
+   stride's words. */
+static size_t ren_elem_bytes(ren_obj *a) {
+  return a->nfields ? ren_elem_size[a->nfields]
+                    : (size_t)ren_stride(a) * sizeof(ren_val);
+}
+
 static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
-                                  uint32_t stride) {
+                                  uint32_t stride, uint8_t kind) {
   ren_array *a = ren_alloc_bytes(sizeof(ren_array));
   cap = cap > len ? cap : len;
   cap = cap > 0 ? cap : 1;
-  size_t bytes = (size_t)cap * (stride > 1 ? stride : 1) * sizeof(ren_val);
+  a->h.nfields = kind;
+  a->stride = stride > 1 ? stride : 1;
+  size_t bytes = (size_t)cap * ren_elem_bytes(&a->h);
   a->data = ren_malloc(bytes);
 #ifdef REN_STATS
   ren_count_alloc((int64_t)(sizeof(ren_array) + bytes));
 #endif
   a->h.rc = 1;
   a->h.tag = REN_TAG_ARRAY;
-  a->h.nfields = 0;
   a->h.objs = boxed_elems;
   a->len = len;
   a->cap = cap;
-  a->stride = stride > 1 ? stride : 1;
   return &a->h;
 }
 
 static ren_obj *ren_alloc_array_s(int64_t len, bool boxed_elems,
                                   uint32_t stride) {
-  return ren_alloc_array_c(len, len, boxed_elems, stride);
+  return ren_alloc_array_c(len, len, boxed_elems, stride, 0);
 }
 
 ren_obj *ren_array_reserve(int64_t cap, bool boxed_elems, uint32_t stride) {
-  return ren_alloc_array_c(0, cap, boxed_elems, stride);
+  return ren_alloc_array_c(0, cap, boxed_elems, stride, 0);
 }
 
 ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {
@@ -145,6 +152,22 @@ ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {
 
 ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride) {
   return ren_alloc_array_s(len, false, stride);
+}
+
+ren_obj *ren_alloc_array_k(int64_t len, uint8_t kind) {
+  return ren_alloc_array_c(len, len, false, 0, kind);
+}
+
+ren_obj *ren_array_reserve_k(int64_t cap, uint8_t kind) {
+  return ren_alloc_array_c(0, cap, false, 0, kind);
+}
+
+ren_obj *ren_alloc_array_d(int64_t len, ren_obj *d) {
+  return ren_alloc_array_c(len, len, ren_desc_counted(d), 0, ren_desc_elem(d));
+}
+
+ren_obj *ren_array_reserve_d(int64_t cap, ren_obj *d) {
+  return ren_alloc_array_c(0, cap, ren_desc_counted(d), 0, ren_desc_elem(d));
 }
 
 static ren_obj *ren_alloc_str(int64_t len) {
@@ -261,8 +284,7 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
     if (o->objs)
       for (int64_t i = 0; i < a->len; i++)
         ren_release(t, a->data[i].o);
-    bytes = (int64_t)(sizeof(ren_array) +
-                      (size_t)(a->cap * ren_stride(o)) * sizeof(ren_val));
+    bytes = (int64_t)(sizeof(ren_array) + (size_t)a->cap * ren_elem_bytes(o));
     free(a->data);
     size = sizeof(ren_array);
     break;
@@ -414,14 +436,16 @@ static void ren_check_index(ren_obj *a, int64_t i, const ren_site *site) {
 /* A copy of [a] with room for [extra] more, each element counted again. */
 static ren_obj *ren_array_copy(ren_obj *a, int64_t extra) {
   ren_array *from = (ren_array *)a;
-  ren_obj *b = ren_alloc_array_s(from->len + extra, a->objs, (uint32_t)from->stride);
+  ren_obj *b = ren_alloc_array_c(from->len + extra, from->len + extra, a->objs,
+                                 (uint32_t)from->stride, a->nfields);
   ren_val *to = ren_elems(b);
-  int64_t words = from->len * ren_stride(a);
-  for (int64_t i = 0; i < words; i++) {
-    to[i] = from->data[i];
-    if (a->objs)
+  if (a->objs)
+    for (int64_t i = 0; i < from->len; i++) {
+      to[i] = from->data[i];
       ren_dup(to[i].o);
-  }
+    }
+  else
+    memcpy(to, from->data, (size_t)from->len * ren_elem_bytes(a));
   return b;
 }
 
@@ -458,9 +482,9 @@ ren_obj *ren_array_unshare(ren_obj *a) {
 static void ren_array_grow(ren_array *arr) {
   if (arr->len < arr->cap)
     return;
-  int64_t k = ren_stride(&arr->h);
+  size_t k = ren_elem_bytes(&arr->h);
   int64_t cap = arr->cap * 2;
-  ren_val *data = realloc(arr->data, (size_t)(cap * k) * sizeof(ren_val));
+  ren_val *data = realloc(arr->data, (size_t)cap * k);
   if (data == NULL) {
     fflush(stdout);
     fputs("error: out of memory\n", stderr);
@@ -468,7 +492,7 @@ static void ren_array_grow(ren_array *arr) {
   }
 #ifdef REN_STATS
   ren_stats.grows++;
-  ren_stats.live_bytes += (cap - arr->cap) * k * (int64_t)sizeof(ren_val);
+  ren_stats.live_bytes += (cap - arr->cap) * (int64_t)k;
   if (ren_stats.live_bytes > ren_stats.peak_bytes)
     ren_stats.peak_bytes = ren_stats.live_bytes;
 #endif
@@ -488,6 +512,44 @@ void ren_array_push_taking(ren_obj **cell, ren_val v) {
   ren_array *arr = (ren_array *)a;
   ren_array_grow(arr);
   arr->data[arr->len++] = v;
+}
+
+/* ---- arrays of a type variable's elements, or a sized type's ---- */
+
+ren_obj *ren_array_set_w(ren_obj *a, int64_t i, ren_val v, const ren_site *site) {
+  if (!a->nfields)
+    return ren_array_set(a, i, v, site);
+  ren_check_index(a, i, site);
+  ren_obj *b = ren_array_copy(a, 0);
+  ren_sized_store(b, i, v);
+  return b;
+}
+
+void ren_array_push_w(ren_obj **cell, ren_val v) {
+  ren_obj *a = *cell;
+  if (!a->nfields) {
+    ren_array_push(cell, v);
+    return;
+  }
+  ren_obj *b = ren_array_copy(a, 1);
+  ren_sized_store(b, ((ren_array *)b)->len - 1, v);
+  ren_drop(a);
+  *cell = b;
+}
+
+void ren_array_push_taking_w(ren_obj **cell, ren_val v) {
+  ren_obj *a = *cell;
+  if (!a->nfields) {
+    ren_array_push_taking(cell, v);
+    return;
+  }
+  if (!ren_is_unique(a)) {
+    ren_array_push_w(cell, v);
+    return;
+  }
+  ren_array *arr = (ren_array *)a;
+  ren_array_grow(arr);
+  ren_sized_store(a, arr->len++, v);
 }
 
 /* ---- arrays of structs ---- */
@@ -683,6 +745,31 @@ _Noreturn void ren_float_undefined(const ren_site *site, const char *op,
   ren_format_float(x, a);
   ren_format_float(y, b);
   snprintf(msg, sizeof msg, "`%s` has no answer here: %s %s %s", op, x, op, y);
+  ren_panic(site, msg);
+}
+
+_Noreturn void ren_narrow_panic(const ren_site *site, uint8_t kind, ren_val v) {
+  static const char *const names[] = {"",       "Int8",   "UInt8",
+                                      "Int16",  "UInt16", "Int32",
+                                      "UInt32", "UInt64", "Float32"};
+  static const int64_t lo[] = {0, INT8_MIN, 0, INT16_MIN, 0, INT32_MIN, 0, 0};
+  static const int64_t hi[] = {0,         INT8_MAX,   UINT8_MAX,
+                               INT16_MAX, UINT16_MAX, INT32_MAX,
+                               UINT32_MAX, INT64_MAX};
+  char num[400], msg[600];
+  if (kind == REN_ELEM_F32) {
+    ren_format_float(num, v.f);
+    snprintf(msg, sizeof msg,
+             "%s doesn't fit in a `Float32`, which holds up to about 3.4e38",
+             num);
+  } else {
+    bool sign = kind == REN_ELEM_I8 || kind == REN_ELEM_I16 ||
+                kind == REN_ELEM_I32;
+    snprintf(msg, sizeof msg,
+             "%" PRId64 " doesn't fit in %s `%s`, which holds %" PRId64
+             " to %" PRId64,
+             v.i, sign ? "an" : "a", names[kind], lo[kind], hi[kind]);
+  }
   ren_panic(site, msg);
 }
 
@@ -909,6 +996,14 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     ren_format_float(num, v.f);
     ren_puts(b, num);
     break;
+  /* a sized type's value, as a word, is the number it holds */
+  case REN_D_SIZED:
+    if (d->var == REN_ELEM_F32)
+      ren_format_float(num, v.f);
+    else
+      snprintf(num, sizeof num, "%" PRId64, v.i);
+    ren_puts(b, num);
+    break;
   case REN_D_BOOL:
     ren_puts(b, v.i ? "true" : "false");
     break;
@@ -925,7 +1020,7 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     for (int64_t i = 0; i < a->len; i++) {
       if (i > 0)
         ren_puts(b, ", ");
-      ren_show_val(b, d->args[0], env, a->data[i]);
+      ren_show_val(b, d->args[0], env, ren_array_load(v.o, i));
     }
     ren_puts(b, "]");
     break;
@@ -1005,6 +1100,8 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
   switch (d->kind) {
   case REN_D_FLOAT:
     return a.f == b.f;
+  case REN_D_SIZED:
+    return d->var == REN_ELEM_F32 ? a.f == b.f : a.i == b.i;
   case REN_D_STR:
     return ren_str_eq(a.o, b.o);
   case REN_D_ARRAY: {
@@ -1012,7 +1109,8 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     if (x->len != y->len)
       return false;
     for (int64_t i = 0; i < x->len; i++)
-      if (!ren_equal_in(d->args[0], env, x->data[i], y->data[i]))
+      if (!ren_equal_in(d->args[0], env, ren_array_load(a.o, i),
+                        ren_array_load(b.o, i)))
         return false;
     return true;
   }
@@ -1064,6 +1162,8 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
   switch (d->kind) {
   case REN_D_FLOAT:
     return REN_CMP(a.f, b.f);
+  case REN_D_SIZED:
+    return d->var == REN_ELEM_F32 ? REN_CMP(a.f, b.f) : REN_CMP(a.i, b.i);
   case REN_D_STR: {
     int64_t la = ren_str_len(a.o), lb = ren_str_len(b.o);
     int c = memcmp(ren_str_data(a.o), ren_str_data(b.o),

@@ -216,3 +216,13 @@ fn wrapped(s: over Sql) -> Int uses Sql =
 //               ^ keyword
 //                    ^ function
 //                                   ^ type.dependency
+
+fn hash(b: UInt8) -> Int =
+//         ^ type
+  var h: UInt32 = 2166136261
+//       ^ type
+  h = h.xor(b) *% 16777619
+//             ^ operator
+  h +%= 1
+//  ^ operator
+  h

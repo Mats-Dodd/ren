@@ -334,3 +334,63 @@ fn main() =
             (identifier)
             (arguments
               (identifier))))))))
+
+================================================================================
+sized types and the wrapping operators
+================================================================================
+
+fn fnv(bytes: Array<UInt8>) -> Int =
+  var h: UInt32 = 2166136261
+  for b in bytes
+    h = h.xor(b) *% 16777619
+  h +%= 1
+  h -% 2 +% a *% b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (number))
+      (for_statement
+        (identifier)
+        (identifier)
+        (block
+          (assignment
+            (identifier)
+            (binary_expression
+              (method_call_expression
+                (identifier)
+                (identifier)
+                (arguments
+                  (identifier)))
+              (number)))))
+      (assignment
+        (identifier)
+        (number))
+      (binary_expression
+        (binary_expression
+          (identifier)
+          (number))
+        (binary_expression
+          (identifier)
+          (identifier))))))

@@ -1,0 +1,4 @@
+import bench
+
+// a million of each, 100 rounds
+fn main() uses Console = bench.run(1_000_000, 100)

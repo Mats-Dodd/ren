@@ -7,6 +7,7 @@
  (deps
   %{bin:ren}
   (glob_files binary-trees/*.ren)
+  (glob_files bytes/*.ren)
   (glob_files blocks/*.ren)
   (glob_files cfold/*.ren)
   (glob_files deriv/*.ren)

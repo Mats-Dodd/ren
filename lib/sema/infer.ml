@@ -83,6 +83,7 @@ type node = Infer_top.node = {
   ty : Ty.ty;
   found : found option;
   narrowed : Path.t list option;
+  coerce : Sized.coerce option;
   targs : Ty.args option;
   needs : (int * string) list;
 }

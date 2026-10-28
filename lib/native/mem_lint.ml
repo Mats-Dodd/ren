@@ -130,6 +130,10 @@ let rt_sig (rt : rt) : layout list * layout =
   | Float_round | Float_truncate -> ([ Float ], Int)
   | Wrapping _ -> ([ Int; Int ], Int)
   | Wrapping_neg -> ([ Int ], Int)
+  | Bits _ -> ([ Int; Int ], Int)
+  | Narrow k -> ([ (if Sized.is_float k then Float else Int) ], Sized k)
+  | Wrap_to k -> ([ Int ], Sized k)
+  | Widen -> ([], Unit) (* its operand's, which [rhs] checks *)
   | Console_write | Console_error -> ([ Boxed ], Unit)
   | Show_any -> ([ Desc; Word 0 ], Boxed)
   | Equal_any -> ([ Desc; Word 0; Word 0 ], Bool)
@@ -188,7 +192,7 @@ let rhs env (r : rhs) : layout =
   | Compare (_, x, y) ->
       let l = atom env x in
       (match l with
-      | Int | Float | Bool | Unit | Enum -> ()
+      | Int | Float | Bool | Unit | Enum | Sized _ -> ()
       | _ -> fail env (sprintf "a comparison of %s" (show_layout l)));
       operand env "the right side" l y;
       Bool
@@ -255,6 +259,16 @@ let rhs env (r : rhs) : layout =
         (List.map (fun (v : var) -> v.layout) f.params)
         xs;
       f.result
+  | Runtime (Widen, [ x ], _) -> (
+      match atom env x with
+      | Sized k -> if Sized.is_float k then Float else Int
+      | l -> fail env (sprintf "%s widened" (show_layout l)))
+  | Runtime (Narrow k, _, None) ->
+      fail env (sprintf "a narrowing into %s with no site" (Sized.name k))
+  | Runtime (Wrap_to k, _, Some _) ->
+      fail env (sprintf "a wrap into %s with a site" (Sized.name k))
+  | Runtime (Wrap_to k, _, _) when not (Sized.wraps k) ->
+      fail env (sprintf "a wrap into %s" (Sized.name k))
   | Runtime (r, xs, _) ->
       let want, gives = rt_sig r in
       args env (show_rt r) want xs;
@@ -351,6 +365,7 @@ let rhs env (r : rhs) : layout =
            (fun used (x, at, bits) ->
              (match atom env x with
              | Bool | Unit | Enum -> ()
+             | Sized k when Sized.bits k = bits -> ()
              | l -> fail env (sprintf "%s packed in a word" (show_layout l)));
              if bits < 1 || bits > 32 || at < 0 || at + bits > 64 then
                fail env (sprintf "a packed field at bit %d of %d bits" at bits);
@@ -384,9 +399,10 @@ let rec stmt env (s : stmt) : env =
             fail env
               (sprintf "%s, %s, read from words" (show_var v)
                  (show_layout v.layout))
-      | Unpack _ -> (
+      | Unpack (_, _, bits) -> (
           match v.layout with
           | Bool | Unit | Enum -> ()
+          | Sized k when Sized.bits k = bits -> ()
           | l ->
               fail env
                 (sprintf "%s, %s, unpacked from a word" (show_var v)

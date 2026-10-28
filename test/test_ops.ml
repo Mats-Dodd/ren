@@ -1201,7 +1201,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:18
     1 │ fn main() = [Int.foo, Array.foo]
       │                  ^^^
-      help: its members: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`
+      help: its members: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`
 
     error: `Array` has no member named `foo`
       ┌─ test.ren:1:29

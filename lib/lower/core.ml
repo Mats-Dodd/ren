@@ -142,6 +142,16 @@ type prim =
           cell, and a program never sees one *)
   | Get_cell  (** what a cell holds *)
   | Set_cell  (** change what a cell holds, to the second operand *)
+  | Widen
+      (** a value of a sized type, `UInt8`, as its wide type, `Int` or `Float`,
+          the same number: how a field, an element or a variable of one is read
+          (sized.ml) *)
+  | Narrow
+      (** an `Int` or a `Float` as a value of the sized type that's this [Prim]'s
+          type: panics if it doesn't fit. How one is stored *)
+  | Wrap
+      (** an `Int` as a value of the sized integer type that's this [Prim]'s
+          type, its low bits: how a wrapping operator's result is stored *)
 
 type param = { mode : mode; var : var }
 
@@ -697,6 +707,9 @@ let show_prim = function
   | New_cell -> "cell"
   | Get_cell -> "get-cell"
   | Set_cell -> "set-cell"
+  | Widen -> "widen"
+  | Narrow -> "narrow"
+  | Wrap -> "wrap"
 
 let atom a = Atom a
 let var v = Atom (show_var v)

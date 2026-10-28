@@ -276,10 +276,10 @@ The built-in dependencies are `Clock`, `Random`, `Console`, `Fs`, `Os` and `Proc
 The runtime installs exactly the built-ins `main` lists in its `uses`, outermost. Any other dependency has to be installed inside `main`, and leaving it out is a compile error, `nothing installs Users before main`, with a help that says how.
 
 ```ren
-pub fn checksum(data: Bytes) -> u32 =          // no `uses`: pure, cannot allocate
-  var h: u32 = 2166136261
+pub fn checksum(data: Array<UInt8>) -> Int =   // no `uses`: pure, cannot allocate
+  var h: UInt32 = 2166136261
   for b in data
-    h = (h ^ b.u32).wrapping_mul(16777619)
+    h = h.xor(b) *% 16777619
   h
 ```
 
@@ -580,7 +580,7 @@ pub fn sum<T>(xs: Array<T>) -> T =
 
 `ren types` shows it as `sum<T has add, zero>`, and `sum([true, false])` is an error where it's called: `` `Bool` has no `+`, which `sum` needs ``. The built-in `[true, false].sum()` gives the same error, and its help says to count them with `count`. In generic code an operator is the one of the same type on both sides.
 
-Numbers follow a few rules, so nothing surprises at runtime. `Int` is 64 bits everywhere and overflow panics in every build, as an out-of-bounds index does; wrapping is a method, `n.wrapping_add(1)`. `/` and `%` round toward zero. `Float` is a 64-bit double, and a literal's type is read from its spelling: `1.5` is a `Float` and `1` an `Int`, always. Numbers never convert by themselves, so `Float.of(n)`, `f.round()` and `f.truncate()` say where they do. There's no `NaN`: `0.0 / 0.0` panics, so `Float` is ordered and hashed. And a condition is a `Bool`, always.
+Numbers follow a few rules, so nothing surprises at runtime. `Int` is 64 bits everywhere and overflow panics in every build, as an out-of-bounds index does; wrapping is `n +% 1`, or `n.wrapping_add(1)`. `/` and `%` round toward zero. `UInt8`, `Int32`, `Float32` and the other sized types are for storage, in fields and arrays: reading one gives an `Int` (or `Float`), storing one checks that it fits, and a wrapping operator's result stored into one wraps at its width. `Float` is a 64-bit double, and a literal's type is read from its spelling: `1.5` is a `Float` and `1` an `Int`, always. Numbers never convert by themselves, so `Float.of(n)`, `f.round()` and `f.truncate()` say where they do. There's no `NaN`: `0.0 / 0.0` panics, so `Float` is ordered and hashed. And a condition is a `Bool`, always.
 
 A `Map` and a `Set` find a key by its `hash` and `==`, so a key is any type without a function in it, `Map<Email, User>` included, equal by its `key`. Both keep insertion order: going over one gives what was set first, first, so output never depends on a hash seed, and the seed is the runtime's own. A key that isn't there is ordinary, so `m.get(k)` gives an `Option`, and there's no `m[k]`. There's no literal syntax either: `Map.of([(k, v)])` and `Set.of([x])`, which leaves `{ }` to records.
 

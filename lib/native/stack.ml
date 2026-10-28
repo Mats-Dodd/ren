@@ -84,6 +84,7 @@ let rt_reads (rt : rt) =
   | Array_len | Array_get _ | Str_len | Str_concat | Str_eq | Show_int
   | Show_float | Show_bool | Float_of_int | Float_sqrt | Float_round
   | Float_truncate | Wrapping _ | Wrapping_neg | Console_write | Console_error
+  | Bits _ | Widen | Narrow _ | Wrap_to _
   | Show_any | Equal_any | Compare_any | Array_check | Buf_check | Buf_get _
   | Array_take _ | Buf_take _ ->
       true

@@ -1,0 +1,69 @@
+// bench.ren as it was written before sized types (compiler.md, "Step
+// 12"), for RESULTS.md's before and after: every array an `Array<Int>`,
+// a word an element, each value kept in range by hand, and the hash's
+// `xor` of a byte done a bit at a time, since `Int` had no `xor`. It
+// prints what main.ren prints, and builds with the compiler of 82ed3d1.
+
+fn next(s: Int) -> Int =
+  s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+
+fn low_byte(x: Int) -> Int = (x % 256 + 256) % 256
+
+fn bytes(n: Int) -> Array<Int> =
+  var xs: Array<Int> = []
+  var s = 42
+  for _ in 0..n
+    s = next(s)
+    &xs.push(low_byte(s / 4294967296))
+  xs
+
+fn ints(n: Int) -> Array<Int> =
+  var xs: Array<Int> = []
+  var s = 7
+  for _ in 0..n
+    s = next(s)
+    &xs.push((s / 4294967296) % 1000003)
+  xs
+
+fn smooth(inout xs: Array<Int>, rounds: Int) =
+  for _ in 0..rounds
+    for i in 1..xs.len()
+      xs[i] = (xs[i] + xs[i - 1]) / 2
+
+fn mix(inout xs: Array<Int>, rounds: Int) =
+  for _ in 0..rounds
+    for i in 1..xs.len()
+      xs[i] = (xs[i] * 3 + xs[i - 1]) % 1000003
+
+// [h] with its low byte xor [b], a byte, a bit at a time
+fn xor_byte(h: Int, b: Int) -> Int =
+  var x = h % 256
+  var y = b
+  var r = 0
+  var bit = 1
+  for _ in 0..8
+    if x % 2 != y % 2 then r += bit
+    x = x / 2
+    y = y / 2
+    bit = bit * 2
+  h - h % 256 + r
+
+fn fnv(xs: Array<Int>, seed: Int) -> Int =
+  var h = 2166136261 + seed
+  for b in xs
+    h = xor_byte(h, b) * 16777619 % 4294967296
+  h
+
+fn run(n: Int, rounds: Int) uses Console =
+  var bs = bytes(n)
+  var is = ints(n)
+  smooth(&bs, rounds)
+  mix(&is, rounds)
+  print(bs.sum())
+  print(is.sum())
+  var h = 0
+  for r in 0..rounds
+    h = (h + fnv(bs, r)) % 4294967296
+  print(h)
+
+fn main() uses Console = run(1_000_000, 100)

@@ -22,6 +22,7 @@
   (glob_files *.ren)
   (glob_files native/binary-trees/*.ren)
   (glob_files native/blocks/*.ren)
+  (glob_files native/bytes/*.ren)
   (glob_files native/cfold/*.ren)
   (glob_files native/deriv/*.ren)
   (glob_files native/fannkuch/*.ren)

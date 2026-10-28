@@ -39,6 +39,7 @@ The twins take the size as their first argument and default to
 | `handlers` | 1,000,000,000 calls | 1,000 | **H2**: a call to a known handler costs a function call |
 | `inout` | 2,000,000 rounds | 10 | **H5**: an `&` parameter aliases nothing |
 | `nested` | 10,000 rounds, lists of 1,000,000 | 20 rounds, lists of 2,000 | an array of arrays changed by index and mapped in place (swap-out), and lists built and mapped by recursion that takes no stack (tail recursion modulo cons) |
+| `bytes` | 1,000,000 elements, 100 rounds | 1,000, 3 | an `Array<UInt8>` and an `Array<Int32>` changed in place, each store checked, and an FNV-1a hash with `*%` into a `UInt32`: sized storage |
 
 The first four are the Perceus set, ported from Koka's
 `test/bench/koka/*.kk` with the same algorithms and outputs. The next
@@ -75,6 +76,15 @@ twin without it, in the same file, and print both checksums:
   reuses each Vec, and builds its list front to back through a `&mut`
   to the next link, as one too long to recurse over must be; the Go is
   the same with pointers, its `map` writing new slices.
+
+- **`bytes`** keeps a million bytes as an `Array<UInt8>` and a million
+  numbers as an `Array<Int32>`, smooths the first and mixes the second a
+  round at a time in place, and hashes the bytes with FNV-1a at 32 bits,
+  `h = h *% 16777619` into a `UInt32`. `wide.ren` is the same program
+  with `Array<Int>`s, written as it had to be before sized types, with
+  its `xor` a bit at a time: what RESULTS.md's before column runs. The
+  Rust and Go keep `u8`s and `i32`s, compute in 64 bits as Ren does, and
+  check each store fits, as Ren's do.
 
 `bench.ren`'s `run` prints the checksums in a fixed order, so to time a
 kernel alone, write an entry that calls the one you want: each is a plain
@@ -134,6 +144,7 @@ times, Rust then Go:
 | `handlers` | 0.83 s | 1.20 s |
 | `inout` | 0.88 s | 1.57 s |
 | `nested` | 2.62 s | 2.81 s |
+| `bytes` | 0.43 s | 0.72 s |
 
 Two miss the range on purpose. `cfold` keeps Koka's size, so it can be
 compared with Koka's published numbers. `binary-trees` keeps the

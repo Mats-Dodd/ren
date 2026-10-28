@@ -466,6 +466,12 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) =
       pure (function [ VInt a; VInt b ] -> VInt (Int64.mul a b) | _ -> bug x)
   | Int_wrapping_neg ->
       pure (function [ VInt a ] -> VInt (Int64.neg a) | _ -> bug x)
+  | Int_xor ->
+      pure (function [ VInt a; VInt b ] -> VInt (Int64.logxor a b) | _ -> bug x)
+  | Int_bit_and ->
+      pure (function [ VInt a; VInt b ] -> VInt (Int64.logand a b) | _ -> bug x)
+  | Int_bit_or ->
+      pure (function [ VInt a; VInt b ] -> VInt (Int64.logor a b) | _ -> bug x)
   (* the operators, as methods, `n.add(2)`: Arith's, as `n + 2` is, with
      the panic said at the call *)
   | Int_add | Float_add -> pure (arith x Add)

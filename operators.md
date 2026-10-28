@@ -326,6 +326,86 @@ panic: `+` overflowed: 9223372036854775807 + 1
   = help: if wrapping is what you mean, write `n.wrapping_add(1)`
 ```
 
+## Sized integers
+
+`Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64` and
+`Float32` are types of places: fields, array elements and variables
+that keep a number in fewer bits (foundations.md, decision 15). Nothing
+is computed in them. Arithmetic is `Int`'s and `Float`'s, so there's one
+set of rules for overflow, and no conversions to write:
+
+```ren
+type Pixel = { r: UInt8, g: UInt8, b: UInt8, a: UInt8 }
+
+fn fnv(bytes: Array<UInt8>) -> Int =
+  var h: UInt32 = 2166136261
+  for b in bytes
+    h = h.xor(b) *% 16777619
+  h
+```
+
+- **Reading one gives an `Int`,** a `Float32` a `Float`, the same number.
+  `p.r + 1000` is `1255` when `p.r` is `255`, and `bytes[i] * 2` is an
+  `Int`. A sized type is never where an expression's type is used: `x ==
+  y`, `show(x)` and a generic function's argument all see the `Int`.
+- **Storing one checks that it fits,** and panics if it doesn't, as an
+  overflow does: `xs[i] = 300` into an `Array<UInt8>` panics with `300
+  doesn't fit in a `UInt8`, which holds 0 to 255`. A literal that
+  doesn't fit is an error where it's written. Storing is any place an
+  `Int` becomes one: a field, an element, a `push`, a `let` or `var`
+  with the type written, an argument, a function's result.
+- **A `Float32` rounds** to the nearest one when stored, as C's
+  `(float)x` does; a finite `Float` too big for one, past about
+  3.4e38, panics, since it would become an infinity.
+- **A `UInt64` holds 0 to 9223372036854775807,** what an `Int` holds that
+  isn't negative, so reading one always gives the same number back. Of
+  the three choices for the values above that, this is the one with no
+  surprise: reading them as negative `Int`s would make `<` disagree with
+  the stored order, and panicking on a read would make every read a
+  check. It's for counts, sizes and ids kept in a format that says
+  unsigned; a 64-bit hash stays an `Int`, and wraps there.
+- **An `inout` place has to be the parameter's type exactly:**
+  `bump(&b)` with `b: UInt8` and `bump(inout n: Int)` is an error, since
+  the place keeps 8 bits.
+- **`len()` and indexes stay `Int`,** so there's no Rust-style
+  `as usize`.
+
+### The wrapping operators
+
+`+%`, `-%` and `*%` are `Int`'s `wrapping_add`, `wrapping_sub` and
+`wrapping_mul`: they wrap at 64 bits instead of panicking, for hashes,
+checksums and random number generators. They bind as `+`, `-` and `*`
+do, and `h *%= k` is `h = h *% k`. `Float` has none: it doesn't wrap.
+
+**Stored into a sized integer, a wrapping operator's result wraps at
+that type's width** instead of being checked: `h = h *% 16777619` with
+`h: UInt32` keeps the low 32 bits. That's the whole rule, and it gives
+exactly what wrapping at the narrow width would, since 2^32 divides
+2^64: the low 32 bits of a product don't depend on the bits above
+them. It applies to the operator at the top of what's stored, `a *% b`,
+`a +% b * c`'s `+%`, or a `wrapping_*` method's call, and nothing
+else: `h = h.xor(b)` is checked as any store is. Storing a wrapping
+result into a `UInt64` is an error, since half of what wrapping at 64
+bits makes is negative; keep a 64-bit hash in an `Int`:
+
+```ren
+fn fnv64(bytes: Array<UInt8>) -> Int =
+  var h = 1469598103934665603
+  for b in bytes
+    h = h.xor(b) *% 1099511628211
+  h
+```
+
+`Int`'s `xor`, `bit_and` and `bit_or` are what such code needs besides;
+shifts aren't there yet.
+
+### How they're kept
+
+The interpreter checks and wraps as above (sized.ml). A native build
+keeps an `Array<UInt8>` as bytes, an `Array<Int32>` as 4-byte elements
+and so on, and packs a record's sized fields into shared words, as it
+packs `Bool`s (compiler.md, "Sized storage").
+
 ## Ranges
 
 `a..b` is the `Int`s from `a` up to, but not including, `b`. There's one
@@ -499,7 +579,10 @@ accounts in a `Map`; the prices cache is a `Map`; `Time`, `Instant` and
 - **Ruby and Kotlin:** operators as methods. **Ruby:** `Enumerable`'s
   names, and insertion order.
 - **Rust:** an operator chosen by its right side's type, `Instant -
-  Instant`; overflow as a bug.
+  Instant`; overflow as a bug. **Zig and Swift:** `+%` and `&+`, the
+  wrapping operators. **Lean:** a `ByteArray` and a `FloatArray` kept
+  unboxed, for `Array<UInt8>`. **C and Java:** a narrow integer is
+  widened before arithmetic, here to 64 bits, with no conversions.
 - **Swift:** overflow panics in every build.
 - **Rust's `ordered_float::NotNan`:** floats with no `NaN`, as a library
   type. Ren makes it the only `Float`.
@@ -527,14 +610,15 @@ Named here so they aren't forgotten:
   `show`.
 - **Literal suffixes.** A literal's type stays read from its spelling,
   and a closed set of suffixes says the rest: `0.08d` for `Decimal`,
-  which moves into the prelude when it arrives (stage 12), and `255u8`
-  to `i64` with sized integers (stage 13). There are no user-defined
-  suffixes. Mixing needs no context: `price * 0.08` with a `Decimal`
+  which moves into the prelude when it arrives (stage 12). Sized
+  integers need none: a literal is an `Int`, checked where it's stored
+  into one. There are no user-defined suffixes. Mixing needs no context: `price * 0.08` with a `Decimal`
   price is an error whose help says `0.08d`.
 - **Shapes and build time,** for `json` and SQL rows, in
   [shapes.md](shapes.md) rather than `comptime`.
-- **Sized integers,** `u8` to `i64`, with the C backend. `len()` and
-  indexes stay `Int`, so there's no Rust-style `as usize`.
+- **Shifts,** `shl` and `shr`, beside `xor`, `bit_and` and `bit_or`.
+- **Narrow lanes:** a loop over sized elements computed at their width
+  where the compiler proves the values fit (foundations.md, decision 15).
 - **`Decimal`,** in std ([stdlib.md](stdlib.md)).
 - **A sorted map,** in std, on a type's order.
 - **Slices,** `xs[1..3]`, once there's a view that doesn't copy.

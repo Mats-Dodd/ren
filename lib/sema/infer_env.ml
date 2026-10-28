@@ -524,6 +524,9 @@ and ctx = {
       (** the type of each expression and pattern of the function, by node id *)
   found : (int, found) Hashtbl.t;  (** what each lookup found, by node id *)
   narrowed : (int, Path.t list) Hashtbl.t;
+  coerced : (int, Sized.coerce) Hashtbl.t;
+      (** each expression, by node id, whose value is read from a sized type as
+          its wide one, or stored into one, or both (Infer_expr.read_wide) *)
       (** each expression, by node id, whose value, an implementation of several
           dependencies, is narrowed to some of them, these, where a written type
           asks for those (Infer_expr.narrow) *)

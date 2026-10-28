@@ -464,6 +464,7 @@ and has_ord env (t : Ty.ty) =
       match (key_ty env p args, Hashtbl.find_opt env.types p) with
       | Some k, _ -> has_req env "ord" k
       | None, _ when List.mem t [ Ty.int; Ty.float; Ty.str; Ty.bool ] -> true
+      | None, _ when Sized.of_ty t <> None -> true
       | None, Some { numeric = Some _; _ } -> true
       | None, Some { body = Sum cs; _ } ->
           List.for_all (fun (c : Iface.ctor) -> c.cfields = []) cs
@@ -1157,6 +1158,18 @@ and prim env sc (e : expr) op args =
   | Set_cell, [ c; v ] ->
       same env v.loc "what's put in a cell" v.ty (held env c);
       is "changing a cell" Ty.unit
+  (* a sized type's value, read as its wide type, and stored from it,
+     checked or wrapped (sized.ml) *)
+  | Widen, [ a ] -> (
+      match Sized.of_ty a.ty with
+      | Some k -> is "a sized value read" (Sized.wide k)
+      | None -> fail env loc (sprintf "`widen` of a `%s`" (show a.ty)))
+  | (Narrow | Wrap), [ a ] -> (
+      match Sized.of_ty e.ty with
+      | Some k when op = Wrap && not (Sized.wraps k) ->
+          fail env loc (sprintf "`wrap` into a `%s`" (show e.ty))
+      | Some k -> same env a.loc "what's stored" a.ty (Sized.wide k)
+      | None -> fail env loc (sprintf "`%s` into a `%s`" (show_prim op) (show e.ty)))
   | _ ->
       fail env loc ("`" ^ show_prim op ^ "` with the wrong number of operands")
 

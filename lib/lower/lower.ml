@@ -283,15 +283,35 @@ let result_args (t : Ty.ty) =
   | Con (_, [ v; errs ]) -> (v, errs)
   | _ -> bug "a `Result` without its two type arguments"
 
+(* A value of a sized type, read as its wide type; anything else as it
+   is (sized.ml). *)
+let widen (x : C.expr) =
+  match Sized.of_ty x.ty with
+  | Some k -> mk (Prim (Widen, [ x ])) (Sized.wide k) x.loc
+  | None -> x
+
+(* A value of [k]'s wide type stored as a [k]: checked, or wrapped if a
+   wrapping operator made it. *)
+let store_as k ~wrap (x : C.expr) =
+  mk (Prim ((if wrap then Wrap else Narrow), [ x ])) (Sized.ty k) x.loc
+
 (* [e], lowered: narrowed to some of its dependencies, if it's an
    implementation of several where a written type asks for those
-   (Infer.node, [narrowed]). *)
+   (Infer.node, [narrowed]); and read from a sized type, or stored into
+   one, as inference decided (Infer.node, [coerce]). *)
 let rec expr cx (e : expr) : C.expr =
   let x = expr_of cx e in
-  match ((node cx e.node).narrowed, Ty.impl_parts x.ty) with
-  | Some ds, Some (_, needs) -> mk (Narrowed (ds, x)) (Ty.impl ds needs) e.loc
-  | Some _, None -> bug "a narrowed implementation isn't one"
-  | None, _ -> x
+  let x =
+    match ((node cx e.node).narrowed, Ty.impl_parts x.ty) with
+    | Some ds, Some (_, needs) -> mk (Narrowed (ds, x)) (Ty.impl ds needs) e.loc
+    | Some _, None -> bug "a narrowed implementation isn't one"
+    | None, _ -> x
+  in
+  match (node cx e.node).coerce with
+  | None -> x
+  | Some { read; store } ->
+      let x = if read <> None then widen x else x in
+      Option.fold ~none:x ~some:(fun (k, wrap) -> store_as k ~wrap x) store
 
 and expr_of cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
@@ -419,11 +439,12 @@ and expr_of cx (e : expr) : C.expr =
       in
       here (Prim (op, [ a; expr cx b ]))
   | Binop (op, a, b, onode) -> (
-      match binop_method op with
-      | Some meth ->
+      (* a wrapping operator is `Int`'s method, `wrapping_add` *)
+      match (binop_method op, wrapping_method op) with
+      | Some meth, _ | None, Some meth ->
           let a = expr cx a in
           operator cx ~onode ~meth (C.Binop op) (ty ()) e.loc [ a; expr cx b ]
-      | None -> bug ("`" ^ binop_to_string op ^ "` as an operator"))
+      | None, None -> bug ("`" ^ binop_to_string op ^ "` as an operator"))
   | If (c, t, f) ->
       let c = expr cx c in
       let t = expr cx t in
@@ -1020,13 +1041,23 @@ and assign cx (e : expr) ~onode target op value =
         match op with
         | None -> v
         | Some op -> (
-            (* `x += v` is `x = x + v`, whose `+` is the operator's *)
-            match binop_method op with
-            | Some meth ->
-                operator cx ~onode ~meth (C.Binop op) (ty_of cx target.node)
-                  e.loc
-                  [ read pl target.loc; v ]
-            | None -> bug ("`" ^ binop_to_string op ^ "=`"))
+            (* `x += v` is `x = x + v`, whose `+` is the operator's. Of a
+               sized type, `x` is read as its wide type, and what the
+               operator makes stored back (sized.ml) *)
+            let held = ty_of cx target.node in
+            let made =
+              match Sized.of_ty held with Some k -> Sized.wide k | None -> held
+            in
+            match (binop_method op, wrapping_method op) with
+            | Some meth, _ | None, Some meth -> (
+                let x =
+                  operator cx ~onode ~meth (C.Binop op) made e.loc
+                    [ widen (read pl target.loc); v ]
+                in
+                match Sized.of_ty held with
+                | Some k -> store_as k ~wrap:(is_wrapping op) x
+                | None -> x)
+            | None, None -> bug ("`" ^ binop_to_string op ^ "=`"))
       in
       lets (binds @ hold_v) (write pl v e.loc)
 

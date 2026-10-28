@@ -77,6 +77,10 @@ type node = {
   narrowed : Path.t list option;
       (** an implementation of several dependencies, narrowed to some of them,
           these, where a written type asks for those *)
+  coerce : Sized.coerce option;
+      (** a value of a sized type read as what it's stored from, an [Int] or a
+          [Float], or one of those stored into a sized type, checked or
+          wrapped, or both (sized.ml) *)
   targs : Ty.args option;
       (** a use of a top-level function, a member, an associated value or an
           intrinsic: the type arguments it picked, the n-th for its scheme's

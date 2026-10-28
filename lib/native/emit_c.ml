@@ -19,6 +19,33 @@ let sprintf = Printf.sprintf
 
 module Ids = Set.Make (Int)
 
+(* A sized type's C type, the suffix of the runtime's functions on it,
+   and its [REN_ELEM_] kind (ren_rt.h). A `UInt64` is an [int64_t], since
+   it holds only what an `Int` can that isn't negative (sized.ml). *)
+let sized_ctype (k : Sized.t) =
+  match k with
+  | I8 -> "int8_t"
+  | U8 -> "uint8_t"
+  | I16 -> "int16_t"
+  | U16 -> "uint16_t"
+  | I32 -> "int32_t"
+  | U32 -> "uint32_t"
+  | U64 -> "int64_t"
+  | F32 -> "float"
+
+let sized_suffix (k : Sized.t) =
+  match k with
+  | I8 -> "i8"
+  | U8 -> "u8"
+  | I16 -> "i16"
+  | U16 -> "u16"
+  | I32 -> "i32"
+  | U32 -> "u32"
+  | U64 -> "u64"
+  | F32 -> "f32"
+
+let sized_kind k = "REN_ELEM_" ^ String.uppercase_ascii (sized_suffix k)
+
 let rec ctype (l : layout) =
   match l with
   | Int -> "int64_t"
@@ -33,10 +60,11 @@ let rec ctype (l : layout) =
   | Block -> "ren_block"
   | Ptr -> "void*"
   | Struct (n, _) -> sprintf "ren_struct_%d" n
+  | Sized k -> sized_ctype k
 
 let zero (l : layout) =
   match l with
-  | Int | Unit | Enum -> "0"
+  | Int | Unit | Enum | Sized _ -> "0"
   | Float -> "0.0"
   | Bool -> "false"
   | Boxed | Desc | Cell _ | Ev | Ptr | Token -> "NULL"
@@ -124,6 +152,9 @@ let word_of (l : layout) c =
   | Boxed | Desc -> sprintf "(ren_val){.o = %s}" c
   | Ptr | Ev -> sprintf "(ren_val){.p = (void*)%s}" c
   | Int | Bool | Unit | Enum -> sprintf "(ren_val){.i = (int64_t)%s}" c
+  (* a sized type's value as a word is the number it is *)
+  | Sized F32 -> sprintf "(ren_val){.f = (double)%s}" c
+  | Sized _ -> sprintf "(ren_val){.i = (int64_t)%s}" c
   | Block | Cell _ | Token | Struct _ ->
       bug "a block, a cell, a token or a struct as a word"
 
@@ -139,6 +170,8 @@ let of_val l v =
   | Ev -> sprintf "((const ren_ev*)%s.p)" v
   | Int -> sprintf "%s.i" v
   | Bool | Unit | Enum -> sprintf "(%s)%s.i" (ctype l) v
+  | Sized F32 -> sprintf "((float)%s.f)" v
+  | Sized k -> sprintf "((%s)%s.i)" (sized_ctype k) v
   | Block | Cell _ | Token | Struct _ ->
       bug "a word as a block, a cell, a token or a struct"
 
@@ -226,7 +259,10 @@ let cmp_op = function
 (* The suffix of the runtime's array functions for elements of [l]:
    [_s] if they're never counted. *)
 let uncounted (l : layout) =
-  match l with Int | Float | Bool | Unit | Enum -> "_s" | _ -> ""
+  match l with
+  | Int | Float | Bool | Unit | Enum -> "_s"
+  | Word _ -> "_w"
+  | _ -> ""
 
 (* The suffix of the buffer functions for elements of [l]: [_o] for
    objects, which are counted, [_s] for scalars. *)
@@ -259,6 +295,34 @@ let runtime rt args site_arg =
         (a 2) (struct_words n) (site ())
   | Array_push_taking (Struct _) ->
       sprintf "ren_array_push_slots_taking(%s, %s.s)" (a 0) (a 1)
+  (* an array of a sized type's elements, at its width: read and written
+     in place directly, and copied, which is rarer, through the words *)
+  | Array_get (Sized k) | Array_take (Sized k) ->
+      sprintf "ren_array_get_%s(%s, %s, %s)" (sized_suffix k) (a 0) (a 1)
+        (site ())
+  | Array_set_taking (Sized k) ->
+      sprintf "ren_array_set_taking_%s(%s, %s, %s, %s)" (sized_suffix k) (a 0)
+        (a 1) (a 2) (site ())
+  | Array_set (Sized _) ->
+      sprintf "ren_array_set_w(%s, %s, %s, %s)" (a 0) (a 1)
+        (to_val (List.nth args 2))
+        (site ())
+  | Array_push (Sized _) ->
+      sprintf "ren_array_push_w(%s, %s)" (a 0) (to_val (List.nth args 1))
+  | Array_push_taking (Sized _) ->
+      sprintf "ren_array_push_taking_w(%s, %s)" (a 0) (to_val (List.nth args 1))
+  (* a type variable's elements, which may be a sized type's: the array
+     says ([_w]) *)
+  | Array_set (Word _) ->
+      sprintf "ren_array_set_w(%s, %s, %s, %s)" (a 0) (a 1)
+        (to_val (List.nth args 2))
+        (site ())
+  | Array_push (Word _) ->
+      sprintf "ren_array_push_w(%s, %s)" (a 0) (to_val (List.nth args 1))
+  | Array_push_taking (Word _) ->
+      sprintf "ren_array_push_taking_w(%s, %s)" (a 0) (to_val (List.nth args 1))
+  | Array_take (Word _ as l) ->
+      of_val l (sprintf "ren_array_take_w(%s, %s, %s)" (a 0) (a 1) (site ()))
   (* elements never counted skip the check of whether they are *)
   | Array_get l ->
       of_val l
@@ -299,6 +363,12 @@ let runtime rt args site_arg =
   | Buf_get (Struct (n, _)) ->
       sprintf "(*(ren_struct_%d*)ren_buf_slots(%s, %s, %s, %d, %s))" n (a 0)
         (a 1) (a 2) (struct_words n) (site ())
+  | Buf_get (Sized k) ->
+      sprintf "ren_buf_get_n(%s, %s, %s, %s, %s)" (sized_ctype k) (a 0) (a 1)
+        (a 2) (site ())
+  | Buf_set (Sized k) ->
+      sprintf "ren_buf_set_n(%s, %s, %s, %s, %s, %s)" (sized_ctype k) (a 0)
+        (a 1) (a 2) (a 3) (site ())
   | Buf_get l ->
       of_val l
         (sprintf "ren_buf_get%s(%s, %s, %s, %s)" (buf_suffix l) (a 0) (a 1)
@@ -322,8 +392,9 @@ let runtime rt args site_arg =
   | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Array_reserve (Struct (n, _)) ->
       sprintf "ren_array_reserve(%s, false, %d)" (a 0) (struct_words n)
-  | Array_reserve (Word _) ->
-      sprintf "ren_array_reserve(%s, ren_desc_counted(%s), 0)" (a 0) (a 1)
+  | Array_reserve (Word _) -> sprintf "ren_array_reserve_d(%s, %s)" (a 0) (a 1)
+  | Array_reserve (Sized k) ->
+      sprintf "ren_array_reserve_k(%s, %s)" (a 0) (sized_kind k)
   | Array_reserve l ->
       sprintf "ren_array_reserve(%s, %b, 0)" (a 0) (is_object l)
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
@@ -340,6 +411,27 @@ let runtime rt args site_arg =
       let o = match op with Add -> "+" | Sub -> "-" | _ -> "*" in
       sprintf "((int64_t)((uint64_t)%s %s (uint64_t)%s))" (a 0) o (a 1)
   | Wrapping_neg -> sprintf "((int64_t)(0 - (uint64_t)%s))" (a 0)
+  | Bits x ->
+      let o =
+        match x with
+        | Int_xor -> "^"
+        | Int_bit_and -> "&"
+        | Int_bit_or -> "|"
+        | _ -> bug "a bitwise operation that isn't one"
+      in
+      sprintf "(%s %s %s)" (a 0) o (a 1)
+  | Widen -> (
+      match atom_layout (List.hd args) with
+      | Sized F32 -> sprintf "((double)%s)" (a 0)
+      | Sized _ -> sprintf "((int64_t)%s)" (a 0)
+      | _ -> bug "a widening of what isn't sized")
+  | Narrow k -> sprintf "ren_narrow_%s(%s, %s)" (sized_suffix k) (a 0) (site ())
+  (* the low bits: converting to an unsigned type is modulo 2^bits in C,
+     and to a signed one, from there, keeps the bits (C11 6.3.1.3, which
+     GCC and Clang define so) *)
+  | Wrap_to k ->
+      sprintf "((%s)(uint%d_t)(uint64_t)%s)" (sized_ctype k) (Sized.bits k)
+        (a 0)
   | Console_write -> sprintf "ren_console_write(%s)" (a 0)
   | Console_error -> sprintf "ren_console_error(%s)" (a 0)
   | Show_any -> sprintf "ren_show_any(%s, %s)" (a 0) (a 1)
@@ -415,8 +507,15 @@ let rhs (r : rhs) =
       failwith (sprintf "bug: emit_c: a field %s.%d outside a Let" (atom x) n)
   | Make_struct _ -> bug "a struct made outside a Let"
   | Pack xs ->
+      (* a `Float32` by its bits; a signed type's value, converted to
+         [uint64_t], has its low bits as they are *)
       let part (x, at, bits) =
-        sprintf "(((uint64_t)%s & %s) << %d)" (atom x) (low_bits bits) at
+        let c =
+          match atom_layout x with
+          | Sized F32 -> sprintf "ren_f32_bits(%s)" (atom x)
+          | _ -> atom x
+        in
+        sprintf "(((uint64_t)%s & %s) << %d)" c (low_bits bits) at
       in
       sprintf "((int64_t)(%s))" (String.concat " | " (List.map part xs))
   | Unpack _ -> bug "a packed field read outside a Let"
@@ -492,6 +591,10 @@ let rec stmt o d (s : stmt) =
       line
         (sprintf "%s %s = %s;" (ctype v.layout) (var v)
            (of_val v.layout (sprintf "%s.s[%d]" (atom x) n)))
+  | Let (v, Unpack (x, at, bits)) when v.layout = Sized F32 ->
+      line
+        (sprintf "float %s = ren_f32_of_bits((uint32_t)(((uint64_t)%s >> %d) & %s));"
+           (var v) (atom x) at (low_bits bits))
   | Let (v, Unpack (x, at, bits)) ->
       line
         (sprintf "%s %s = (%s)(((uint64_t)%s >> %d) & %s);" (ctype v.layout)
@@ -584,6 +687,27 @@ let rec stmt o d (s : stmt) =
               line
                 (sprintf "((ren_struct_%d*)ren_elems(%s))[%d] = %s;" n (var v) i
                    (atom x)))
+            elems
+      (* a sized type's, at its width *)
+      | Sized k ->
+          line
+            (sprintf "ren_obj* %s = ren_alloc_array_k(%d, %s);" (var v)
+               (List.length elems) (sized_kind k));
+          List.iteri
+            (fun i x ->
+              line
+                (sprintf "((%s*)ren_elems(%s))[%d] = %s;" (sized_ctype k)
+                   (var v) i (atom x)))
+            elems
+      (* a type variable's, which its descriptor says how to keep *)
+      | Word _ when desc <> None ->
+          line
+            (sprintf "ren_obj* %s = ren_alloc_array_d(%d, %s);" (var v)
+               (List.length elems) (atom (Option.get desc)));
+          List.iteri
+            (fun i x ->
+              line
+                (sprintf "ren_array_init_w(%s, %d, %s);" (var v) i (to_val x)))
             elems
       | _ ->
           line
@@ -1056,6 +1180,7 @@ let dkind_c (k : dkind) =
   | D_errors -> "REN_D_ERRORS"
   | D_var _ -> "REN_D_VAR"
   | D_unknown -> "REN_D_UNKNOWN"
+  | D_sized _ -> "REN_D_SIZED"
 
 (* The program's descriptors and its types' declarations, as static data
    (ren_rt.h, [ren_desc] and [ren_decl]): each descriptor declared first,
@@ -1138,9 +1263,13 @@ let static_types add (descs : desc list) (decls : decl list) =
       add
         (sprintf
            "static ren_desc ren_desc_%d = {{0, REN_TAG_DESC, 0, 0}, %s, %b, \
-            %d, %d, %s, %s};\n"
+            %d, %s, %s, %s};\n"
            i (dkind_c d.dkind) d.dcounted (List.length d.dargs)
-           (match d.dkind with D_var n -> n | _ -> 0)
+           (* a variable's number, or a sized type's kind *)
+           (match d.dkind with
+           | D_var n -> string_of_int n
+           | D_sized k -> sized_kind k
+           | _ -> "0")
            (match d.dkind with
            | D_named k -> sprintf "&ren_decl_%d" k
            | _ -> "NULL")

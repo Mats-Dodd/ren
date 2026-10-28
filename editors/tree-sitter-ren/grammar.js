@@ -665,11 +665,14 @@ module.exports = grammar({
     // a lambda's body takes an assignment after it, as the parser does
     _line: ($) => prec.right(choice($._expression, $.assignment)),
 
-    // x = 1, xs[i] += 1
+    // x = 1, xs[i] += 1, h *%= 16777619
     assignment: ($) =>
       seq(
         field('target', $._expression),
-        field('operator', choice('=', '+=', '-=', '*=')),
+        field(
+          'operator',
+          choice('=', '+=', '-=', '*=', '+%=', '-%=', '*%='),
+        ),
         field('value', $._body),
       ),
 
@@ -693,8 +696,9 @@ module.exports = grammar({
           [PREC.or, '||'],
           [PREC.and, '&&'],
           [PREC.compare, choice('==', '!=', '<', '<=', '>', '>=')],
-          [PREC.add, choice('+', '-')],
-          [PREC.mul, choice('*', '/', '%')],
+          // `+%`, `-%` and `*%` wrap, at the precedence of what they wrap
+          [PREC.add, choice('+', '-', '+%', '-%')],
+          [PREC.mul, choice('*', '/', '%', '*%')],
         ].map(([p, op]) =>
           prec.left(
             p,

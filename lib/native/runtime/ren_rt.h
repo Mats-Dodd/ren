@@ -63,12 +63,14 @@ enum {
    code couldn't find without reading the header. The order stays the
    declaration's, and the mask goes in the byte the count would.
 
-   An array keeps whether its elements are counted in [objs], and a
-   string and a descriptor use neither byte. */
+   An array keeps whether its elements are counted in [objs], and in
+   [nfields] whether they're of a sized type (sized.ml), kept at its
+   width, and which ([REN_ELEM_U8] and the rest), or words, 0. A string
+   and a descriptor use neither byte. */
 typedef struct ren_obj {
   int32_t rc;      /* > 0: counted; 0: never freed; < 0: kept, shared */
   uint16_t tag;    /* a constructor's, or REN_TAG_ARRAY, _STR or _DESC */
-  uint8_t nfields; /* a constructor's fields */
+  uint8_t nfields; /* a constructor's fields; an array's [REN_ELEM_*] */
   uint8_t objs;    /* its first eight that hold objects; an array's: 1 if
                       its elements are counted */
 } ren_obj;
@@ -97,8 +99,67 @@ typedef struct {
   int64_t len;
   int64_t cap;
   ren_val *data;
-  int64_t stride; /* words an element, 1 but for an array of structs */
+  int64_t stride; /* words an element, 1 but for an array of structs; 1
+                     for one of a sized type, whose width its kind says */
 } ren_array;
+
+/* The kinds of an array's elements: words, or a sized type's, each kept
+   at its width (sized.ml), as Lean keeps a `ByteArray` and a
+   `FloatArray`'s elements unboxed (lean.h, `lean_sarray_object`), but
+   for every sized type, and decided by the element type, so an array's
+   kind is always its type's: code that knows the type indexes it
+   directly, and only code that doesn't, a generic function in a debug
+   build, asks the array ([ren_array_get_w]). A `UInt64` holds what an
+   `Int` can that isn't negative, so it's a word too, but one that says
+   it's sized. */
+enum {
+  REN_ELEM_WORD,
+  REN_ELEM_I8,
+  REN_ELEM_U8,
+  REN_ELEM_I16,
+  REN_ELEM_U16,
+  REN_ELEM_I32,
+  REN_ELEM_U32,
+  REN_ELEM_U64,
+  REN_ELEM_F32,
+};
+static const uint8_t ren_elem_size[] = {8, 1, 1, 2, 2, 4, 4, 8, 4};
+
+/* A `Float32`'s bits, and the `Float32` of bits, for packing one. */
+static inline uint32_t ren_f32_bits(float f) {
+  uint32_t b;
+  memcpy(&b, &f, sizeof b);
+  return b;
+}
+static inline float ren_f32_of_bits(uint32_t b) {
+  float f;
+  memcpy(&f, &b, sizeof f);
+  return f;
+}
+
+/* The [bits] of a value of the sized type [kind] kept at its width, as a
+   word: the number it is, as an `Int` (or a `Float`), which is how
+   generic code and the walks see one. */
+static inline ren_val ren_sized_word(uint8_t kind, uint64_t bits) {
+  ren_val v;
+  switch (kind) {
+  case REN_ELEM_I8:
+    v.i = (int8_t)(uint8_t)bits;
+    break;
+  case REN_ELEM_I16:
+    v.i = (int16_t)(uint16_t)bits;
+    break;
+  case REN_ELEM_I32:
+    v.i = (int32_t)(uint32_t)bits;
+    break;
+  case REN_ELEM_F32:
+    v.f = (double)ren_f32_of_bits((uint32_t)bits);
+    break;
+  default:
+    v.i = (int64_t)bits;
+  }
+  return v;
+}
 
 typedef struct {
   ren_obj h;
@@ -521,6 +582,11 @@ static inline ren_val *ren_elems(ren_obj *o) { return ((ren_array *)o)->data; }
    0 meaning 1: what `map` makes when it can't reuse its input. */
 ren_obj *ren_array_reserve(int64_t cap, bool boxed_elems, uint32_t stride);
 
+/* The same, of a sized type's elements, of the kind [REN_ELEM_U8] and
+   the rest. */
+ren_obj *ren_alloc_array_k(int64_t len, uint8_t kind);
+ren_obj *ren_array_reserve_k(int64_t cap, uint8_t kind);
+
 /* An array of [len] elements of [stride] words each, a release build's
    structs (a copied record's fields, Mem's [Struct]), kept in the
    elements: never counted, and never walked, since nothing that walks a
@@ -598,6 +664,85 @@ static inline ren_val ren_array_take(ren_obj *a, int64_t i, const ren_site *site
   return v;
 }
 
+/* An array of a sized type's elements: element [i] as a word, and [v],
+   a word, stored at [i], at the array's width. [v] fits, since storing
+   into a sized type checked that it does where it was made (eval.ml,
+   [stored]). */
+static inline ren_val ren_sized_load(ren_obj *a, int64_t i) {
+  void *p = ((ren_array *)a)->data;
+  switch (a->nfields) {
+  case REN_ELEM_I8:
+    return (ren_val){.i = ((int8_t *)p)[i]};
+  case REN_ELEM_U8:
+    return (ren_val){.i = ((uint8_t *)p)[i]};
+  case REN_ELEM_I16:
+    return (ren_val){.i = ((int16_t *)p)[i]};
+  case REN_ELEM_U16:
+    return (ren_val){.i = ((uint16_t *)p)[i]};
+  case REN_ELEM_I32:
+    return (ren_val){.i = ((int32_t *)p)[i]};
+  case REN_ELEM_U32:
+    return (ren_val){.i = ((uint32_t *)p)[i]};
+  case REN_ELEM_F32:
+    return (ren_val){.f = ((float *)p)[i]};
+  default:
+    return ((ren_val *)p)[i];
+  }
+}
+static inline void ren_sized_store(ren_obj *a, int64_t i, ren_val v) {
+  void *p = ((ren_array *)a)->data;
+  switch (a->nfields) {
+  case REN_ELEM_I8:
+    ((int8_t *)p)[i] = (int8_t)v.i;
+    break;
+  case REN_ELEM_U8:
+    ((uint8_t *)p)[i] = (uint8_t)v.i;
+    break;
+  case REN_ELEM_I16:
+    ((int16_t *)p)[i] = (int16_t)v.i;
+    break;
+  case REN_ELEM_U16:
+    ((uint16_t *)p)[i] = (uint16_t)v.i;
+    break;
+  case REN_ELEM_I32:
+    ((int32_t *)p)[i] = (int32_t)v.i;
+    break;
+  case REN_ELEM_U32:
+    ((uint32_t *)p)[i] = (uint32_t)v.i;
+    break;
+  case REN_ELEM_F32:
+    ((float *)p)[i] = (float)v.f;
+    break;
+  default:
+    ((ren_val *)p)[i] = v;
+  }
+}
+
+/* Element [i] as a word, of whatever kind the array's elements are:
+   what the walks read. */
+static inline ren_val ren_array_load(ren_obj *a, int64_t i) {
+  return a->nfields ? ren_sized_load(a, i) : ((ren_array *)a)->data[i];
+}
+
+/* [ren_array_get] and [ren_array_take] for a type variable's elements,
+   whose array says how they're kept. */
+static inline ren_val ren_array_get_w(ren_obj *a, int64_t i,
+                                      const ren_site *site) {
+  if (__builtin_expect(a->nfields != 0, 0)) {
+    ren_array_check(a, i, site);
+    return ren_sized_load(a, i);
+  }
+  return ren_array_get(a, i, site);
+}
+static inline ren_val ren_array_take_w(ren_obj *a, int64_t i,
+                                       const ren_site *site) {
+  if (__builtin_expect(a->nfields != 0, 0)) {
+    ren_array_check(a, i, site);
+    return ren_sized_load(a, i);
+  }
+  return ren_array_take(a, i, site);
+}
+
 /* A new array, [a] with element [i] replaced by [v]: the naive
    semantics, which copies. Neither argument is taken. */
 ren_obj *ren_array_set(ren_obj *a, int64_t i, ren_val v, const ren_site *site);
@@ -628,6 +773,54 @@ static inline ren_obj *ren_array_set_taking_s(ren_obj *a, int64_t i, ren_val v,
   return a;
 }
 void ren_array_push_taking(ren_obj **cell, ren_val v);
+
+/* The same for a type variable's elements, whose array says how they're
+   kept, or a sized type's, given as words; and element [i] of a new
+   array written ([ren_alloc_array_d]). */
+ren_obj *ren_array_set_w(ren_obj *a, int64_t i, ren_val v, const ren_site *site);
+void ren_array_push_w(ren_obj **cell, ren_val v);
+void ren_array_push_taking_w(ren_obj **cell, ren_val v);
+static inline ren_obj *ren_array_set_taking_w(ren_obj *a, int64_t i, ren_val v,
+                                              const ren_site *site) {
+  if (__builtin_expect(a->nfields != 0, 0)) {
+    ren_array_check(a, i, site);
+    a = ren_array_own(a);
+    ren_sized_store(a, i, v);
+    return a;
+  }
+  return ren_array_set_taking(a, i, v, site);
+}
+static inline void ren_array_init_w(ren_obj *a, int64_t i, ren_val v) {
+  if (a->nfields)
+    ren_sized_store(a, i, v);
+  else
+    ren_elems(a)[i] = v;
+}
+
+/* An array of a sized type's elements whose type the compiler knows,
+   [T] each: element [i] read, and written in place, as [ren_array_get_s]
+   and [ren_array_set_taking_s] are for words. */
+#define REN_SIZED_ARRAY(N, T)                                                  \
+  static inline T ren_array_get_##N(ren_obj *a, int64_t i,                    \
+                                    const ren_site *site) {                   \
+    ren_array_check(a, i, site);                                              \
+    return ((T *)((ren_array *)a)->data)[i];                                  \
+  }                                                                           \
+  static inline ren_obj *ren_array_set_taking_##N(ren_obj *a, int64_t i, T v, \
+                                                  const ren_site *site) {     \
+    ren_array_check(a, i, site);                                              \
+    a = ren_array_own(a);                                                     \
+    ((T *)ren_elems(a))[i] = v;                                               \
+    return a;                                                                 \
+  }
+REN_SIZED_ARRAY(i8, int8_t)
+REN_SIZED_ARRAY(u8, uint8_t)
+REN_SIZED_ARRAY(i16, int16_t)
+REN_SIZED_ARRAY(u16, uint16_t)
+REN_SIZED_ARRAY(i32, int32_t)
+REN_SIZED_ARRAY(u32, uint32_t)
+REN_SIZED_ARRAY(u64, int64_t)
+REN_SIZED_ARRAY(f32, float)
 
 /* The same for an array of structs, each element [v], its words: [get]
    gives where element [i] is, which the caller copies. */
@@ -693,6 +886,11 @@ static inline ren_val ren_dup_elem(ren_val v) {
   return v;
 }
 #define ren_buf_get_s(p, len, i, site) (ren_buf_check(len, i, site), (p)[i])
+/* of a sized type's elements, [T] each */
+#define ren_buf_get_n(T, p, len, i, site)                                      \
+  (ren_buf_check(len, i, site), ((T *)(p))[i])
+#define ren_buf_set_n(T, p, len, i, v, site)                                   \
+  (ren_buf_check(len, i, site), (void)(((T *)(p))[i] = (v)))
 #define ren_buf_get_o(p, len, i, site)                                         \
   (ren_buf_check(len, i, site), ren_dup_elem((p)[i]))
 /* [ren_array_take] once the array is known unique, of objects: the
@@ -753,6 +951,34 @@ _Noreturn void ren_int_overflowed(const ren_site *site, const char *op,
                                   int64_t a, int64_t b);
 _Noreturn void ren_float_undefined(const ren_site *site, const char *op,
                                    double a, double b);
+
+/* An `Int` or a `Float` stored into a sized type (sized.ml): checked
+   that it fits, panicking with the interpreter's message (eval.ml,
+   [stored]) if it doesn't, then kept at the type's width. A `Float`
+   that's finite has to stay finite as a `Float32`: it does if it's less
+   than halfway from `Float32`'s largest to the next power of two,
+   2^128 - 2^103, since it rounds to the nearest. That's checked before
+   converting, since converting a `double` outside `float`'s range is
+   undefined in C. */
+_Noreturn void ren_narrow_panic(const ren_site *site, uint8_t kind, ren_val v);
+#define REN_NARROW(N, T, KIND, LO, HI)                                         \
+  static inline T ren_narrow_##N(int64_t x, const ren_site *site) {           \
+    if (__builtin_expect(x < (LO) || x > (HI), 0))                            \
+      ren_narrow_panic(site, KIND, (ren_val){.i = x});                        \
+    return (T)x;                                                              \
+  }
+REN_NARROW(i8, int8_t, REN_ELEM_I8, INT8_MIN, INT8_MAX)
+REN_NARROW(u8, uint8_t, REN_ELEM_U8, 0, UINT8_MAX)
+REN_NARROW(i16, int16_t, REN_ELEM_I16, INT16_MIN, INT16_MAX)
+REN_NARROW(u16, uint16_t, REN_ELEM_U16, 0, UINT16_MAX)
+REN_NARROW(i32, int32_t, REN_ELEM_I32, INT32_MIN, INT32_MAX)
+REN_NARROW(u32, uint32_t, REN_ELEM_U32, 0, UINT32_MAX)
+REN_NARROW(u64, int64_t, REN_ELEM_U64, 0, INT64_MAX)
+static inline float ren_narrow_f32(double x, const ren_site *site) {
+  if (__builtin_expect(fabs(x) >= 0x1.ffffffp127 && fabs(x) != INFINITY, 0))
+    ren_narrow_panic(site, REN_ELEM_F32, (ren_val){.f = x});
+  return (float)x;
+}
 
 static inline int64_t ren_add(int64_t a, int64_t b, const ren_site *site) {
   int64_t r;
@@ -837,6 +1063,7 @@ enum {
   REN_D_ERRORS,  /* an error, which keeps its payload's own */
   REN_D_VAR,     /* in a template: the parameter [var] */
   REN_D_UNKNOWN, /* a type variable nothing decided: no value has it */
+  REN_D_SIZED,   /* a sized type's, [var] its kind, [REN_ELEM_U8]... */
 };
 
 struct ren_decl;
@@ -864,19 +1091,11 @@ typedef struct {
   const uint32_t *at;
 } ren_ctor_info;
 
-/* Field [i] of [o], a constructor or a record of [c], as a word: a packed
-   one's bits, unsigned. [c] NULL is a tuple's, never packed. */
-static inline ren_val ren_ctor_field(ren_obj *o, const ren_ctor_info *c,
-                                     int32_t i) {
-  if (c == NULL || c->at == NULL)
-    return ren_fields(o)[i];
-  uint32_t at = c->at[i], bits = at & 0xFF;
-  ren_val v = ren_fields(o)[at >> 16];
-  if (bits < 64)
-    v.i = (int64_t)(((uint64_t)v.i >> ((at >> 8) & 0xFF)) &
-                    ((UINT64_C(1) << bits) - 1));
-  return v;
-}
+/* The same as [ren_alloc_array] and [ren_array_reserve] for a type
+   variable's elements, described by [d]: kept at a sized type's width
+   if it's one. */
+ren_obj *ren_alloc_array_d(int64_t len, ren_obj *d);
+ren_obj *ren_array_reserve_d(int64_t cap, ren_obj *d);
 
 enum { REN_DECL_RECORD, REN_DECL_SUM, REN_DECL_REP };
 
@@ -889,6 +1108,38 @@ typedef struct ren_decl {
   const ren_ctor_info *ctors; /* a record's one, or a sum's, by tag */
   ren_desc *rep;              /* an opaque type's representation */
 } ren_decl;
+
+/* The kind of a sized type [d] describes, [REN_ELEM_U8] and the rest,
+   looking through what an opaque type is represented as; 0 for any other
+   type, whose values are words. How an array of them keeps its elements.
+   [d] is a type's, never a template. */
+static inline uint8_t ren_desc_elem(ren_obj *o) {
+  const ren_desc *d = (const ren_desc *)o;
+  while (d->kind == REN_D_NAMED && d->decl->kind == REN_DECL_REP) {
+    const ren_desc *r = d->decl->rep;
+    d = r->kind == REN_D_VAR ? d->args[r->var] : r;
+  }
+  return d->kind == REN_D_SIZED ? (uint8_t)d->var : 0;
+}
+
+/* Field [i] of [o], a constructor or a record of [c], as a word: a packed
+   one's bits, unsigned, or the number a sized type's are. [c] NULL is a
+   tuple's, never packed. */
+static inline ren_val ren_ctor_field(ren_obj *o, const ren_ctor_info *c,
+                                     int32_t i) {
+  if (c == NULL || c->at == NULL)
+    return ren_fields(o)[i];
+  uint32_t at = c->at[i], bits = at & 0xFF;
+  ren_val v = ren_fields(o)[at >> 16];
+  if (bits < 64) {
+    v.i = (int64_t)(((uint64_t)v.i >> ((at >> 8) & 0xFF)) &
+                    ((UINT64_C(1) << bits) - 1));
+    uint8_t kind = ren_desc_elem((ren_obj *)c->types[i]);
+    if (kind)
+      v = ren_sized_word(kind, (uint64_t)v.i);
+  }
+  return v;
+}
 
 /* The arguments a template is read under: [args] for its [REN_D_VAR]s,
    each of which is read under [up]. */

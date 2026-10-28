@@ -75,6 +75,12 @@ type layout =
   | Token
       (** a reuse token: the memory of an object a [Reset] found unique, to
           build a new one in, or NULL. Never counted, and used or freed once *)
+  | Sized of Sized.t
+      (** a value of a sized storage type, `UInt8`, at its width: [uint8_t].
+          An array of them keeps its elements at that width, and an object
+          packs them as it does a [Bool] ([Pack]). Never counted; read as an
+          [Int] or a [Float] by [Widen], and made of one by [Narrow] or
+          [Wrap_to] (sized.ml) *)
 
 (* How a [Struct] keeps its value. *)
 type struct_kind =
@@ -197,6 +203,12 @@ type rt =
   | Float_truncate
   | Wrapping of Ast.binop  (** `Int`'s `wrapping_add`, `_sub` or `_mul` *)
   | Wrapping_neg
+  | Bits of Intrinsic.t  (** `Int`'s `xor`, `bit_and` or `bit_or` *)
+  | Widen  (** a [Sized] as its wide type, the variable's, the same number *)
+  | Narrow of Sized.t
+      (** an [Int] or a [Float] as a [Sized] of this type: panics if it doesn't
+          fit, as the interpreter does (eval.ml, [stored]) *)
+  | Wrap_to of Sized.t  (** an [Int]'s low bits as a [Sized] of this type *)
   | Console_write
   | Console_error
   | Show_any  (** a descriptor and a [Word]: `show` through the walk *)
@@ -433,6 +445,7 @@ type dkind =
   | D_errors
   | D_var of int
   | D_unknown
+  | D_sized of Sized.t
 
 type desc = { dkind : dkind; dargs : int list; dcounted : bool }
 
@@ -507,6 +520,7 @@ let rec show_layout (l : layout) =
   | Ptr -> "Ptr"
   | Token -> "Token"
   | Struct (n, c) -> "Struct" ^ string_of_int n ^ if c then "c" else ""
+  | Sized k -> Sized.name k
 
 let show_var (v : var) = v.name ^ "/" ^ string_of_int v.id
 let typed (v : var) = Core.Atom (show_var v ^ ":" ^ show_layout v.layout)
@@ -565,6 +579,10 @@ let show_rt = function
   | Float_truncate -> "truncate"
   | Wrapping op -> "wrapping" ^ Ast.binop_to_string op
   | Wrapping_neg -> "wrapping-neg"
+  | Bits x -> Intrinsic.member_name x
+  | Widen -> "widen"
+  | Narrow k -> "narrow:" ^ Sized.name k
+  | Wrap_to k -> "wrap:" ^ Sized.name k
   | Console_write -> "console-write"
   | Console_error -> "console-error"
   | Show_any -> "show-any"

@@ -1,0 +1,57 @@
+// Sized storage (compiler.md, "Step 12"): a million bytes kept as an
+// `Array<UInt8>` and a million `Int32`s, each changed in place a round
+// at a time, and an FNV-1a hash of the bytes written with `*%` into a
+// `UInt32`. Every store into an element is checked to fit, and the
+// hash's wraps at 32 bits. wide.ren is the same program with
+// `Array<Int>`s, as it was written before sized types; the checksums
+// are the same.
+
+// a 64-bit linear congruential generator's next state (Knuth's MMIX)
+fn next(s: Int) -> Int = s *% 6364136223846793005 +% 1442695040888963407
+
+fn bytes(n: Int) -> Array<UInt8> =
+  var xs: Array<UInt8> = []
+  var s = 42
+  for _ in 0..n
+    s = next(s)
+    &xs.push((s / 4294967296).bit_and(255))
+  xs
+
+fn ints(n: Int) -> Array<Int32> =
+  var xs: Array<Int32> = []
+  var s = 7
+  for _ in 0..n
+    s = next(s)
+    &xs.push((s / 4294967296) % 1000003)
+  xs
+
+// each byte the average of itself and the one before, as it now is
+fn smooth(inout xs: Array<UInt8>, rounds: Int) =
+  for _ in 0..rounds
+    for i in 1..xs.len()
+      xs[i] = (xs[i] + xs[i - 1]) / 2
+
+// each element a step of a recurrence on itself and the one before
+fn mix(inout xs: Array<Int32>, rounds: Int) =
+  for _ in 0..rounds
+    for i in 1..xs.len()
+      xs[i] = (xs[i] * 3 + xs[i - 1]) % 1000003
+
+fn fnv(xs: Array<UInt8>, seed: Int) -> Int =
+  var h: UInt32 = 2166136261 + seed
+  for b in xs
+    h = h.xor(b)
+    h = h *% 16777619
+  h
+
+pub fn run(n: Int, rounds: Int) uses Console =
+  var bs = bytes(n)
+  var is = ints(n)
+  smooth(&bs, rounds)
+  mix(&is, rounds)
+  print(bs.reduce(0, fn(acc, x) => acc + x))
+  print(is.reduce(0, fn(acc, x) => acc + x))
+  var h = 0
+  for r in 0..rounds
+    h = (h + fnv(bs, r)) % 4294967296
+  print(h)

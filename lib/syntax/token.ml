@@ -114,6 +114,9 @@ type t =
   | PLUSEQ
   | MINUSEQ
   | STAREQ
+  | PLUSPERCENTEQ
+  | MINUSPERCENTEQ
+  | STARPERCENTEQ
   | AMP
   | BANG
   (* operators *)
@@ -122,6 +125,9 @@ type t =
   | STAR
   | SLASH
   | PERCENT
+  | PLUSPERCENT
+  | MINUSPERCENT
+  | STARPERCENT
   | EQEQ
   | NEQ
   | LT
@@ -209,6 +215,9 @@ let to_string = function
   | PLUSEQ -> "+="
   | MINUSEQ -> "-="
   | STAREQ -> "*="
+  | PLUSPERCENTEQ -> "+%="
+  | MINUSPERCENTEQ -> "-%="
+  | STARPERCENTEQ -> "*%="
   | AMP -> "&"
   | BANG -> "!"
   | PLUS -> "+"
@@ -216,6 +225,9 @@ let to_string = function
   | STAR -> "*"
   | SLASH -> "/"
   | PERCENT -> "%"
+  | PLUSPERCENT -> "+%"
+  | MINUSPERCENT -> "-%"
+  | STARPERCENT -> "*%"
   | EQEQ -> "=="
   | NEQ -> "!="
   | LT -> "<"

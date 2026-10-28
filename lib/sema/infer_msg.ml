@@ -2276,6 +2276,13 @@ let no_ord loc ~shown ~op ~by ~uses why =
    [loc], or given to [by], which uses it; [uses] says how (uses_note).
    [Str]'s `+` is `concat`. [other] says [shown] has an [op], but not one
    that takes another [shown], which is the one generic code uses. *)
+(* What a sized type is for, when one is used as a number. *)
+let sized_storage shown =
+  sprintf
+    "`%s` is for storage: reading one gives %s, which arithmetic is done in"
+    shown
+    (if shown = Sized.name F32 then "a `Float`" else "an `Int`")
+
 let no_op ?hidden ?(test = false) ?(other = false) loc ~shown ~op ~by ~uses =
   let what =
     if other then sprintf "`%s` that takes %s" op (article shown)
@@ -2298,6 +2305,13 @@ let no_op ?hidden ?(test = false) ?(other = false) loc ~shown ~op ~by ~uses =
     | None, "Bool", ("+" | "zero")
       when Option.fold ~none:false ~some:(String.ends_with ~suffix:".sum") by ->
         ([], Some "to count those that are `true`, use `count(fn(b) => b)`")
+    (* a sized type's: add them up as what they read as *)
+    | None, _, ("+" | "zero")
+      when Option.fold ~none:false ~some:(String.ends_with ~suffix:".sum") by
+           && List.exists (fun k -> Sized.name k = shown) Sized.all ->
+        let zero = if shown = Sized.name F32 then "0.0" else "0" in
+        ( [ sized_storage shown ],
+          Some (sprintf "add them up as you read them: `reduce(%s, fn(acc, x) => acc + x)`" zero) )
     | None, _, ("+" | "zero")
       when Option.fold ~none:false ~some:(String.ends_with ~suffix:".sum") by ->
         ( [],
@@ -2312,9 +2326,41 @@ let no_op ?hidden ?(test = false) ?(other = false) loc ~shown ~op ~by ~uses =
               op;
           ],
           None )
+    | None, _, _ when List.exists (fun k -> Sized.name k = shown) Sized.all ->
+        ([ sized_storage shown ], None)
     | None, _, _ -> ([], None)
   in
   Diag.make loc ?help ~notes:(Option.to_list uses @ notes) msg
+
+(* `a +% b` where [a] isn't an `Int`, of type [shown]. *)
+let no_wrapping loc ~shown ~op =
+  let plain = String.sub op 0 1 in
+  Diag.make loc
+    ~notes:[ "the wrapping operators, `+%`, `-%` and `*%`, are `Int`'s" ]
+    ~help:
+      (if shown = "Float" then sprintf "a `Float` doesn't wrap: use `%s`" plain
+       else sprintf "use `%s`, or wrap `Int`s" plain)
+    (sprintf "`%s` has no `%s`" shown op)
+
+(* A literal number stored into a sized type it doesn't fit in. *)
+let literal_doesnt_fit loc k ~written =
+  Diag.make loc
+    ~notes:[ "a sized type keeps a number in fewer bits than an `Int`" ]
+    ~help:"give the place a type that holds it, or an `Int`"
+    (Sized.doesnt_fit k (code written))
+
+(* The result of a wrapping operator stored into a `UInt64`, whose values
+   stop at `Int`'s largest (sized.ml). *)
+let wrapped_into_uint64 loc ~op =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "`%s` wraps at `Int`'s 64 bits, and half of what it makes is \
+                 negative" op;
+        "a `UInt64` holds what an `Int` can that isn't negative";
+      ]
+    ~help:"keep a 64-bit hash or checksum in an `Int`"
+    "a wrapping operator's result can't be stored in a `UInt64`"
 
 (* `a op b` where [left], [a]'s type, has no [op] taking [right], [b]'s:
    an operator is found on its left side's type, chosen by its right

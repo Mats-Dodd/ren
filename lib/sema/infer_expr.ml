@@ -57,6 +57,100 @@ let want_bool env use (e : expr) t =
   in
   unify_at env e.loc ~found:t ~expected:bool ~notes:[ bool_note use ] ?help
 
+(* ---- sized types (sized.ml) ----
+
+   A sized type, `UInt8`, is the type of a field, an array's element or a
+   variable, never of what's computed with one: wherever an expression
+   whose type is one is used, its value is read as its wide type, `Int`
+   (or `Float`), the same number ([read_wide]); and wherever one is wanted,
+   what's checked against it is checked against its wide type and stored
+   into it, checked, or wrapped if it's what a wrapping operator made
+   ([stored]). A value of one sized type is never a value of another, or
+   the same type but through a type variable, so a type variable is only
+   ever a sized type because a written type says so: `Array<UInt8>`, never
+   because of a value. Each is recorded at the expression's node, for
+   lowering ([Sized.coerce]). *)
+
+(* The sized type [t] is, if it's one. *)
+let sized_of t =
+  match repr t with TCon (p, []) -> Sized.of_path p | _ -> None
+
+let wide_of k = if Sized.is_float k then float else int
+let sized_ty k = TCon (Sized.path k, [])
+
+(* Record that the value of [node] is read as its wide type, [read], or
+   stored into a sized type, [store], keeping what's recorded already. *)
+let coerce cx node ?read ?store () =
+  let c : Sized.coerce =
+    Option.value
+      (Hashtbl.find_opt cx.coerced node)
+      ~default:{ read = None; store = None }
+  in
+  let c : Sized.coerce =
+    {
+      read = (match read with Some _ -> read | None -> c.read);
+      store = (match store with Some _ -> store | None -> c.store);
+    }
+  in
+  Hashtbl.replace cx.coerced node c
+
+(* [e], of type [t], used as a value: if [t] is a sized type, it's read as
+   its wide one. *)
+let read_wide cx (e : expr) t =
+  match sized_of t with
+  | Some k ->
+      coerce cx e.node ~read:k ();
+      wide_of k
+  | None -> t
+
+(* The wrapping operator [e] is, by name, if it's one: `a +% b`, or the
+   method it is, `a.wrapping_add(b)` (operators are methods). *)
+let wrapping_op cx (e : expr) =
+  match e.kind with
+  | Binop (op, _, _, _) when is_wrapping op -> Some (binop_to_string op)
+  | Call ({ kind = Field (_, m); node; _ }, _)
+    when String.starts_with ~prefix:"wrapping_" m.name -> (
+      match Hashtbl.find_opt cx.found node with
+      | Some (Method_of p) when p = Path.member (Path.prelude "Int") m.name ->
+          Some m.name
+      | _ -> None)
+  | _ -> None
+
+(* [e], which makes [t], where a value of the sized type [k] is wanted: it
+   has to make [k]'s wide type, which is stored into [k], checked, or
+   wrapped if a wrapping operator made it. A literal that can't fit is an
+   error here. *)
+let stored env cx why (e : expr) t k =
+  let wide = wide_of k in
+  let makes_wide =
+    match repr t with
+    | TVar { contents = Unbound _ } -> true
+    | TCon (p, []) -> TCon (p, []) = wide
+    | _ -> false
+  in
+  match repr t with
+  | TError -> ()
+  | _ when makes_wide ->
+      ignore (unifies env why (result_loc e) ~found:t ~expected:wide);
+      let wrap = wrapping_op cx e in
+      (match wrap with
+      | Some op when not (Sized.is_float k || Sized.wraps k) ->
+          report env (wrapped_into_uint64 e.loc ~op)
+      | _ -> ());
+      let written = Option.value (env.source e) ~default:"" in
+      (match e.kind with
+      | Int n when (not (Sized.is_float k)) && not (Sized.fits k n) ->
+          report env (literal_doesnt_fit e.loc k ~written)
+      | Unop (Neg, { kind = Int n; _ }, _)
+        when (not (Sized.is_float k)) && not (Sized.fits k (Int64.neg n)) ->
+          report env (literal_doesnt_fit e.loc k ~written)
+      | Float f when Sized.is_float k && Sized.float32 f = None ->
+          report env (literal_doesnt_fit e.loc k ~written)
+      | _ -> ());
+      coerce cx e.node ~store:(k, wrap <> None) ()
+  | _ ->
+      ignore (unifies env why (result_loc e) ~found:t ~expected:(sized_ty k))
+
 (* How to explain a mismatch with [expected], the type of a parameter of
    [callee]: when a statement of [callee] threw away a value whose type
    wasn't known, that made it `Unit`, and a `Unit` in [expected] may well be
@@ -142,8 +236,13 @@ let block_uses env cx loc ~listed (bcx : ctx) =
       !(bcx.calls)
     @ !(cx.calls)
 
-(* [e]'s type, from [e] alone. *)
-let rec infer env cx (e : expr) : ty =
+(* [e]'s type, from [e] alone, as it's used: a sized type's value is read
+   as its wide type ([read_wide]). *)
+let rec infer env cx (e : expr) : ty = read_wide cx e (infer_raw env cx e)
+
+(* [e]'s type, from [e] alone, as it's written: a place's, which a sized
+   type's value is stored into, or a value passed with `&`. *)
+and infer_raw env cx (e : expr) : ty =
   let t = synth env cx e in
   Hashtbl.replace cx.nodes e.node t;
   t
@@ -154,8 +253,10 @@ let rec infer env cx (e : expr) : ty =
    declaration (Infer_written.is_written), usually [expected] itself: an
    implementation of several dependencies is narrowed to what it asks for
    ([narrow]). It's passed down only to the parts of it that are written
-   too. *)
-and check env cx ?(why = plain) ?written (e : expr) expected =
+   too. A value of a sized type is read as its wide type, and one is
+   stored into a sized type that's expected ([stored]), unless [exact]:
+   a place passed with `&`, which has to be of the parameter's type. *)
+and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
   let leaf () =
     let t = synth env cx e in
     Hashtbl.replace cx.nodes e.node t;
@@ -167,7 +268,31 @@ and check env cx ?(why = plain) ?written (e : expr) expected =
       | Some w -> narrow env cx e t w
       | None -> t
     in
-    ignore (unifies env why (result_loc e) ~found:t ~expected)
+    match (sized_of t, sized_of expected) with
+    | a, b when exact ->
+        (* a place of a sized type is kept at its width, so it can't be
+           changed as an `Int`, nor an `Int`'s as a sized type's *)
+        let why =
+          if a = None && b = None then why
+          else
+            explain
+              ~notes:
+                [
+                  "an `inout` argument is changed where it's kept, so its type \
+                   has to be the parameter's exactly";
+                ]
+              ~help:(fun _ _ ->
+                "copy it into a `var` of the parameter's type, pass that, and \
+                 store it back")
+              ()
+        in
+        ignore (unifies env why (result_loc e) ~found:t ~expected)
+    | Some a, Some b when a = b ->
+        ignore (unifies env why (result_loc e) ~found:t ~expected)
+    | _, Some k -> stored env cx why e (read_wide cx e t) k
+    | _ ->
+        ignore
+          (unifies env why (result_loc e) ~found:(read_wide cx e t) ~expected)
   in
   let fits () = Hashtbl.replace cx.nodes e.node expected in
   (* the expected type, and what's written of it, go to where the value is
@@ -376,9 +501,8 @@ and synth env cx (e : expr) : ty =
   | Binop (op, a, b, onode) -> (
       let name = binop_to_string op in
       match op with
-      | Add | Sub | Mul | Div | Mod ->
-          let meth = Option.get (binop_method op) in
-          operator env cx e ~onode ~meth ~name a (infer env cx a) (Some b)
+      | Add | Sub | Mul | Div | Mod | Wrap_add | Wrap_sub | Wrap_mul ->
+          arith env cx e ~onode ~op ~name a (infer env cx a) (Some b)
       | Lt | Le | Gt | Ge ->
           (* the left side says what the right side has to be, and that
              has to have an order, which is known once the group's types
@@ -493,17 +617,23 @@ and synth env cx (e : expr) : ty =
             in
             Hashtbl.replace cx.nodes target.node t;
             t
-        | _ -> infer env cx target
+        | _ -> infer_raw env cx target
       in
       (match op with
       | Some op ->
           (* `x += v` puts `x + v` back in `x`, so it has to make what [x]
-             holds *)
+             holds: of a sized type, its wide type, which is stored back,
+             wrapped if [op] is a wrapping operator (sized.ml) *)
           let name = binop_to_string op in
-          let meth = Option.get (binop_method op) in
-          let made =
-            operator env cx e ~onode ~meth ~name target tt (Some value)
-          in
+          let sized = sized_of tt in
+          let tt = match sized with Some k -> wide_of k | None -> tt in
+          (match sized with
+          | Some k
+            when is_wrapping op
+                 && not (Sized.is_float k || Sized.wraps k) ->
+              report env (wrapped_into_uint64 e.loc ~op:name)
+          | _ -> ());
+          let made = arith env cx e ~onode ~op ~name target tt (Some value) in
           let written =
             match (env.source target, env.source value) with
             | Some t, Some v -> Some (sprintf "%s %s= %s" t name v)
@@ -940,6 +1070,42 @@ and numeric_takes env p meth tb =
   | Some _, ("add" | "sub"), Some (TCon (q, _)) -> q = p
   | Some rep, "mul", Some (TCon (q, _)) -> TCon (q, []) = of_decl rep
   | _ -> false
+
+(* The arithmetic operator [op], written [name], on [a], of type [ta],
+   and [b]: a wrapping one is `Int`'s ([wrapping]), and any other is
+   found on [ta] ([operator]). *)
+and arith env cx (e : expr) ~onode ~op ~name (a : expr) ta b =
+  match (binop_method op, wrapping_method op) with
+  | Some meth, _ -> operator env cx e ~onode ~meth ~name a ta b
+  | None, Some meth -> wrapping env cx e ~onode ~meth ~name a ta b
+  | None, None -> assert false
+
+(* `a +% b`, the wrapping operator [name], the method [meth] of `Int`,
+   `wrapping_add`, on [a], of type [ta], and [b]: `Int`'s only, so it's
+   that method, which wraps at 64 bits; stored into a sized type it wraps
+   at that type's width instead ([stored]). *)
+and wrapping env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
+  let infer_b () = Option.map (fun b -> (b, infer env cx b)) b in
+  match repr ta with
+  | TError ->
+      ignore (infer_b ());
+      TError
+  | TVar { contents = Unbound _ } | TCon (_, []) ->
+      if
+        match repr ta with
+        | TCon (p, []) -> TCon (p, []) = int
+        | _ -> unifies env plain a.loc ~found:ta ~expected:int
+      then
+        op_method env cx e ~onode a int (infer_b ())
+          (Path.member (Path.prelude "Int") meth)
+      else (
+        ignore (infer_b ());
+        report env (no_wrapping e.loc ~shown:(show (printer env) ta) ~op:name);
+        TError)
+  | t ->
+      ignore (infer_b ());
+      report env (no_wrapping e.loc ~shown:(show (printer env) t) ~op:name);
+      TError
 
 (* The operator [name], `+`, the method [meth], `add`, on [a], of type
    [ta], and [b], the right side, if it has one: the type it makes. *)
@@ -1648,7 +1814,7 @@ and check_args env cx ~name ?callee ~written ps args =
       match (p.mode, a.kind) with
       | Inout, Ref place when passed ->
           Hashtbl.replace cx.nodes a.node p.ty;
-          check env cx place p.ty
+          check env cx ~exact:true place p.ty
       | Inout, Ref call ->
           (* `take(&c.pop())`: the `&` is `c`'s, and the argument is
                    what the call returns *)
@@ -1700,7 +1866,7 @@ and check_args env cx ~name ?callee ~written ps args =
 and infer_arg env cx (a : expr) =
   match a.kind with
   | Ref place when changed_receiver a = None ->
-      let t = infer env cx place in
+      let t = infer_raw env cx place in
       Hashtbl.replace cx.nodes a.node t;
       { mode = Inout; ty = t }
   | _ -> read (infer env cx a)
@@ -2091,4 +2257,12 @@ and tag_pattern env cx ?(arm = false) (p : pattern) (c : ident) ps errs =
 (* What infer_handlers.ml calls back, from the functions above (see
    [Infer_handlers.core]). A [let rec] can define a record of its
    functions, as well as the functions themselves. *)
-and core = { infer; check; stmt; infer_call; call_with; check_args }
+and core =
+  {
+    infer;
+    check = (fun env cx ?why ?written e t -> check env cx ?why ?written e t);
+    stmt;
+    infer_call;
+    call_with;
+    check_args;
+  }

@@ -363,6 +363,9 @@ type node = {
   narrowed : Path.t list option;
       (** an implementation of several dependencies, narrowed to some of them,
           these, where a written type asks for those (Infer_expr.narrow) *)
+  coerce : Sized.coerce option;
+      (** a value read from a sized type as its wide one, or stored into one
+          (Infer_expr.read_wide, [check]) *)
   targs : Ty.args option;
       (** a use of a top-level function, a member, an associated value or an
           intrinsic: the type arguments it's used at *)
@@ -818,6 +821,7 @@ let setup env ~is_value (f : fn_def) =
       nodes = Hashtbl.create 64;
       found = Hashtbl.create 16;
       narrowed = Hashtbl.create 4;
+      coerced = Hashtbl.create 4;
       targs = Hashtbl.create 16;
       required = Hashtbl.create 4;
       errs;
@@ -1381,6 +1385,7 @@ let canonical env so_far (f : fn_def) =
             ty;
             found = Hashtbl.find_opt cx.found id;
             narrowed = Hashtbl.find_opt cx.narrowed id;
+            coerce = Hashtbl.find_opt cx.coerced id;
             targs = Option.map fst used;
             needs = Option.fold ~none:[] ~some:snd used;
           }

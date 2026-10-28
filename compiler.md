@@ -2493,3 +2493,91 @@ fewer cycles, its peak memory 97.4 MB to 25.5 MB, every cell of
 stack, built. What it costs: a function taken has its body twice in
 the C, and a parameter it walks without consuming is owned by the
 loop, counted each turn, where it had been borrowed.
+
+### Step 12: sized storage, and the wrapping operators
+
+`Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64` and
+`Float32` (foundations.md, decision 15; operators.md, "Sized
+integers"), through the whole pipeline. sized.ml says what each is: its
+name, its range, how a value is made to fit, and what a panic says.
+
+**Types.** A sized type is a type of places, never of computation, and
+inference keeps it so with two coercions, recorded on the expression's
+node (`Infer.node.coerce`) and nowhere else. `infer` reads: a value
+whose type is sized is given its wide type, `Int` or `Float`, where
+it's used (`read_wide`). `check` stores: an expression checked against
+an expected sized type is inferred, read wide, and stored (`stored`),
+which is checked, or wrapped if it's a wrapping operator's result (a
+`+%`, `-%` or `*%` at its top, or an `Int.wrapping_*` call), or both
+for one sized type stored into another. A literal that doesn't fit is
+an error where it's written, and so is a wrapping result stored into a
+`UInt64`, whose values stop at `Int`'s largest. A type variable only
+becomes sized where a type is written, `Array<UInt8>`, so a generic
+function's `T` can be one and its body never computes in it: a `+` on a
+`T` needs `add`, which no sized type has. An `inout` place has to be
+the parameter's type exactly (`check ~exact:true`), since what's
+changed there is kept at its width. Lowering makes each coercion a
+Core prim, `Widen`, `Narrow` or `Wrap`, which Core Lint types; compound
+assignment, `x +%= v`, reads `x` wide and stores the result back. The
+interpreter does what sized.ml says (eval.ml, `stored`).
+
+**Native.** Mem has a layout, `Sized k`, a C type of its width
+(`uint8_t`, and `int64_t` for a `UInt64`), and three runtime calls:
+`Widen`, `Narrow k`, which panics with the interpreter's message
+(ren_rt.h, `ren_narrow_*`), and `Wrap_to k`, a conversion to its
+unsigned type and back. A `Float32` is checked against 2^128 - 2^103,
+halfway from its largest to the next power of two, before converting,
+since converting a `double` outside `float`'s range is undefined in C.
+
+- **An array of a sized type keeps its elements at their width,** as
+  Lean's scalar arrays do (`lean_sarray_object`, lean.h:226-232), for
+  every sized type: the array's header says which (`nfields`, unused by
+  arrays, holds a `REN_ELEM_*` kind), so copying, growing, freeing and
+  the walks (`show`, `==`, ordering) size it. Code that knows the
+  element type reads and writes it directly (`ren_array_get_u8`,
+  `ren_buf_get_n(uint8_t, ...)` in a loop hoist.ml takes). A generic
+  function's `T`'s array, a `Word`'s, may be sized: its descriptor says
+  (`REN_D_SIZED`), an array it makes takes its kind from there
+  (`ren_alloc_array_d`), and it reads and writes through the `_w`
+  functions, which ask the array. A sized value as a word is the number
+  it holds, so generic code sees an `Int` or a `Float`.
+- **An object packs its sized fields,** as it packs `Bool`s (step 10):
+  8, 16 or 32 bits each, the widest first, sign-extended or read as a
+  `Float32`'s bits when unpacked, and decoded for the walks by
+  `ren_ctor_field` through the field's descriptor. A `UInt64` takes a
+  word. A release build's small value (step 10) packs the same way: a
+  record with no type parameters whose fields are all scalars, its
+  `Bool`s and enums too, has its small scalars' words in its struct
+  (`packed_struct`), so an `Array<Pixel>` of four `UInt8`s is a word an
+  element. Writing one such field of an element in place (step 8's
+  `Array_set_field`) builds the element again instead.
+- `map`'s in-place path (step 7) is taken from a sized type only to the
+  same one, so an `Array<UInt8>` mapped to `Int`s gets a new array.
+
+**Soundness.** Every value stored into a sized place went through
+`Narrow` or `Wrap_to` (or is a literal checked at compile time, or a
+value read from a place of the same type), so a place never holds what
+its type can't: every `Sized k` atom fits `k`. Mem Lint checks it: a
+`Narrow` needs a site, a `Wrap_to` none and only into a type
+`Sized.wraps`, a `Widen` only of a `Sized`, a packed field's bits are
+its width. Hence a narrow C store (`(uint8_t)v.i` in `ren_sized_store`)
+never loses anything, and a widen gives back exactly the number stored.
+Wrapping at a width is sound to do after `Int`'s 64-bit wrap because
+2^w divides 2^64, so the low w bits of the 64-bit result are those of
+the exact one. bench/sized.ren and sized_panic.ren run under the
+sanitizers in build.t, in both builds and both countings, and print
+what `ren run` does; test_sized.ml checks the errors, the panics and
+the Mem IR.
+
+Measured (bench/native/RESULTS.md, "Sized storage"): `bytes`, a
+million `UInt8`s and a million `Int32`s changed in place and an
+FNV-1a hash, against the same program with `Array<Int>`s at 82ed3d1:
+release 1.40 s to 0.56 s, 1.30× the Rust's time where it was 3.2×;
+peak memory 17.6 MB to 6.6 MB (the Rust's 6.7 MB), the arrays' live
+bytes exactly 8× and 2× smaller; the hash 8× faster, its `xor` and
+32-bit multiply an instruction each. What it costs: the debug build's
+stores call the check, 5% and 9% more cycles on the two in-place
+kernels.
+
+Left for later: shifts, and computing in narrow lanes where values are
+proven to fit (decision 15's last sentence).

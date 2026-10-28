@@ -1,0 +1,102 @@
+// Sized storage types (operators.md, "Sized integers"): arrays of each
+// kept at its width (ren_rt.h, [REN_ELEM_U8] and the rest), read in a
+// loop hoist.ml gives a buffer, changed in place and copied when shared;
+// records whose sized fields are packed into shared words (to_mem.ml,
+// [pack]), a sum's too, and a release build's small value's, a texel
+// a word, its fields written in place; a generic function, which reads a sized array
+// through its descriptor ([ren_array_get_w]); `show` and `==`, which
+// walk them; and an FNV-1a hash written with `*%`, at 32 bits into a
+// `UInt32` and at 64 in an `Int`. build.t runs it under the sanitizers.
+
+type Pixel = { r: UInt8, g: UInt8, b: UInt8, a: UInt8 }
+type Sample = { at: Int, level: Int16, gain: Float32, id: UInt64, ok: Bool }
+type Box<T> = { item: T }
+type Texel = { r: UInt8, g: UInt8, b: UInt8, lit: Bool, depth: Int16 }
+type Shape =
+  | Dot(d: Int8)
+  | Line(a: Int16, b: Int16)
+  | Empty
+
+fn fnv32(bytes: Array<UInt8>) -> Int =
+  var h: UInt32 = 2166136261
+  for b in bytes
+    h = h.xor(b)
+    h = h *% 16777619
+  h
+
+fn fnv64(bytes: Array<UInt8>) -> Int =
+  var h = 1469598103934665603
+  for b in bytes
+    h = h.xor(b) *% 1099511628211
+  h
+
+fn first<T>(xs: Array<T>) -> Box<T> = Box { item: xs[0] }
+
+fn twice<T>(xs: Array<T>) -> Array<T> =
+  var out: Array<T> = []
+  for x in xs
+    &out.push(x)
+    &out.push(x)
+  out
+
+fn brighten(inout ps: Array<Pixel>) =
+  var i = 0
+  while i < ps.len()
+    ps[i].g = (ps[i].g + 50) % 256
+    i += 1
+
+fn shade(inout ts: Array<Texel>) =
+  var i = 0
+  while i < ts.len()
+    ts[i].g = ts[i].g / 2
+    if ts[i].lit then ts[i].depth = ts[i].depth - 1000
+    let t = ts[i]
+    ts[i] = Texel { r: t.b, g: t.g, b: t.r, lit: not t.lit, depth: t.depth }
+    i += 1
+
+fn main() uses Console =
+  var ts: Array<Texel> = []
+  for i in 0..20
+    &ts.push(Texel { r: i * 10, g: 255 - i, b: i, lit: i % 3 == 0, depth: i * 100 })
+  shade(&ts)
+  var lit = 0
+  var sum = 0
+  for t in ts
+    sum += t.r + t.g * 2 + t.b * 3 + t.depth
+    if t.lit then lit += 1
+  print(sum)
+  print(lit)
+  var buf: Array<UInt8> = []
+  for i in 0..300
+    &buf.push(i % 256)
+  print(fnv32(buf))
+  print(fnv64(buf))
+  var acc: UInt8 = 0
+  for b in buf
+    acc +%= b
+  print(acc)
+  let shared = buf
+  buf[0] = 255
+  print(shared[0])
+  print(buf[0])
+  var ps: Array<Pixel> = [Pixel { r: 1, g: 2, b: 3, a: 4 }, Pixel { r: 9, g: 230, b: 7, a: 6 }]
+  brighten(&ps)
+  print(ps)
+  print(ps[0] == Pixel { r: 1, g: 52, b: 3, a: 4 })
+  let s = Sample { at: 5, level: -300, gain: 1.5, id: 9223372036854775807, ok: true }
+  print(s)
+  print(s.level * 2)
+  print(s.id - 1)
+  print(first(buf))
+  let small: Array<Int8> = [-128, 0, 127]
+  print(twice(small))
+  print(twice(small) == [-128, -128, 0, 0, 127, 127])
+  var ints: Array<Int32> = [5, -2, 9, 0]
+  ints[1] = ints[1] *% 2000000000
+  print(ints)
+  print([Dot(-3), Line(-1000, 1000), Empty])
+  var fs: Array<Float32> = [0.5, 1.25]
+  &fs.push(3.4)
+  print(fs)
+  var u: Array<UInt16> = [65535]
+  print(u.map(fn(x) => x + 1))

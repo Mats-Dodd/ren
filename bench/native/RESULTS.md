@@ -9,6 +9,59 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Sized storage (compiler.md, step 12)
+
+`bytes` ([README.md](README.md)): a million bytes as an `Array<UInt8>`
+and a million numbers as an `Array<Int32>`, each changed in place a
+round at a time with every store checked to fit, and an FNV-1a hash of
+the bytes with `*%` into a `UInt32`. Before is `wide.ren`, the same
+program written with `Array<Int>`s as it had to be at 82ed3d1, the
+commit before sized types, built by that commit's compiler, its `xor`
+a bit at a time since `Int` had none; "wide, now" is the same file
+built by this commit's, which changes nothing (same cycles and
+instructions). One hyperfine invocation per row (`-N --warmup 3 --runs
+10`, at main.ren's size), with CPU cycles, instructions retired and
+mean peak memory as hyperfine records them; each kernel is `bench.ren`'s
+function alone, on the array `run` builds. The Rust and Go twins, which
+keep `u8`s and `i32`s and check each store, timed just after, whole
+program only. Load average 3.2 to 3.6 of 16 cores. Every binary prints
+what the Rust and Go twins print.
+
+| run | 82ed3d1, `Array<Int>` (s) | wide, now (s) | sized (s) | Rust (s) | sized / 82ed3d1, cycles | instructions 10⁹, before / sized | peak MB, before / sized | `--stats` peak live bytes, before / sized |
+|---|---|---|---|---|---|---|---|---|
+| `bytes`, release | 1.396 ± 0.008 | 1.493 ± 0.017 | **0.560 ± 0.004** | 0.432 ± 0.004 (Go 0.721) | **0.39×** | 15.3 / 2.3 | 17.6 / 6.6 (Rust 6.7, Go 20.6) | 16,777,339 / 5,243,003 |
+| smooth (`Array<UInt8>`), release | 0.106 ± 0.000 | 0.106 ± 0.000 | **0.082 ± 0.000** | | **0.77×** | 0.97 / 0.87 | 9.5 / 2.5 | 8,388,683 / 1,048,651 |
+| mix (`Array<Int32>`), release | 0.412 ± 0.002 | 0.413 ± 0.001 | **0.357 ± 0.001** | | **0.87×** | 1.47 / 0.98 | 9.5 / 5.5 | 8,388,687 / 4,194,383 |
+| fnv (`*%` into a `UInt32`), release | 0.882 ± 0.001 | 0.882 ± 0.002 | **0.107 ± 0.000** | | **0.12×** | 13.0 / 0.57 | 9.5 / 2.5 | 8,388,664 / 1,048,632 |
+| `bytes`, debug | (see cycles) | | **6.37 ± 0.17** | | **0.24×** | 302.1 / 88.9 | 17.8 / 6.7 | |
+| smooth, debug | 2.49 ± 0.14 | | 2.58 ± 0.13 | | 1.05× | 33.2 / 36.0 | 9.6 / 2.6 | |
+| mix, debug | 2.52 ± 0.11 | | 2.63 ± 0.10 | | 1.09× | 34.8 / 37.7 | 9.6 / 5.6 | |
+| fnv, debug | 22.2 ± 1.1 | | **1.12 ± 0.02** | | **0.056×** | 233.7 / 15.1 | 9.6 / 2.5 | |
+
+- **Memory is the element's width.** The arrays' peak live bytes,
+  which `--stats` counts exactly, are 8× smaller for the bytes and 2×
+  for the `Int32`s, and the process's peak resident memory follows:
+  the whole program's 17.6 MB is 6.6 MB, the Rust twin's 6.7 MB.
+- **Narrow arrays are faster too.** smooth reads and writes a byte per
+  element instead of a word: 0.77× the cycles and a tenth fewer
+  instructions, with the fit check on each store (`ren_narrow_u8`, a
+  compare and a branch never taken). mix is a dependency chain through
+  `%`, so the narrower load saves less: 0.87×.
+- **The hash is 8× faster** because it's written as it means: `xor` and
+  a multiply that wraps at 32 bits are one instruction each, where
+  82ed3d1's had to do the `xor` a bit at a time and keep `h` in range
+  with `%`. 0.57 billion instructions to 13.0.
+- **Against Rust: 1.30× its time**, 1.24× its cycles, where `Array<Int>`
+  was 3.2×. The Rust checks each store with `try_from().unwrap()`, as
+  Ren does, but keeps `h` a `u32` the whole way; Ren's is read as an
+  `Int` and stored back each step, a widen, and a check for the `xor`'s
+  store, which C can't drop since it doesn't know `h.xor(b)` fits.
+- What it costs: in the debug build, built at -O0, each store into a
+  sized element calls the runtime's check, which nothing inlines, so
+  smooth and mix take 5% and 9% more cycles there. The debug build's whole-program time at
+  82ed3d1 isn't given: under the load of the run its ten samples ranged
+  from 0.4 to 2.3 minutes, so only its cycles, 101 billion, are.
+
 ## Arrays of arrays and recursion that builds (compiler.md, step 11)
 
 Swap-out (swap.ml, Lean's) and tail recursion modulo cons (trmc.ml,

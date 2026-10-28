@@ -320,6 +320,13 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
         start)
     else
       match (c, peek 1) with
+      (* the wrapping operators, `+%`, and their assignments, `+%=` *)
+      | '+', '%' when peek 2 = '=' -> advance_by 3 PLUSPERCENTEQ
+      | '-', '%' when peek 2 = '=' -> advance_by 3 MINUSPERCENTEQ
+      | '*', '%' when peek 2 = '=' -> advance_by 3 STARPERCENTEQ
+      | '+', '%' -> advance_by 2 PLUSPERCENT
+      | '-', '%' -> advance_by 2 MINUSPERCENT
+      | '*', '%' -> advance_by 2 STARPERCENT
       | '-', '>' -> advance_by 2 ARROW
       | '=', '=' -> advance_by 2 EQEQ
       | '=', '>' -> advance_by 2 FATARROW

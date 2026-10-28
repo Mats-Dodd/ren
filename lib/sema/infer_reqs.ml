@@ -330,6 +330,7 @@ and has_ord env t =
       | None -> (
           let ordered =
             [ int_path; float_path; Path.prelude "Str"; Path.prelude "Bool" ]
+            @ List.map Sized.path Sized.all
           in
           match Hashtbl.find_opt env.types p with
           | _ when List.mem p ordered || numeric env p <> None -> Has []
