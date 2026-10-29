@@ -126,6 +126,43 @@ the push of a struct whose size the compiler knows is inline now
 (`ren_array_push_slots_taking_k`), its words stores, and `pages` is
 0.92×. The rest of the suite is the same C as at d86b474.
 
+**The third fix: a byte tag, and pointer niches.** A sum with one
+constructor that has fields, one an object, and the rest without has no
+tag: the object's slot holds `ren_box(UINT32_MAX - t)` for constructor
+`t` without fields. Any other sum's tag is the low byte of slot 0, its
+constructors' small scalars packed above it. `Option<Item>` is two
+words, `{ name, price }`, where it was a tag and two slots. optional.ren's
+last line printed `best`, whose `show` boxes `Option<Item>` and so
+`Item`, 101,004 allocations at 7c68889 and after; it prints `best`'s
+fields now, `tea` and `7` (compiler.md, step 7's choices), and with that
+change alone it allocates 4 at 7c68889 too, the option a tag and two
+slots: the second word is what this fix saves. Against 7c68889, the
+second fix's commit, all in one hyperfine run (`-N --warmup 5 --runs
+50`), release, with instructions from valgrind's lackey, which this
+machine (no perf) counts steadily where its times drift; the copy with
+100 times the items is optional.ren with its count changed, and the
+array holds a million options, half `None`, read ten times:
+
+| kernel | allocations, 7c68889 | after | peak RSS, 7c68889 | after | instructions, 7c68889 | after | time (ms), 7c68889 | after |
+|---|---|---|---|---|---|---|---|---|
+| optional | 4 | 4 | 2.1 MB | 2.1 MB | 4.40 M | 4.30 M | 2.05 ± 0.32 | 2.30 ± 0.71 |
+| optional, 100 times the items | 4 | 4 | 2.1 MB | 2.1 MB | 411.2 M | **401.4 M** | 29.2 ± 6.9 | 31.8 ± 8.1 |
+| `Array<Option<Item>>`, a million | 4 | 4 | 25.2 MB | **17.6 MB** | 308.9 M | **256.4 M** | 45.7 ± 8.1 | **36.6 ± 5.8** |
+| optional as step 0 wrote it, `print(best)` | 101,004 | 101,004 | 2.1 MB | 2.1 MB | 12.53 M | 12.53 M | | |
+
+The first two runs' times are within this machine's noise of each other
+(their minimums, 1.56 and 1.45 ms, 19.6 and 19.5 ms, agree), on 2% fewer
+instructions: a variable's option is a word less to copy, and the match
+compares a pointer where it read a tag. An array of them is a third
+smaller, 16.8 MB of elements, not 25.2, and reading it 0.80× as long.
+
+**The suite, third fix.** No program or kernel of the suite compiles to
+different C: none keeps a sum that's a small value and has a niche or a
+scalar to pack beside its tag (the C of every program and kernel
+build.sh builds, both countings, compared as for the second fix). A sum
+with nothing packed beside its tag keeps the whole word, read without a
+mask, so `stack`'s `Option<Int>` is as it was. Nothing in it to time.
+
 **How.** `$S` is a scratch folder, `ren` the compiler at each commit
 copied there before building the next:
 
@@ -145,6 +182,28 @@ copied there before building the next:
     # the part after `---- the program ----`) and compared; then each
     # program whose C changed timed against d86b474 in one run
     hyperfine -N --warmup 2 --runs 10 -n before $S/before/slices -n after $S/after/slices
+    # the third fix: optional the same way, and its two copies, in one run
+    sed 's/for k in 0..100000/for k in 0..10000000/' optional.ren > optional_big.ren
+    hyperfine -N --warmup 5 --runs 50 -n optional-before $S/before/optional -n optional-after $S/after/optional ...
+    valgrind --tool=lackey --basic-counts=yes ./optional     # "guest instrs"
+
+The array of options, `optional_array.ren` above:
+
+    type Item = { name: Str, price: Int }
+
+    fn main() uses Console =
+      let names = ["tea", "jam", "cake"]
+      var os: Array<Option<Item>> = []
+      for k in 0..1000000
+        let price = k * 7919 % 1000
+        &os.push(if price < 500 then Some(Item { name: names[k % 3], price }) else None)
+      var t = 0
+      for round in 0..10
+        for o in os
+          match o
+            Some(i) => t += i.price + i.name.len() + round
+            None => t += 1
+      print(t)
 
 measure.sh's whole run took 67 minutes here. build.sh stopped at the
 dispatch kernels at 8c7c65c (step 6 renamed `shapesK` to `codecsK`), and

@@ -2350,7 +2350,11 @@ a slot a constructor has no field in holds a scalar. A sum of two
 constructors, one without fields and one with an object, is that
 object or a value no object or constructor is, `Scalar_ctor (-1)`
 (`ren_box(UINT32_MAX)`), Koka's `DataAsMaybe` (Core/Core.hs:533):
-`Option<Str>` is one word. A type is recursive if its declaration
+`Option<Str>` is one word. (Since the data stage's step 7, any sum with
+one constructor that has fields, one an object, and the rest without
+has no tag, its object's slot holding a niche for each of the others,
+and any other sum's tag is a byte, its small scalars packed beside it:
+"Data stage", "The layout fixes (step 7)".) A type is recursive if its declaration
 reaches itself through its fields' types, whatever their arguments,
 and is never a small value, as in Koka (Kind/Repr.hs:66); so `List`
 stays boxed, and `Option<List>` is a pointer that may be none.
@@ -6625,7 +6629,15 @@ optional 101,004, for 100,000 items each.
    (`ren_box(UINT32_MAX - i)`), its other slots 0 (Roc's
    `NullableUnwrapped`, Swift's spare bits). `Option<Item>` with `Item
    = { name: Str, price: Int }` is two words and no tag; optional.ren
-   should allocate a constant number.
+   should allocate a constant number. **Built** (step 7, part 3; its
+   choices are below): `Option<Item>` is two words, `{ name, price }`,
+   where it was a tag and two slots; optional.ren allocates 4, where it
+   allocated 101,004, once its last line prints `best`'s fields, not
+   `best`, whose `show` boxed it (with that change alone it allocates 4
+   at 7c68889 too, a word more for each option). The niche's scalar is
+   by the constructor's tag, `ren_box(UINT32_MAX - t)`, not by its
+   number among those without fields; a tag is the whole word where no
+   constructor packs a scalar beside it.
 
 Each follows "the programmer never holds an address, so representation
 is the compiler's choice" (foundations.md, "The bet"): no program can
@@ -6727,7 +6739,16 @@ migration, step 3's `let ... else` where it fits).
   mem_lint.ml (an array of counted structs of at most eight slots; a
   field written is its struct's slot, at its layout), hoist.ml (a field
   write's struct agrees with a read's), mem.ml(i)'s `Struct`; bench/data's
-  rows_objs and rows_panic, and rows' last line.
+  rows_objs and rows_panic, and rows' last line. Part 3, as built:
+  to_mem.ml (`small`'s sum case, `Niche` and the byte tag's `Bits (0,
+  ...)` places; `small_ctor`, which packs a tag's slot 0 and writes a
+  niche), mem.ml(i) (`Tagged of int`, the tag's bits, and `Niche`, for
+  `Nullable`; `Scalar_ctor` below 0 a niche), emit_c.ml (`Tag_of` of
+  each, a niche's scalar), ren_rt.h (`ren_niche_tag`), mem_lint.ml (a
+  sum's struct and its niches; the join, where a constant stands for a
+  reference); test_native.ml (the join's two cases); bench/data's
+  niche, niche_walks, niche_panic, niche_reuse and niche_join, and
+  optional's last line.
 - **Step 8:** the review, its three lenses (the brief's), and what it
   finds; language.md's "What Ren has today" table brought up to date.
 
@@ -6971,7 +6992,8 @@ revisit if a step finds it wrong:
 | 5 | ed8f0f8 | the errors that teach the model, and `todo`, through the whole pipeline: `todo` a keyword (token.ml, the lexer, the parser's `primary`, Ast's `Todo`), Resolve (one of `let ... else`'s leaves), Infer (a fresh type variable), lowering (the intrinsic `Lib_panic`, "reached a `todo`", at the `todo`, so Core, Core Lint and the interpreter see a call they already know), and Mem IR in both builds (a `Lib_panic` in the program's code is said where it's written, not at the function's site, so native and `ren run` print the same); `$start` calls a `main` that never gives a value, `fn main<T>() -> T`, at `Unit`, which natively was Mem Lint's "`$start` isn't what the program says it is"; Diag's `code` and `code_at`, lines a help writes; `field_access`'s sum case (Infer_msg.field_of_sum): "`Shape` is a sum type; only `Ring` has `r`" with the `match` to paste, its variants in one arm with `\|` when the field has one type, an arm each otherwise; "every variant of `Shape` has `id`, but a sum type has no fields" with the hoisting help, or, at different types, the `match`; Exhaust's arms to paste, up to three and an arm for the rest, values' `_` or errors' `fail _`, by name where a variant is, after their sum where a record type shadows a bare constructor (Infer_msg.braced_ctor), at the column of the match's arms; tree-sitter's `todo`, the corpus (statements.txt) and the highlight markers, Zed's keyword highlight; test_data.ml's s5 tests on, and thirteen more: a positional variant's label, a field at different types, no variant, a generic sum's hoist, more missing than shown, nested, the shadowed constructor, values and errors, `Err`'s tags, a `todo` body and `main`, `todo` not a name, the arms of nine programs pasted back in after their last arm, and the `match` of three field errors pasted in for the read, each of which then checks; every "missing:" error's help in test_exhaust, test_errors, test_modules, test_tasks, test_collections and examples.t promoted, each new line pasteable; bench/data/todo_panic as specified and in `same`, `release` and `tcc_same`, and `fn main() = todo` in build.t; errors.md's `match` section and the README's tour show the printed arms; language.md's "What Ren has today". Choices: below the table | steps 6 to 8 |
 | 6 | 8c7c65c | descriptions: an operation called on a description only when its handler is stateless, through the pipeline: Infer's `Calls_op` gains the receiver as written and the call a `with` would make, its arguments as written; Lower records each method call (Core.program's `method_calls`, by its `With`'s location, from `Lower.program` and `Lower.made`); a new link-time pass, lib/lower/stateless.ml (`Stateless.check`), run by `Driver.link` after the modules are linked, so `ren run`, `ren test` and `ren build` refuse (not `ren check`): a handler is stateful if its body makes a cell (a `var`) or its instance has a `finally`; a method call on a description made where it's installed, or held by a local never changed and only installed, may be only that handler's; any other may be any kept handler's (refined from the specification's per-dependency rule: "Where the data stage may differ"); the error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method" ("which has a `finally`"), at the operation's name, with its note and the help that writes the `with`; the interpreter and native builds unchanged, each program that still compiles running the same; test_data.ml's s6 tests on (the refusals through `run_error`; the last accept's program had a dropped `Area.area()`, now `let _ =`), and seven more: a stateful handler bound and only installed beside stored stateless calls, one called where it's made, a local that's assigned, one passed, returned, stored and wrapped, a handler of another module kept there, and `ren check` not seeing it; test_descriptions.ml's stateful method call a refusal, its `with` half its own accept test, its `Shape` a `Codec` (numbers kept); test_deps.ml's handler of several called as a method through `id(...)`, now a stateless `fixed_rates`, with the `counting_rates` one a refusal; bench/10d/methods.ren, review_deps.ren and dispatch_mix.ren's calls that may reach a handler with state written as `with`s, their outputs and every site's lowering unchanged; the renames: bench/10d/shapes.ren's `Shape` a `Codec`, dispatch.ren's `Shape` and `Expr` `Codec` and `Pipe`, dispatch_mix's `Area`, `Size` and `Label` `Codec`, `Width` and `Name`, build.t's `--explain-dispatch` listings redone, bench/native/dispatch's `ShapeK` `CodecK` (gen.py and bench.ren; the twins byte for byte as they were, checksums the same, the release C the same but for handlers' names, so RESULTS.md's numbers stand, as it now says); bench/data/shapes in `same`, `release` and `tcc_same`; deps.md's example a library's routes, with the rule, its error and that `ren check` doesn't report it; handlers.md's "Called as a method"; README's handlers section; bench/native/README.md; language.md's "What Ren has today". Choices: below the table | steps 7 and 8 |
 | 7 (part 1) | d86b474 | the before measurements of all three faults, the kernels and bench/native's suite at 8c7c65c (bench/native/RESULTS.md, "Data stage: layout", with the commands and the machine), and the first fix: a small record or tuple in a small value flattened into its slots, the budget counted in slots (to_mem.ml: `small`'s places and `Flat`, `small_of`, `struct_shape`, `flat_var`, `flat_slots`, `within`, a pattern's `flats` and `pending`), so nested.ren allocates 4, not 66,671, and a copy with 100 times its items runs in 17 ms, not 64; three faults of boxed values' counting the tests found, fixed (reuse.ml's sizes known by path, a heap overflow; rc.ml's slot nested once, and a changing variable's views); bench/data's layout, layout_walks, layout_panic and reuse_arms, and the three kernels, in build.t's loops and a release naive one; build.sh's dispatch kernels, which step 6's rename broke, and measure.sh's peak memory on Linux | the second fix (an array of counted structs inline) and the third (byte tags and niches), each measured; rows.ren's and optional.ren's last lines `show` the value, which boxes its type and hides the fix (step 7's choices); the milestone kernel against Rust; `if c then None else p` in debug builds (step 7's choices) |
-| 7 (part 2) | this commit | the second fix: an array of small values that hold objects keeps them inline, counted by the mask of their slots that hold objects, which the array's header keeps in its `objs` byte (1 for counted words, as before), instead of boxing their type program-wide: to_mem.ml's `plain_layout` and `element` no longer demote; ren_rt.h's and ren_rt.c's arrays count by the mask (`REN_ELEM_OBJS` for freeing, copying, the shared mark, splices and joins; `ren_slots_dup` and `ren_slots_drop`; inline reads, writes, field writes and pushes of counted structs, and their hoisted loops' buffer macros); emit_c.ml's `struct_mask` and each operation's C; Mem Lint (arrays of counted structs of at most eight slots, a field written at its slot's layout) and hoist.ml (a field write's struct agrees with a read's); and a fault the suite found: a walk reads an array's elements as words, so a small type that's an array's element anywhere in a walked value is boxed (`no_struct_elements`, for each closed type's descriptor and each built at run time past the specialization budget), which `show` of a record holding an array of uncounted structs crashed on at d86b474 too (build.t's walked_arrays). rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4 (a copy with 100 times the items 187 ms, not 446, 162 MB, not 402); of the suite only slices' C changes in substance, 96 million allocations, not 164 million, 0.88× the time, its `json` kernel 0.78× (RESULTS.md, "Data stage: layout"); rows.ren's last line prints the element's fields; bench/data's rows_objs and rows_panic in build.t's loops and the release naive one, layout_walks' arrays in a walked record, test_native's Mem Lint tests of arrays of counted structs. Choices: below the table | the third fix (byte tags and niches), measured; optional.ren's last line `show`s the value, which boxes its type and hides the fix; the milestone kernel against Rust; borrowed reads of an array's struct, and swap-out of one's objects (step 7's choices, part 2); `if c then None else p` in debug builds (part 1's choices) |
+| 7 (part 2) | 7c68889 | the second fix: an array of small values that hold objects keeps them inline, counted by the mask of their slots that hold objects, which the array's header keeps in its `objs` byte (1 for counted words, as before), instead of boxing their type program-wide: to_mem.ml's `plain_layout` and `element` no longer demote; ren_rt.h's and ren_rt.c's arrays count by the mask (`REN_ELEM_OBJS` for freeing, copying, the shared mark, splices and joins; `ren_slots_dup` and `ren_slots_drop`; inline reads, writes, field writes and pushes of counted structs, and their hoisted loops' buffer macros); emit_c.ml's `struct_mask` and each operation's C; Mem Lint (arrays of counted structs of at most eight slots, a field written at its slot's layout) and hoist.ml (a field write's struct agrees with a read's); and a fault the suite found: a walk reads an array's elements as words, so a small type that's an array's element anywhere in a walked value is boxed (`no_struct_elements`, for each closed type's descriptor and each built at run time past the specialization budget), which `show` of a record holding an array of uncounted structs crashed on at d86b474 too (build.t's walked_arrays). rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4 (a copy with 100 times the items 187 ms, not 446, 162 MB, not 402); of the suite only slices' C changes in substance, 96 million allocations, not 164 million, 0.88× the time, its `json` kernel 0.78× (RESULTS.md, "Data stage: layout"); rows.ren's last line prints the element's fields; bench/data's rows_objs and rows_panic in build.t's loops and the release naive one, layout_walks' arrays in a walked record, test_native's Mem Lint tests of arrays of counted structs. Choices: below the table | the third fix (byte tags and niches), measured; optional.ren's last line `show`s the value, which boxes its type and hides the fix; the milestone kernel against Rust; borrowed reads of an array's struct, and swap-out of one's objects (step 7's choices, part 2); `if c then None else p` in debug builds (part 1's choices) |
+| 7 (part 3) | this commit | the third fix: a sum with one constructor that has fields, one of them an object after flattening, and any number without has no tag, `Niche { obj_ctor; slot; ctors }` for `Nullable`, its first object's slot holding `ren_box(UINT32_MAX - t)` for each constructor `t` without fields, read by `ren_niche_tag` or one compare; any other sum's tag is a byte (16 or 32 bits past 256 or 65,536 constructors), `Tagged bits`, each constructor's small scalars (`Bool`, `()`, enums, sized types under 64 bits) packed above it in slot 0, the widest first, and the whole word as before where none is (to_mem.ml's `small` and `small_ctor`, mem.ml(i), emit_c.ml's `Tag_of`, ren_rt.h, Mem Lint's sum structs and niches); and the debug builds' Mem Lint fault from step 3, `if c then None else p`: Mem was right, a boxed constructor without fields is a scalar that holds no reference, and Lint's join counted the parameter dropped on the constant's path against the one moved on the other; a path where some of a class hold constants may now hold fewer references than the paths where none do, at most one fewer for each constant (test_native's two cases, bench/data/niche_join). `Option<Item>` is two words, not three: optional.ren allocates 4, not 101,004, once its last line prints `best`'s fields (4 at 7c68889 too with that line; 2% fewer instructions, the copy with 100 times the items 411 to 401 million, and an array of a million options 25.2 MB to 17.6 MB, 309 to 256 million instructions, 0.80× the time); no program or kernel of the suite compiles to different C (RESULTS.md, "Data stage: layout"); variant types of a niche'd sum cost nothing (niche_reuse: nothing allocated in release, each update a reuse in debug); bench/data's niche, niche_walks, niche_panic, niche_reuse and niche_join in build.t's loops and the release naive one. Choices: below the table | the milestone kernel against Rust; a niche'd or tagged struct as a field of another is still boxed, not flattened (an option of an option, an option in a record); borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7467,7 +7489,8 @@ where the sections above are silent:
   fields on one path and to a parameter on the other. Release builds
   keep both as structs and pass. It's in the boxed path's counting or
   Mem Lint's join, not in the layout code, and the niche fix won't
-  reach it, since debug builds keep every type boxed.
+  reach it, since debug builds keep every type boxed. Fixed in part 3,
+  in Mem Lint's join (part 3's choices).
 - **bench/native/build.sh** called dispatch's kernels by step 6's old
   names, `shapes2(...)`, so it stopped there: it calls `codecsK` under
   the kernels' names now. **measure.sh's `memory` part** used BSD
@@ -7572,6 +7595,96 @@ inline), where the sections above are silent:
   `ren_dup`s an element, where each element was one pointer whose
   object was counted. A test's time only; the debug naive build, as
   before, 141 s against 156.
+
+Step 7's choices, part 3 (the third fix: a byte tag and pointer niches,
+and Mem Lint's join), where the sections above are silent:
+
+- **Which sums have a niche** (to_mem.ml, `small`): exactly one
+  constructor with fields, and one of its slots, after flattening, an
+  object; any number without, none included, so `| Wrap { s: Str, n:
+  Int, ok: Bool }` has no tag either, its `Tag_of` a constant. Its
+  slots are that constructor's, placed as a product's, at most four,
+  the product's budget; a sum that was boxed for a tag and four slots
+  may now be a small value. The niche slot is its first object. A sum
+  of one constructor of scalars only keeps its tag: there's no object to
+  hold a niche in, and the spec asks for none.
+- **A niche is by the constructor's tag**, `Scalar_ctor (-1 - t)`,
+  `ren_box(UINT32_MAX - t)`, not by its number among those without
+  fields, as the spec wrote it: either is a scalar no object is, and by
+  tag the C reads a tag back with one subtraction. With one constructor
+  without fields, `Tag_of` is one compare, as `Nullable`'s was; with
+  more, `ren_niche_tag` (ren_rt.h) takes the slot, the constructor with
+  fields, and the highest niche'd tag, and a scalar in that range is a
+  constructor without fields. **What else can be in the slot:** an
+  object, or a boxed sum's constructor without fields, `ren_box(k)` for
+  its small tag `k`, which is below the range unless a sum has billions
+  of constructors: `Option<Shown>` with `Shown` boxed keeps `Some(Plain)`
+  as `ren_box(0)` and `None` as `ren_box(UINT32_MAX - 1)`
+  (niche_walks). A niche'd value is never flattened into another, as the
+  spec has it, so no niche is ever in a slot that has one of its own; an
+  option of an option boxes the inner one, whose `None` is `ren_box(1)`.
+- **Counting a niche:** it's a scalar in an object slot, which
+  `ren_dup`, `ren_drop`, the release walk, the shared mark and the
+  array copies skip, as they skip `Scalar_ctor 0` in a slot a
+  constructor doesn't use; an array of niche'd values counts their slots
+  by its mask as any counted struct's. The walks (`show`, `==`, hash)
+  and descriptors never see one: a walked small value's type is boxed
+  (step 10's rule), and a boxed sum is unchanged. Mem Lint checks that a
+  niche is only in a `Niche` struct's object slot and is one of its
+  constructors without fields, that the slot is an object's, and that a
+  tag is 8, 16, 32 or 64 bits.
+- **The byte tag** is the low 8 bits of slot 0 for up to 256
+  constructors, 16 for up to 65,536, else 32 (as `small_bits` sizes an
+  enum), `Tagged bits`. Each constructor's small scalars, those `pack`
+  packs in an object (`Bool`, `()`, an enum, a sized type under 64 bits,
+  `Float32` included), go above it, the widest first, while there's
+  room; the rest take slots as before. Constructors pack independently,
+  since only one is alive. A type with parameters packs too: a struct
+  is one instantiation's, and generic code never sees one. Built by a
+  `Pack` of the tag, an `Enum_tag`, and the fields (`small_ctor`); read
+  by `Unpack` of slot 0, as a packed record's field is. **A sum with
+  nothing packed beside its tag keeps the whole word**, `Tagged 64`,
+  read without a mask, so its C is as before: a first build masked every
+  tag, and `stack`'s `Option<Int>` match compiled to different C for an
+  `and` it didn't need.
+- **Not flattened, still:** a niche'd or tagged struct as a field of
+  another small value, as the spec has it: the field's type is boxed
+  (an option of an option, an option in a record, `Option<Plan.Pro>`,
+  whose field is a `Plan`'s). Flattening a niche'd field into a parent
+  that has one would need the niches not to collide; not done.
+- **Mem Lint's join, `if c then None else p`** (part 1's "found, not
+  fixed", from step 3). The Mem was right. A boxed constructor without
+  fields is a scalar, `ren_box(t)`, which holds no reference and which
+  dropping does nothing to, so Perceus drops `p` on the constant's path
+  and moves it on the other, and the naive counting keeps it on both
+  and drops it after; release builds keep both as structs, which Lint
+  counts as owned, and pass. Lint's join puts `p` and `$if` in one class,
+  since they share a bundle on the parameter's path, and counted 0
+  references on the constant's path (`p`, dropped) against 1 on the
+  other. It already let a path where the class holds only constants
+  hold none; now a path where some of the class hold constants may hold
+  fewer references than the paths where none does, at most one fewer
+  for each constant, which stands for the reference its variable holds
+  elsewhere, and the paths where none does agree with each other. The
+  class is then given the most any path holds, so a later drop through
+  it is the parameter's on one path and the constant's, which does
+  nothing, on the other. A constant path that holds more than the
+  others, or two fewer for one constant, is still refused
+  (test_native.ml). Like the join's classes before it, this doesn't say
+  which of the class holds what: a constant path that kept `p` and so
+  leaked it held as many as the other and passed before as now.
+- **Measured against 7c68889** (RESULTS.md, "Data stage: layout"):
+  optional allocates 4, as it did at 7c68889 once its last line no
+  longer `show`s the option, on 2% fewer instructions, its time within
+  this machine's noise; an array of a million options is a third
+  smaller and read in 0.80× the time. No program or kernel of the
+  suite compiles to different C, so none is timed.
+- **Variant types and `Placed { ..p }` cost nothing extra when the
+  value is unique,** with these layouts too: a variant type's value is
+  its sum's, so `as` binds the subject's struct and `Pro { ..q }` is no
+  code; in release builds niche_reuse's loop of 1000 round trips
+  allocates nothing and its C is struct copies; in debug builds, `Plan`
+  boxed, each update is a reuse (build.t).
 
 ## The runtime model
 

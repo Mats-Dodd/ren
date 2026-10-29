@@ -87,16 +87,23 @@ type layout =
 (* How a [Struct] keeps its value. *)
 type struct_kind =
   | Product  (** a record's or a tuple's fields, a slot each *)
-  | Tagged
-      (** a sum's: slot 0 its constructor's tag, an [Int], and the fields of
-          each constructor in the slots after, which constructors share where
+  | Tagged of int
+      (** a sum's: slot 0 an [Int], its constructor's tag in its low [bits]
+          bits, 8 for up to 256 constructors, and each constructor's small
+          scalars packed above it ([Pack]), or, with none, the tag the whole
+          word, [64]; the other fields of each
+          constructor in the slots after, which constructors share where
           their layouts are the same; a slot a constructor has no field in
           holds a scalar ([Scalar_ctor 0] where it's [Boxed]) *)
-  | Nullable of int * int
-      (** a sum of two constructors, the first tag's without fields and the
-          second's with one, an object, its only slot: the object, or
-          [Scalar_ctor (-1)], which no object or constructor is, for the first
-          (Koka's [DataAsMaybe], Core/Core.hs:533) *)
+  | Niche of { obj_ctor : int; slot : int; ctors : int }
+      (** a sum of [ctors] constructors, one with fields, [obj_ctor], at
+          least one an object, and the rest without: no tag. The slots are
+          [obj_ctor]'s fields', and its object in [slot] says which
+          constructor it is: there, constructor [t] without fields is
+          [Scalar_ctor (-1 - t)], [ren_box(UINT32_MAX - t)], which no object
+          or other constructor is, its other slots scalars (Roc's
+          [NullableUnwrapped], Swift's spare bits; Koka's [DataAsMaybe],
+          Core/Core.hs:533, the case of one without fields) *)
 
 (* A [Struct]: its slots' layouts, and how it keeps its value. *)
 type strukt = { sfields : layout list; skind : struct_kind }
@@ -121,7 +128,8 @@ type atom =
   | Unit
   | Enum_tag of int  (** an [Enum]: the constructor with this tag *)
   | Scalar_ctor of int
-      (** a [Boxed] sum's constructor without fields, with this tag *)
+      (** a [Boxed] sum's constructor without fields, with this tag; below
+          0, [-1 - t], constructor [t]'s niche in a [Niche] struct *)
   | Lit of int
       (** the program's [strings]'s n-th, a [Str] made once and never freed *)
   | Desc_lit of int
@@ -318,7 +326,7 @@ type rhs =
   | Not of atom
   | Tag_of of atom
       (** the tag of a sum type's value, an [Int]: an [Enum], a [Boxed], or a
-          [Struct] that's [Tagged] or [Nullable] *)
+          [Struct] that's [Tagged] or [Niche] *)
   | Field of atom * int * int
       (** the [n]-th field of a constructor, a record or a tuple of [size]
           fields, by its slot: borrowed, not counted again *)

@@ -30,7 +30,8 @@ type Item =
   | Priced { l: Line, total: Int }
   | Void
 
-// one object, flattened: not an `Option`'s one word, a tag and a slot
+// one object, flattened: one word, its niche the record's `Str`'s slot (the
+// third fix; before it, a tag and a slot)
 type Name = { s: Str }
 
 type Tagged =

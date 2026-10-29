@@ -145,8 +145,9 @@ let atom (x : atom) =
   | Bool b -> if b then "true" else "false"
   | Unit -> "((ren_unit)0)"
   | Enum_tag t -> sprintf "((uint32_t)%d)" t
-  (* a [Nullable] struct's first constructor: a tag no type has *)
-  | Scalar_ctor t when t < 0 -> "ren_box(UINT32_MAX)"
+  (* a [Niche] struct's constructor [-1 - t] without fields: a scalar no
+     object or constructor is *)
+  | Scalar_ctor t when t < 0 -> sprintf "ren_box(UINT32_MAX - %d)" (-1 - t)
   | Scalar_ctor t -> sprintf "ren_box(%d)" t
   | Lit n -> sprintf "((ren_obj*)&ren_lit_%d)" n
   | Desc_lit n -> sprintf "((ren_obj*)&ren_desc_%d)" n
@@ -634,10 +635,24 @@ let rhs (r : rhs) =
       | Enum -> sprintf "((int64_t)%s)" (atom x)
       | Struct (n, _) -> (
           match !structs.(n).skind with
-          | Tagged -> sprintf "%s.s[0].i" (atom x)
-          | Nullable (none, some) ->
-              sprintf "(%s.s[0].o == ren_box(UINT32_MAX) ? %d : %d)" (atom x)
-                none some
+          | Tagged 64 -> sprintf "%s.s[0].i" (atom x)
+          | Tagged bits ->
+              sprintf "((int64_t)((uint64_t)%s.s[0].i & %s))" (atom x)
+                (low_bits bits)
+          | Niche { obj_ctor; slot; ctors } -> (
+              (* the constructors without fields, by their niches *)
+              match
+                List.filter (( <> ) obj_ctor)
+                  (List.init ctors Fun.id)
+              with
+              | [] -> sprintf "INT64_C(%d)" obj_ctor
+              | [ t ] ->
+                  sprintf "(%s.s[%d].o == ren_box(UINT32_MAX - %d) ? %d : %d)"
+                    (atom x) slot t t obj_ctor
+              | ts ->
+                  sprintf "ren_niche_tag(%s.s[%d].o, %d, %d)" (atom x) slot
+                    obj_ctor
+                    (List.fold_left max 0 ts))
           | Product -> bug "the tag of a record or a tuple")
       | _ -> sprintf "ren_tag(%s)" (atom x))
   | Field (x, n, _) | Struct_get (x, n) ->

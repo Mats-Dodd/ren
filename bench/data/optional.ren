@@ -21,4 +21,8 @@ fn main() uses Console =
         best = Some(i)
       None => ()
   print(hits)
-  print(best)
+  match best
+    Some(i) =>
+      print(i.name)
+      print(i.price)
+    None => print("none")

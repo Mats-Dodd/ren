@@ -338,6 +338,18 @@ static inline int64_t ren_tag(ren_obj *o) {
   return ren_is_scalar(o) ? (int64_t)((uintptr_t)o >> 1) : (int64_t)o->tag;
 }
 
+/* The tag of a small value kept with a pointer niche (mem.mli, `Niche`),
+   from its object slot `o`: constructor `t` without fields is
+   `ren_box(UINT32_MAX - t)`, for each `t` up to `most`, and anything
+   else, an object or a boxed sum's constructor without fields, a scalar
+   of a small tag, is the constructor `obj` with fields. */
+static inline int64_t ren_niche_tag(ren_obj *o, int64_t obj, uint32_t most) {
+  uintptr_t w = (uintptr_t)o;
+  return (w & 1) && (w >> 1) >= (uintptr_t)(UINT32_MAX - most)
+             ? (int64_t)(UINT32_MAX - (w >> 1))
+             : obj;
+}
+
 void ren_free(ren_obj *o);
 
 /* Counting has three modes, chosen when the C is compiled, and the

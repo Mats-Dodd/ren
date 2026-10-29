@@ -1,0 +1,27 @@
+// Data stage, step 7: a variant type of a niche'd sum costs nothing when
+// its value is unique, as variants_reuse.ren's does (compiler.md, "The
+// layout fixes (step 7)"). Each turn binds the `Pro` with `as`, updates
+// it as a `Plan.Pro`, `{ ..q, seats }`, and makes it the sum again, `Pro
+// { ..q }`. In a debug build `Plan` is boxed and Perceus reuse builds
+// each update over the value it replaces; in a release build it's two
+// words, its `Str` and its `Int`, with no tag, and nothing is allocated.
+// It's never shown, which would box it.
+
+type Plan =
+  | Free
+  | Pro { name: Str, seats: Int }
+  | Lapsed
+
+fn bump(q: Plan.Pro, by: Int) -> Plan.Pro = { ..q, seats: q.seats + by }
+
+fn main() uses Console =
+  var p: Plan = Pro { name: "team".concat("!"), seats: 0 }
+  for i in 0..1000
+    p = match p
+      Pro { .. } as q => Pro { ..bump(q, i) }
+      Free | Lapsed => p
+  match p
+    Pro { name, seats } =>
+      print(name)
+      print(seats)
+    Free | Lapsed => print("none")

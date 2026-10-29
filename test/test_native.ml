@@ -639,7 +639,7 @@ fn main() -> Int =
         (let $eq/5:Bool (== $len/4 0))
         (decl $if/6:Struct1c)
         (if $eq/5
-          (do (let $struct/7:Struct1c (struct #none*)) (set $if/6 $struct/7))
+          (do (let $struct/7:Struct1c (struct #niche1*)) (set $if/6 $struct/7))
           (do (let xs/8:Boxed xs/2) (let $elem/9:Boxed (array-get:Boxed xs/8 0))
             (let $struct/10:Struct1c (struct $elem/9))
             (set $if/6 $struct/10)))
@@ -798,6 +798,53 @@ let%expect_test "Mem Lint: a reference dropped on one path only" =
     ];
   [%expect
     {| Mem Lint, in f: x/1 holds 0 and 1 references on different paths |}]
+
+(* `if c then None else p`, boxed: the constant stands for the reference
+   the other path moves from the parameter it dropped here *)
+let%expect_test "Mem Lint: a constructor without fields where paths meet" =
+  let p = v 1 "p" Boxed and r = v 2 "r" Boxed in
+  lint
+    [
+      fn ~params:[ v 9 "ev" Ev ] ~modes:[ Owned ] [ Return (Int 0L) ];
+      {
+        (fn ~result:Boxed ~params:[ p ] ~modes:[ Owned ]
+        [
+          Decl r;
+          If
+            ( Bool true,
+              [ Drop (Var p); Set (r, Scalar_ctor 0) ],
+              [ Set (r, Var p) ] );
+          Return (Var r);
+        ])
+        with
+        name = "g";
+      };
+    ];
+  [%expect {| ok |}]
+
+(* but it stands for one reference at most *)
+let%expect_test "Mem Lint: a constant where paths meet, two references short" =
+  let p = v 1 "p" Boxed and r = v 2 "r" Boxed in
+  lint
+    [
+      fn ~params:[ v 9 "ev" Ev ] ~modes:[ Owned ] [ Return (Int 0L) ];
+      {
+        (fn ~result:Boxed ~params:[ p ] ~modes:[ Owned ]
+        [
+          Decl r;
+          If
+            ( Bool true,
+              [ Drop (Var p); Set (r, Scalar_ctor 0) ],
+              [ Dup (Var p); Set (r, Var p) ] );
+          Drop (Var p);
+          Return (Var r);
+        ])
+        with
+        name = "g";
+      };
+    ];
+  [%expect
+    {| Mem Lint, in g: r/2 holds 0 and 2 references on different paths |}]
 
 let%expect_test "Mem Lint: a reuse token never used" =
   let t = v 1 "t" Token in

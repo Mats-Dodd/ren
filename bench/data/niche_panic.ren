@@ -1,0 +1,35 @@
+// Data stage, step 7: a panic while niche'd and byte-tagged small values
+// that hold objects are alive, in a variable, in a match and in an array
+// (compiler.md, "The layout fixes (step 7)", the third fix). A panic
+// leaves what's alive as it is.
+
+type Plan =
+  | Free
+  | Pro { name: Str, seats: Int }
+  | Lapsed
+
+type Mark =
+  | Dot(on: Bool)
+  | Pin { on: Bool, label: Str }
+  | Gone
+
+fn main() uses Console =
+  let names = ["tea", "jam"]
+  let kept: Option<Str> = Some("kept".concat("!"))
+  var marks: Array<Mark> = [Pin { on: true, label: "m".concat("!") }, Gone]
+  var n = 0
+  for i in 0..5
+    let p = if i == 2 then Lapsed else if i == 3 then Free else Pro { name: names[i % 2].concat("?"), seats: i }
+    &marks.push(Dot(i % 2 == 0))
+    match p
+      Pro { name, seats } =>
+        n += seats
+        print(name)
+        // reads past the end on the fourth
+        print(names[seats / 4 * 5])
+      Free | Lapsed => n += 100
+  match kept
+    Some(s) => print(s)
+    None => ()
+  print(marks.len())
+  print(n)

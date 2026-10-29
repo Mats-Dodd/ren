@@ -411,13 +411,17 @@ let rec layout cx loc (t : Ty.ty) : layout =
    - a record or a tuple of at most four slots, each field a scalar, an
      object, or a small record or tuple flattened into it;
    - a sum that isn't recursive, whose constructors' fields are each a
-     scalar, an object or a small record or tuple, with a tag and at most
-     three slots, which the constructors share where their fields'
-     layouts are the same (as Koka's constructors of a value type share
-     their scan fields, Kind/Repr.hs:150-170); or, if it has two
-     constructors, one with no fields and one with an object, that
-     object, or a value no object is (Koka's [DataAsMaybe],
-     Core/Core.hs:533).
+     scalar, an object or a small record or tuple: if one constructor
+     has fields, one of them an object, and the rest have none, its
+     fields' slots, at most four, and no tag, the object's slot holding a
+     scalar no object is for each of the others ([Niche]: Roc's
+     [NullableUnwrapped], Swift's spare bits, and Koka's [DataAsMaybe],
+     Core/Core.hs:533, for one); otherwise a tag and at most three
+     slots, which the constructors share where their fields' layouts are
+     the same (as Koka's constructors of a value type share their scan
+     fields, Kind/Repr.hs:150-170), the tag a byte for up to 256
+     constructors with each constructor's small scalars packed beside it
+     in slot 0 ([Tagged]; the data stage's third layout fix).
    A field that's a small record or tuple, a [Product], is flattened:
    its slots are the value's, in order, each placed as a field of its
    layout is, and the budget is counted in slots after flattening (the
@@ -501,49 +505,110 @@ and small cx loc p args : (strukt * place list list) option =
     | Some { body = Sum cs; _ }
       when List.exists (fun (c : Iface.ctor) -> c.cfields <> []) cs
            && not (recursive cx p) -> (
-        let ctors = List.map (fun (c : Iface.ctor) -> simple (types_of c.cfields)) cs in
+        let tyss = List.map (fun (c : Iface.ctor) -> types_of c.cfields) cs in
+        let ctors = List.map simple tyss in
         if List.mem None ctors then None
         else
           let ctors = List.map Option.get ctors in
-          match ctors with
-          | [ []; [ `One Boxed ] ] ->
-              Some
-                ( { sfields = [ Boxed ]; skind = Nullable (0, 1) },
-                  [ []; [ Slot 0 ] ] )
-          | [ [ `One Boxed ]; [] ] ->
-              Some
-                ( { sfields = [ Boxed ]; skind = Nullable (1, 0) },
-                  [ [ Slot 0 ]; [] ] )
-          | _ ->
-              (* slot 0 is the tag; each slot of a field goes in the first
-                 slot after of its layout that its constructor hasn't
-                 used *)
-              let slots = ref [ (Int : layout) ] in
-              let place ls =
-                let used = ref [] in
+          let with_fields =
+            List.filter (fun (_, fs) -> fs <> []) (List.mapi (fun i f -> (i, f)) ctors)
+          in
+          match with_fields with
+          | [ (obj_ctor, fields) ]
+            when List.mem Boxed (List.concat_map slots_of fields)
+                 && List.length (List.concat_map slots_of fields) <= 4 ->
+              (* one constructor with fields, one of them an object, and
+                 the rest without: its fields' slots, as a product's, and
+                 no tag, since its first object's slot tells them apart
+                 (the third layout fix's niche, compiler.md, "The layout
+                 fixes (step 7)") *)
+              let sfields = List.concat_map slots_of fields in
+              let next = ref 0 in
+              let places =
                 List.map
                   (fun field ->
-                    place_of field
-                      (List.map
-                         (fun l ->
-                           let rec find i = function
-                             | [] ->
-                                 slots := !slots @ [ l ];
-                                 i
-                             | l' :: rest ->
-                                 if i > 0 && l' = l && not (List.mem i !used)
-                                 then i
-                                 else find (i + 1) rest
-                           in
-                           let i = find 0 !slots in
-                           used := i :: !used;
-                           i)
-                         (slots_of field)))
+                    let ks = List.mapi (fun i _ -> !next + i) (slots_of field) in
+                    next := !next + List.length ks;
+                    place_of field ks)
+                  fields
+              in
+              let rec first i = function
+                | Boxed :: _ -> i
+                | _ :: rest -> first (i + 1) rest
+                | [] -> bug "a niche without an object"
+              in
+              Some
+                ( {
+                    sfields;
+                    skind =
+                      Niche
+                        { obj_ctor; slot = first 0 sfields; ctors = List.length cs };
+                  },
+                  List.mapi (fun i _ -> if i = obj_ctor then places else []) ctors )
+          | _ ->
+              (* slot 0 is the tag, in its low byte for up to 256
+                 constructors, and each constructor's small scalars packed
+                 above it, the widest first, while there's room (the third
+                 layout fix's byte tag); each slot of another field goes
+                 in the first slot after of its layout that its
+                 constructor hasn't used *)
+              let n = List.length cs in
+              let tag_bits = if n <= 256 then 8 else if n <= 65536 then 16 else 32 in
+              let slots = ref [ (Int : layout) ] in
+              let place ls tys =
+                let small =
+                  List.filter_map
+                    (fun (i, (field, t)) ->
+                      match field with
+                      | `One l when scalar l ->
+                          Option.map (fun b -> (i, b)) (small_bits cx t)
+                      | _ -> None)
+                    (List.mapi (fun i ft -> (i, ft)) (List.combine ls tys))
+                in
+                let packed = Hashtbl.create 4 and at = ref tag_bits in
+                List.iter
+                  (fun (i, b) ->
+                    if !at + b <= 64 then (
+                      Hashtbl.replace packed i (!at, b);
+                      at := !at + b))
+                  (List.stable_sort (fun (_, a) (_, b) -> compare b a) small);
+                let used = ref [] in
+                List.mapi
+                  (fun i field ->
+                    match Hashtbl.find_opt packed i with
+                    | Some (at, b) -> Bits (0, at, b)
+                    | None ->
+                        place_of field
+                          (List.map
+                             (fun l ->
+                               let rec find i = function
+                                 | [] ->
+                                     slots := !slots @ [ l ];
+                                     i
+                                 | l' :: rest ->
+                                     if i > 0 && l' = l && not (List.mem i !used)
+                                     then i
+                                     else find (i + 1) rest
+                               in
+                               let i = find 0 !slots in
+                               used := i :: !used;
+                               i)
+                             (slots_of field)))
                   ls
               in
-              let placed = List.map place ctors in
+              let placed = List.map2 place ctors tyss in
+              (* with nothing packed beside it, the tag is the whole word,
+                 read without a mask *)
+              let tag_bits =
+                if
+                  List.exists
+                    (List.exists (function Bits _ -> true | _ -> false))
+                    placed
+                then tag_bits
+                else 64
+              in
               if List.length !slots <= 4 then
-                Some ({ sfields = !slots; skind = Tagged }, placed)
+                Some ({ sfields = !slots; skind = Tagged tag_bits }, placed)
               else None)
     | _ -> None
 
@@ -2054,17 +2119,29 @@ and small_ctor fs env (l : layout) (sh : shape) xs =
     match l with Struct (n, _) -> struct_of fs.cx n | _ -> bug "a struct"
   in
   let slots = Array.of_list (List.map (dummy fs env) st.sfields) in
+  (* a tag's slot 0: the tag, and the small scalars packed with it *)
+  let packed = ref [] in
   (match st.skind with
-  | Tagged -> slots.(0) <- Int (Int64.of_int sh.tag)
-  | Nullable (none, _) when sh.tag = none -> slots.(0) <- Scalar_ctor (-1)
+  | Tagged 64 -> slots.(0) <- Int (Int64.of_int sh.tag)
+  | Tagged bits -> packed := [ (Enum_tag sh.tag, 0, bits) ]
+  | Niche { obj_ctor; slot; _ } when sh.tag <> obj_ctor ->
+      slots.(slot) <- Scalar_ctor (-1 - sh.tag)
   | _ -> ());
   List.iter2
     (fun ((place : place), _) x ->
       match place with
       | Slot k -> slots.(k) <- x
       | Flat ks -> List.iter2 (fun k y -> slots.(k) <- y) ks (flat_slots fs x)
-      | Bits _ -> bug "a struct's field packed")
+      | Bits (0, at, bits) -> packed := !packed @ [ (x, at, bits) ]
+      | Bits _ -> bug "a struct's field packed outside its tag's slot")
     sh.places xs;
+  (match !packed with
+  | [] -> ()
+  | [ (Enum_tag t, _, _) ] -> slots.(0) <- Int (Int64.of_int t)
+  | packed ->
+      slots.(0) <-
+        borrowed fs "$packed" Int
+          (Pack (List.sort (fun (_, a, _) (_, b, _) -> compare a b) packed)));
   owned fs env "$struct" l (Make_struct (Array.to_list slots))
 
 and packed_words fs (sh : shape) fields =

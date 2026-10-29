@@ -513,10 +513,25 @@ let rec stmt env (s : stmt) : env =
                   (sprintf "%s is counted as a struct %s objects"
                      (show_layout v.layout)
                      (if c then "without" else "with"));
+              (* a niche, a constructor without fields, is only in a
+                 [Niche] struct's object slot, and is one of its
+                 constructors without fields *)
+              let niche (x, k) =
+                match (x, st.skind) with
+                | Scalar_ctor t, Niche { obj_ctor; slot; ctors } when t < 0 ->
+                    k = slot && -1 - t < ctors && -1 - t <> obj_ctor
+                | Scalar_ctor t, _ -> t >= 0
+                | _ -> true
+              in
+              if not (List.for_all niche (List.mapi (fun k x -> (x, k)) xs))
+              then fail env "a niche where it isn't one";
               (match (st.skind, st.sfields) with
               | Product, _ -> ()
-              | Tagged, Int :: _ -> ()
-              | Nullable _, [ Boxed ] -> ()
+              | Tagged (8 | 16 | 32 | 64), Int :: _ -> ()
+              | Niche { obj_ctor; slot; ctors }, ls
+                when List.nth_opt ls slot = Some Boxed
+                     && obj_ctor >= 0 && obj_ctor < ctors ->
+                  ()
               | _ -> fail env "a struct of a sum kept wrong")
           | l ->
               fail env
@@ -1092,12 +1107,30 @@ let merge env scope (states : rc_state list) : rc_state option =
             let k = List.hd ks in
             if k >= 0 then name first (find first k) else "a lent cell's value"
           in
-          (match totals with
-          | t :: rest when List.exists (( <> ) t) rest ->
-              rc_fail env
-                (sprintf "%s holds %s references on different paths" (what ())
-                   (String.concat " and " (List.map string_of_int totals)))
-          | _ -> ());
+          (* nor does a constant beside them: a path where some of them
+             hold constants, `$if` set to a constructor without fields
+             where another path sets it to a parameter, which is then
+             dropped there and moved here, may hold fewer references
+             than the paths where none does, each constant standing for
+             at most one, which dropping does nothing to. The paths where
+             none does hold as many as each other *)
+          let constants (st, _) =
+            List.length (List.filter (fun k -> not (real st (find st k))) ks)
+          in
+          let most = List.fold_left max 0 totals in
+          let plain =
+            List.filter_map
+              (fun p -> if constants p = 0 then Some (total p) else None)
+              per
+          in
+          let short p = most - total p in
+          if
+            (match plain with t :: rest -> List.exists (( <> ) t) rest | [] -> false)
+            || List.exists (fun p -> short p > constants p) per
+          then
+            rc_fail env
+              (sprintf "%s holds %s references on different paths" (what ())
+                 (String.concat " and " (List.map string_of_int totals)));
           match per with
           | [] -> ()
           | (_, [ b ]) :: rest
@@ -1125,7 +1158,7 @@ let merge env scope (states : rc_state list) : rc_state option =
                     st (bundles first)
                 in
                 let st, b =
-                  bundle env st ~count:(List.hd totals) kind (what ())
+                  bundle env st ~count:most kind (what ())
                 in
                 merged :=
                   List.fold_left
