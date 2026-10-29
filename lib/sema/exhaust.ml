@@ -208,9 +208,12 @@ let rec outcomes ?swap env (p : pattern) =
   | POr ps when is_fails p -> List.concat_map (outcomes ?swap env) ps
   | _ -> [ Ctor (value, [ simplify env p ]) ]
 
-(* A space as a pattern is written. A record's, and a by-name
-   constructor's, are written in braces, by name: the fields that matter,
-   and `..` for the rest, `{ paid: false, .. }`, `Rect { .. }`. *)
+(* A space as a pattern is written, as code that compiles where an arm's
+   pattern goes. A record's, and a by-name constructor's, are written in
+   braces, by name: the fields that matter, and `..` for the rest, `{
+   paid: false, .. }`, `Rect { .. }`; a by-name constructor after its sum,
+   `Shape.Rect { .. }`, where a bare one would be a record type in scope
+   (Infer_msg.braced_ctor). *)
 let rec show_space env = function
   | Any -> "_"
   | Or ss -> String.concat " | " (List.map (show_space env) ss)
@@ -223,7 +226,8 @@ let rec show_space env = function
   | Ctor ({ name; owner = Of_type p | Of_variant (p, _) }, args)
     when match ctor_of env p name with Some k -> k.cnamed | None -> false ->
       let k = Option.get (ctor_of env p name) in
-      show_named env (name ^ " { ")
+      let written = Infer_msg.braced_ctor ~types:env.types ~names:env.names p name in
+      show_named env (written ^ " { ")
         (List.map (fun (f : Iface.field) -> f.fname) k.cfields)
         args ~all:true
   | Ctor (c, []) -> c.name
@@ -512,12 +516,13 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
         each (Option.get fail_tags) (fun t -> Ctor (failed, [ t ]))
     | w -> [ w ]
   in
-  let missing = List.concat_map expand (collect rows 3) in
+  (* a fourth, if there is one, says more may be missing than are shown *)
+  let found = List.concat_map expand (collect rows 4) in
   let is_error = function
     | Ctor ({ owner = Outcome; name = "fail" }, _) -> true
     | _ -> false
   in
-  match List.filteri (fun i _ -> i < 3) missing with
+  match List.filteri (fun i _ -> i < 3) found with
   | [] -> ()
   | first :: _ as ws ->
       let errors_missing = List.exists is_error ws in
@@ -550,19 +555,40 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
       let help =
         match first with
         | Any | Ctor ({ owner = Outcome; name = "value" }, [ Any ]) ->
-            "add a `_ =>` arm to cover the remaining values"
+            "add a `_ =>` arm to cover the remaining values:"
         | Ctor ({ owner = Outcome; name = "fail" }, [ Any ]) ->
-            "add a `fail _ =>` arm, or pass the errors on with `try match`"
+            "add a `fail _ =>` arm, or pass the errors on with `try match`:"
         | w when is_error w ->
-            sprintf
-              "add an arm for `%s`, or a `fail _ =>` arm for the rest, or pass \
-               them on with `try match`"
-              (show_space env w)
-        | w ->
-            sprintf "add an arm for `%s`, or a `_ =>` arm for the rest"
-              (show_space env w)
+            "add the missing arms, or a `fail _ =>` arm for the rest, or pass \
+             them on with `try match`:"
+        | _ -> "add the missing arms, or a `_ =>` arm for the rest:"
       in
-      Diag.error keyword ~notes ~help
+      (* The arms to paste after the others, each `PATTERN => todo`: the
+         missing ones shown, then, if more may be missing, an arm for the
+         rest of the values, or of the errors, that aren't. *)
+      let shown = rows @ List.map (fun w -> [ w ]) ws in
+      let rest =
+        if List.length found <= 3 then []
+        else if not handles then [ "_" ]
+        else
+          (if missing env (shown @ [ [ Ctor (failed, [ Any ]) ] ]) 1 <> None
+           then [ "_" ]
+           else [])
+          @
+          if missing env (shown @ [ [ Ctor (value, [ Any ]) ] ]) 1 <> None
+          then [ "fail _" ]
+          else []
+      in
+      let code =
+        List.map (fun p -> p ^ " => todo") (List.map (show_space env) ws @ rest)
+      in
+      (* at the column of the arms, to paste under them *)
+      let code_at =
+        match arms with
+        | a :: _ -> a.arm_pat.ploc.start.col
+        | [] -> start.col + 2
+      in
+      Diag.error keyword ~notes ~help ~code ~code_at
         (sprintf "this `match` doesn't handle %s" what)
 
 (* A variable bound to an error, `Err(e)`, would make the error a value of
@@ -593,7 +619,7 @@ let guard env f = Diag.recover env.sink ~default:() f
 
 let rec check_expr env (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
   | Named (_, a) -> check_expr env a
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms

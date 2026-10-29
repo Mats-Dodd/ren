@@ -63,6 +63,7 @@
 (any) @keyword
 (numeric) @keyword
 (break) @keyword
+(todo) @keyword
 ; how a block parameter's block runs: `concurrent`, `spawned`
 (block_mode) @keyword
 

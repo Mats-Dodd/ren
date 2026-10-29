@@ -383,7 +383,8 @@ instruction isn't handled until `Vm.step` has an arm for it:
   50 │     match p.at(self.pc)
      │     ^^^^^
      = missing: Dup
-     help: add an arm for `Dup`, or a `_ =>` arm for the rest
+     help: add the missing arms, or a `_ =>` arm for the rest:
+        Dup => todo
   [1]
 
 A method that changes its receiver is called with `&`:
@@ -543,14 +544,16 @@ to do about it:
   34 │   match &acme.transfer(send(alice, carol, 10))
      │   ^^^^^
      = missing: fail TooLarge(_)
-     help: add an arm for `fail TooLarge(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+     help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+      fail TooLarge(_) => todo
   
   error: this `match` doesn't handle every `Result`
      ┌─ b4/main.ren:70:3
   70 │   match r
      │   ^^^^^
      = missing: Err(TooLarge(_))
-     help: add an arm for `Err(TooLarge(_))`, or a `_ =>` arm for the rest
+     help: add the missing arms, or a `_ =>` arm for the rest:
+      Err(TooLarge(_)) => todo
   [1]
 
 A public function can't take a type other modules can't name, and the

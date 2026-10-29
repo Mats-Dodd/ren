@@ -769,6 +769,15 @@ and expr_of cx (e : expr) : C.expr =
       let cond = expr cx cond in
       here (While (cond, expr cx body))
   | Break -> here Break
+  | Todo ->
+      (* the standard library's panic, at the type wanted here, with the
+         `todo`'s place as the call's, which is where the panic is said *)
+      let t = ty () in
+      let a : Ty.args = { tys = [ t ]; rows = [ Ty.closed; Ty.closed ] } in
+      let fty = Ty.apply a (Prelude.scheme Lib_panic).ty in
+      let f = mk (Intrinsic (Lib_panic, a, descs cx a, [])) fty e.loc in
+      let msg = mk (Str "reached a `todo`") Ty.str e.loc in
+      here (Call (f, [ C.Value msg ], cx.ev))
   | With { items; body } -> with_ cx e items body
   | Handler { deps; state; arms; _ } ->
       (* it runs where it's installed, with the evidence there *)
@@ -2610,7 +2619,7 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
@@ -2916,19 +2925,30 @@ let main_uses (main : C.fn_def) =
    (infer_top.ml, [check_main]). It starts from no evidence at all. *)
 let start (main : C.fn_def) : C.fn_def =
   let loc = main.loc in
+  (* A `main` that never gives a value, `fn main() = todo`, is generic in
+     the one it would give, `fn main<T>() -> T`: `$start` calls it at
+     `Unit`, so that what the runtime runs isn't generic. *)
+  let own = Ty.own_args main.scheme.ty in
+  let own =
+    if main.scheme.reqs = [] then
+      { own with tys = List.map (fun _ -> Ty.unit) own.tys }
+    else own
+  in
   let ret, errs =
-    match main.scheme.ty with
+    match Ty.apply own main.scheme.ty with
     | Fun (_, ret, errs, _) -> (ret, errs)
     | _ -> bug "a `main` whose type isn't a function's"
   in
   let deps = main_uses main in
-  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) } in
+  let scheme =
+    let names = if main.scheme.reqs = [] then [] else main.scheme.names in
+    { main.scheme with ty = Fun ([], ret, errs, Ty.closed); names }
+  in
   let tys = C.type_params scheme in
   let dicts = C.dict_params scheme in
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
-        let own = Ty.own_args main.scheme.ty in
         mk
           (Call
              ( mk
@@ -2937,7 +2957,7 @@ let start (main : C.fn_def) : C.fn_def =
                       own,
                       List.map (C.describe tys) own.tys,
                       List.map (fun v -> C.Dict_param v) dicts ))
-                 main.scheme.ty loc,
+                 (Ty.apply own main.scheme.ty) loc,
                [],
                C.evidence n ))
           ret loc

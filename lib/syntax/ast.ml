@@ -320,6 +320,10 @@ and ('v, 'b, 't) expr_kind =
   | Break
       (** [break]: leaves the innermost `while` or `for` it's written in, never
           a block's (resolve.ml) *)
+  | Todo
+      (** [todo]: code still to write, of any type, which panics where it's
+          reached, "reached a `todo`"; what a `match`'s missing arms are
+          printed with (compiler.md, "Data stage") *)
   | Fail of ident * (ident option * ('v, 'b, 't) expr) list
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
           so it's only ever written here, after `!`, in a pattern, and as the
@@ -676,7 +680,7 @@ let children (e : ('v, 'b, 't) expr) =
     | Expr e | Finally e -> [ e ]
   in
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> []
   | Unop (_, a, _)
   | Field (a, _)
   | Ref a
@@ -1089,6 +1093,7 @@ let rec show_expr (e : expr) =
         ]
   | While { cond; body } -> parens [ "while"; show_expr cond; show_expr body ]
   | Break -> "break"
+  | Todo -> "todo"
   | Fail (t, args) ->
       let show_arg = function
         | Some (l : ident), a -> l.name ^ "=" ^ show_expr a
@@ -1367,6 +1372,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Bool b -> string_of_bool b
     | Str s -> show_str s
     | Unit -> "()"
+    | Todo -> "todo"
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p
     | Var (Intrinsic x) -> Intrinsic.name x

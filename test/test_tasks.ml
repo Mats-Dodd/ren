@@ -1037,7 +1037,8 @@ fn main() = ()
     7 │       match r
       │       ^^^^^
       = missing: Err(Cancelled)
-      help: add an arm for `Err(Cancelled)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+            Err(Cancelled) => todo
     |}]
 
 (* ---- s3: the rest of `Async` ---- *)

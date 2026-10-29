@@ -162,7 +162,8 @@ fn main() =
     2 │   match (1, Some(2))
       │   ^^^^^
       = missing: (_, Some(_))
-      help: add an arm for `(_, Some(_))`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        (_, Some(_)) => todo
     |}];
   check_error
     {|

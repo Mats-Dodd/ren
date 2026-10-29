@@ -1628,14 +1628,14 @@ let rec pattern env ?(how = By_pattern) ?(same = Env.empty) sc
    "Data stage", "Patterns that always match"). *)
 let binding env sc bound (p : Parsed.pattern) = pattern env ~how:bound sc p
 
-(* Whether [e], the `else` of a `let ... else`, leaves: it's a `fail` or a
-   `break`, or a block whose last line leaves, an `if` with an `else`
-   whose branches both do, or a `match` whose every arm does. Ren has no
-   `return`, and `todo` comes with the errors that teach the model
-   (compiler.md, "Data stage", "`let ... else`"). *)
+(* Whether [e], the `else` of a `let ... else`, leaves: it's a `fail`, a
+   `break` or a `todo`, which panics, or a block whose last line leaves,
+   an `if` with an `else` whose branches both do, or a `match` whose every
+   arm does. Ren has no `return`, and no other expression a program writes
+   panics with any type (compiler.md, "Data stage", "`let ... else`"). *)
 let rec leaves (e : Parsed.expr) =
   match e.kind with
-  | Fail _ | Break -> true
+  | Fail _ | Break | Todo -> true
   | Block (_, last) -> leaves last
   | If (_, t, Some f) -> leaves t && leaves f
   | Match (_, arms) -> List.for_all (fun (a : Parsed.arm) -> leaves a.arm_body) arms
@@ -2057,6 +2057,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               ~help:"end the `with`'s body with a `Bool`, and `break` after it"
               "a `break` can't leave a `with`");
         Break
+    | Todo -> Todo
     | Fail (t, args) ->
         (match Hashtbl.find_opt env.types t.name with
         | Some (p, _) when is_set env p ->

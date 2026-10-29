@@ -276,11 +276,12 @@ Tested against the compiler on 2026-10-28:
 | Or-patterns | only on `fail` tags; `A(n) \| B(n)` doesn't parse. Since step 3: anywhere a pattern goes, nested, `Some(Pro(_) \| Team(_))`, each alternative binding the same names at the same types, and one that matches nothing new an error |
 | `as` | doesn't parse. Since step 3: `Pro(n) as old`, binding the whole of what's matched, looser than `\|` |
 | `if let` | doesn't parse. Since step 3: an error whose help writes the `match` or the `let ... else` |
-| `let Some(n) = o else ...` | rejected with a good error and help to use `match`; `o orelse 0` works. Since step 3: works, its `else` leaving with `fail` or `break`; a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too |
+| `let Some(n) = o else ...` | rejected with a good error and help to use `match`; `o orelse 0` works. Since step 3: works, its `else` leaving with `fail` or `break` (and `todo`, since step 5); a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too |
 | Methods on a sum type | work |
-| A field every variant has, `s.id` | "`.id` needs a record, but this is a `Shape`" |
+| A field every variant has, `s.id` | "`.id` needs a record, but this is a `Shape`". Since step 5: "every variant of `Shape` has `id`, but a sum type has no fields", whose help says to hoist it into a record, `type Shape = { id: Int, kind: ShapeKind }`, or write a method; a field only some variants have, "`Shape` is a sum type; only `Rect` has `w`", whose help writes the `match` that takes it out |
 | Narrowing in an arm | none; a variant isn't a type. Since step 4: a variant with named fields is a type, `Order.Placed`, which a pattern's `as` binds, `Placed { .. } as p`; a record of its fields, read, matched and updated, that goes anywhere a value does, `Placed { ..p }` the sum again; `==`, order, `hash` and `show` the sum's |
-| Exhaustiveness | very good: lists the missing patterns, says guarded arms don't count, flags unreachable arms |
+| Exhaustiveness | very good: lists the missing patterns, says guarded arms don't count, flags unreachable arms. Since step 5: the help prints the missing arms as code to paste, `Some(Closed) => todo`, at the arms' column; the editor's code action is later |
+| `todo` | none. Since step 5: a keyword, an expression of any type that panics where it's reached, "reached a `todo`", in `ren run` and natively; it leaves a `let ... else` |
 | One constructor name in two types | resolved by the expected type, else "write `A.Open`" |
 | Records | nominal: same-shaped records don't mix |
 

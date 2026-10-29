@@ -187,7 +187,7 @@ let no_inout cx (ps : param list) =
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Tag_set _ -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Todo | Tag_set _ -> ()
   | Named (_, a) -> walk cx a
   | Var _ | Field _ | Index _ | Slice _ -> (
       match place_of e with

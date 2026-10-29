@@ -915,6 +915,9 @@ and synth env cx (e : expr) : ty =
   | Break ->
       (* it never produces a value, as `fail` doesn't *)
       fresh_var env.st
+  | Todo ->
+      (* it panics, so it's of whatever type is wanted where it's written *)
+      fresh_var env.st
   | Fail ({ name = "Cancelled"; _ }, []) when env.in_finally > 0 ->
       (* in a `finally`: the cancel goes on, which no row has *)
       List.iter (fun m -> if m.mkind <> Mtry then m.failed <- true) cx.markers;

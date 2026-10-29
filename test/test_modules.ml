@@ -792,7 +792,8 @@ fn main() = price(Free)
     3 │   match p
       │   ^^^^^
       = missing: Pro(_)
-      help: add an arm for `Pro(_)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Pro(_) => todo
     |}]
 
 let%expect_test "a type written with its alias doesn't use its name" =

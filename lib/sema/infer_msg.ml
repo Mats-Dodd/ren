@@ -459,6 +459,116 @@ let no_such_field ~names ?(what = "field") ?owner (f : Ast.ident) path decl =
        (match owner with Some o -> o | None -> names path)
        what f.name)
 
+(* ---- the errors that teach the model (compiler.md, "Data stage",
+   "The errors that teach the model") ---- *)
+
+(* How code a help writes names the by-name constructor [c] of the sum
+   [sum] in a pattern: bare, `Rect`, unless a bare `Rect { ... }` would be
+   a type in scope there that isn't a sum with it (resolve.ml,
+   [braces_name]), and then after its sum, `Shape.Rect`. [types] is every
+   type the module can see, and [names] how it writes one, bare only if
+   it's in scope. *)
+let braced_ctor ~types ~names sum c =
+  let sum_bare = not (String.contains (names sum) '.') in
+  let shadowed =
+    Hashtbl.fold
+      (fun p (td : Iface.type_decl) acc ->
+        acc
+        || names p = c
+           && match td.body with Sum _ -> not sum_bare | _ -> true)
+      types false
+  in
+  if shadowed then names sum ^ "." ^ c else c
+
+(* `s.r`, where [recv], `s` as it's written, is of the sum type [td],
+   which has no fields: which of its variants have [f], a by-name one or a
+   positional one whose label it is, said with the `match` that takes it
+   from them, or, if every variant has it at one type, how to make it the
+   sum's own. [None] if none of them has it. *)
+let field_of_sum ~types ~names (f : Ast.ident) ~recv (td : Iface.type_decl) =
+  let cs = match td.body with Sum cs -> cs | _ -> [] in
+  let has =
+    List.filter_map
+      (fun (k : Iface.ctor) ->
+        Option.map
+          (fun (d : Iface.field) -> (k, d.fty))
+          (List.find_opt (fun (d : Iface.field) -> d.fname = f.name) k.cfields))
+      cs
+  in
+  let sum = names td.path in
+  let printer =
+    Ty.printer ~names
+      {
+        ty = Ty.Con (td.path, List.mapi (fun i _ -> Ty.Var i) td.params);
+        names = List.mapi (fun i n -> (i, n)) td.params;
+        reqs = [];
+        row_reqs = [];
+        modes = [];
+        defaults = [];
+      }
+  in
+  (* each variant's pattern that binds the field to its name *)
+  let pattern ((k : Iface.ctor), _) =
+    if k.cnamed then
+      sprintf "%s { %s%s }"
+        (braced_ctor ~types ~names td.path k.cname)
+        f.name
+        (if List.length k.cfields > 1 then ", .." else "")
+    else sprintf "%s(%s)" k.cname f.name
+  in
+  let one_type =
+    match has with
+    | (_, t) :: rest -> List.for_all (fun (_, t') -> t' = t) rest
+    | [] -> true
+  in
+  let every = List.length has = List.length cs in
+  (* the arms: the variants in one, if they have it at one type *)
+  let arms =
+    if one_type then
+      [ String.concat " | " (List.map pattern has) ^ " => " ^ f.name ]
+    else List.map (fun v -> pattern v ^ " => " ^ f.name) has
+  in
+  let code =
+    (sprintf "match %s" recv :: List.map (fun a -> "  " ^ a) arms)
+    @ if every then [] else [ "  _ => todo" ]
+  in
+  let ctor_names = List.map (fun ((k : Iface.ctor), _) -> k.cname) has in
+  match has with
+  | [] -> None
+  | (_, t) :: _ when every && one_type ->
+      let name = td.path.name in
+      let args =
+        if td.params = [] then ""
+        else "<" ^ String.concat ", " td.params ^ ">"
+      in
+      Some
+        (Diag.make f.loc
+           ~help:
+             (sprintf
+                "hoist it into a record, `type %s%s = { %s: %s, kind: \
+                 %sKind%s }`, or write a method that matches each variant"
+                name args f.name (Ty.show printer t) name args)
+           (sprintf "every variant of `%s` has `%s`, but a sum type has no \
+                     fields" sum f.name))
+  | _ when every ->
+      (* at different types, so there's nothing one record could hold *)
+      Some
+        (Diag.make f.loc ~help:"take it from each with a `match`:" ~code
+           (sprintf "every variant of `%s` has `%s`, but a sum type has no \
+                     fields" sum f.name))
+  | [ _ ] ->
+      Some
+        (Diag.make f.loc
+           ~help:(sprintf "take it from `%s` with a `match`:" (List.hd ctor_names))
+           ~code
+           (sprintf "`%s` is a sum type; only `%s` has `%s`" sum
+              (List.hd ctor_names) f.name))
+  | _ ->
+      Some
+        (Diag.make f.loc ~help:"take it from them with a `match`:" ~code
+           (sprintf "`%s` is a sum type; only %s have `%s`" sum
+              (and_list ctor_names) f.name))
+
 (* ---- record update, `{ ..base, f: v }` (compiler.md, "Data stage",
    "Record update") ----
 

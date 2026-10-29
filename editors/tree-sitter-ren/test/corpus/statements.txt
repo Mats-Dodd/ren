@@ -512,3 +512,58 @@ fn fnv(bytes: Array<UInt8>) -> Int =
         (binary_expression
           (identifier)
           (identifier))))))
+
+================================================================================
+todo, of any type, and leaving a let ... else
+================================================================================
+
+fn first(o: Option<Int>) -> Int =
+  let Some(n) = o else todo
+  match n
+    0 => todo
+    _ => n
+
+fn later() -> Str = todo
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (let_statement
+        (constructor_pattern
+          (constructor_ref
+            (type_identifier))
+          (identifier))
+        (identifier)
+        (let_else
+          (todo)))
+      (match_expression
+        (identifier)
+        (match_arm
+          (number)
+          (todo))
+        (match_arm
+          (wildcard)
+          (identifier)))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (named_type
+      (type_name
+        (type_identifier)))
+    (todo)))

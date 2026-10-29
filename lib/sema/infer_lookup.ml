@@ -364,6 +364,17 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
               | Dep ops ->
                   report env (op_of_value ~names:env.names ?recv:(env.source r) f p ops);
                   TError
+              | Sum _ -> (
+                  (* the variants that have it, and the `match` that takes
+                     it from them *)
+                  let recv = Option.value (env.source r) ~default:"..." in
+                  match
+                    field_of_sum ~types:env.types ~names:env.names f ~recv td
+                  with
+                  | Some d ->
+                      report env d;
+                      TError
+                  | None -> needs_record t)
               | _ -> needs_record t))
       | TVariant (p, c, args) -> (
           (* a variant type is a record of its constructor's fields: a

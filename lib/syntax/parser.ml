@@ -128,7 +128,7 @@
                                                      the call's last argument;
                                                      alone, it's the only one)
      primary  := INT | STR | "true" | "false" | "(" ")" | IDENT | "self"
-              |  "break"
+              |  "break" | "todo"                   (`todo`: any type; panics)
               |  lambda | "handler" lambda      (an inline handler)
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  tyname "{" ".." expr {"," finit} "}"   (an update: the rest
@@ -1688,6 +1688,9 @@ and parse_primary p =
   | BREAK ->
       advance p;
       mk Break start p
+  | TODO ->
+      advance p;
+      mk Todo start p
   | LPAREN when peek2 p = RPAREN ->
       advance p;
       advance p;

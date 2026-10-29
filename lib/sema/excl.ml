@@ -833,7 +833,7 @@ let param_use cx (b : binder) loc why =
 
 let rec walk cx (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Todo -> ()
   | Var _ | Field _ | Index _ | Slice _ -> (
       match place_of cx e with
       | Some p ->

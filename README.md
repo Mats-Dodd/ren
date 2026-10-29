@@ -114,7 +114,19 @@ fn seat_limit(p: Plan) -> Int =
     Enterprise(_) => Int.max
 ```
 
-An arm can match several shapes with `|` between them, each binding the same names, and `as` names the whole of what it matched. A `let` takes apart what might not match when it has an `else`, which has to leave, with `fail` or `break`:
+Leave out an arm and the error writes it for you, as code to paste under the others, ending in `todo`: an expression of any type that panics where it's reached, so a program with work still to do compiles. Asking a sum for a field one variant has says which, and writes the `match`; asking for one every variant has says to hoist it into a record:
+
+```
+error: this `match` doesn't handle every `Plan`
+  ┌─ plans.ren:9:3
+9 │   match p
+  │   ^^^^^
+  = missing: Enterprise(_)
+  help: add the missing arms, or a `_ =>` arm for the rest:
+    Enterprise(_) => todo
+```
+
+An arm can match several shapes with `|` between them, each binding the same names, and `as` names the whole of what it matched. A `let` takes apart what might not match when it has an `else`, which has to leave, with `fail`, `break` or `todo`:
 
 ```ren
 fn upgraded(p: Plan) -> Plan =

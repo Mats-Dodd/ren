@@ -2632,11 +2632,14 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
       emit fs (Panic (here_site fs, "every task is waiting, and nothing can wake one"));
       Unit
   (* the standard library's panic, whose message is always written in
-     its source *)
+     its source, said at the program's call that reached it; and a
+     program's `todo`, which is said where it's written, as `ren run`
+     says it *)
   | Lib_panic, _, _ -> (
       match args with
       | [ Value { kind = C.Str msg; _ } ] ->
-          emit fs (Panic (here_site fs, msg));
+          let site = if fs.prelude then here_site fs else new_site cx (at fs e.loc) in
+          emit fs (Panic (site, msg));
           dummy fs env (lay e.ty)
       | _ -> unsupported_at fs e.loc "`lib_panic` of a message not written there")
   (* the real `Console`'s operations *)

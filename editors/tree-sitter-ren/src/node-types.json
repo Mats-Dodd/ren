@@ -108,6 +108,10 @@
         "named": true
       },
       {
+        "type": "todo",
+        "named": true
+      },
+      {
         "type": "try_expression",
         "named": true
       },
@@ -705,6 +709,10 @@
             "named": true
           },
           {
+            "type": "todo",
+            "named": true
+          },
+          {
             "type": "tuple_expression",
             "named": true
           },
@@ -1257,6 +1265,10 @@
           },
           {
             "type": "string",
+            "named": true
+          },
+          {
+            "type": "todo",
             "named": true
           },
           {
@@ -2164,6 +2176,10 @@
             "named": true
           },
           {
+            "type": "todo",
+            "named": true
+          },
+          {
             "type": "tuple_expression",
             "named": true
           },
@@ -2589,6 +2605,10 @@
           },
           {
             "type": "string",
+            "named": true
+          },
+          {
+            "type": "todo",
             "named": true
           },
           {
@@ -4088,6 +4108,10 @@
   {
     "type": "then",
     "named": false
+  },
+  {
+    "type": "todo",
+    "named": true
   },
   {
     "type": "true",

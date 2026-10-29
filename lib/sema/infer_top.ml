@@ -108,7 +108,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
     | Named (_, a) -> expr a
     | Unop (_, a, _)
     | Field (a, _)
@@ -1871,7 +1871,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     let carried = if block then Said else Kept Elsewhere in
     let all place = List.iter (walk (Kept place)) in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
     | Named (_, a) -> walk pos a
     | Call (callee, args) ->
         (* a block a type variable of the callee stands for is blamed on

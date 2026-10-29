@@ -991,10 +991,14 @@ module.exports = grammar({
         $.fail_expression,
         $.with_expression,
         $.break,
+        $.todo,
       ),
 
     // leaves the innermost `while` or `for`
     break: (_) => 'break',
+
+    // code still to write: of any type, it panics where it's reached
+    todo: (_) => 'todo',
 
     // 1_000_000, hex 0x82F6_3B78 or binary 0b1010: the prefix in lower
     // case, underscores anywhere after the first digit. Always an `Int`

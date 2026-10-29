@@ -854,7 +854,8 @@ fn main() = ()
     7 │   match s
       │   ^^^^^
       = missing: Rect { .. }
-      help: add an arm for `Rect { .. }`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Rect { .. } => todo
     |}]
 
 (* ---- s3: or-patterns, `as`, `let ... else` ---- *)
@@ -1607,85 +1608,58 @@ type Shape =
 |}
 
 let%expect_test "[s5 reject] a field asked of a sum names the variant that has it" =
-  until "s5"
-    ~says:
-      [
-        "error: `Shape` is a sum type; only `Ring` has `r`";
-        "help: take it from `Ring` with a `match`:";
-        "match s";
-        "Ring { r, .. } => r";
-        "_ => todo";
-      ]
-    (fun () -> check_error (shapes ^ {|
+  check_error (shapes ^ {|
 fn f(s: Shape) -> Int = s.r
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: `.r` needs a record, but this is a `Shape`
+    error: `Shape` is a sum type; only `Ring` has `r`
       ┌─ test.ren:7:27
     7 │ fn f(s: Shape) -> Int = s.r
       │                           ^
+      help: take it from `Ring` with a `match`:
+          match s
+            Ring { r, .. } => r
+            _ => todo
     |}]
 
 let%expect_test "[s5 reject] a field two variants have" =
-  until "s5"
-    ~says:
-      [
-        "error: `Shape` is a sum type; only `Rect`, `Frame` and `Ring` have `id`";
-        "help: take it from them with a `match`:";
-        "Rect { id, .. } | Frame { id, .. } | Ring { id, .. } => id";
-        "_ => todo";
-      ]
-    (fun () -> check_error (shapes ^ {|
+  check_error (shapes ^ {|
 fn f(s: Shape) -> Int = s.id
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: `.id` needs a record, but this is a `Shape`
+    error: `Shape` is a sum type; only `Rect`, `Frame` and `Ring` have `id`
       ┌─ test.ren:7:27
     7 │ fn f(s: Shape) -> Int = s.id
       │                           ^^
+      help: take it from them with a `match`:
+          match s
+            Rect { id, .. } | Frame { id, .. } | Ring { id, .. } => id
+            _ => todo
     |}]
 
 let%expect_test "[s5 reject] a field every variant has: hoist it" =
-  until "s5"
-    ~says:
-      [
-        "error: every variant of `Shape` has `id`, but a sum type has no fields";
-        "help: hoist it into a record, `type Shape = { id: Int, kind: \
-         ShapeKind }`, or write a method that matches each variant";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Shape =
   | Rect { id: Int, w: Int, h: Int }
   | Ring { id: Int, r: Int }
 
 fn f(s: Shape) -> Int = s.id
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `.id` needs a record, but this is a `Shape`
+    error: every variant of `Shape` has `id`, but a sum type has no fields
       ┌─ test.ren:5:27
     5 │ fn f(s: Shape) -> Int = s.id
       │                           ^^
+      help: hoist it into a record, `type Shape = { id: Int, kind: ShapeKind }`, or write a method that matches each variant
     |}]
 
 let%expect_test "[s5 reject] a `match` that misses cases prints the arms to paste" =
-  until "s5"
-    ~says:
-      [
-        "error: this `match` doesn't handle every `Option`";
-        "help: add the missing arms, or a `_ =>` arm for the rest:";
-        "Some(Closed) => todo";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Door =
   | Open
   | Closed
@@ -1695,55 +1669,40 @@ fn f(d: Option<Door>) -> Int =
     Some(Open) => 1
     None => 0
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s5)
     error: this `match` doesn't handle every `Option`
       ┌─ test.ren:6:3
     6 │   match d
       │   ^^^^^
       = missing: Some(Closed)
-      help: add an arm for `Some(Closed)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Some(Closed) => todo
     |}]
 
 let%expect_test "[s5 reject] the arms to paste, by name, and the rest" =
   (* three are printed; if more may be missing, a `_` arm after them *)
-  until "s5"
-    ~says:
-      [
-        "help: add the missing arms, or a `_ =>` arm for the rest:";
-        "Rect { .. } => todo";
-        "Frame { .. } => todo";
-        "Ring { .. } => todo";
-      ]
-    (fun () ->
-      check_error (shapes ^ {|
+  check_error (shapes ^ {|
 fn f(s: Shape) -> Int =
   match s
     Dot => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s5)
     error: this `match` doesn't handle every `Shape`
       ┌─ test.ren:8:3
     8 │   match s
       │   ^^^^^
       = missing: Rect { .. }, Frame { .. }, Ring { .. }
-      help: add an arm for `Rect { .. }`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Rect { .. } => todo
+        Frame { .. } => todo
+        Ring { .. } => todo
     |}]
 
 let%expect_test "[s5 reject] a missing error is a `fail` arm to paste" =
-  until "s5"
-    ~says:
-      [
-        "help: add the missing arms, or a `fail _ =>` arm for the rest, or pass \
-         them on with `try match`:";
-        "fail Late(_) => todo";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn take(n: Int) -> Int ! Short(Int) | Late(Int) =
   if n > 3 then fail Short(n) else if n < 0 then fail Late(n) else n
 
@@ -1751,23 +1710,20 @@ fn main() uses Console =
   match take(5)
     n => print(n)
     fail Short(x) => print(x)
-|});
+|};
   [%expect {|
-    (until s5)
     error: this `match` doesn't handle every error it can fail with
       ┌─ test.ren:5:3
     5 │   match take(5)
       │   ^^^^^
       = missing: fail Late(_)
-      help: add an arm for `fail Late(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+      help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+        fail Late(_) => todo
     |}]
 
 let%expect_test "[s5 accept] `todo` has any type, and panics where it's reached" =
-  until "s5"
-    ~says:[ "panic: reached a `todo`" ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 type Light =
   | Red
   | Green
@@ -1780,42 +1736,474 @@ fn next(l: Light) -> Int =
 fn main() uses Console =
   print(next(Red))
   print(next(Green))
-|});
+|};
   [%expect {|
-    (until s5)
-    error: there's no variable named `todo`
+    1
+    error: panic: reached a `todo`
       ┌─ test.ren:8:14
     8 │     Green => todo
       │              ^^^^
     |}]
 
 let%expect_test "[s5 accept] `todo` leaves a `let ... else`" =
-  until "s5"
-    ~want:{|
-fn first(o: Option<Int>) -> Int
-fn main()
-|}
-    (fun () ->
-      types
-        {|
+  types
+    {|
 fn first(o: Option<Int>) -> Int =
   let Some(n) = o else todo
   n
 
 fn main() = ()
+|};
+  [%expect {|
+    fn first(o: Option<Int>) -> Int
+    fn main()
+    |}]
+
+let%expect_test "[s5 reject] a positional variant's label is its field" =
+  (* at another type, so an arm each *)
+  check_error
+    {|
+type Shape =
+  | Ring { id: Int, r: Int }
+  | Pin(r: Str)
+  | Dot
+
+fn f(s: Shape) -> Int = s.r
+fn main() = ()
+|};
+  [%expect {|
+    error: `Shape` is a sum type; only `Ring` and `Pin` have `r`
+      ┌─ test.ren:6:27
+    6 │ fn f(s: Shape) -> Int = s.r
+      │                           ^
+      help: take it from them with a `match`:
+          match s
+            Ring { r, .. } => r
+            Pin(r) => r
+            _ => todo
+    |}]
+
+let%expect_test "[s5 reject] a field every variant has at different types" =
+  check_error
+    {|
+type Key =
+  | Num { id: Int }
+  | Name { id: Str }
+
+fn f(k: Key) -> Int = k.id
+fn main() = ()
+|};
+  [%expect {|
+    error: every variant of `Key` has `id`, but a sum type has no fields
+      ┌─ test.ren:5:25
+    5 │ fn f(k: Key) -> Int = k.id
+      │                         ^^
+      help: take it from each with a `match`:
+          match k
+            Num { id } => id
+            Name { id } => id
+    |}]
+
+let%expect_test "[s5 reject] a field no variant has keeps today's error" =
+  check_error (shapes ^ {|
+fn f(s: Shape) -> Int = s.z
+fn main() = ()
 |});
   [%expect {|
-    (until s5)
-    error: there's no variable named `todo`
-      ┌─ test.ren:2:24
-    2 │   let Some(n) = o else todo
-      │                        ^^^^
+    error: `.z` needs a record, but this is a `Shape`
+      ┌─ test.ren:7:27
+    7 │ fn f(s: Shape) -> Int = s.z
+      │                           ^
+    |}]
 
-    error: the `else` of a `let ... else` has to leave
-      ┌─ test.ren:2:24
-    2 │   let Some(n) = o else todo
-      │                        ^^^^
-      help: end it with `fail`, `break` or `todo`
+let%expect_test "[s5 reject] a generic sum's field every variant has: hoist it" =
+  check_error
+    {|
+type Tree<T> =
+  | Leaf { id: Int }
+  | Node { id: Int, left: Tree<T>, value: T, right: Tree<T> }
+
+fn f(t: Tree<Int>) -> Int = t.id
+fn main() = ()
+|};
+  [%expect {|
+    error: every variant of `Tree` has `id`, but a sum type has no fields
+      ┌─ test.ren:5:31
+    5 │ fn f(t: Tree<Int>) -> Int = t.id
+      │                               ^^
+      help: hoist it into a record, `type Tree<T> = { id: Int, kind: TreeKind<T> }`, or write a method that matches each variant
+    |}]
+
+let%expect_test "[s5 reject] more missing than shown: an arm for the rest" =
+  check_error
+    {|
+type Day =
+  | Mon
+  | Tue
+  | Wed
+  | Thu
+  | Fri
+
+fn work(d: Day) -> Int =
+  if true then
+    match d
+      Mon => 1
+  else 0
+fn main() = ()
+|};
+  [%expect {|
+    error: this `match` doesn't handle every `Day`
+       ┌─ test.ren:10:5
+    10 │     match d
+       │     ^^^^^
+       = missing: Tue, Wed, Thu
+       help: add the missing arms, or a `_ =>` arm for the rest:
+          Tue => todo
+          Wed => todo
+          Thu => todo
+          _ => todo
+    |}]
+
+let%expect_test "[s5 reject] a missing arm nested, by name inside a positional one" =
+  check_error (shapes ^ {|
+fn f(s: Option<(Shape, Bool)>) -> Int =
+  match s
+    None => 0
+    Some((Dot, _)) => 1
+    Some((Rect { .. }, _)) => 2
+    Some((Frame { .. }, true)) => 3
+    Some((Ring { .. }, _)) => 4
+fn main() = ()
+|});
+  [%expect {|
+    error: this `match` doesn't handle every `Option`
+      ┌─ test.ren:8:3
+    8 │   match s
+      │   ^^^^^
+      = missing: Some((Frame { .. }, false))
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Some((Frame { .. }, false)) => todo
+    |}]
+
+let%expect_test "[s5 reject] a by-name constructor a record type shadows is written after its sum" =
+  check_error
+    {|
+type Rect = { w: Int, h: Int }
+type Shape =
+  | Dot
+  | Rect { w: Int, h: Int }
+
+fn f(s: Shape) -> Int =
+  match s
+    Dot => 0
+fn main() = ()
+|};
+  [%expect {|
+    error: this `match` doesn't handle every `Shape`
+      ┌─ test.ren:7:3
+    7 │   match s
+      │   ^^^^^
+      = missing: Shape.Rect { .. }
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Shape.Rect { .. } => todo
+    |}]
+
+let%expect_test "[s5 reject] missing values and errors: an arm each" =
+  check_error
+    {|
+fn take(n: Int) -> Bool ! Short(Int) | Late(Int) =
+  if n > 3 then fail Short(n) else if n < 0 then fail Late(n) else n > 1
+
+fn main() uses Console =
+  match take(5)
+    true => print(1)
+    fail Short(x) => print(x)
+|};
+  [%expect {|
+    error: this `match` doesn't handle every value and error
+      ┌─ test.ren:5:3
+    5 │   match take(5)
+      │   ^^^^^
+      = missing: false, fail Late(_)
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        false => todo
+        fail Late(_) => todo
+    |}]
+
+let%expect_test "[s5 reject] a missing `Err` is each of its tags" =
+  check_error
+    {|
+fn take(n: Int) -> Int ! Short | Late(Int) =
+  if n > 3 then fail Short else if n < 0 then fail Late(n) else n
+
+fn main() uses Console =
+  match attempt take(5)
+    Ok(n) => print(n)
+|};
+  [%expect {|
+    error: this `match` doesn't handle every `Result`
+      ┌─ test.ren:5:3
+    5 │   match attempt take(5)
+      │   ^^^^^
+      = missing: Err(Late(_)), Err(Short)
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Err(Late(_)) => todo
+        Err(Short) => todo
+    |}]
+
+let%expect_test "[s5 accept] `todo` stands for a whole function's body, `main`'s too" =
+  run_error {|
+fn later(n: Int) -> Str = todo
+
+fn main() = todo
+|};
+  [%expect {|
+    error: panic: reached a `todo`
+      ┌─ test.ren:3:13
+    3 │ fn main() = todo
+      │             ^^^^
+    |}]
+
+let%expect_test "[s5 reject] `todo` is a keyword, not a name" =
+  check_error {|
+fn main() =
+  let todo = 1
+  ()
+|};
+  [%expect {|
+    error: expected a name, found `todo`
+      ┌─ test.ren:2:7
+    2 │   let todo = 1
+      │       ^^^^
+    |}]
+
+(* The arms a `match` misses, pasted in as they're printed, at the column
+   they're printed at, after its last arm: the program then checks. *)
+let pasted src =
+  let src = clean src in
+  let lines = String.split_on_char '\n' src in
+  match Ren.Driver.check ~file src with
+  | _ -> print_endline "it checks, with nothing to paste"
+  | exception (Ren.Diag.Errors (d :: _) | Ren.Diag.Error d) ->
+      let col = Option.value d.code_at ~default:1 in
+      let indent l =
+        let n = String.length l in
+        let rec go i = if i < n && l.[i] = ' ' then go (i + 1) else i in
+        if String.trim l = "" then max_int else go 0
+      in
+      (* the arms are the lines after the `match`'s that are indented as far
+         as its arms, or further *)
+      let rec after i = function
+        | l :: rest when indent l >= col - 1 && indent l <> max_int ->
+            after (i + 1) rest
+        | _ -> i
+      in
+      let at = after d.loc.start.line (List.filteri (fun i _ -> i >= d.loc.start.line) lines) in
+      let arms = List.map (fun c -> String.make (col - 1) ' ' ^ c) d.code in
+      let src' =
+        String.concat "\n"
+          (List.filteri (fun i _ -> i < at) lines
+          @ arms
+          @ List.filteri (fun i _ -> i >= at) lines)
+      in
+      List.iter print_endline arms;
+      (match Ren.Driver.check ~file src' with
+      | _ -> print_endline "pasted: it checks"
+      | exception e ->
+          report src' (fun () -> raise e))
+
+let%expect_test "[s5 accept] the arms printed, pasted back in, check" =
+  List.iter
+    (fun src ->
+      pasted src;
+      print_endline "--")
+    [
+      {|
+type Door =
+  | Open
+  | Closed
+
+fn f(d: Option<Door>) -> Int =
+  match d
+    Some(Open) => 1
+    None => 0
+fn main() = ()
+|};
+      shapes ^ {|
+fn f(s: Shape) -> Int =
+  match s
+    Dot => 0
+fn main() = ()
+|};
+      shapes ^ {|
+fn f(s: Option<(Shape, Bool)>) -> Int =
+  match s
+    None => 0
+    Some((Dot, _)) => 1
+    Some((Rect { .. }, _)) => 2
+    Some((Frame { .. }, true)) => 3
+    Some((Ring { .. }, _)) => 4
+fn main() = ()
+|};
+      {|
+type Day =
+  | Mon
+  | Tue
+  | Wed
+  | Thu
+  | Fri
+
+fn work(d: Day) -> Int =
+  if true then
+    match d
+      Mon => 1
+  else 0
+fn main() = ()
+|};
+      {|
+type Rect = { w: Int, h: Int }
+type Shape =
+  | Dot
+  | Rect { w: Int, h: Int }
+
+fn f(s: Shape) -> Int =
+  match s
+    Dot => 0
+fn main() = ()
+|};
+      {|
+type Order = { id: Int, paid: Bool, urgent: Bool }
+
+fn f(o: Order) -> Int =
+  match o
+    { paid: true, .. } => 1
+    { urgent: true, .. } => 2
+fn main() = ()
+|};
+      {|
+fn take(n: Int) -> Bool ! Short(Int) | Late(Int) =
+  if n > 3 then fail Short(n) else if n < 0 then fail Late(n) else n > 1
+
+fn main() uses Console =
+  match take(5)
+    true => print(1)
+    fail Short(x) => print(x)
+|};
+      {|
+fn take(n: Int) -> Int ! Short | Late(Int) =
+  if n > 3 then fail Short else if n < 0 then fail Late(n) else n
+
+fn main() uses Console =
+  match attempt take(5)
+    Ok(n) => print(n)
+|};
+      {|
+type Plan =
+  | Free
+  | Pro(Int)
+
+fn f(p: Plan, n: Int) -> Int =
+  match (p, n)
+    (Free, 0) => 0
+    (Pro(_), _) if n > 1 => 1
+fn main() = ()
+|};
+    ];
+  [%expect {|
+        Some(Closed) => todo
+    pasted: it checks
+    --
+        Rect { .. } => todo
+        Frame { .. } => todo
+        Ring { .. } => todo
+    pasted: it checks
+    --
+        Some((Frame { .. }, false)) => todo
+    pasted: it checks
+    --
+          Tue => todo
+          Wed => todo
+          Thu => todo
+          _ => todo
+    pasted: it checks
+    --
+        Shape.Rect { .. } => todo
+    pasted: it checks
+    --
+        { paid: false, urgent: false, .. } => todo
+    pasted: it checks
+    --
+        false => todo
+        fail Late(_) => todo
+    pasted: it checks
+    --
+        Err(Late(_)) => todo
+        Err(Short) => todo
+    pasted: it checks
+    --
+        (Pro(_), _) => todo
+        (Free, _) => todo
+    pasted: it checks
+    --
+    |}]
+
+(* The `match` a field asked of a sum writes, pasted in for the field's
+   read, as the function's body: the program then checks. [decls] are the
+   types, and [f] the function, `fn f(s: Shape) -> Int =` and its body,
+   which reads the field. A field every variant has at different types
+   gives arms of different types, which no one function returns, so it
+   isn't among them. *)
+let pasted_match decls f =
+  let src = clean (decls ^ f ^ "fn main() = ()\n") in
+  match Ren.Driver.check ~file src with
+  | _ -> print_endline "it checks, with nothing to paste"
+  | exception (Ren.Diag.Errors (d :: _) | Ren.Diag.Error d) ->
+      let head = List.hd (String.split_on_char '=' f) ^ "=" in
+      let src' =
+        clean decls ^ String.trim head ^ "\n"
+        ^ String.concat "\n" (List.map (fun l -> "  " ^ l) d.code)
+        ^ "\nfn main() = ()\n"
+      in
+      List.iter print_endline d.code;
+      (match Ren.Driver.check ~file src' with
+      | _ -> print_endline "pasted: it checks"
+      | exception e -> report src' (fun () -> raise e))
+
+let%expect_test "[s5 accept] the `match` a field's error writes, pasted in, checks" =
+  let fields =
+    {|
+type Shape =
+  | Dot
+  | Rect { id: Int, w: Int, h: Int }
+  | Ring { id: Int, r: Int }
+  | Pin(r: Int)
+|}
+  in
+  List.iter
+    (fun f ->
+      pasted_match fields f;
+      print_endline "--")
+    [
+      "fn f(s: Shape) -> Int = s.w\n";
+      "fn f(s: Shape) -> Int = s.id\n";
+      "fn f(r: Shape) -> Int = r.r\n";
+    ];
+  [%expect {|
+    match s
+      Rect { w, .. } => w
+      _ => todo
+    pasted: it checks
+    --
+    match s
+      Rect { id, .. } | Ring { id, .. } => id
+      _ => todo
+    pasted: it checks
+    --
+    match r
+      Ring { r, .. } | Pin(r) => r
+      _ => todo
+    pasted: it checks
+    --
     |}]
 
 (* ---- s6: descriptions, an operation called only on a stateless one ---- *)

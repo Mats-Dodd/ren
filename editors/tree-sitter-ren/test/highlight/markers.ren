@@ -354,3 +354,12 @@ fn ship(p: Order.Placed) -> Order = Order.Placed { ..p }
 //               ^ type
 //                          ^ type
 //                                        ^ constructor
+
+// `todo` is a keyword: code still to write, of any type
+fn first(o: Option<Int>) -> Int =
+  let Some(n) = o else todo
+//                     ^ keyword
+  match n
+    0 => todo
+//       ^ keyword
+    _ => n
