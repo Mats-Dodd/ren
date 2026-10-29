@@ -320,12 +320,35 @@ Async.scope fn(s) =>
   `n` of the scope's tasks run, which is a server's backpressure. The
   default is 64, as `Async.map`'s is, so a server writes
   `max: 10_000`.
-- **A handler has no task of its own.** Background work, a cache's
-  refresh or a metrics flush, is a task spawned beside the `with` that
-  calls one of the handler's operations (`Metrics.flush()`), and the
-  scope cancels it when the body ends. So every piece of handler code
-  is an operation, and an operation keeps its instance until it
-  returns (decision 10).
+- **A handler has no task of its own.** Background work is a task
+  that calls the handler's operations (`Metrics.flush()`), and every
+  piece of handler code is an operation, which keeps its instance until
+  it returns (decision 10).
+- **A task can't reach a handler installed inside the scope it's
+  spawned into.** It's a compile error, since the task could outlive the
+  handler; its help says to open the scope inside the `with`. So whether
+  a task is waited for never depends on where a `with` sits. (Java's
+  `StructureViolationException` makes the same refusal at run time,
+  Effekt's capture sets at compile time; where a scope passed to a
+  helper hides which is inner, the check is the run time's.)
+- **Background work is a scope of its own:** `Async.beside(task) fn()
+  => body` runs `task` alongside `body`, and when `body` ends, cancels
+  `task` and waits for it; `Async.background fn(bg) => body` is the same
+  for tasks spawned with `bg.spawn` as the body goes. Opened inside a
+  `with`, it can't outlive the handler, and the nesting gives the order
+  a pool's health checker needs: the work drains, then the background
+  stops, then the handler's `finally` runs.
+
+  ```ren
+  with pool() in
+    Async.beside(fn() => health_loop()) fn() =>
+      Async.scope(max: 10_000) fn(s) => ...
+  ```
+
+- **A background task's failure cancels the body** and is its error:
+  `Async.beside`'s `task` may fail, unlike a spawned one, so a lease
+  keeper that loses its lease stops the work it guards, as in Eio,
+  Kotlin, Go's errgroup and OTP's `one_for_all`.
 - **One way to wait: `Async.until(cond)`.** The condition reads only the
   handler's own state, and is checked again when the handler is released.
   The runtime resumes the first waiter whose condition holds. No wakeup
@@ -427,6 +450,18 @@ happen, with nothing to annotate.
   needed three fixes: two puts claimed one offset, a record written
   during an fsync was published as durable, and two overlapping syncs
   published out of order.
+- **`release` lets go for one call.** `try release next.get(id)`: the
+  instance is let go of while that call runs, and taken back after it,
+  queueing like any caller. It's the one place state can change under
+  an operation, so it's written there, and two checks come with it:
+  `sim` switches tasks at every `release`, and a value read from state
+  before a `release` and used to write state after it is a warning. A
+  circuit breaker needs it (without it, every call queues behind the
+  slow one it exists to cut off), and so does a cache that shouldn't
+  make hits wait behind misses. Releasing after an operation's last use
+  of state, chosen by the compiler, was rejected: it changes the order
+  of outward calls, not only timing, and it can't help a handler that
+  writes state after its call.
 - **What it costs:** one slow call, an fsync, serializes that handler's
   operations. For the writer that's what's wanted. A handler that wants
   its calls to overlap splits an operation in two, "reserve" and
@@ -882,7 +917,8 @@ and 32-bit references as the default.
 | A dependency can't take type parameters | Generic dependencies |
 | `Async.limit` and the recorder are built in | `over any` handlers in Ren |
 | `Async.group(max:)` | `Async.scope(max:)` |
-| A handler can run a `task =>` that lives as long as its `with` (async.md) | A task spawned beside the `with`, calling an operation |
+| A handler can run a `task =>` that lives as long as its `with` (async.md) | `Async.beside(task) fn() => body` inside the `with`, whose task's failure cancels the body |
+| A cancelled `Proc.run` kills its program | It kills the program's whole process group, `kill: Tree`, unless `kill: Child` |
 | `par_map` | `Async.map` over a block with no dependencies |
 | Preemption at loop back-edges (async.md) | None |
 | `race` takes the first to finish; `retry(n)` retries any error | `race`'s branches can't fail, so the first to finish succeeded; `retry(n, on: Tags)` |
@@ -991,6 +1027,15 @@ and 32-bit references as the default.
    here: `s.spawn` carries `Async` in its caller's row, since it can
    wait; and no code reached from a call with an empty row runs a
    scheduling point.
+   **Done** (a38b2f4 to aba8624, d34dc80), with parameters with
+   defaults, given by name (`max: Int = 64`), kept as a language
+   feature. **Follow-ups, gavelled after it landed:** the compile error
+   for a task that reaches a handler installed inside its scope, and
+   `Async.beside` and `Async.background` (decision 7), replacing the
+   built rule that cancelled such tasks when the `with` ended;
+   `release` on one call, with `sim` switching at it and the stale-read
+   warning (decision 10); `Proc.run(cmd, kill: Tree | Child)`, `Tree`
+   by default.
 5. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the
    runtime model of [compiler.md](compiler.md#the-runtime-model): the
    shared mark and atomic counts on shared objects, a heap per thread
@@ -1011,6 +1056,13 @@ need no native code.
 ## Open questions
 
 - The size budget for cloning a `with` body per handler.
+- **What a keyed handler is.** `keyed(n, h)` is `n` fixed stripes
+  routed by the first argument's key, built into the runtime since Ren
+  code can't hold `n` instances of a handler. Under decision 10 a stripe
+  is held across its outward calls, so striping only divides the
+  waiting, and an operation with no key gives the last stripe's result.
+  One instance per key, made on first use (Orleans' activations), is the
+  candidate, with its lifecycle (eviction, its `finally`) to decide.
 - Whether `both` gets a "runs once" marker.
 - What a runtime written by users looks like.
 - Where folding and sharing per layout run (on Mem IR before C, or on
