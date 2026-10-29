@@ -1,0 +1,72 @@
+// What step 1 proves of a loop over bytes, which a native build then
+// doesn't check (compiler.md, "Bytes stage", "Step 1's fixes"): a read
+// at the loop's count, or a copy of it; at an index tested below the
+// length, `while j < n && b.at(j) ...`; at a count that steps by more
+// than 1, as a tokenizer's does; a count stepped to the largest `Int`;
+// and, unproved and so still checked, a read after the bytes or the
+// index changed. Each prints what `ren run` prints, in every build.
+
+fn digits(b: Bytes) -> Int =
+  // `j < n && b.at(j)`: in bounds where the test held
+  var total = 0
+  var i = 0
+  let n = b.len()
+  while i < n
+    let c = b.at(i)
+    if c >= 48 && c <= 57 then
+      var j = i
+      var v = 0
+      while j < n && b.at(j) >= 48 && b.at(j) <= 57
+        v = v * 10 + b.at(j) - 48
+        j += 1
+      total += v
+      i = j
+    else if c == 34 then i += 2
+    else i += 1
+  total
+
+fn same(b: Bytes, from: Int, s: Bytes) -> Bool =
+  // `i < s.len()` on one side of an `&&`
+  var ok = from + s.len() <= b.len()
+  var i = 0
+  while ok && i < s.len()
+    ok = b.at(from + i) == s.at(i)
+    i += 1
+  ok
+
+fn changed(b: Bytes) -> Int =
+  // the bytes change in the loop: a read is proved only between its
+  // test and the change
+  var c = b
+  var t = 0
+  for i in 0..b.len()
+    if i < c.len() then
+      t += c.at(i)
+      c = c[0..c.len() - 1]
+  t
+
+fn widest() -> Int =
+  // a count stepped up to the largest `Int`, which can't overflow
+  let top = 9223372036854775807
+  var i = top - 3
+  var n = 0
+  while i < top
+    n += 1
+    i += 1
+  n
+
+fn main() uses Console =
+  let b = "x 12 \"y\" 345 6789 z".bytes()
+  print(digits(b))
+  print(same(b, 2, "12".bytes()))
+  print(same(b, 2, "13".bytes()))
+  print(same(b, 17, "zz".bytes()))
+  print(changed("abcdef".bytes()))
+  print(widest())
+  var xs = [1, 2, 3]
+  var sum = 0
+  for i, x in &xs
+    sum += b.at(i) + x
+    x += 1
+  print(sum)
+  print(xs)

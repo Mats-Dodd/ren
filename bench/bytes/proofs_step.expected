@@ -1,0 +1,5 @@
+1
+2
+3
+exit 1
+error: panic: `+` overflowed: 9223372036854775807 + 1

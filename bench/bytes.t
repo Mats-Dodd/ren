@@ -17,6 +17,15 @@ here to say so.
   >    rm -f spec.out spec.err)
   > }
 
+Step 1's proofs, which a native build doesn't check, and the reads and
+steps they leave checked:
+
+  $ for f in proofs proofs_ref proofs_step proofs_negative; do spec bytes/$f.ren; done
+  bytes/proofs.ren: as specified
+  bytes/proofs_ref.ren: as specified
+  bytes/proofs_step.ren: as specified
+  bytes/proofs_negative.ren: as specified
+
 Layer 3 lands in step 2. `Map` and `Set` already run in the
 interpreter, so their programs are as specified there; `x.hash()` lands
 in step 3.
@@ -86,6 +95,31 @@ line of what `ren build` said. Layer 3 lands natively in step 2, `Map`,
   >    fi
   >    rm -f interp.out interp.err interp.code native.bin native.out native.err native.err2 native.code build.err spec.out spec.err spec.code)
   > }
+  $ for f in proofs proofs_ref proofs_step proofs_negative; do native bytes/$f.ren; done
+  bytes/proofs.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/proofs.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 8 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs.ren, release: the same, exit 0, objects live at exit 0
+  bytes/proofs.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/proofs.ren, ren run --release: the same
+  bytes/proofs_ref.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/proofs_ref.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_ref.ren, release: the same, exit 1, objects live at exit 2
+  bytes/proofs_ref.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/proofs_ref.ren, ren run --release: the same
+  bytes/proofs_step.ren, perceus: the same, exit 1, objects live at exit 1
+  bytes/proofs_step.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_step.ren, release: the same, exit 1, objects live at exit 1
+  bytes/proofs_step.ren, tcc: the same, exit 1, objects live at exit 1
+  bytes/proofs_step.ren, ren run --release: the same
+  bytes/proofs_negative.ren, perceus: the same, exit 1, objects live at exit 1
+  bytes/proofs_negative.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_negative.ren, release: the same, exit 1, objects live at exit 1
+  bytes/proofs_negative.ren, tcc: the same, exit 1, objects live at exit 1
+  bytes/proofs_negative.ren, ren run --release: the same
   $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor; do native bytes/$f.ren; done
   bytes/reads.ren: not native yet: error: `Bytes` has no method named `u8`
   bytes/reads_panic.ren: not native yet: error: `Bytes` has no method named `u32_le`

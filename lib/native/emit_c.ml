@@ -335,8 +335,9 @@ let runtime rt args site_arg =
   | Array_set_taking (Struct (n, _)) ->
       sprintf "ren_array_set_slots_taking_k(%s, %s, %s.s, %d, %s)" (a 0) (a 1)
         (a 2) (struct_words n) (isite ())
-  | Array_push_taking (Struct _) ->
-      sprintf "ren_array_push_slots_taking(%s, %s.s)" (a 0) (a 1)
+  | Array_push_taking (Struct (n, _)) ->
+      sprintf "ren_array_push_slots_taking_k(%s, %s.s, %d)" (a 0) (a 1)
+        (struct_words n)
   (* an array of a sized type's elements, at its width: read and written
      in place directly, and copied, which is rarer, through the words *)
   | Array_get (Sized k) | Array_take (Sized k) ->
@@ -467,7 +468,9 @@ let runtime rt args site_arg =
   | Str_trim -> sprintf "ren_str_trim(%s)" (a 0)
   | Copied Of_array_elems -> sprintf "ren_array_copied(%s)" (a 0)
   | Copied _ -> sprintf "ren_str_copied(%s)" (a 0)
-  | Bytes_at -> sprintf "ren_bytes_at(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Bytes_at -> sprintf "ren_bytes_at(%s, %s, %s)" (a 0) (a 1) (isite ())
+  | Str_data -> sprintf "((void*)ren_str_data(%s))" (a 0)
+  | Bytes_get -> sprintf "ren_buf_byte(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (isite ())
   | Bytes_of -> sprintf "ren_bytes_of(%s, %s)" (a 0) (site ())
   | Show_int -> sprintf "ren_show_int(%s)" (a 0)
   | Show_float -> sprintf "ren_show_float(%s, %s)" (a 0) (site ())
@@ -483,6 +486,9 @@ let runtime rt args site_arg =
       let o = match op with Add -> "+" | Sub -> "-" | _ -> "*" in
       sprintf "((int64_t)((uint64_t)%s %s (uint64_t)%s))" (a 0) o (a 1)
   | Wrapping_neg -> sprintf "((int64_t)(0 - (uint64_t)%s))" (a 0)
+  (* proved not to overflow (bounds.ml), so C's signed `+`, which tells
+     clang it doesn't, and which UBSan checks *)
+  | Count_step -> sprintf "(%s + 1)" (a 0)
   | Bits x ->
       let o =
         match x with
@@ -591,6 +597,14 @@ let rhs (r : rhs) =
       sprintf "%s_d(%s, %s, %s)"
         (binop_fn op Float)
         (atom x) (atom y) (tag s)
+  (* `/` or `%` of an [Int] by a constant other than 0 and -1: C's own,
+     which can't fault or overflow then, so [ren_div]'s and [ren_rem]'s
+     tests would be dead; and the constant reaches clang's lowering of a
+     division by one, a multiply, as itself, where through [ren_rem]
+     constant hoisting could hide it (compiler.md, "Bytes stage") *)
+  | Arith (((Div | Mod) as op), x, (Int c as y), _)
+    when atom_layout x = Int && c <> 0L && c <> -1L ->
+      sprintf "(%s %s %s)" (atom x) (if op = Div then "/" else "%") (atom y)
   | Arith (op, x, y, s) ->
       sprintf "%s(%s, %s, %s)"
         (binop_fn op (atom_layout x))

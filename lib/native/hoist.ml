@@ -443,4 +443,116 @@ let fn (f : fn) =
   in
   { f with body = block f.body }
 
-let program (p : program) = { p with fns = List.map fn p.fns }
+(* ---- the bytes a loop reads ----
+
+   A `Str`'s or `Bytes`' length and where its bytes are never change once
+   it's made (ren_rt.h, [ren_str]), but C can't know that: a loop that
+   reads a byte, [Bytes_at], and also calls a function or stores
+   anything reads both from the object again before every byte, since
+   the call or the store might have changed them as far as C knows. Rust
+   keeps a slice's pointer and length in registers instead (compiler.md,
+   "Bytes stage", "The baseline"). So each `Bytes` a loop reads a byte of
+   has its length and its bytes read once, before the loop, [Str_len]
+   and [Str_data], and in the loop [Bytes_get] checks the index against
+   that length and loads.
+
+   It's sound because the loop reads the same object all through, and
+   that object is alive: the variable is a parameter or a [Let], which
+   nothing in the function [Set]s, so it holds one object from before
+   the loop to after it; it's used in the loop, so the reference it
+   holds (or, borrowed, its caller's) is alive across it, or the loop's
+   own reads would be of freed memory; and nothing writes a string's
+   header once it's made. A copy made in the loop, `let y = x`, never
+   [Set] either, is the same object, and read through as [x] is. A
+   [Decl]ed variable, which is [Set] later, is never one. *)
+
+let bytes (f : fn) =
+  let set = ref Ids.empty and lets = ref Ids.empty in
+  let copy_of = Hashtbl.create 16 in
+  List.iter (fun (v : var) -> lets := Ids.add v.id !lets) f.params;
+  Rc.iter_stmts
+    (function
+      | Set (v, _) | Decl v -> set := Ids.add v.id !set
+      | Let (v, r) ->
+          lets := Ids.add v.id !lets;
+          (match r with
+          | Atom (Var w) when v.layout = Boxed -> Hashtbl.replace copy_of v.id w
+          | _ -> ())
+      | _ -> ())
+    f.body;
+  let steady (v : var) =
+    v.layout = Boxed && Ids.mem v.id !lets && not (Ids.mem v.id !set)
+  in
+  (* the variable [x] is a copy of, through copies, that holds the same
+     object all along *)
+  let rec root (x : var) =
+    match Hashtbl.find_opt copy_of x.id with
+    | Some w when steady x && steady w -> root w
+    | _ -> x
+  in
+  let next, _ = Rc.fresh_counters f in
+  let fresh name layout =
+    let id = !next in
+    incr next;
+    { id; name; layout }
+  in
+  let read (s : stmt) =
+    match s with
+    | Let (_, Runtime (Bytes_at, Var x :: _, _))
+    | Do (Runtime (Bytes_at, Var x :: _, _)) ->
+        Some (root x)
+    | _ -> None
+  in
+  (* [b] with each byte read of one of [views] read from its buffer *)
+  let rec rewrite views (b : block) : block =
+    List.map
+      (fun s ->
+        let get site i (_, len, data) =
+          Runtime (Bytes_get, [ Var data; Var len; i ], site)
+        in
+        let view x = List.find_opt (fun ((r : var), _, _) -> r.id = (root x).id) views in
+        match s with
+        | Let (v, Runtime (Bytes_at, [ Var x; i ], site)) when view x <> None ->
+            Let (v, get site i (Option.get (view x)))
+        | Do (Runtime (Bytes_at, [ Var x; i ], site)) when view x <> None ->
+            Do (get site i (Option.get (view x)))
+        | s -> Rc.map_blocks (rewrite views) s)
+      b
+  in
+  let rec block (b : block) : block =
+    List.concat_map
+      (fun s ->
+        match s with
+        | Loop (l, body) -> (
+            let inside, _ = defined body in
+            let roots = ref [] in
+            Rc.iter_stmts
+              (fun s ->
+                match read s with
+                | Some r
+                  when steady r
+                       && (not (Ids.mem r.id inside))
+                       && not (List.exists (fun (v : var) -> v.id = r.id) !roots) ->
+                    roots := r :: !roots
+                | _ -> ())
+              body;
+            match List.rev !roots with
+            | [] -> [ Loop (l, block body) ]
+            | roots ->
+                let views =
+                  List.map (fun r -> (r, fresh "$blen" Int, fresh "$bytes" Ptr)) roots
+                in
+                List.concat_map
+                  (fun (r, len, data) ->
+                    [
+                      Let (len, Runtime (Str_len, [ Var r ], None));
+                      Let (data, Runtime (Str_data, [ Var r ], None));
+                    ])
+                  views
+                @ [ Loop (l, block (rewrite views body)) ])
+        | s -> [ Rc.map_blocks block s ])
+      b
+  in
+  { f with body = block f.body }
+
+let program (p : program) = { p with fns = List.map (fun f -> bytes (fn f)) p.fns }

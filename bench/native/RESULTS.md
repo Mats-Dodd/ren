@@ -74,6 +74,59 @@ json 151.9 and pages 6.33, and Rust's 50.3 and 2.50. Every variant of
 `bytes` ran 2127 to 2131 Mcyc. compiler.md's "Bytes stage" says what
 the profiles show and which fixes step 1 makes of them.
 
+## Bytes stage, step 1 (compiler.md, "Bytes stage", "Step 1, as built")
+
+The same machine, kernels and method as the baseline above. Each fix
+was built on the one before and measured against it in one session, ten
+runs interleaved with Rust and Go; the previous build's binaries are
+timed as a variant (`<out>/var/<kernel>-<rounds>.<name>`, copied in by
+hand). Mcyc a pass, M instructions in brackets; bytes in Mcyc whole:
+
+| build | `logs_r` | `json_r` | `pages_r` | bytes |
+|---|---|---|---|---|
+| step 0 | 42.2 (271) | 154.8 (572) | 6.77 (32.1) | 2124 (2346) |
+| 1, `Bytes.at` inline | 39.4 (254) | 141.0 (563) | 6.44 (30.3) | 2125 (2346) |
+| same session: 1 | 40.2 (254) | 136.6 (557) | 6.70 (31.0) | 2128 (2346) |
+| 1b, length and data before the loop | **32.6** (191) | 136.5 (534) | 7.05 (30.1) | 2126 (2346) |
+| same session: 1b | 33.8 (192) | 136.4 (533) | 7.11 (30.8) | 2129 (2347) |
+| 4, push inline | 33.7 (192) | **82.6** (369) | **4.31** (19.3) | 2128 (2346) |
+| same session: 4 | 33.3 (191) | 86.4 (369) | 4.30 (18.7) | 2126 (2346) |
+| 5, `%` and `/` by a constant | 33.5 (192) | 82.8 (366) | 4.30 (19.0) | 2125 (2346) |
+| same session: 5 | 34.8 (192) | 80.3 (366) | 4.34 (19.2) | 2130 (2347) |
+| 2 and 3, step and `b.at(i)` proved | 34.9 (191) | 82.9 (353) | 4.39 (19.3) | 2127 (2346) |
+| Rust, those sessions | 30.7 to 33.7 | 49.1 to 51.2 | 2.51 to 2.60 | 1726 to 1730 |
+| Go | 33.4 to 36.2 | 85.6 to 87.7 | 4.52 to 4.78 | 2942 to 2950 |
+
+All of step 1 against step 0, 21 runs interleaved, load about 4 (the
+OS's photo analysis was running), medians and the 20-round runs' spread:
+
+| kernel | step 0 | step 1 | Rust | Go | step 1 / Rust |
+|---|---|---|---|---|---|
+| `logs_r` | 40.7 (847-1093) | 35.4 (773-894) | 31.3 (655-750) | 35.6 | 1.13× |
+| `json_r` | 158.1 (2815-3534) | 93.6 (1514-2409) | 51.8 (985-1202) | 93.9 | 1.81× |
+| `pages_r` | 6.93 (339-389) | 4.47 (294-348) | 2.62 (111-125) | 4.72 | 1.71× |
+| bytes, whole | 2125 (2123-2127) | 2124 (2123-2126) | 1727 (1726-1730) | 2944 | 1.23× |
+
+```sh
+sh bench/native/profile/build.sh $out
+# the build before, its Ren binaries copied to $out/var as <k>-<r>.base and bytes.base
+python3 -I bench/native/profile/measure.py $out 21 base
+```
+
+`json_r` alone, twelve runs of one binary: 1.64 to 2.33 G cycles on 7.5
+to 8.0 G instructions, so its spread is the run, not the build. Fix 5's
+hand-written multiply (the C's `% INT64_C(1000003)` replaced by `smulh`
+by the magic number, a shift, a fix-up and `msub`) ran bytes in 2188
+Mcyc against 2125, five runs each.
+
+The other programs, release, step 0's compiler against step 1's, five
+runs interleaved, G cycles: binary-trees 19.27 / 19.87 (eleven runs:
+19.63 / 19.94, spreads 19.1-20.0 and 19.3-20.3), blocks 4.47 / 4.48,
+cfold 0.201 / 0.203, deriv 1.83 / 1.84, dispatch 1.33 / 1.35, fannkuch
+6.95 / 6.93, handlers 3.68 / 3.67, inout 5.98 / 5.98, nbody 7.14 / 7.14,
+nested 2.90 / 2.88, nqueens 1.88 / 1.90, rbtree 2.24 / 2.26, slices
+10.26 / 8.46, stack 2.58 / 2.58, vec 4.40 / 4.39; each printed the same.
+
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 
 Slices are built as representation A: a slice is a header like its

@@ -243,6 +243,13 @@ type rt =
           [Vacant]): a scalar, which nothing reads, so the halves are what
           hold the value *)
   | Bytes_at  (** `Bytes`' byte at an [Int], which panics if it isn't one *)
+  | Str_data
+      (** where a `Str`'s or `Bytes`' bytes are, a [Ptr]: hoist.ml's, read
+          before a loop with its length, since neither changes while the
+          string lives *)
+  | Bytes_get
+      (** [Bytes_at] of the bytes a [Ptr] points at, of which there are as
+          many as its first [Int]: hoist.ml's, in a loop *)
   | Bytes_of  (** `Bytes.of(xs)`, which panics at an element that isn't a byte *)
   | Show_int
   | Show_float
@@ -253,6 +260,9 @@ type rt =
   | Float_truncate
   | Wrapping of Ast.binop  (** `Int`'s `wrapping_add`, `_sub` or `_mul` *)
   | Wrapping_neg
+  | Count_step
+      (** an [Int] plus 1, which can't overflow: Core's [Step], a loop's step
+          that bounds.ml proved *)
   | Bits of Intrinsic.t  (** `Int`'s `xor`, `bit_and` or `bit_or` *)
   | Shift of Intrinsic.t
       (** `Int`'s `shl` or `shr`, which panics at its site if the amount isn't
@@ -741,6 +751,8 @@ let show_rt = function
   | Str_trim -> "str-trim"
   | Vacant -> "vacant"
   | Bytes_at -> "bytes-at"
+  | Str_data -> "str-data"
+  | Bytes_get -> "bytes-get"
   | Bytes_of -> "bytes-of"
   | Show_int -> "show-int"
   | Show_float -> "show-float"
@@ -751,6 +763,7 @@ let show_rt = function
   | Float_truncate -> "truncate"
   | Wrapping op -> "wrapping" ^ Ast.binop_to_string op
   | Wrapping_neg -> "wrapping-neg"
+  | Count_step -> "count-step"
   | Bits x -> Intrinsic.member_name x
   | Shift x -> Intrinsic.member_name x
   | Widen -> "widen"

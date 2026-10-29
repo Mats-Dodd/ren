@@ -64,9 +64,14 @@ module Facts = Map.Make (Int)
 (* The locals a function assigns, how often, and those a block or a
    handler in it changes. *)
 type fn_info = {
-  assigns : int Facts.t;  (** how many assignments to each, anywhere *)
+  assigns : int Facts.t;
+      (** how many assignments to each, anywhere, a pass with `&` counted as
+          one *)
   stepped : Ids.t;  (** those whose every assignment is `x = x + 1` *)
   unsteady : Ids.t;  (** assigned or passed with `&` inside a block *)
+  nonneg : Ids.t;
+      (** [Int] locals that are 0 or more wherever they're in scope
+          ([nonneg]) *)
 }
 
 (* What's known at a point of a walk. *)
@@ -83,8 +88,12 @@ type env = {
 
 let empty = { bound = Facts.empty; within = Facts.empty; low = Facts.empty }
 let arrays m (v : var) = Option.value (Facts.find_opt v.id m) ~default:Ids.empty
+let arrays_of = arrays
 
-(* [env] without any fact about the arrays in [changed]. *)
+(* [env] without any fact about the arrays in [changed], nor any that an
+   index in [changed] is in bounds: a count's is never forgotten in its
+   pass, since only its step, the last thing, changes it, but one learned
+   from a test ([learn_test]) is, where the index changes. *)
 let forget env changed =
   if Ids.is_empty changed then env
   else
@@ -95,7 +104,11 @@ let forget env changed =
           if Ids.is_empty s then None else Some s)
         m
     in
-    { env with bound = drop env.bound; within = drop env.within }
+    {
+      env with
+      bound = drop env.bound;
+      within = Facts.filter (fun j _ -> not (Ids.mem j changed)) (drop env.within);
+    }
 
 (* An assignment that keeps [a]'s length: `a = set a j v`. *)
 let keeps_length (a : var) (value : expr) =
@@ -118,26 +131,92 @@ let rec changed (e : expr) =
   in
   List.fold_left (fun s c -> Ids.union s (changed c)) here (children e)
 
+(* Whether [value] is `v + 1` of [v]: a step, written or proved ([Step]). *)
+let is_step (v : var) (value : expr) =
+  match value.kind with
+  | Prim (Binop Add, [ { kind = Local w; _ }; { kind = Int 1L; _ } ])
+  | Prim (Step, [ { kind = Local w; _ } ]) ->
+      w.id = v.id
+  | _ -> false
+
+(* ---- locals that are never below 0 ----
+
+   An [Int] local is 0 or more wherever it's in scope if it's let-bound
+   to something that is, and every assignment to it is of something that
+   is: a literal of 0 or more, a length, another such local, or such a
+   local plus a literal of 0 or more, or plus another such local. An
+   addition that overflowed would panic ([Step]'s can't), so its result
+   is never negative. Locals passed with `&` are never among them, since
+   a callee may store anything in them. [nonneg] finds the most it can:
+   it starts from every let-bound local and drops each with a value that
+   doesn't qualify, till none is dropped. That's how `var j = i`, then
+   `j += 1`, beside `i = j + 1`, are both known 0 or more, which a count
+   that steps by more than 1 needs, as a tokenizer's does. *)
+let nonneg (body : expr) (refs : Ids.t) =
+  let values = Hashtbl.create 16 and lets = ref Ids.empty in
+  let rec go (e : expr) =
+    (match e.kind with
+    | Let (v, init, _) when v.ty = Ty.int ->
+        lets := Ids.add v.id !lets;
+        Hashtbl.add values v.id init
+    | Assign (v, value) -> Hashtbl.add values v.id value
+    | _ -> ());
+    List.iter go (children e)
+  in
+  go body;
+  let set = ref (Ids.diff !lets refs) in
+  let rec ok (e : expr) =
+    match e.kind with
+    | Int n -> n >= 0L
+    | Local w -> Ids.mem w.id !set
+    | Prim (Length, [ _ ])
+    | Call
+        ( { kind = Intrinsic ((Array_len | Bytes_len | Str_len), _, _, _); _ },
+          [ Value _ ],
+          _ ) ->
+        true
+    | Prim (Binop Add, [ a; b ]) -> ok a && ok b
+    | Prim (Step, [ a ]) -> ok a
+    | _ -> false
+  in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    Ids.iter
+      (fun id ->
+        if not (List.for_all ok (Hashtbl.find_all values id)) then (
+          set := Ids.remove id !set;
+          changed := true))
+      !set
+  done;
+  !set
+
 let info (body : expr) =
   let assigns = ref Facts.empty
   and unsteady = ref Ids.empty
-  and other = ref Ids.empty in
+  and other = ref Ids.empty
+  and refs = ref Ids.empty in
+  let assigned (v : var) =
+    assigns :=
+      Facts.update v.id (fun n -> Some (1 + Option.value n ~default:0)) !assigns
+  in
   let rec go in_block (e : expr) =
     (match e.kind with
     | Assign (v, value) ->
-        assigns :=
-          Facts.update v.id
-            (fun n -> Some (1 + Option.value n ~default:0))
-            !assigns;
-        (match value.kind with
-        | Prim (Binop Add, [ { kind = Local w; _ }; { kind = Int 1L; _ } ])
-          when w.id = v.id ->
-            ()
-        | _ -> other := Ids.add v.id !other);
+        assigned v;
+        if not (is_step v value) then other := Ids.add v.id !other;
         if in_block then unsteady := Ids.add v.id !unsteady
-    | Call (_, args, _) when in_block ->
+    (* a local passed with `&` is assigned whatever the callee leaves in
+       it *)
+    | Call (_, args, _) ->
         List.iter
-          (function Ref (v : var) -> unsteady := Ids.add v.id !unsteady | Value _ -> ())
+          (function
+            | Ref (v : var) ->
+                assigned v;
+                other := Ids.add v.id !other;
+                refs := Ids.add v.id !refs;
+                if in_block then unsteady := Ids.add v.id !unsteady
+            | Value _ -> ())
           args
     | _ -> ());
     let in_block =
@@ -151,34 +230,34 @@ let info (body : expr) =
       (fun id _ s -> if Ids.mem id !other then s else Ids.add id s)
       !assigns Ids.empty
   in
-  { assigns = !assigns; stepped; unsteady = !unsteady }
+  { assigns = !assigns; stepped; unsteady = !unsteady; nonneg = nonneg body !refs }
 
 let never_assigned fi (v : var) = not (Facts.mem v.id fi.assigns)
 
 (* The least [j] is here, if it's known to be 0 or more. *)
-let least env (j : var) =
+let least fi env (j : var) =
   match (Facts.find_opt j.id env.low, Facts.mem j.id env.within) with
   | Some l, _ -> Some l
   | None, true -> Some 0L
-  | None, false -> None
+  | None, false -> if Ids.mem j.id fi.nonneg then Some 0L else None
 
 (* The least [init], an [Int], can be, if it's 0 or more: a literal, a
    local that is ([least]), or such a local in bounds plus a literal of 0
    or more, which can't overflow: an array's length is far below 2^62,
    so an index in bounds plus less than 2^61 isn't. *)
-let lower_bound env (init : expr) =
+let lower_bound fi env (init : expr) =
   match init.kind with
   | Int n when n >= 0L -> Some n
-  | Local j -> least env j
+  | Local j -> least fi env j
   | Prim (Binop Add, [ { kind = Local j; _ }; { kind = Int c; _ } ])
     when Facts.mem j.id env.within && c >= 0L && c < Int64.shift_left 1L 61 ->
-      Option.map (Int64.add c) (least env j)
+      Option.map (Int64.add c) (least fi env j)
   | _ -> None
 
 (* What's learned from `let v = init`, [init] already run. *)
 let learn fi env (v : var) (init : expr) =
   let env =
-    match lower_bound env init with
+    match lower_bound fi env init with
     | Some l when never_assigned fi v || Ids.mem v.id fi.stepped ->
         { env with low = Facts.add v.id l env.low }
     | _ -> env
@@ -192,7 +271,7 @@ let learn fi env (v : var) (init : expr) =
       match init.kind with
       | Prim (Length, [ { kind = Local a; _ } ])
       | Call
-          ( { kind = Intrinsic (Array_len, _, _, _); _ },
+          ( { kind = Intrinsic ((Array_len | Bytes_len), _, _, _); _ },
             [ Value { kind = Local a; _ } ],
             _ ) ->
           steady a
@@ -215,11 +294,16 @@ let learn fi env (v : var) (init : expr) =
 let rec last (body : expr) =
   match body.kind with Let (_, _, b) | Seq (_, b) -> last b | _ -> body
 
-(* How many assignments to [i] [e] has. *)
+(* How many assignments to [i] [e] has, a pass with `&` counted as one. *)
 let rec assigns_in (i : var) (e : expr) =
   List.fold_left
     (fun n c -> n + assigns_in i c)
-    (match e.kind with Assign (v, _) when v.id = i.id -> 1 | _ -> 0)
+    (match e.kind with
+    | Assign (v, _) when v.id = i.id -> 1
+    | Call (_, args, _) ->
+        List.length
+          (List.filter (function Ref (v : var) -> v.id = i.id | Value _ -> false) args)
+    | _ -> 0)
     (children e)
 
 (* `while i < n` whose pass ends `i = i + 1`, with no other assignment
@@ -233,11 +317,7 @@ let counter fi env (cond : expr) (body : expr) =
          && Ids.mem i.id fi.stepped
          && assigns_in i body = 1 -> (
       match (last body).kind with
-      | Assign
-          ( i',
-            { kind = Prim (Binop Add, [ { kind = Local i''; _ }; { kind = Int 1L; _ } ]); _ } )
-        when i'.id = i.id && i''.id = i.id ->
-          Some (i, n)
+      | Assign (i', step) when i'.id = i.id && is_step i step -> Some (i, n)
       | _ -> None)
   | _ -> None
 
@@ -251,10 +331,37 @@ let counted fi env (cond : expr) (body : expr) =
       else { env with within = Facts.add i.id arrays env.within }
   | None -> env
 
-(* What's learned where [test] held, an `if`'s condition: `n <= a.len()`
-   and conjunctions of those, `if c1 then c2 else false`. *)
+(* The array or `Bytes` [e] is the length of, `a.len()`. *)
+let length_of (e : expr) =
+  match e.kind with
+  | Prim (Length, [ { kind = Local a; _ } ])
+  | Call
+      ( { kind = Intrinsic ((Array_len | Bytes_len), _, _, _); _ },
+        [ Value { kind = Local a; _ } ],
+        _ ) ->
+      Some a
+  | _ -> None
+
+(* What's learned where [test] held, an `if`'s or a loop's condition:
+   `n <= a.len()`; `j < n` of a bound [n], or `j < a.len()`, where [j] is
+   0 or more, which puts [j] in bounds of those arrays till [j] or they
+   change ([forget]); and conjunctions of those, `if c1 then c2 else
+   false`. That's `while j < n && b.at(j) ...`, whose read is in bounds. *)
 let rec learn_test fi env (test : expr) =
   match test.kind with
+  | Prim (Binop Lt, [ { kind = Local j; _ }; hi ]) when least fi env j <> None -> (
+      let arrays =
+        match (hi.kind, length_of hi) with
+        | Local n, _ when never_assigned fi n -> arrays env.bound n
+        | _, Some a when not (Ids.mem a.id fi.unsteady) -> Ids.singleton a.id
+        | _ -> Ids.empty
+      in
+      if Ids.is_empty arrays then env
+      else
+        {
+          env with
+          within = Facts.add j.id (Ids.union arrays (arrays_of env.within j)) env.within;
+        })
   | Prim
       ( Binop Le,
         [ { kind = Local n; _ }; { kind = Prim (Length, [ { kind = Local a; _ } ]); _ } ] )
@@ -269,13 +376,13 @@ let rec learn_test fi env (test : expr) =
 
 (* An index into [a] at [j] is in bounds here: [j] is in bounds, or
    [j - k] where [j] is at least [k]. *)
-let holds env (a : expr) (j : expr) =
+let holds fi env (a : expr) (j : expr) =
   match (a.kind, j.kind) with
   | Local a, Local j -> Ids.mem a.id (arrays env.within j)
   | Local a, Prim (Binop Sub, [ { kind = Local j; _ }; { kind = Int k; _ } ]) -> (
       Ids.mem a.id (arrays env.within j)
       && k >= 0L
-      && match least env j with Some l -> k <= l | None -> false)
+      && match least fi env j with Some l -> k <= l | None -> false)
   | _ -> false
 
 (* [e] with [f] on each of its immediate parts. *)
@@ -501,7 +608,7 @@ let versions fi env (loop : expr) (i : var) (n : var) (body : expr) =
       | Prim (Binop Sub, [ { kind = Local j; _ }; { kind = Int k; _ } ]) -> (
           Ids.mem j.id !copies
           && k >= 0L
-          && match least env i with Some l -> k <= l | None -> false)
+          && match least fi env i with Some l -> k <= l | None -> false)
       | _ -> false
     in
     let rec look (e : expr) =
@@ -557,8 +664,11 @@ let rec walk ?fresh fi decide env (e : expr) : expr =
     | While (cond, body) -> (
         (* what a pass changes, it may have changed before any pass *)
         let env = forget env (changed e) in
+        (* a pass runs where its condition held *)
         let plain () =
-          While (walk ?fresh fi decide env cond, walk ?fresh fi decide (counted fi env cond body) body)
+          While
+            ( walk ?fresh fi decide env cond,
+              walk ?fresh fi decide (learn_test fi (counted fi env cond body) cond) body )
         in
         match (fresh, counter fi env cond body) with
         | Some fresh, Some (i, n) -> (
@@ -579,19 +689,30 @@ let rec walk ?fresh fi decide env (e : expr) : expr =
                     (le (List.hd arrays))
                     (List.tl arrays)
                 in
-                let copy = { e with kind = While (cond, rename fresh body) } in
-                (* each loop walked as it is, not made two again *)
-                let fast = walk fi decide (learn_test fi env test) copy in
+                (* each loop walked as it is, not made two again; the
+                   copy walked before its binders are renamed, so what
+                   [fi] says of them holds *)
+                let fast = rename fresh (walk fi decide (learn_test fi env test) e) in
                 let slow = walk fi decide env e in
                 If (test, fast, slow))
         | _ -> plain ())
     | Prim (Get_index b, [ a; j ]) ->
         let a = go a and j = go j in
-        Prim (Get_index (decide e b (holds env a j)), [ a; j ])
+        Prim (Get_index (decide e b (holds fi env a j)), [ a; j ])
     | Prim (Set_index b, [ a; j; v ]) ->
         let a = go a and j = go j and v = go v in
         let env = forget env (changed v) in
-        Prim (Set_index (decide e b (holds env a j)), [ a; j; v ])
+        Prim (Set_index (decide e b (holds fi env a j)), [ a; j; v ])
+    (* `b.at(j)` as `xs[j]`: a `Bytes` changes only as an array does *)
+    | Prim (Byte_at b, [ a; j ]) ->
+        let a = go a and j = go j in
+        Prim (Byte_at (decide e b (holds fi env a j)), [ a; j ])
+    | Call (({ kind = Intrinsic (Bytes_at, _, _, _); _ } as g), [ Value a; Value j ], ev)
+      -> (
+        let a = go a and j = go j in
+        match decide e Checked (holds fi env a j) with
+        | In_bounds -> Prim (Byte_at In_bounds, [ a; j ])
+        | Checked -> Call (g, [ Value a; Value j ], ev))
     | Lambda l -> Lambda { l with body = walk ?fresh fi decide empty l.body }
     | Handler h -> Handler { h with body = walk ?fresh fi decide empty h.body }
     | _ ->
@@ -601,8 +722,73 @@ let rec walk ?fresh fi decide env (e : expr) : expr =
   in
   { e with kind }
 
+(* ---- steps that can't overflow ----
+
+   `i = i + 1` is a step that can't overflow when it's the last thing a
+   pass of a loop does whose condition tests `i < e`, alone or as one
+   side of an `&&`, and nothing else in the pass or the condition changes
+   [i], nor a block (which may run anywhere): the pass ran because [i]
+   was below [e], an [Int], so [i + 1] is at most [e], at most
+   2^63 - 1. Nothing about [i]'s lower bound, or about arrays, is needed.
+   That's every `for` loop over a range, whose count `+ 1` was a checked
+   add on every pass (compiler.md, "Bytes stage"), and it's marked
+   [Step]. *)
+
+(* Whether [cond] tests `i < e` where it holds. *)
+let rec tested (i : var) (cond : expr) =
+  match cond.kind with
+  | Prim (Binop Lt, [ { kind = Local j; _ }; _ ]) -> j.id = i.id && i.ty = Ty.int
+  | If (c1, c2, { kind = Bool false; _ }) -> tested i c1 || tested i c2
+  | _ -> false
+
+let steppable fi (cond : expr) (body : expr) =
+  match (last body).kind with
+  | Assign (i, value)
+    when is_step i value && tested i cond
+         && assigns_in i body = 1
+         && assigns_in i cond = 0
+         && not (Ids.mem i.id fi.unsteady) ->
+      Some i
+  | _ -> None
+
+(* [body] with its last thing, through its [Let]s and [Seq]s, [f]'s. *)
+let rec with_last f (body : expr) =
+  match body.kind with
+  | Let (v, a, b) -> { body with kind = Let (v, a, with_last f b) }
+  | Seq (a, b) -> { body with kind = Seq (a, with_last f b) }
+  | _ -> f body
+
+let rec mark_steps fi (e : expr) =
+  let e = { e with kind = map (mark_steps fi) e } in
+  match e.kind with
+  | While (cond, body) when steppable fi cond body <> None ->
+      let step (s : expr) =
+        match s.kind with
+        | Assign (i, value) ->
+            { s with kind = Assign (i, { value with kind = Prim (Step, [ local i value.loc ]) }) }
+        | _ -> s
+      in
+      { e with kind = While (cond, with_last step body) }
+  | _ -> e
+
+(* The first [Step] in [body] that isn't a step [steppable] proves. *)
+let bad_step (body : expr) =
+  let fi = info body and proved = ref [] and bad = ref None in
+  let rec go (e : expr) =
+    match e.kind with
+    | Assign (_, { kind = Prim (Step, [ i ]); _ }) when List.memq e !proved -> go i
+    | Prim (Step, _) -> if !bad = None then bad := Some e
+    | While (cond, body) ->
+        if steppable fi cond body <> None then proved := last body :: !proved;
+        List.iter go (children e)
+    | _ -> List.iter go (children e)
+  in
+  go body;
+  !bad
+
 (* A function with each index this proves in bounds marked so, a loop
-   versioned where its copy would prove more. *)
+   versioned where its copy would prove more, and each step it proves
+   can't overflow marked [Step]. *)
 let mark (f : fn_def) =
   let fi = info f.body in
   let next =
@@ -616,13 +802,11 @@ let mark (f : fn_def) =
     incr next;
     !next
   in
-  {
-    f with
-    body = walk ~fresh fi (fun _ b holds -> if holds then In_bounds else b) empty f.body;
-  }
+  let body = walk ~fresh fi (fun _ b holds -> if holds then In_bounds else b) empty f.body in
+  { f with body = mark_steps fi body }
 
-(* Whether each [In_bounds] index in [body] is proved here: the first
-   that isn't, if one isn't. *)
+(* Whether each [In_bounds] index and each [Step] in [body] is proved
+   here: the first that isn't, if one isn't. *)
 let verify (body : expr) =
   let fi = info body and bad = ref None in
   ignore
@@ -631,4 +815,4 @@ let verify (body : expr) =
          if b = In_bounds && (not holds) && !bad = None then bad := Some e;
          b)
        empty body);
-  !bad
+  match !bad with Some e -> Some e | None -> bad_step body

@@ -515,7 +515,7 @@ fn main() = ()
           (let $i/4 0
             (let $stop/5 n/1
               (while (< $i/4 $stop/5)
-                (let i/6 $i/4 (seq (= t/3 (+ t/3 i/6)) (= $i/4 (+ $i/4 1)))))))
+                (let i/6 $i/4 (seq (= t/3 (+ t/3 i/6)) (= $i/4 (step $i/4)))))))
           t/3)))
     (fn main () ev/1 ())
     (fn $start () ev/1 (call ev/1 main))

@@ -6043,6 +6043,113 @@ token where Rust's copies 12. Sized fields in an array of records
 (`kind: UInt8, start: Int32, stop: Int32`) would close it, if the
 kernel were written so; step 1 measures the kernel as it is, and says.
 
+### Step 1, as built
+
+Each fix measured alone, before and after in one interleaved session
+(ten runs; RESULTS.md, "Bytes stage, step 1", has every number and the
+commands), Mcyc a pass:
+
+| fix | `logs_r` | `json_r` | `pages_r` | bytes |
+|---|---|---|---|---|
+| 1, `Bytes.at` inline | 42.2 → 39.4 | 154.8 → 141.0 | 6.77 → 6.44 | 2124 → 2125 |
+| 1b, a `Bytes`' length and data read before the loop | 40.2 → **32.6** | 136.6 → 136.5 | 6.70 → 7.05 | 2128 → 2126 |
+| 4, push inline | 33.8 → 33.7 | 136.4 → **82.6** | 7.11 → **4.31** | 2129 → 2128 |
+| 5, `%` and `/` by a constant | 33.3 → 33.5 | 86.4 → 82.8 | 4.30 → 4.30 | 2126 → 2125 |
+| 2 and 3, the step and `b.at(i)` proved | 34.8 → 34.9 | 80.3 → 82.9 (366 → 353 M instructions) | 4.34 → 4.39 | 2130 → 2127 |
+
+**All of step 1, against the baseline,** 21 runs interleaved, the
+owner's M4 Max with the OS's photo analysis running (load about 4):
+
+| kernel | baseline | step 1 | Rust | Go | step 1 / Rust |
+|---|---|---|---|---|---|
+| `logs_r` | 40.7 | **35.4** (20 rounds 773-894) | 31.3 (655-750) | 35.6 | **1.13×** |
+| `json_r` | 158.1 | **93.6** (1514-2409) | 51.8 (985-1202) | 93.9 | **1.81×** |
+| `pages_r` | 6.93 | **4.47** (294-348) | 2.62 (111-125) | 4.72 | **1.71×** |
+| bytes, Mcyc whole | 2125 | **2124** (2123-2126) | 1727 (1726-1730) | 2944 | **1.23×** |
+
+In quieter sessions earlier the same build ran `logs_r` at 1.03× to
+1.04×, `json_r` 1.62× to 1.69× and `pages_r` 1.71× to 1.75×. `json_r`'s
+spread is its own: twelve runs of one binary alone vary from 1.64 to
+2.33 G cycles on the same instruction count, which is the kernel's
+memory (its token array grows by `realloc` to 24 MB), not its code. Every
+kernel is within 2× of Rust's time. The other programs of bench/native,
+release, against step 0's compiler (five runs): all within 1.5% but
+binary-trees, 3% slower (19.6 against 19.9 G cycles in eleven runs,
+spreads overlapping), whose C differs only in two `for` steps outside
+its hot path; and slices, the whole benchmark, 17% faster.
+
+**What each fix is, and why it's sound:**
+
+1. **`Bytes.at` inline,** as specified: `ren_bytes_at` in ren_rt.h,
+   one unsigned compare, its message made in `ren_bytes_index_panic`,
+   `cold` and `noinline`. The same check.
+1b. **A `Bytes`' length and data read before a loop** (hoist.ml,
+   "the bytes a loop reads"; Mem's `Str_data` and `Bytes_get`,
+   ren_rt.h's `ren_buf_byte`). Fix 1 alone took logs only from 42 to 39:
+   the loop still read the length and the data from the object before
+   every byte, not because of the panic's call but because of the
+   others in the loop (`equal`, `line_r`'s stores into `st`), which C
+   must assume may change the object. Release builds now read both once
+   before each loop that reads a byte of a `Bytes`, and the loop checks
+   against that length. Sound because a string's header is written only
+   when it's made, and the variable read through is a parameter or a
+   `let` that nothing in the function `set`s, used in the loop, so the
+   one object it holds is alive across the loop; a copy made inside, `let
+   y = x`, is followed to it. Not specified in the spec's list; added
+   because fix 1 didn't do what the list said it would.
+2. **The step,** Core's new `Step` (bounds.ml, "steps that can't
+   overflow"): `i = i + 1` as the last thing a pass of a loop does whose
+   condition tests `i < e` (alone, or a side of an `&&`), with nothing
+   else in the pass or the condition changing `i`, and no block that can:
+   `i + 1 <= e <= 2^63 - 1`. Wider than the spec's "a count bounds.ml
+   marks in bounds": no array or lower bound is needed. Emitted as C's
+   signed `+`, so UBSan checks it in sanitized builds, and Mem's
+   `Count_step`. Core Lint's `Bounds.verify` checks each, and the
+   interpreter treats one that would overflow as a compiler bug.
+3. **`b.at(i)` in bounds,** Core's new `Byte_at In_bounds`, made by
+   bounds.ml of a call of `Bytes.at` it proves, as `xs[i]`: a bound
+   learns `b.len()`, and the walk learns from a test that held, an `if`'s
+   or a loop's condition, `j < n` of a bound or `j < a.len()`, where `j`
+   is 0 or more, that `j` is in bounds of those till `j` or they change
+   (the walk now forgets a fact about an index where it's assigned or
+   passed with `&`). "0 or more" is new too: an `Int` local let-bound to,
+   and only ever assigned, literals of 0 or more, lengths, such locals,
+   and sums of them, found as a greatest fixpoint ([nonneg]); that's
+   json's tokenizer's `i` and `j`, which step by 1, 4, 5 and to each
+   other. A checked sum that overflowed would panic, so a sum is never
+   negative. The cycles barely moved: after 1b the checks are a compare
+   on registers, off the loops' chains.
+4. **Push inline,** `ren_array_push_slots_taking_k` in ren_rt.h, its
+   stride the struct's words: unique, an owner and with room, the words
+   are stored and the length counted; otherwise the out-of-line push,
+   which tests the same cases in the same order.
+5. **`%` and `/` by a constant** other than 0 and -1 are C's own. As the
+   spec feared, clang 16 still hoists 1,000,003 as 1,000,000 plus 3 and
+   divides with `sdiv`: bytes didn't move. A barrier can't help, since
+   hiding the constant is what clang does already; the multiply by the
+   magic number written by hand into the C (`smulh`, a shift, a fix-up,
+   `msub`) ran slower, 2188 Mcyc against 2125, so it isn't emitted. The
+   remainder stays where bytes' last 23% is; Rust's newer LLVM doesn't
+   hoist a divisor.
+6. Nothing: `equal` is a loop written by hand, and no kernel is past 2×
+   for it.
+
+**A bug in bounds.ml found and fixed:** a count passed with `&`, `bump(&i)`,
+wasn't counted as an assignment, so `xs[i]` after it was marked in
+bounds; the interpreter called it a compiler bug and a native build read
+past the array. A pass with `&` now counts as an assignment that isn't
+a step, everywhere a fact is decided (bench/bytes/proofs_ref.ren). And a
+versioned loop's copy is now walked before its binders are renamed, so
+what bounds.ml knows of them holds in the copy.
+
+**What's left above Rust's time,** none of it past 2×: json's tokens
+are three `Int`s, 24 bytes, against Rust's 12, so its array copies and
+stores twice the bytes (sized fields would close it, an `Array` of
+records with `UInt8` and `Int32` fields, if the kernel were written so);
+pages' records are four `Int`s, 32 bytes, against Rust's two `u32`s
+and two `u16`s, 12, and its `u16` reads are two checked `at`s each, which layer 3's `u16_le`
+(step 2) makes one load; bytes' remainder, above.
+
 ### Layer 3: the API
 
 Settled here, in formats.md's style: the width and the byte order in the
@@ -6250,13 +6357,17 @@ header, then:
 ### Where this stage may differ from foundations.md
 
 - The cursor's `at`, and the formats deferred, above.
-- None else yet.
+- Step 1 added fix 1b, hoisting a `Bytes`' length and data out of a
+  loop, which the spec's list didn't have; widened fix 2 to any loop
+  whose condition tests `i < e`; and left fix 5's remainder as `sdiv`,
+  measured (Step 1, as built).
 
 ### Progress log
 
 | step | commit | what's done | what's left |
 |---|---|---|---|
 | 0 | "Bytes stage, step 0" | this section; the baseline (RESULTS.md, bench/native/profile/); bench/bytes/ and bench/bytes.t, test/test_bytes.ml, each marked for its step | steps 1 to 4 |
+| 1 | "Bytes stage, step 1" | `Bytes.at` inline; a `Bytes`' length and data read before a loop (hoist.ml); Core's `Step` and `Byte_at` (bounds.ml), verified by Core Lint; push of a struct inline; `%` and `/` by a constant; bounds.ml's `&` bug; bench/bytes/proofs*, test_bytes.ml's b1; every kernel within 2× (logs 1.13×, json 1.81×, pages 1.71×, bytes 1.23×) | steps 2 to 4; bytes' `sdiv` (clang 16) |
 
 ## The runtime model
 

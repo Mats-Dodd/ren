@@ -70,7 +70,7 @@ fn main() uses Console =
       (let $i/4 0
         (let $stop/5 n/1
           (while (< $i/4 $stop/5)
-            (let i/6 $i/4 (seq (call ev/3 f/2 i/6) (= $i/4 (+ $i/4 1))))))))
+            (let i/6 $i/4 (seq (call ev/3 f/2 i/6) (= $i/4 (step $i/4))))))))
     (fn main () ev/1
       (let total/2 0
         (let k/3 3
@@ -92,7 +92,7 @@ fn main() uses Console =
         (let $stop/6 n/1
           (while (< $i/5 $stop/6)
             (let i/7 $i/5
-              (seq (call ev/4 main$1#1 &total/2 k/3 i/7) (= $i/5 (+ $i/5 1))))))))
+              (seq (call ev/4 main$1#1 &total/2 k/3 i/7) (= $i/5 (step $i/5))))))))
     3 copies, 1 blocks lifted, 0 handlers known, 0 past
     |}]
 

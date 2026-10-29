@@ -149,6 +149,16 @@ type prim =
           operands *)
   | Length  (** an array's length *)
   | Get_index of bounds  (** [xs[i]]: panics if [i] is out of bounds *)
+  | Byte_at of bounds
+      (** [b.at(i)], a `Bytes`' byte at [i], 0 to 255: what bounds.ml makes of
+          a call of `Bytes.at` it proves in bounds, [In_bounds]. Panics, as the
+          call does, if [i] is out of bounds *)
+  | Step
+      (** [i + 1] of an [Int] local [i] that can't overflow, which bounds.ml
+          made of the step of a loop, the last thing a pass does, after its
+          test that [i] is below some [Int], with nothing else changing [i]:
+          so [i + 1] is at most that [Int]. Core Lint checks each again
+          (Bounds.verify) *)
   | Entries
       (** a [Map]'s keys and values, as an array of pairs, in the order each key
           was first set: what a `for` goes over *)
@@ -800,6 +810,9 @@ let show_prim = function
   | Length -> "length"
   | Get_index Checked -> "get"
   | Get_index In_bounds -> "get-in"
+  | Byte_at Checked -> "byte-at"
+  | Byte_at In_bounds -> "byte-at-in"
+  | Step -> "step"
   | Entries -> "entries"
   | Members -> "members"
   | Set_index Checked -> "set"

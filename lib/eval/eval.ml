@@ -237,6 +237,19 @@ let prim loc op args (at : expr list) =
   | Get_index b, [ VArray xs; VInt i ] ->
       proved b xs i;
       element loc xs i
+  | Byte_at b, [ VBytes s; VInt i ] ->
+      let n = String.length s in
+      if i < 0L || i >= Int64.of_int n then
+        if b = In_bounds then bug "a byte proved in bounds is out of them"
+        else
+          panic loc
+            (Printf.sprintf "index %Ld is out of bounds for bytes of length %d" i n)
+      else VInt (Int64.of_int (Char.code s.[Int64.to_int i]))
+  (* a step bounds.ml proved can't overflow: a native build adds without
+     checking *)
+  | Step, [ VInt i ] ->
+      if i = Int64.max_int then bug "a step proved not to overflow overflowed"
+      else VInt (Int64.succ i)
   | Entries, [ VTable t ] ->
       array_of_list (List.map (fun (k, v) -> VTuple [ k; v ]) (Table.to_list t))
   | Members, [ VTable t ] -> array_of_list (List.map fst (Table.to_list t))

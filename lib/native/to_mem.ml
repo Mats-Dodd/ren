@@ -1971,6 +1971,20 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let n = owned fs env "$len" Int (Runtime (Array_len, [ x ], None)) in
       drop fs env x;
       n
+  (* `b.at(i)` that bounds.ml proved in bounds: not checked, as an index
+     it proved isn't *)
+  | Byte_at b, [ a; i ] ->
+      let x = expr fs env a in
+      let y = expr fs env i in
+      let at = match b with C.In_bounds -> None | Checked -> Some (site ()) in
+      let r = owned fs env "$at" Int (Runtime (Bytes_at, [ x; y ], at)) in
+      drop fs env x;
+      r
+  (* a loop's step that bounds.ml proved can't overflow: C's own `+`,
+     which UBSan checks in a sanitized build *)
+  | Step, [ a ] ->
+      let x = expr fs env a in
+      owned fs env "$step" Int (Runtime (Count_step, [ x ], None))
   (* slices (foundations.md, decision 17; ren_rt.c, "slices"): each a
      new header sharing its root's buffer, or, for a write back, a new
      owner *)

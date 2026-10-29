@@ -1,0 +1,20 @@
+// A count passed with `&` is changed by the callee, so nothing it's
+// tested against holds after: the read is checked, and panics as `ren
+// run` does. (Before step 1, bounds.ml took it as in bounds, and a
+// native build read past the array.)
+
+fn bump(inout i: Int) =
+  i += 5
+
+fn main() uses Console =
+  let xs = [1, 2, 3]
+  let b = "abc".bytes()
+  let n = xs.len()
+  var i = 0
+  var s = 0
+  while i < n
+    s += b.at(i)
+    bump(&i)
+    s += xs[i]
+    i = i + 1
+  print(s)

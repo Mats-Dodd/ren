@@ -191,7 +191,7 @@ fn main() = ()
               (let $i/6 0
                 (while (< $i/6 $n/5)
                   (let x/7 (get-in $xs/4 $i/6)
-                    (seq (= t/3 (+ t/3 x/7)) (= $i/6 (+ $i/6 1))))))))
+                    (seq (= t/3 (+ t/3 x/7)) (= $i/6 (step $i/6))))))))
           t/3)))
     (fn step (a/1 b/2) ev/3
       (let $i/4 0
@@ -203,14 +203,14 @@ fn main() = ()
                   (let $index/7 i/6
                     (let $v/8 (+ (get-in a/1 i/6) (get-in b/2 i/6))
                       (= a/1 (set-in a/1 $index/7 $v/8))))
-                  (= $i/4 (+ $i/4 1)))))
+                  (= $i/4 (step $i/4)))))
             (while (< $i/4 $stop/5)
               (let i/9 $i/4
                 (seq
                   (let $index/10 i/9
                     (let $v/11 (+ (get-in a/1 i/9) (get b/2 i/9))
                       (= a/1 (set-in a/1 $index/10 $v/11))))
-                  (= $i/4 (+ $i/4 1)))))))))
+                  (= $i/4 (step $i/4)))))))))
     (fn dot (xs/1 ys/2) ev/3
       (let t/4 0
         (seq
@@ -224,7 +224,7 @@ fn main() = ()
                         (let x/11 (get-in $xs/5 $i/10)
                           (let y/12 (get-in $xs/6 $i/10)
                             (seq (let $v/13 (* x/11 y/12) (= t/4 (+ t/4 $v/13)))
-                              (= $i/10 (+ $i/10 1))))))))))))
+                              (= $i/10 (step $i/10))))))))))))
           t/4)))
     (fn pairs (xs/1) ev/2
       (let t/3 0
@@ -241,8 +241,8 @@ fn main() = ()
                             (seq
                               (let $v/10 (* (get-in xs/1 i/6) (get-in xs/1 j/9))
                                 (= t/3 (+ t/3 $v/10)))
-                              (= $i/7 (+ $i/7 1)))))))
-                    (= $i/4 (+ $i/4 1)))))))
+                              (= $i/7 (step $i/7)))))))
+                    (= $i/4 (step $i/4)))))))
           t/3)))
     (fn main () ev/1 ())
     (fn $start () ev/1 (call ev/1 main))
@@ -295,7 +295,7 @@ fn main() = ()
                     (seq
                       (seq (call ev/2 Array.push &ys/3 1)
                         (let $v/8 (get ys/3 i/7) (= t/4 (+ t/4 $v/8))))
-                      (= $i/5 (+ $i/5 1)))))))
+                      (= $i/5 (step $i/5)))))))
             t/4))))
     (fn shrinks (xs/1) ev/2
       (let ys/3 xs/1
@@ -311,7 +311,7 @@ fn main() = ()
                           (= ys/3 (array)))
                         (seq (call ev/2 f/8)
                           (let $v/10 (get ys/3 i/7) (= t/4 (+ t/4 $v/10)))))
-                      (= $i/5 (+ $i/5 1)))))))
+                      (= $i/5 (step $i/5)))))))
             t/4))))
     (fn ahead (xs/1) ev/2
       (let t/3 0
@@ -321,7 +321,7 @@ fn main() = ()
               (while (< $i/4 $stop/5)
                 (let i/6 $i/4
                   (seq (let $v/7 (get xs/1 (+ i/6 1)) (= t/3 (+ t/3 $v/7)))
-                    (= $i/4 (+ $i/4 1)))))))
+                    (= $i/4 (step $i/4)))))))
           t/3)))
     (fn below (xs/1 lo/2) ev/3
       (let t/4 0
@@ -331,7 +331,7 @@ fn main() = ()
               (while (< $i/5 $stop/6)
                 (let i/7 $i/5
                   (seq (let $v/8 (get xs/1 i/7) (= t/4 (+ t/4 $v/8)))
-                    (= $i/5 (+ $i/5 1)))))))
+                    (= $i/5 (step $i/5)))))))
           t/4)))
     (fn main () ev/1 ())
     (fn $start () ev/1 (call ev/1 main))
@@ -362,7 +362,7 @@ fn main() = ()
                 (let $index/6 i/5
                   (let $v/7 (/ (+ (get-in xs/1 i/5) (get-in xs/1 (- i/5 1))) 2)
                     (= xs/1 (set-in xs/1 $index/6 $v/7))))
-                (= $i/3 (+ $i/3 1))))))))
+                (= $i/3 (step $i/3))))))))
     (fn diff (xs/1 ys/2) ev/3
       (let t/4 0
         (seq
@@ -374,13 +374,13 @@ fn main() = ()
                     (seq
                       (let $v/8 (- (get-in xs/1 i/7) (get-in ys/2 (- i/7 2)))
                         (= t/4 (+ t/4 $v/8)))
-                      (= $i/5 (+ $i/5 1)))))
+                      (= $i/5 (step $i/5)))))
                 (while (< $i/5 $stop/6)
                   (let i/9 $i/5
                     (seq
                       (let $v/10 (- (get-in xs/1 i/9) (get ys/2 (- i/9 2)))
                         (= t/4 (+ t/4 $v/10)))
-                      (= $i/5 (+ $i/5 1))))))))
+                      (= $i/5 (step $i/5))))))))
           t/4)))
     (fn main () ev/1 ())
     (fn $start () ev/1 (call ev/1 main))
@@ -462,6 +462,6 @@ fn main() = get([1], 0)
       print_endline "ok");
   [%expect
     {|
-    internal compiler error in lint: Failure("Core Lint: in `get`, at test.ren:1:41: an index marked in bounds that its loop doesn't keep so")
+    internal compiler error in lint: Failure("Core Lint: in `get`, at test.ren:1:41: an index marked in bounds, or a step marked as not overflowing, that its loop doesn't keep so")
       = this is a bug in the Ren compiler, not in your program
     |}]

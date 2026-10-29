@@ -981,16 +981,12 @@ ren_obj *ren_str_copied(ren_obj *s) {
   return ren_str_of(ren_str_data(s), ren_str_len(s));
 }
 
-int64_t ren_bytes_at(ren_obj *b, int64_t i, const ren_site *site) {
-  int64_t n = ren_str_len(b);
-  if (i < 0 || i >= n) {
-    char msg[128];
-    snprintf(msg, sizeof msg,
-             "index %" PRId64 " is out of bounds for bytes of length %" PRId64,
-             i, n);
-    ren_panic(site, msg);
-  }
-  return (unsigned char)ren_str_data(b)[i];
+void ren_bytes_index_panic(int64_t len, int64_t i, const ren_site *site) {
+  char msg[128];
+  snprintf(msg, sizeof msg,
+           "index %" PRId64 " is out of bounds for bytes of length %" PRId64,
+           i, len);
+  ren_panic(site, msg);
 }
 
 ren_obj *ren_bytes_of(ren_obj *a, const ren_site *site) {

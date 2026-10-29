@@ -71,8 +71,9 @@ let rt h (r : rt) : rt =
   | Array_reserve l -> Array_reserve (lay h l)
   | ( Array_len | Array_check | Array_own | Array_data | Buf_check | Str_len
     | Str_concat | Str_eq | Slice _ | Splice _ | Join _ | Copied _ | Str_split | Str_trim | Vacant | Bytes_at
+    | Str_data | Bytes_get
     | Bytes_of | Show_int | Show_float | Show_bool | Float_of_int
-    | Float_sqrt | Float_round | Float_truncate | Wrapping _ | Wrapping_neg
+    | Float_sqrt | Float_round | Float_truncate | Wrapping _ | Wrapping_neg | Count_step
     | Bits _ | Shift _ | Widen | Narrow _ | Wrap_to _
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _
     | Op_any _ | Value_any _ | New_desc _ | Nan_check _ | Nan_check_any _

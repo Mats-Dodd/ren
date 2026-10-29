@@ -22,11 +22,19 @@ strides = {"json_r": 3, "pages_r": 4}
 BYTES_AT = re.compile(
     r"int64_t ren_bytes_at\(ren_obj \*b, int64_t i, const ren_site \*site\) \{.*?\n\}\n", re.S)
 
+# after step 1 of the bytes stage, a byte read in a loop is also
+# `ren_buf_byte`, of a length and data read before it (hoist.ml)
+BUF_BYTE = re.compile(
+    r"int64_t ren_buf_byte\(const void \*data, int64_t len, int64_t i,\s*const ren_site \*site\) \{.*?\n\}\n", re.S)
+
 def nob(c):
     assert BYTES_AT.search(c)
-    return BYTES_AT.sub(
+    c = BYTES_AT.sub(
         "int64_t ren_bytes_at(ren_obj *b, int64_t i, const ren_site *site) {\n"
         "  (void)site; return (unsigned char)ren_str_data(b)[i];\n}\n", c)
+    return BUF_BYTE.sub(
+        "int64_t ren_buf_byte(const void *data, int64_t len, int64_t i, const ren_site *site) {\n"
+        "  (void)site; (void)len; return ((const unsigned char *)data)[i];\n}\n", c)
 
 def noovf(c):
     for op, sym in [("add", "+"), ("sub", "-"), ("mul", "*")]:

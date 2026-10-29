@@ -1274,6 +1274,13 @@ and prim env sc (e : expr) op args =
   | Get_index _, [ a; i ] ->
       int i;
       is "an element" (elem a)
+  | Byte_at _, [ b; i ] ->
+      same env b.loc "what a byte is read of" b.ty (Ty.Con (Path.prelude "Bytes", []));
+      int i;
+      is "a byte" Ty.int
+  | Step, [ ({ kind = Local _; _ } as i) ] ->
+      int i;
+      is "a step" Ty.int
   | Entries, [ m ] -> (
       match reveal env m.ty with
       | Con (p, [ k; v ]) when p = Path.prelude "Map" ->
@@ -1650,10 +1657,12 @@ let fn_def env (f : fn_def) =
       fail env f.loc "a function gives a scope or a task's handle"
   | _ -> ());
   instances env f.body;
-  (* each index marked in bounds is, by what its loop shows (bounds.ml) *)
+  (* each index marked in bounds is, and each step marked as not
+     overflowing can't, by what its loop shows (bounds.ml) *)
   Option.iter
     (fun (e : expr) ->
-      fail env e.loc "an index marked in bounds that its loop doesn't keep so")
+      fail env e.loc
+        "an index marked in bounds, or a step marked as not overflowing, that its loop doesn't keep so")
     (Bounds.verify f.body);
   blocks env false f.body;
   no_fun_args env f.body;

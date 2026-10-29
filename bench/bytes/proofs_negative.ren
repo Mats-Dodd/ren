@@ -1,0 +1,10 @@
+// A count that starts below 0 isn't in bounds below the length: the
+// read is checked, and panics as `ren run` does.
+
+fn main() uses Console =
+  let b = "abc".bytes()
+  let n = b.len()
+  var i = -1
+  while i < n
+    print(b.at(i))
+    i += 1

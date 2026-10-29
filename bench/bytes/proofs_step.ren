@@ -1,0 +1,11 @@
+// `i <= top` isn't a test that `i + 1` can't overflow: the step stays
+// checked, and panics at the largest `Int` as `ren run` does.
+
+fn main() uses Console =
+  let top = 9223372036854775807
+  var i = top - 2
+  var n = 0
+  while i <= top
+    n += 1
+    print(n)
+    i += 1

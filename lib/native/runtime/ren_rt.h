@@ -930,6 +930,24 @@ static inline ren_obj *ren_array_set_slots_taking(ren_obj *a, int64_t i,
   return ren_array_set_slots_taking_k(a, i, v, ren_stride(a), site);
 }
 void ren_array_push_slots_taking(ren_obj **cell, const ren_val *v);
+/* The same, of [k] words, a constant the C knows: inline when the array
+   is unique, an owner and has room, which is most pushes, so the struct's
+   words are stored directly and no call is made; otherwise
+   [ren_array_push_slots_taking], whose cases, a copy and growing, are
+   tested in the same order. Out of line, every push of a token was a
+   call, a capacity test in another, and a `memcpy` of a stride read from
+   the array (compiler.md, "Bytes stage", "The baseline"). */
+static inline void ren_array_push_slots_taking_k(ren_obj **cell, const ren_val *v,
+                                                 int64_t k) {
+  ren_obj *a = *cell;
+  ren_array *arr = (ren_array *)a;
+  if (__builtin_expect(ren_array_unique(a) && arr->len < arr->cap, 1)) {
+    memcpy(&arr->data[arr->len * k], v, (size_t)k * sizeof(ren_val));
+    arr->len++;
+    return;
+  }
+  ren_array_push_slots_taking(cell, v);
+}
 
 /* Field [off] of element [i] of an array of structs of [k] words
    changed to [v], the rest of the element as it was: a copy, which
@@ -1055,8 +1073,34 @@ ren_obj *ren_array_copied(ren_obj *a);
 ren_obj *ren_str_copied(ren_obj *s);
 
 /* `Bytes`' byte [i], 0 to 255, panicking as `b.at(i)` does if it isn't
-   one; and `Bytes.of(xs)`, panicking at an element that isn't a byte. */
-int64_t ren_bytes_at(ren_obj *b, int64_t i, const ren_site *site);
+   one, unless bounds.ml proved it is ([REN_IN_BOUNDS]). Inline, as
+   [ren_array_check] is: one unsigned compare, and the message made out
+   of line, in a cold function. Built in place, the panic's buffer and
+   its `snprintf` came into every loop that read a byte, and with them a
+   call that, as far as C knew, might change the bytes' object, so the
+   loop read their length and data from it again on every byte
+   (compiler.md, "Bytes stage", "The baseline"). */
+__attribute__((cold, noinline)) _Noreturn void
+ren_bytes_index_panic(int64_t len, int64_t i, const ren_site *site);
+static inline int64_t ren_bytes_at(ren_obj *b, int64_t i, const ren_site *site) {
+  if (site != REN_IN_BOUNDS &&
+      __builtin_expect((uint64_t)i >= (uint64_t)ren_str_len(b), 0))
+    ren_bytes_index_panic(ren_str_len(b), i, site);
+  return (unsigned char)ren_str_data(b)[i];
+}
+
+/* [ren_bytes_at] of [len] bytes at [data], which hoist.ml read before a
+   loop: a string's length and where its bytes are never change once
+   it's made, but a loop that calls a function or stores anything would
+   read them again on every pass, since C can't know that. */
+static inline int64_t ren_buf_byte(const void *data, int64_t len, int64_t i,
+                                   const ren_site *site) {
+  if (site != REN_IN_BOUNDS && __builtin_expect((uint64_t)i >= (uint64_t)len, 0))
+    ren_bytes_index_panic(len, i, site);
+  return ((const unsigned char *)data)[i];
+}
+
+/* `Bytes.of(xs)`, panicking at an element that isn't a byte. */
 ren_obj *ren_bytes_of(ren_obj *a, const ren_site *site);
 
 /* What `show` makes of a scalar, as Ren writes it; a NaN can't be shown,
