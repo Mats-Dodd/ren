@@ -1249,7 +1249,7 @@ handler doc(id: DocId) for Doc uses Store, Conns =
   join(c) => &subs.push(c)
   leave(c) => &subs.remove(c)
 
-dep Docs = Actors<DocId, Doc>
+dep Docs = Actors<DocId, Doc> ! StoreDown
 
 pub wiring live(url: Str) provides Docs uses Net ! StoreDown =
   pg_store(url), conns(), actors(doc, max: 50_000) as Docs
@@ -1262,7 +1262,8 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
     for op in conn.ops() => try Doc.edit(op)
 ```
 
-- **A family is a dependency, `Actors<K, D>`.** It's named in `uses`,
+- **A family is a dependency, `Actors<K, D> ! E`,** with `E` the errors
+  of making an actor, which `try Docs.at(id)` can fail with. It's named in `uses`,
   installed by the root, and swapped in tests by installing a family of
   a fake handler, `actors(fake_doc, max: 8) as Docs`. Code that works on
   one actor is written `uses Doc` and runs inside `at`, so it's tested
@@ -1271,19 +1272,22 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   actor as `Doc` for its block, making it if it isn't live. There's no
   handle to keep, because `Docs` is a dependency. A key can be stored
   anywhere, and a stored key can't dangle: `at` makes the actor again.
-- **`actors(doc, max:)` names the handler,** whose one parameter is the
-  key. What else it needs comes from the `with` set, as for any item.
-- **An actor can't reach its own family** except to `post` (below).
+- **`actors(doc, max: Int = 10_000)` names the handler,** whose one
+  parameter is the key. What else it needs comes from the `with` set, as
+  for any item.
+- **An actor can't `at` its own family,** only `post` to it (below).
   Anything else would be a cycle in one `with` set, which is already an
   error, and it's what keeps waits from closing a cycle.
 - **Each operation takes the actor for one call**, as every handler's
   operation does (foundations.md decision 10), and the `at` block keeps
   it from being evicted. So a read and a write in two operations race,
   as in every actor system: a read-modify-write is one operation.
-- **`post` is Erlang's send.** `Docs.post(k) fn() => Doc.edit(op)`
-  queues the call in k's mailbox and returns. The family's `with` owns
-  the work, posted work can't fail, and a full mailbox waits. An actor
-  may post to its siblings.
+- **`post` is Erlang's cast.** `Docs.post(k).edit(op)` puts one
+  operation, with its arguments evaluated now, in k's mailbox and
+  returns: a message, which is data. Only an operation that returns `()`
+  and can't fail can be posted. An actor posts to its siblings by naming
+  its family in `uses`. A post from outside waits while the family is
+  over its `mailbox:` bound; a sibling's post never waits.
 
 The rest, setup, eviction, periodic work, deadlock and what `sim` does,
 is in [foundations.md decision 18](foundations.md#18-actors-and-stripes).

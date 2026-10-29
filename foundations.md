@@ -927,7 +927,7 @@ when to choose them over data in one service, is in
 actors, as Orleans' grains and Cloudflare's Durable Objects are:
 
 ```ren
-dep Docs = Actors<DocId, Doc>
+dep Docs = Actors<DocId, Doc> ! StoreDown
 with store(), actors(doc, max: 50_000) as Docs in serve()
 
 try Docs.at(id) fn() => Doc.edit(op)
@@ -936,19 +936,22 @@ try Docs.at(id) fn() => Doc.edit(op)
 - **Addressing.** The key is the address. `Docs.at(k) fn() => body`
   installs k's actor as `Doc` for its block. `doc` names a handler
   whose one parameter is the key, and its other dependencies come from
-  the `with` set, so an actor can't use its own family: that's a cycle
-  in one `with`, already an error (decision 10). `post` is the
-  exception, below.
+  the `with` set, so an actor can't `at` its own family: that's a cycle
+  in one `with`, already an error (decision 10). It may `post` to it,
+  below.
 - **Holding.** Each operation takes the actor for one call, as decision
   10 says for every instance. The `at` block pins it, so it isn't
   evicted while the block runs, but other callers' operations
   interleave between the block's calls.
 - **Setup.** The actor is made when `at` is entered, so setup's errors
-  are `at`'s: `try Docs.at(id)`. Callers waiting on the same key's setup
+  are `at`'s: `try Docs.at(id)`. An actor's `with` is deferred to `at`,
+  so its setup's errors move with it, and the family's declaration
+  states them, `Actors<DocId, Doc> ! StoreDown`, as a dependency states
+  its operations' errors; the handler given to `actors` must fit them. Callers waiting on the same key's setup
   get the same error, and the next `at` tries again. If setup is
   cancelled, the waiters try it themselves.
-- **Eviction.** `max:` is required: an unbounded family is a memory leak
-  keyed by whatever the network sends. Making one past `max:` evicts the
+- **Eviction.** A family is always bounded, `max: Int = 10_000`: an
+  unbounded family is a memory leak keyed by whatever the network sends. Making one past `max:` evicts the
   least recently released actor that's evictable, and the caller that
   makes it pays: the victim's `finally` runs on its task. If none is
   evictable, it waits. An actor that's pinned, running an operation, or
@@ -968,13 +971,30 @@ try Docs.at(id) fn() => Doc.edit(op)
   error. A task that pins an actor may wait for a slot only in a family
   installed outside the families it pins; anywhere else a full family
   fails at once with `Full`, the inner-to-outer rule of decision 10.
-- **`post` is Erlang's send, deferred.** `Docs.post(k) fn() =>
-  Doc.edit(op)` puts the call in k's mailbox and returns. It runs as a
-  task owned by the family's `with`, so it can't fail, as a spawned
-  task can't. A mailbox is bounded: a full one makes the poster wait, or
-  fails with `Full` where waiting could close a cycle. An actor may post
-  to its siblings, the one use of its own family the cycle rule allows,
-  since a post never holds anything. Posts are journaled.
+- **`post` is Erlang's cast: a message, and messages are data.**
+  `Docs.post(k).edit(op)` puts one operation of `D`, with its arguments,
+  in k's mailbox and returns. The arguments are evaluated when it's
+  posted and are data, copied as an Erlang message is; no block is kept.
+  A mailbox holds the enum of `D`'s operations the compiler writes
+  (language.md §6), and the journal records posts as data. `at` is the
+  call, `post` the cast.
+  - **Only an operation that returns `()` and can't fail may be
+    posted**, since there's no caller to give a result or an error to.
+    Anything else is a compile error whose help says to handle it inside
+    the actor, or to use `at`.
+  - **Order:** posts from one task to one actor run in the order posted,
+    each as one operation, on a task the family's `with` owns.
+  - **Siblings:** an actor names its own family in its handler's `uses`,
+    `handler doc(id: DocId) for Doc uses Store, Docs`, and may only
+    `post` to it, never `at`: a post holds nothing, so it can't close a
+    cycle. The handler's parameter, its key, is its `self()`.
+  - **Back-pressure at the family's edge.** A family has one bound,
+    `mailbox: Int = 10_000`. A post from outside the family waits while
+    the family is over it; a post from an actor to a sibling never waits,
+    so two actors posting to each other can't deadlock. Posts inside a
+    family are caused by work that came in from outside, so the edge
+    bounds the whole; debug builds and `sim` report each family's
+    high-water mark, which is how an actor posting in a loop is found.
 - **Policies are data.** `evict: Lru`, the default, or `Lfu`. Expiry
   after a time without use or since a write (`expire:`) and a weight
   per actor (`weigh:`) are designed with the server milestone, as
