@@ -1665,3 +1665,26 @@ in debug and release alike:
   [1]
   $ (cd 11a && ren build --release spawns.ren -o ./spawns.bin 2>&1 | head -n 1)
   error: `Async.scope` runs tasks, and tasks aren't native yet
+
+The data stage's programs (compiler.md, "Data stage", "The tests"), in
+data/, checked as 10d's and 11a's are: each `.expected` holds what `ren
+run` prints, then how it exits, then the first line it writes to
+stderr. The step that lands one changes its line here to say so, and
+adds it to the loops above that check its native builds against `ren
+run`. `nested`, `rows` and `optional` are step 7's kernels, one for each
+layout fault: they run today, so they're as specified already, and step
+7 measures them before and after its fixes and adds them to the loops.
+`interp`, the milestone's kernel, needs step 2's by-name variants to
+run, and step 7 measures it against Rust.
+
+  $ for f in update byname orpat variants todo_panic shapes nested rows optional interp; do spec data/$f.ren; done
+  data/update.ren: not yet
+  data/byname.ren: not yet
+  data/orpat.ren: not yet
+  data/variants.ren: not yet
+  data/todo_panic.ren: not yet
+  data/shapes.ren: not yet
+  data/nested.ren: as specified
+  data/rows.ren: as specified
+  data/optional.ren: as specified
+  data/interp.ren: not yet

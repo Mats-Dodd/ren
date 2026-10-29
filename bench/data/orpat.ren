@@ -1,0 +1,49 @@
+// Data stage, step 3: or-patterns, `as` and `let ... else` (compiler.md,
+// "Data stage"), each native build against `ren run`.
+
+type Plan =
+  | Free
+  | Pro(seats: Int)
+  | Team(seats: Int)
+  | Enterprise { seats: Int, contract: Int }
+
+fn seats(p: Plan) -> Int =
+  match p
+    Pro(n) | Team(n) | Enterprise { seats: n, .. } => n
+    Free => 1
+
+fn paid(p: Plan) -> Bool =
+  match p
+    Pro(_) | Team(_) | Enterprise { .. } => true
+    Free => false
+
+fn upgraded(p: Plan) -> Plan =
+  match p
+    Pro(n) as old => if n > 5 then Team(n) else old
+    other => other
+
+fn team_seats(p: Plan) -> Int ! NotTeam =
+  let Team(n) = p else fail NotTeam
+  n
+
+// the seats of the teams before the first plan that isn't one
+fn leading_teams(ps: Array<Plan>) -> Int =
+  var n = 0
+  for p in ps
+    let Team(s) = p else break
+    n += s
+  n
+
+fn main() uses Console =
+  let plans = [Free, Pro(3), Team(8), Enterprise { seats: 50, contract: 2 }, Pro(9)]
+  var total = 0
+  for p in plans
+    total += seats(p)
+    print(paid(p))
+    print(upgraded(p))
+  print(total)
+  print(leading_teams([Team(2), Team(3), Free, Team(4)]))
+  match team_seats(Pro(1))
+    n => print(n)
+    fail NotTeam => print(-1)
+  print(attempt team_seats(Team(6)))

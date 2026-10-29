@@ -1,0 +1,19 @@
+// Data stage, step 5: `todo`, what the arms a `match` misses are
+// printed with, has any type and panics where it's reached (compiler.md,
+// "Data stage"), natively as `ren run` does.
+
+type Light =
+  | Red
+  | Amber
+  | Green
+
+fn next(l: Light) -> Light =
+  match l
+    Red => Green
+    Green => Amber
+    Amber => todo
+
+fn main() uses Console =
+  print(next(Red))
+  print(next(next(Red)))
+  print(next(Amber))

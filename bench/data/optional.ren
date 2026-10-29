@@ -1,0 +1,24 @@
+// Data stage, step 7: the third layout fault (language.md §2, "Layout
+// fixes"). An `Option` of a small record that holds an object boxes the
+// record; with a pointer niche, `None` is a scalar in the record's object
+// slot, and `Some` no tag at all.
+
+type Item = { name: Str, price: Int }
+
+fn item(k: Int, names: Array<Str>) -> Item =
+  Item { name: names[k % 3], price: k * 7919 % 1000 }
+
+fn main() uses Console =
+  let names = ["tea", "jam", "cake"]
+  var best: Option<Item> = None
+  var hits = 0
+  for k in 0..100000
+    let x = item(k, names)
+    let o = if x.price < 10 then Some(x) else None
+    match o
+      Some(i) =>
+        hits += 1
+        best = Some(i)
+      None => ()
+  print(hits)
+  print(best)

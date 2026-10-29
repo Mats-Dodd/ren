@@ -1,0 +1,48 @@
+// Data stage, step 4: variant types (language.md §2, "Variant types").
+// `as` binds one, it goes anywhere, and `Placed { ..p }` is the sum
+// again; `==` and `show` are the sum's. Each native build against `ren
+// run`: a variant type is its sum's value, so it costs nothing.
+
+type Order =
+  | Draft { lines: Array<Int> }
+  | Placed { id: Int, lines: Array<Int>, total: Int }
+  | Shipped { id: Int, tracking: Str }
+
+fn place(d: Order.Draft, id: Int) -> Order =
+  var total = 0
+  for x in d.lines
+    total += x
+  Placed { ..d, id, total }
+
+fn ship(p: Order.Placed, tracking: Str) -> Order = Shipped { id: p.id, tracking }
+
+fn step(o: Order, id: Int) -> Order =
+  match o
+    Draft { .. } as d => place(d, id)
+    Placed { .. } as p => ship(p, "track")
+    Shipped { .. } => o
+
+fn main() uses Console =
+  var o: Order = Draft { lines: [3, 4, 5] }
+  print(o)
+  o = step(o, 7)
+  print(o)
+  // variant types kept in an array
+  var placed: Array<Order.Placed> = []
+  for i in 0..5
+    match step(Draft { lines: [i, i + 1] }, i)
+      Placed { .. } as p => &placed.push(p)
+      _ => ()
+  var sum = 0
+  for p in placed
+    sum += p.total
+  print(sum)
+  print(placed[0])
+  print(placed[0] == placed[0])
+  let back: Order = Placed { ..placed[1] }
+  print(back)
+  var p = placed[2]
+  p.total = 100
+  print(Placed { ..p, id: 9 })
+  o = step(o, 8)
+  print(o)

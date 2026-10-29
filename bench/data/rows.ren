@@ -1,0 +1,18 @@
+// Data stage, step 7: the second layout fault (language.md §2, "Layout
+// fixes"). An array of small records that hold a `Str` boxes `Line`
+// program-wide, one allocation an element; kept inline, scanned by
+// the mask the type already has, the array holds them.
+
+type Line = { sku: Str, qty: Int }
+
+fn main() uses Console =
+  let names = ["a", "bb", "ccc"]
+  var ls: Array<Line> = []
+  for i in 0..100000
+    &ls.push(Line { sku: names[i % 3], qty: i % 10 })
+  var t = 0
+  for l in ls
+    t += l.qty * l.sku.len()
+  print(t)
+  print(ls[4])
+  print(ls.len())

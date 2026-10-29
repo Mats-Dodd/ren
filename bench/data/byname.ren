@@ -1,0 +1,38 @@
+// Data stage, step 2: a variant with several fields is built and matched
+// by name, one with one field by position (compiler.md, "Data stage"),
+// and `show` writes each as it's built. Each native build against `ren
+// run`.
+
+type Shape =
+  | Dot
+  | Circle(r: Int)
+  | Rect { w: Int, h: Int }
+  | Frame { w: Int, h: Int, t: Int }
+
+fn area(s: Shape) -> Int =
+  match s
+    Dot => 0
+    Circle(r) => 3 * r * r
+    Rect { w, h } => w * h
+    Frame { w, h, t } => w * h - (w - 2 * t) * (h - 2 * t)
+
+fn width(s: Shape) -> Int =
+  match s
+    Rect { w: width, .. } => width
+    Frame { w, .. } => w
+    Circle(r) => 2 * r
+    Dot => 0
+
+fn main() uses Console =
+  let shapes = [Dot, Circle(2), Rect { w: 2, h: 3 }, Rect { h: 4, w: 5 }, Frame { w: 6, h: 6, t: 1 }]
+  for s in shapes
+    print(s)
+    print(area(s))
+  var total = 0
+  for i in 0..1000
+    let w = i % 7 + 1
+    let h = i % 5 + 1
+    let s = if i % 2 == 0 then Rect { w, h } else Frame { w: w + 2, h: h + 2, t: 1 }
+    total += area(s) + width(s)
+  print(total)
+  print(Rect { w: 1, h: 2 } == Rect { h: 2, w: 1 })

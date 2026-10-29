@@ -1,0 +1,3 @@
+1000
+Some(Item { name: "tea", price: 7 })
+exit 0

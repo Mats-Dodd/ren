@@ -1,0 +1,40 @@
+// Data stage, step 1: record update, record patterns and `let { .. } =`
+// (compiler.md, "Data stage"), each native build against `ren run`. The
+// loop at the end updates a unique record, which Perceus reuses in place.
+
+type Line = { sku: Str, qty: Int, price: Int }
+type Order = { id: Int, lines: Array<Line>, total: Int, paid: Bool }
+
+fn total(lines: Array<Line>) -> Int =
+  var t = 0
+  for { qty, price, .. } in lines
+    t += qty * price
+  t
+
+// every line's quantity raised by [by], and the total again
+fn bump(o: Order, by: Int) -> Order =
+  var ls: Array<Line> = []
+  for l in o.lines
+    &ls.push({ ..l, qty: l.qty + by })
+  { ..o, lines: ls, total: total(ls) }
+
+fn state(o: Order) -> Int =
+  match o
+    { paid: true, total, .. } => total
+    { lines, .. } => 0 - lines.len()
+
+fn main() uses Console =
+  let lines = [Line { sku: "a", qty: 1, price: 3 }, Line { sku: "b", qty: 2, price: 5 }]
+  let o = Order { id: 7, lines, total: total(lines), paid: false }
+  print(o)
+  let o2 = bump(o, 2)
+  let { id, total, .. } = o2
+  print(id)
+  print(total)
+  print(state(o2))
+  let paid = { ..o2, paid: true }
+  print(state(paid))
+  var acc = Order { ..o, lines: [] }
+  for i in 0..1000
+    acc = { ..acc, total: acc.total + i }
+  print(acc.total)
