@@ -1099,8 +1099,8 @@ and handler cx (e : expr) deps state arms =
         let v = bind cx name value.ty in
         let body = state_lets rest in
         mk (Let (v, value, body)) body.ty value.loc
-    | Let_tuple { pat; value } :: rest ->
-        take_apart cx pat (expr cx value) (fun () -> state_lets rest)
+    | Let_pattern { pat; value; else_ } :: rest ->
+        take_apart cx pat ?else_ (expr cx value) (fun () -> state_lets rest)
     | Expr s :: rest -> seq (expr cx s) (state_lets rest)
     | Finally f :: rest ->
         (* the state after it, which, if it fails to start, it's given;
@@ -1135,7 +1135,7 @@ and handler cx (e : expr) deps state arms =
           | Let { name; mut = true; _ } ->
               let v = var_of cx name in
               Some (v, temp cx v.name (C.cell_ty v.ty))
-          | Let _ | Let_tuple _ | Expr _ | Finally _ -> None)
+          | Let _ | Let_pattern _ | Expr _ | Finally _ -> None)
         state
     in
     let impl (d : tname dep_ref) : Path.t * C.expr =
@@ -1990,9 +1990,9 @@ and block cx stmts last =
       let v = bind cx name value.ty in
       let body = block cx rest last in
       mk (Let (v, value, body)) body.ty value.loc
-  | Let_tuple { pat; value } :: rest ->
+  | Let_pattern { pat; value; else_ } :: rest ->
       let value = expr cx value in
-      take_apart cx pat value (fun () -> block cx rest last)
+      take_apart cx pat ?else_ value (fun () -> block cx rest last)
   | Expr e :: rest ->
       let e = expr cx e in
       seq e (block cx rest last)
@@ -2012,19 +2012,34 @@ and block cx stmts last =
           mk (Covered { body = covered; result; after }) after.ty f.loc
       | _ -> bug "a `finally` that isn't a lambda of one parameter")
 
-(* [body ()] with [pat], a name or a tuple of them (the parser sees to
-   that), bound to [value]: a [Let], or a [match] of one arm, which always
-   matches. *)
-and take_apart cx (pat : pattern) (value : C.expr) body =
-  match pat.pkind with
-  | PVar b ->
+(* [body ()] with [pat] bound to [value]: a [Let], or a [match] of one
+   arm, which always matches (Exhaust sees to that). With [else_], `let
+   PAT = value else LEAVE`, a [match] of two arms, [pat] then the body,
+   and `_` then [else_], which leaves, so it's of the body's type
+   (inference checked it is). *)
+and take_apart cx (pat : pattern) ?else_ (value : C.expr) body =
+  match (pat.pkind, else_) with
+  | PVar b, None ->
       let v = bind cx b value.ty in
       let body = body () in
       mk (Let (v, value, body)) body.ty value.loc
-  | _ ->
+  | _, None ->
       let pat = pattern cx pat in
       let body = body () in
       mk (Match (value, [ { pat; guard = None; body } ])) body.ty value.loc
+  | _, Some leave ->
+      let leave = expr cx leave in
+      let pat = pattern cx pat in
+      let body = body () in
+      let other : C.pattern = { pkind = PWild; pty = value.ty; ploc = pat.ploc } in
+      mk
+        (Match
+           ( value,
+             [
+               { pat; guard = None; body };
+               { pat = other; guard = None; body = leave };
+             ] ))
+        body.ty value.loc
 
 (* `for i in a..b` holds both ends, then counts from the first up to the
    second, which it never reaches: when it starts there, the body never
@@ -2322,6 +2337,7 @@ and pattern cx (p : pattern) : C.pattern =
     | PFail_any -> PWild
     | PFail_in _ -> bug "`fail on` other than as a whole arm's pattern"
     | POr ps -> POr (List.map (pattern cx) ps)
+    | PAs (q, b) -> PAs (pattern cx q, bind cx b pty)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
     | PCon_named (_, fs) -> (
         (* the positional constructor, a pattern for every field, in
@@ -2538,6 +2554,9 @@ and free (e : C.expr) =
   and pat (p : C.pattern) =
     match p.pkind with
     | PVar v -> bind v
+    | PAs (q, v) ->
+        pat q;
+        bind v
     | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps) ->
         List.iter pat ps
     | PWild | PInt _ | PBool _ -> ()
@@ -2610,13 +2629,17 @@ let max_binder (f : fn_def) =
     | Let { name; value; _ } ->
         see name;
         go value
-    | Let_tuple { pat = p; value } ->
+    | Let_pattern { pat = p; value; else_ } ->
         pat p;
-        go value
+        go value;
+        Option.iter go else_
     | Expr e | Finally e -> go e
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b
+    | PAs (q, b) ->
+        pat q;
+        see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
     | PRecord (_, fs) | PCon_named (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
     | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()

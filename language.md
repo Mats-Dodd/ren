@@ -273,10 +273,10 @@ Tested against the compiler on 2026-10-28:
 | Record patterns, `let { id } = u` | don't parse. Since step 1: `{ id, .. }` and `User { id, .. }` in a `match`, a `let`, a `for` and a block's parameter |
 | Labels in a pattern, `Rect(h: hh, ..)` | don't parse; patterns are positional, with no `..`. Since step 2: `Rect { h: hh, .. }` |
 | Nested patterns and guards | work: `Some(Active(Pro(n))) if n > 3 =>` |
-| Or-patterns | only on `fail` tags; `A(n) \| B(n)` doesn't parse |
-| `as` | doesn't parse |
-| `if let` | doesn't parse |
-| `let Some(n) = o else ...` | rejected with a good error and help to use `match`; `o orelse 0` works |
+| Or-patterns | only on `fail` tags; `A(n) \| B(n)` doesn't parse. Since step 3: anywhere a pattern goes, nested, `Some(Pro(_) \| Team(_))`, each alternative binding the same names at the same types, and one that matches nothing new an error |
+| `as` | doesn't parse. Since step 3: `Pro(n) as old`, binding the whole of what's matched, looser than `\|` |
+| `if let` | doesn't parse. Since step 3: an error whose help writes the `match` or the `let ... else` |
+| `let Some(n) = o else ...` | rejected with a good error and help to use `match`; `o orelse 0` works. Since step 3: works, its `else` leaving with `fail` or `break`; a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too |
 | Methods on a sum type | work |
 | A field every variant has, `s.id` | "`.id` needs a record, but this is a `Shape`" |
 | Narrowing in an arm | none; a variant isn't a type |

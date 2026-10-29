@@ -169,8 +169,13 @@ and ('b, 't) pattern_kind =
           whole arm's, never part of another pattern *)
   | PFail_any  (** [fail _]: any error *)
   | POr of ('b, 't) pattern list
-      (** [fail Short(_, _) | fail Frozen(_)]: any of them. So far only `fail`
-          patterns are combined, and each binds the same names *)
+      (** [Pro(n) | Team(n)], [fail Short(_, _) | fail Frozen(_)]: any of
+          them, each binding the same names (compiler.md, "Data stage",
+          "Or-patterns"). `fail` patterns combine only with each other *)
+  | PAs of ('b, 't) pattern * 'b
+      (** [Pro(n) as old]: what the pattern matches, the whole of it bound
+          to the name too. It binds looser than `|`: [A | B as x] names the
+          whole. Never of a `fail` pattern *)
   | PTuple of ('b, 't) pattern list
       (** [(k, v)]: a tuple of two or three, taken apart *)
   | PRecord of 't option * ('b, 't) fields
@@ -421,9 +426,16 @@ and ('v, 'b, 't) stmt =
       value : ('v, 'b, 't) expr;
       mut : bool;
     }  (** [let], or [var] when [mut] *)
-  | Let_tuple of { pat : ('b, 't) pattern; value : ('v, 'b, 't) expr }
-      (** [let (k, v) = pair]: a tuple taken apart, by a pattern that always
-          matches, of names, [_] and tuples *)
+  | Let_pattern of {
+      pat : ('b, 't) pattern;
+      value : ('v, 'b, 't) expr;
+      else_ : ('v, 'b, 't) expr option;
+    }
+      (** [let (k, v) = pair], [let { id, .. } = order]: taken apart by a
+          pattern that always matches; or, with [else_], [let Team(n) = p
+          else fail NotTeam], by one that might not, the [else_] run, and
+          leaving, when it doesn't (compiler.md, "Data stage", "`let ...
+          else`"). Exhaust checks which *)
   | Expr of ('v, 'b, 't) expr
   | Finally of ('v, 'b, 't) expr
       (** [finally(r) => ...], a lambda of one parameter: it covers what comes
@@ -651,11 +663,13 @@ let with_links items =
   List.concat_map (fun i -> List.map (fun l -> l.link) i.chain) items
 
 (* The expressions directly inside [e], in source order: a statement's
-   value, a guard and an arm's body, a handler's state and arms too. *)
+   value (and a `let ... else`'s `else`), a guard and an arm's body, a
+   handler's state and arms too. *)
 let children (e : ('v, 'b, 't) expr) =
   let stmt = function
-    | Let { value; _ } | Let_tuple { value; _ } -> value
-    | Expr e | Finally e -> e
+    | Let { value; _ } -> [ value ]
+    | Let_pattern { value; else_; _ } -> value :: Option.to_list else_
+    | Expr e | Finally e -> [ e ]
   in
   match e.kind with
   | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> []
@@ -681,7 +695,7 @@ let children (e : ('v, 'b, 't) expr) =
   | Con (_, args) | Fail (_, args) -> List.map snd args
   | Record (_, fields) | Con_named (_, fields) -> List.map snd fields
   | Update { base; fields; _ } -> base :: List.map snd fields
-  | Block (stmts, last) -> List.map stmt stmts @ [ last ]
+  | Block (stmts, last) -> List.concat_map stmt stmts @ [ last ]
   | Match (s, arms) ->
       s
       :: List.concat_map
@@ -689,7 +703,7 @@ let children (e : ('v, 'b, 't) expr) =
            arms
   | With { items; body } -> with_links items @ [ body ]
   | Handler { state; arms; _ } ->
-      List.map stmt state @ List.map (fun a -> a.arm_impl) arms
+      List.concat_map stmt state @ List.map (fun a -> a.arm_impl) arms
 
 (* ---- names, once resolved ----
 
@@ -762,6 +776,11 @@ let show_fields show (fs : ('b, 't) fields) =
   ^ String.concat ", "
       (List.map field fs.fpats @ if fs.rest then [ ".." ] else [])
   ^ " }"
+
+(* An alternative of an or-pattern as it's written, [show] writing it: in
+   parentheses if it's an `as`, which would otherwise name the whole. *)
+let or_alt show (p : ('b, 't) pattern) =
+  match p.pkind with PAs _ -> "(" ^ show p ^ ")" | _ -> show p
 
 module Parsed = struct
   type nonrec ty = tyname ty
@@ -982,7 +1001,8 @@ let rec show_pattern (p : pattern) =
       ^ ")"
   | PFail_any -> "fail _"
   | PFail_in t -> "fail " ^ t.name
-  | POr ps -> String.concat " | " (List.map show_pattern ps)
+  | POr ps -> String.concat " | " (List.map (or_alt show_pattern) ps)
+  | PAs (q, x) -> show_pattern q ^ " as " ^ x.name
   | PTuple ps -> "(" ^ String.concat ", " (List.map show_pattern ps) ^ ")"
   | PRecord (name, fs) ->
       let name = match name with Some t -> show_tyname t ^ " " | None -> "" in
@@ -1146,8 +1166,10 @@ and show_param (p : param) =
 and show_stmt : stmt -> string = function
   | Let { name; value; mut; _ } ->
       parens [ (if mut then "var" else "let"); name.name; show_expr value ]
-  | Let_tuple { pat; value } ->
+  | Let_pattern { pat; value; else_ = None } ->
       parens [ "let"; show_pattern pat; show_expr value ]
+  | Let_pattern { pat; value; else_ = Some e } ->
+      parens [ "let"; show_pattern pat; show_expr value; "else"; show_expr e ]
   | Expr e -> show_expr e
   | Finally f -> parens [ "finally"; show_expr f ]
 
@@ -1298,6 +1320,9 @@ let bound_in (e : Resolved.expr) =
   let rec pat (p : Resolved.pattern) =
     match p.pkind with
     | PVar b -> see b
+    | PAs (q, b) ->
+        pat q;
+        see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
     | PRecord (_, fs) | PCon_named (_, fs) ->
         List.iter (fun (_, q) -> pat q) fs.fpats
@@ -1310,7 +1335,7 @@ let bound_in (e : Resolved.expr) =
         List.iter
           (function
             | Let { name; _ } -> see name
-            | Let_tuple { pat = p; _ } -> pat p
+            | Let_pattern { pat = p; _ } -> pat p
             | Expr _ | Finally _ -> ())
           stmts
     | For { index; pat = p; _ } ->
@@ -1466,7 +1491,8 @@ let rec pattern_source ~type_name (p : Resolved.pattern) =
   | PFail (t, ps) -> "fail " ^ t.name ^ args ps
   | PFail_any -> "fail _"
   | PFail_in b -> "fail " ^ b.ident.name
-  | POr ps -> String.concat " | " (List.map go ps)
+  | POr ps -> String.concat " | " (List.map (or_alt go) ps)
+  | PAs (q, b) -> go q ^ " as " ^ b.ident.name
   | PTuple ps -> args ps
   | PRecord (t, fs) ->
       (match t with

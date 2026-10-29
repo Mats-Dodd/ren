@@ -869,18 +869,9 @@ type Plan =
 |}
 
 let%expect_test "[s3 accept] an or-pattern over constructors binds the same names" =
-  until "s3"
-    ~want:{|
-1
-3
-8
-50
-()
-|}
-    (fun () ->
-      run
-        (plan_types
-       ^ {|
+  run
+    (plan_types
+   ^ {|
 fn seats(p: Plan) -> Int =
   match p
     Pro(n) | Team(n) | Enterprise { seats: n, .. } => n
@@ -891,27 +882,19 @@ fn main() uses Console =
   print(seats(Pro(3)))
   print(seats(Team(8)))
   print(seats(Enterprise { seats: 50, contract: 1 }))
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: expected `=>`, found `|`
-      ┌─ test.ren:9:12
-    9 │     Pro(n) | Team(n) | Enterprise { seats: n, .. } => n
-      │            ^
+    1
+    3
+    8
+    50
+    ()
     |}]
 
 let%expect_test "[s3 accept] an or-pattern nested inside a constructor" =
-  until "s3"
-    ~want:{|
-true
-false
-false
-()
-|}
-    (fun () ->
-      run
-        (plan_types
-       ^ {|
+  run
+    (plan_types
+   ^ {|
 fn paid_option(o: Option<Plan>) -> Bool =
   match o
     Some(Pro(_) | Team(_)) => true
@@ -921,28 +904,19 @@ fn main() uses Console =
   print(paid_option(Some(Team(2))))
   print(paid_option(Some(Free)))
   print(paid_option(None))
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: expected `,` or `)`, found `|`
-      ┌─ test.ren:9:17
-    9 │     Some(Pro(_) | Team(_)) => true
-      │                 ^
+    true
+    false
+    false
+    ()
     |}]
 
 let%expect_test "[s3 accept] `as` binds the whole of what a pattern matched" =
   (* it binds looser than `|`: `A | B as x` names the whole *)
-  until "s3"
-    ~want:{|
-Team(9)
-Some(Pro(2))
-Free
-()
-|}
-    (fun () ->
-      run
-        (plan_types
-       ^ {|
+  run
+    (plan_types
+   ^ {|
 fn upgraded(p: Plan) -> Plan =
   match p
     Pro(n) as old => if n > 5 then Team(n) else old
@@ -955,31 +929,18 @@ fn main() uses Console =
     Some(Pro(_) as inner) as whole => print(whole)
     _ => print(0)
   print(upgraded(Free))
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: expected `=>`, found `as`
-      ┌─ test.ren:9:12
-    9 │     Pro(n) as old => if n > 5 then Team(n) else old
-      │            ^^
-
-    error: expected `,` or `)`, found `as`
-       ┌─ test.ren:16:17
-    16 │     Some(Pro(_) as inner) as whole => print(whole)
-       │                 ^^
+    Team(9)
+    Some(Pro(2))
+    Free
+    ()
     |}]
 
 let%expect_test "[s3 accept] `let ... else` that fails" =
-  until "s3"
-    ~want:{|
-Ok(6)
-Err(NotTeam)
-()
-|}
-    (fun () ->
-      run
-        (plan_types
-       ^ {|
+  run
+    (plan_types
+   ^ {|
 fn team_seats(p: Plan) -> Int ! NotTeam =
   let Team(n) = p else fail NotTeam
   n
@@ -987,27 +948,17 @@ fn team_seats(p: Plan) -> Int ! NotTeam =
 fn main() uses Console =
   print(attempt team_seats(Team(6)))
   print(attempt team_seats(Free))
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Team(n)` might not
-      ┌─ test.ren:8:7
-    8 │   let Team(n) = p else fail NotTeam
-      │       ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+    Ok(6)
+    Err(NotTeam)
+    ()
     |}]
 
 let%expect_test "[s3 accept] `let ... else` that breaks, and a by-name pattern" =
-  until "s3"
-    ~want:{|
-5
-Ok(51)
-()
-|}
-    (fun () ->
-      run
-        (plan_types
-       ^ {|
+  run
+    (plan_types
+   ^ {|
 fn leading_teams(ps: Array<Plan>) -> Int =
   var n = 0
   for p in ps
@@ -1022,32 +973,16 @@ fn contract(p: Plan) -> Int ! NotEnterprise =
 fn main() uses Console =
   print(leading_teams([Team(2), Team(3), Free, Team(4)]))
   print(attempt contract(Enterprise { seats: 50, contract: 1 }))
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Team(s)` might not
-       ┌─ test.ren:10:9
-    10 │     let Team(s) = p else break
-       │         ^^^^^^^
-       help: take it apart with a `match`, which says what happens when it doesn't match
-
-    error: expected the end of the line, found `else`
-       ┌─ test.ren:15:42
-    15 │   let Enterprise { seats, contract } = p else fail NotEnterprise
-       │                                          ^^^^
+    5
+    Ok(51)
+    ()
     |}]
 
 let%expect_test "[s3 accept] `let ... else` whose else is a block or an `if` that leaves" =
-  until "s3"
-    ~want:{|
-said
-Err(Missing)
-Err(Small)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn first(o: Option<Int>) -> Int ! Missing | Small uses Console =
   let Some(n) = o else
     print("said")
@@ -1059,40 +994,28 @@ fn first(o: Option<Int>) -> Int ! Missing | Small uses Console =
 fn main() uses Console =
   print(attempt first(None))
   print(attempt first(Some(1)))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
-      ┌─ test.ren:2:7
-    2 │   let Some(n) = o else
-      │       ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+    said
+    Err(Missing)
+    Err(Small)
+    ()
     |}]
 
 let%expect_test "[s3 accept] a `let` takes apart a type of one variant" =
   (* it always matches, so it needs no `else` *)
-  until "s3"
-    ~want:{|
-3
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Meters =
   | Meters(Int)
 
 fn main() uses Console =
   let Meters(n) = Meters(3)
   print(n)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Meters(n)` might not
-      ┌─ test.ren:5:7
-    5 │   let Meters(n) = Meters(3)
-      │       ^^^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+    3
+    ()
     |}]
 
 let%expect_test "[s3 accept] or-patterns of `fail` keep working" =
@@ -1112,40 +1035,26 @@ fn main() uses Console =
     |}]
 
 let%expect_test "[s3 reject] a name bound in one alternative but not another" =
-  until "s3"
-    ~says:
-      [
-        "error: `n` is bound in `Pro(n)` but not in `Free`";
-        "help: bind the same names in every alternative";
-      ]
-    (fun () ->
-      check_error
-        (plan_types
-       ^ {|
+  check_error
+    (plan_types
+   ^ {|
 fn f(p: Plan) -> Int =
   match p
     Pro(n) | Free => n
     _ => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: expected `=>`, found `|`
-      ┌─ test.ren:9:12
+    error: `n` is bound in `Pro(n)` but not in `Free`
+      ┌─ test.ren:9:14
     9 │     Pro(n) | Free => n
-      │            ^
+      │              ^^^^
+      help: bind the same names in every alternative
     |}]
 
 let%expect_test "[s3 reject] a name bound to two types by two alternatives" =
-  until "s3"
-    ~says:
-      [
-        "error: `n` is an `Int` in `A(n)`, but a `Str` in `B(n)`";
-        "help: bind it to one type in every alternative";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type T =
   | A(Int)
   | B(Str)
@@ -1154,185 +1063,129 @@ fn f(t: T) -> Int =
   match t
     A(n) | B(n) => 0
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected `=>`, found `|`
-      ┌─ test.ren:7:10
+    error: `n` is an `Int` in `A(n)`, but a `Str` in `B(n)`
+      ┌─ test.ren:7:14
     7 │     A(n) | B(n) => 0
-      │          ^
+      │              ^
+      help: bind it to one type in every alternative
     |}]
 
 let%expect_test "[s3 reject] an alternative that never matches" =
-  until "s3"
-    ~says:
-      [
-        "error: this alternative never matches";
-        "help: the alternatives before it, or the arms above, already match \
-         all of it";
-      ]
-    (fun () ->
-      check_error
-        (plan_types
-       ^ {|
+  check_error
+    (plan_types
+   ^ {|
 fn f(p: Plan) -> Int =
   match p
     Pro(_) | Pro(_) => 1
     _ => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: expected `=>`, found `|`
-      ┌─ test.ren:9:12
+    error: this alternative never matches
+      ┌─ test.ren:9:14
     9 │     Pro(_) | Pro(_) => 1
-      │            ^
+      │              ^^^^^^
+      help: the alternatives before it, or the arms above, already match all of it
     |}]
 
 let%expect_test "[s3 reject] the `else` of a `let ... else` has to leave" =
-  until "s3"
-    ~says:
-      [
-        "error: the `else` of a `let ... else` has to leave";
-        "help: end it with `fail`, `break` or `todo`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(o: Option<Int>) -> Int =
   let Some(n) = o else 0
   n
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
-      ┌─ test.ren:2:7
+    error: the `else` of a `let ... else` has to leave
+      ┌─ test.ren:2:24
     2 │   let Some(n) = o else 0
-      │       ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+      │                        ^
+      help: end it with `fail`, `break` or `todo`
     |}]
 
 let%expect_test "[s3 reject] a `let ... else` whose pattern always matches" =
-  until "s3"
-    ~says:
-      [
-        "error: this pattern always matches, so the `else` never runs";
-        "help: remove the `else`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(p: (Int, Int)) -> Int ! Never =
   let (a, b) = p else fail Never
   a + b
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected the end of the line, found `else`
-      ┌─ test.ren:2:18
+    error: this pattern always matches, so the `else` never runs
+      ┌─ test.ren:2:7
     2 │   let (a, b) = p else fail Never
-      │                  ^^^^
+      │       ^^^^^^
+      help: remove the `else`
     |}]
 
 let%expect_test "[s3 reject] a `let` whose pattern might not match needs an `else`" =
-  until "s3"
-    ~says:
-      [
-        "error: `Some(n)` might not match, so this `let` needs an `else`";
-        "help: add one that leaves, `let Some(n) = o else fail ...`, or use a \
-         `match`";
-      ]
-    (fun () ->
-      check_error {|
+  check_error {|
 fn f(o: Option<Int>) -> Int =
   let Some(n) = o
   n
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
+    error: `Some(n)` might not match, so this `let` needs an `else`
       ┌─ test.ren:2:7
     2 │   let Some(n) = o
       │       ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+      help: add one that leaves, `let Some(n) = o else fail ...`, or use a `match`
     |}]
 
 let%expect_test "[s3 reject] a `for` takes apart only what always matches" =
-  until "s3"
-    ~says:
-      [
-        "error: a `for` takes apart only what always matches, but `Some(n)` \
-         might not";
-        "help: take it apart with a `match`, which says what happens when it \
-         doesn't match";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(xs: Array<Option<Int>>) -> Int =
   var t = 0
   for Some(n) in xs
     t += n
   t
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected `in`, found `(`
-      ┌─ test.ren:3:11
+    error: a `for` takes apart only what always matches, but `Some(n)` might not
+      ┌─ test.ren:3:7
     3 │   for Some(n) in xs
-      │           ^
+      │       ^^^^^^^
+      help: take it apart with a `match`, which says what happens when it doesn't match
     |}]
 
 let%expect_test "[s3 reject] Ren has no `if let`" =
-  until "s3"
-    ~says:
-      [
-        "error: Ren has no `if let`";
-        "help: write a `match`, or `let Some(n) = o else ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(o: Option<Int>) -> Int =
   if let Some(n) = o then n else 0
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected an expression, found `let`
+    error: Ren has no `if let`
       ┌─ test.ren:2:6
     2 │   if let Some(n) = o then n else 0
       │      ^^^
+      help: write a `match`, or `let Some(n) = o else ...`
     |}]
 
 let%expect_test "[s3 reject] a `fail` pattern isn't bound with `as`" =
-  until "s3"
-    ~says:
-      [
-        "error: a `fail` pattern can't bind the whole error to a name";
-        "help: match each tag, like `fail NotFound`, or keep the whole outcome \
-         as a value with `attempt`, and match `Err(e)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn take(n: Int) -> Int ! Short(Int) = if n > 3 then fail Short(n) else n
 
 fn main() uses Console =
   match take(5)
     n => print(n)
     fail Short(_) as e => print(0)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected `=>`, found `as`
+    error: a `fail` pattern can't bind the whole error to a name
       ┌─ test.ren:6:19
     6 │     fail Short(_) as e => print(0)
       │                   ^^
+      help: match each tag, like `fail NotFound`, or keep the whole outcome as a value with `attempt`, and match `Err(e)`
     |}]
 
 (* ---- s4: variant types ---- *)
@@ -1382,11 +1235,6 @@ fn main() = ()
       ┌─ test.ren:9:17
     9 │ fn ship(p: Order.Placed, tracking: Str) -> Order = Shipped { id: p.id, tracking }
       │                 ^
-
-    error: expected `=>`, found `as`
-       ┌─ test.ren:13:18
-    13 │     Draft { .. } as d => place(d, 1)
-       │                  ^^
     |}]
 
 let%expect_test "[s4 accept] a variant type is a record: fields, patterns and update" =
@@ -1418,10 +1266,22 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s4)
-    error: expected `=>`, found `as`
-      ┌─ test.ren:8:19
-    8 │     Placed { .. } as p =>
-      │                   ^^
+    error: `.id` needs a record, but this is an `Order`
+      ┌─ test.ren:9:15
+    9 │       print(p.id)
+      │               ^^
+
+    error: `Order` is a sum type, so a record pattern doesn't match it
+       ┌─ test.ren:10:11
+    10 │       let { lines, .. } = p
+       │           ^^^^^^^^^^^^^
+       help: name the variant: `Draft { lines, .. }`
+
+    error: `..p` takes the rest from a record, but `p` is an `Order`
+       ┌─ test.ren:12:19
+    12 │       let q = { ..p, total: 30 }
+       │                   ^
+       help: write every field, without `..`
     |}]
 
 let%expect_test "[s4 accept] back to the sum with `Placed { ..p }`" =
@@ -1590,10 +1450,9 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected `=>`, found `|`
-      ┌─ test.ren:8:19
-    8 │     Placed { .. } | Shipped { .. } as s => same(s)
-      │                   ^
+    fn id(o: Order) -> Int
+    fn same(o: Order) -> Int
+    fn main()
     |}]
 
 let%expect_test "[s4 reject] a constructor builds the sum, not its variant type" =
@@ -1758,10 +1617,7 @@ fn main() = ()
 |});
   [%expect {|
     (until s4)
-    error: expected `=>`, found `as`
-      ┌─ test.ren:9:19
-    9 │     Placed { .. } as p => p.size()
-      │                   ^^
+    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
 (* ---- s5: the errors that teach the model, and `todo` ---- *)
@@ -1975,11 +1831,16 @@ fn main() = ()
 |});
   [%expect {|
     (until s5)
-    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
-      ┌─ test.ren:2:7
+    error: there's no variable named `todo`
+      ┌─ test.ren:2:24
     2 │   let Some(n) = o else todo
-      │       ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+      │                        ^^^^
+
+    error: the `else` of a `let ... else` has to leave
+      ┌─ test.ren:2:24
+    2 │   let Some(n) = o else todo
+      │                        ^^^^
+      help: end it with `fail`, `break` or `todo`
     |}]
 
 (* ---- s6: descriptions, an operation called only on a stateless one ---- *)
@@ -2153,20 +2014,8 @@ fn main() uses Console =
    3 ---- *)
 
 let%expect_test "[s3 accept] a program, end to end" =
-  until "s3"
-    ~want:
-      {|
-test.ren
-  ✓ a flat discount comes off the total
-  ✓ an amount under the minimum gets nothing off
-  ✓ an abandoned cart is refused
-
-3 passed
-[exit 0]
-|}
-    (fun () ->
-      test
-        {|
+  test
+    {|
 // the domain: data, and the rules it keeps
 pub type Money = opaque Int with numeric
   pub fn dollars(n: Int) -> Money = n * 100
@@ -2246,11 +2095,13 @@ test "an amount under the minimum gets nothing off" =
 test "an abandoned cart is refused" =
   with mem_orders(), fixed(NoDiscount) in
     assert attempt checkout(1, Abandoned) == Err(Empty)
-|});
+|};
   [%expect {|
-    (until s3)
-    error: expected the end of the line, found `else`
-       ┌─ test.ren:34:33
-    34 │   let Open { lines, .. } = cart else fail Empty
-       │                                 ^^^^
+    test.ren
+      ✓ a flat discount comes off the total
+      ✓ an amount under the minimum gets nothing off
+      ✓ an abandoned cart is refused
+
+    3 passed
+    [exit 0]
     |}]

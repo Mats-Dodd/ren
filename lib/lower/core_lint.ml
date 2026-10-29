@@ -1404,6 +1404,10 @@ and pattern env sc (p : pattern) t =
         (fun sc (f : Iface.field) sub ->
           pattern env sc sub (field_ty env loc td targs f.fname))
         sc fs ps
+  | PAs (q, v) ->
+      (* the whole of what [q] matched; a variant type is step 4's *)
+      same env loc ("the `as` variable `" ^ v.name ^ "`") v.ty t;
+      add v (pattern env sc q t)
   | POr [] -> fail env loc "an or-pattern of nothing"
   | POr (first :: rest) ->
       let first_sc = pattern env sc first t in

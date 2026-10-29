@@ -6920,7 +6920,8 @@ revisit if a step finds it wrong:
 |---|---|---|---|
 | 0 | f313084 | this section: the grammar, the AST, each step's rules, passes and files, every error with its help, the layout faults and their fixes, the choices where the design is silent; the inventory of by-name sites (324, counted by a scratchpad script); test/test_data.ml, every test of a feature behind `until "sN"`, the guards written plainly; bench/data/ (update, byname, orpat, variants, todo_panic, shapes, and step 7's nested, rows, optional and interp) and its section of bench/build.t, step 7's three kernels already as specified | steps 1 to 8; nothing of the language is built yet |
 | 1 | cff7c15 | record update, `{ ..o, f: v }` and `T { ..o, f: v }`, and record patterns, `{ f: p, g, .. }` and `T { .. }`, in a `match`, a `let`, a `for` and a block's parameter, through the parser, Resolve, Infer (`infer_update`, `record_pattern`), Exhaust (a record is one constructor), Core (`PRecord`) and Core Lint, the interpreter, and Mem IR in both builds; the fourteen refusals; tree-sitter's `record_expression` with a `spread`, `record_pattern`, `field_pattern` and `rest_pattern`, its corpus (records.txt) and Zed's highlights; test_data.ml's s1 tests on, and bench/data/update in build.t's `same`, `release` and `tcc_same`, with its reuse shown (`--stats`: the loop of 1000 updates allocates nothing, each a reuse); the README and language.md's "What Ren has today". Choices: below the table | steps 2 to 8 |
-| 2 | this commit | the language change, by-name variants, through the whole pipeline: the parser (`parse_ctor_decl`'s braces and one positional field, labelled or not; `Shape.Rect { ... }` and `Shape.Rect { .. }`; `..` refused in parentheses), Resolve (`braces_name`, the record-or-constructor refusal; a by-name constructor refused where a binding pattern must always match), Infer (`infer_con_named`, `con_pattern`, `ctor_shape` down to arity, the by-name and by-position refusals with their fix-its, an update into a by-name constructor), Exhaust (`Rect { .. }`), lowering (to `Con` and `PCon`, so Core, Core Lint, the interpreter and Mem IR are unchanged), `show` in the interpreter, its `assert` diff, the journal, and natively (`ren_ctor_info.fields`); tree-sitter's `variant`, `constructor_expression` and `constructor_pattern` with fields, the corpus (variants.txt, and types.txt's declaration moved), Zed's highlights; test_data.ml's s2 tests on, bench/data/byname in `same`, `release` and `tcc_same` (and `shapes` and `interp` now as specified) ; and the migration, every site of the inventory moved to the new forms, 318 of its 324: bench/ 100 (packed, review_lists, review_values, sized, trmc, trmc_panic, values), bench/native 103 (binary-trees, blocks, cfold, deriv, nested, nqueens, rbtree; their Rust and Go twins and checksums unchanged), bench/build.t's heredocs 12, examples/ 17 (bank 7, `Sent { amount: t.amount, to: t.to }`; shop 3, vm 4, infer.ren and plans.ren 3), test/ 81 (test_native 38, test_eval 12, test_blocks 10, test_deps 10 with 6 printed, test_resolve 4 with 1 printed, test_infer 3, test_modules 2, test_ops 1, test_syntax 1), the corpus 2 (types.txt, expressions.txt), the docs 3 (README.md's `Pro(5)`, errors.md's `Sent` and `Received`) and their prose (README.md, bench/native/README.md, the Native slice's trmc paragraph); the outputs promoted, each diff only `show`'s braces, the step's error texts and the bank's line numbers. Left as they are, 6: formats.md's `Query(sql: CStr)`, a format's `case`; test_infer.ml's `Pro(seat: 5)` and `Pt(x: 1, 2)` and their printed copies, now tests of the errors that replace theirs; test_modules.ml's printed `Full(row: Row)`, a declaration of one field. Choices: below the table | steps 3 to 8 |
+| 2 | e180921 | the language change, by-name variants, through the whole pipeline: the parser (`parse_ctor_decl`'s braces and one positional field, labelled or not; `Shape.Rect { ... }` and `Shape.Rect { .. }`; `..` refused in parentheses), Resolve (`braces_name`, the record-or-constructor refusal; a by-name constructor refused where a binding pattern must always match), Infer (`infer_con_named`, `con_pattern`, `ctor_shape` down to arity, the by-name and by-position refusals with their fix-its, an update into a by-name constructor), Exhaust (`Rect { .. }`), lowering (to `Con` and `PCon`, so Core, Core Lint, the interpreter and Mem IR are unchanged), `show` in the interpreter, its `assert` diff, the journal, and natively (`ren_ctor_info.fields`); tree-sitter's `variant`, `constructor_expression` and `constructor_pattern` with fields, the corpus (variants.txt, and types.txt's declaration moved), Zed's highlights; test_data.ml's s2 tests on, bench/data/byname in `same`, `release` and `tcc_same` (and `shapes` and `interp` now as specified) ; and the migration, every site of the inventory moved to the new forms, 318 of its 324: bench/ 100 (packed, review_lists, review_values, sized, trmc, trmc_panic, values), bench/native 103 (binary-trees, blocks, cfold, deriv, nested, nqueens, rbtree; their Rust and Go twins and checksums unchanged), bench/build.t's heredocs 12, examples/ 17 (bank 7, `Sent { amount: t.amount, to: t.to }`; shop 3, vm 4, infer.ren and plans.ren 3), test/ 81 (test_native 38, test_eval 12, test_blocks 10, test_deps 10 with 6 printed, test_resolve 4 with 1 printed, test_infer 3, test_modules 2, test_ops 1, test_syntax 1), the corpus 2 (types.txt, expressions.txt), the docs 3 (README.md's `Pro(5)`, errors.md's `Sent` and `Received`) and their prose (README.md, bench/native/README.md, the Native slice's trmc paragraph); the outputs promoted, each diff only `show`'s braces, the step's error texts and the bank's line numbers. Left as they are, 6: formats.md's `Query(sql: CStr)`, a format's `case`; test_infer.ml's `Pro(seat: 5)` and `Pt(x: 1, 2)` and their printed copies, now tests of the errors that replace theirs; test_modules.ml's printed `Full(row: Row)`, a declaration of one field. Choices: below the table | steps 3 to 8 |
+| 3 | this commit | or-patterns anywhere a pattern goes, nested, `as`, and `let PATTERN = e else LEAVE`, through the whole pipeline: the parser (`parse_pattern`'s alternatives, `as` and grouping; `let` and `for` taking any pattern and a block's parameter one that starts with `(`, `{` or a capital; the `let ... else` statement; `if let` refused with its help; `as` after `fail` patterns refused), Resolve (one message for a name only some alternatives bind, `fail` ones too; `leaves`; the `else` resolved before the pattern binds), Infer (`bind_pattern`'s `POr`, through `alternatives`, which `bind_fail` shares, with the new message; `PAs`; the `else` checked against the rest of the block's type), Exhaust (`Or` spaces, each alternative checked useful, the patterns of a `let`, a `for` and a block's parameter checked to always match, and a `let ... else`'s to not), lowering (`let ... else` a `Match` of two arms, `PAs`), Core's `PAs` and Core Lint, the interpreter, and Mem IR in both builds (`PAs` the subject itself; an or-pattern that binds names gives each alternative its own variables and its own join, which Perceus needs, and a pattern's variable found by id); tree-sitter's `or_pattern` for any patterns, `as_pattern`, `parenthesized_pattern`, `let_else`, patterns in a `let`, a `for` and a block's parameter, the corpus (patterns.txt) and the highlight markers, Zed's highlights; test_data.ml's s3 tests on, the end-to-end program among them; bench/data/orpat as specified and in `same`, `release` and `tcc_same`, with bench/data/orpat_strs beside it (or-patterns binding counted values); the bank's `worth_retrying` in two arms with or-patterns; README's tour, language.md's "What Ren has today". The parser's `binding_pattern`, `irrefutable` and `might_not_match` are gone, and so is Resolve's refusal of a by-name constructor in a binding position: Exhaust decides. Choices: below the table | steps 4 to 8 |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7038,6 +7039,81 @@ Step 2's choices, where the sections above are silent:
   `Pt` declared by name; its `Pro(seat: 5)`, "expected the label
   `seats`", is now the by-position refusal; test_resolve.ml's `P(x, x)`
   is `P { a: x, b: x }` and keeps "two pattern variables named `x`".
+
+Step 3's choices, where the sections above are silent:
+
+- `todo` is step 5's, as the step split says; the `else`'s help already
+  names it ("end it with `fail`, `break` or `todo`"), the spec's text, so
+  until step 5 a `let ... else` leaves with `fail` or `break`, or a block,
+  an `if` or a `match` that ends in them. The refusal points at the line
+  the `else` ends in.
+- One pattern in parentheses is itself, `(A as x) | B`; a tuple needs a
+  comma. `as` takes a lowercase name, and anything else after it is "`as`
+  names the whole of what's matched, but ... isn't a name".
+- The parser reads a pattern after `let` unless a lowercase name comes
+  next (that's `let x = e`), after `for` unless a name and `,` or `in`
+  do, and as a block's parameter that starts with `(`, `{` or a capital,
+  `fn(Meters(n)) => n`. `let x = e else ...` and `let _ = e else ...` are
+  the pattern form, a name or `_`, which Exhaust refuses ("the `else`
+  never runs").
+- A pattern that might not match, in a `let`, a `for` or a block's
+  parameter, is pointed at whole, not at its part that might not match:
+  test_collections.ml's `let (a, Some(b)) = ...` is now "`(a, Some(b))`
+  might not match, so this `let` needs an `else`". A block's parameter is
+  told apart by the name the parser gives it, `$` and its node, which no
+  program writes.
+- A name only some alternatives bind is reported each way round: "`x` is
+  bound in `B(x)` but not in `A`", at the name, when a later alternative
+  binds one the first doesn't, and "`x` is bound in `A(x)` but not in
+  `B`", at the alternative, when it doesn't bind one the first does. A
+  nested or-pattern is compared with its own first alternative.
+- Each alternative is checked as the whole arm with its or-pattern
+  swapped for it, against the arms above, guarded ones left out, and the
+  arm with the or-pattern swapped for the alternatives before it; `fail`
+  alternatives are each a row, as before. "this alternative never
+  matches" is reported, not raised, so one arm can have several, and only
+  when the arm itself can match ("this arm can never match" otherwise).
+- A `let ... else`'s pattern is a test, as an arm's is: in braces, it
+  names every field or ends in `..`. Its `else` is checked against the
+  type of the rest of the block, which, since it leaves, is what the two
+  arms of the `match` it lowers to share. It sees none of the pattern's
+  names, which are bound after it.
+- `as` binding an error, `Err(Short(_) as e)`, is refused as `Err(e)` is
+  (Exhaust's `no_bound_errors`).
+- `if let`'s help writes the pattern, and the value if it's a name, `...`
+  if not.
+- The first alternative that matches is the one, natively as in the
+  interpreter: a later column that doesn't match, or a guard that's
+  false, goes on to the next arm, not the next alternative. An
+  or-pattern that binds names gives each alternative variables of its
+  own and lowers the rest of the arm once for each, with a join each, so
+  that each variable is set once on its path and Perceus makes it a
+  `let` (rc.ml's `set_once`): set in two places, Perceus took one for a
+  `var` and dropped it where it wasn't defined, which Mem Lint caught.
+  The arm's body is lowered once for each alternative that binds, the
+  price of keeping Perceus as it is.
+- A pattern's variable is found by its id natively (to_mem.ml's
+  `slot`), not by its record: lowering makes one for each alternative
+  that binds it. Before, a `fail` or-pattern that bound a name was an
+  internal error natively (`Not_found`); no test had built one.
+- Tree-sitter: `or_pattern` is binary and nests to the left, `A | B | C`
+  as `(A | B) | C`; `fail` alternatives keep the name `or_pattern`
+  through an alias, at an arm's top only. In the grammar a block's
+  parameter with `|` or `as` is in parentheses, `fn((A(n) as x)) => ...`,
+  since `_` lexes as `wildcard` wherever a pattern may start, and `fn(_)`
+  has to stay a parameter; for the same reason `let _ = e` is a
+  `let_statement` whose name is a `wildcard`.
+- `let ... else` didn't fit the bank, the shop or the ledger as they
+  are: each refutable take-apart there is an `Option` with a default or a
+  failure, which `orelse` says in one line (`self.accounts.get(id) orelse
+  fail NoSuchAccount(id)`), or a `match` whose other arm gives a value.
+  The bank's `worth_retrying` uses or-patterns, two arms where it had six.
+- Found, not fixed (it isn't this step's, and Mem Lint stops it): a
+  sum with a variant of no fields and one with an object, `type Plan = |
+  Free | Pro(Int)`, returned as `if c then Free else p` fails Mem Lint
+  natively, "`$if` holds 0 and 1 references on different paths", at
+  e180921 too; the `Free` is a word that holds nothing. Step 7's layout
+  work (`Nullable`, niches) is where it belongs.
 
 ## The runtime model
 

@@ -125,9 +125,9 @@ and `try` passes the error on), ~~`Option<Refusal>`, where `None` meant it
 worked~~, and ~~a nested `match` for "both accounts found"~~ (two lines
 with `try`). What's left, and what stage 6 found:
 
-- **Or-patterns are only for errors.** `fail A | fail B =>` works, but
-  `Err(Short(_, _)) | Err(Frozen(_)) =>` doesn't parse, so
-  `worth_retrying` has an arm for every tag.
+- ~~**Or-patterns are only for errors.**~~ Since the data stage, any
+  pattern can have alternatives, nested, so `worth_retrying` has two
+  arms: `Err(Short(_, _) | Frozen(_)) => true` and the rest.
 - **No `()` pattern.** The value arm of `match &acme.transfer(...)` is
   `_ =>`, since the value is `()` and `()` can't be written as a pattern.
 - **No `panic`.** The arms for errors that can't happen in that `match`

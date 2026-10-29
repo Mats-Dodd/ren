@@ -1208,10 +1208,11 @@ let arm_after f x =
 
 let first_arm x = sprintf "the first arm is %s" (article x)
 
-(* the variable [name] of one alternative of a pattern, `A(x) | B(x)` *)
-let alternative name f x =
-  sprintf "`%s` is %s here, but %s in the first alternative" name (article f)
-    (article x)
+(* the variable [name] of the alternative [here] of a pattern, `A(x) |
+   B(x)`, which has another type in the [first] *)
+let alternative name ~first ~here f x =
+  sprintf "`%s` is %s in `%s`, but %s in `%s`" name (article x) first
+    (article f) here
 
 let pattern_for f x =
   sprintf "expected a pattern for `%s`, but this one is %s" x (article f)
@@ -1231,6 +1232,7 @@ let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
     | PTuple ps -> args ps
     | PRecord (_, fs) -> Ast.show_fields shown fs
     | PCon_named (c, fs) -> c.name.name ^ " " ^ Ast.show_fields shown fs
+    | PAs (q, b) -> shown q ^ " as " ^ b.ident.name
     | PWild | PFail _ | PFail_any | PFail_in _ | POr _ -> "_"
   in
   let parts =

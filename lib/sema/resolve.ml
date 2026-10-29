@@ -1306,6 +1306,7 @@ let rec pattern_vars (p : Parsed.pattern) =
   match p.pkind with
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
   | PVar x -> [ x ]
+  | PAs (q, x) -> pattern_vars q @ [ x ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
       List.concat_map (fun (_, q) -> pattern_vars q) fs.fpats
@@ -1405,16 +1406,23 @@ let braces_name env sc (t : tyname) =
       Braced_type (record_name env sc t)
   | None, Some _ -> Braced_ctor { qual = None; name = t.tid }
 
-(* A pattern, and the scope its names are bound in. [same] are the
-   binders the first alternative of an or-pattern bound, which the names
-   of the others are: `fail Short(_, by) | fail Late(by)` binds one `by`. *)
-let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
-    Resolved.pattern * scope =
+(* A pattern, and the scope its names are bound in, each bound as [how]
+   says: a loop's are its loop variables. [same] are the binders the
+   first alternative of an or-pattern bound, which the names of the others
+   are: `Pro(n) | Team(n)` binds one `n`. *)
+let rec pattern env ?(how = By_pattern) ?(same = Env.empty) sc
+    (p : Parsed.pattern) : Resolved.pattern * scope =
+  let pattern env ?(same = same) sc p = pattern env ~how ~same sc p in
+  let name sc (x : ident) =
+    match Env.find_opt x.name same with
+    | Some b -> (b, { sc with locals = Env.add x.name b sc.locals })
+    | None -> bind env sc x how
+  in
   let patterns sc ps =
     let ps, sc =
       List.fold_left
         (fun (acc, sc) p ->
-          let p, sc = pattern env ~same sc p in
+          let p, sc = pattern env sc p in
           (p :: acc, sc))
         ([], sc) ps
     in
@@ -1440,12 +1448,13 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
                    x.name)
               "a `fail` pattern can't bind the whole error to a name";
             (PFail_any, sc))
-    | PVar x -> (
-        match Env.find_opt x.name same with
-        | Some b -> (PVar b, { sc with locals = Env.add x.name b sc.locals })
-        | None ->
-            let b, sc = bind env sc x By_pattern in
-            (PVar b, sc))
+    | PVar x ->
+        let b, sc = name sc x in
+        (PVar b, sc)
+    | PAs (q, x) ->
+        let q, sc = pattern env sc q in
+        let b, sc = name sc x in
+        (PAs (q, b), sc)
     | PCon (c, ps) ->
         let ps, sc = patterns sc ps in
         (PCon (ctor_ref env sc c, ps), sc)
@@ -1489,31 +1498,26 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
           List.exists (fun (y : ident) -> y.name = x.name) vars
         in
         let help = "bind the same names in every alternative" in
-        (* a name only some alternatives bind is reported, and bound
+        (* "`n` is bound in `Pro(n)` but not in `Free`", either way round;
+           a name only some alternatives bind is reported, and bound
            anyway, so its uses aren't reported too *)
+        let unbound (x : ident) ~(in_ : Parsed.pattern) ~(not_in : Parsed.pattern) =
+          report env x.loc ~help
+            (sprintf "`%s` is bound in `%s` but not in `%s`" x.name
+               (show_pattern in_) (show_pattern not_in))
+        in
         let rest, inner =
           List.fold_left
             (fun (acc, inner) (alt : Parsed.pattern) ->
               let vars = pattern_vars alt in
               no_duplicates env "pattern variables" vars;
               List.iter
-                (fun (x : ident) ->
-                  if not (has bound x) then
-                    report env x.loc ~help
-                      (sprintf
-                         "`%s` is bound by this alternative, but not by the \
-                          first one"
-                         x.name))
+                (fun x -> if not (has bound x) then unbound x ~in_:alt ~not_in:first)
                 vars;
               List.iter
-                (fun (y : ident) ->
+                (fun y ->
                   if not (has vars y) then
-                    report env alt.ploc ~help
-                      ~labels:[ (y.loc, sprintf "`%s` is bound here" y.name) ]
-                      (sprintf
-                         "this alternative doesn't bind `%s`, which the first \
-                          one does"
-                         y.name))
+                    unbound { y with loc = alt.ploc } ~in_:first ~not_in:alt)
                 bound;
               let alt, inner = pattern env ~same:inner.locals inner alt in
               (alt :: acc, inner))
@@ -1523,61 +1527,28 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
-(* The pattern of a `let` or a `for`, of names, `_` and tuples (the
-   parser sees to that), whose names are bound as [bound] says: a loop's
-   are its loop variables. *)
-let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
-  let kind, sc =
-    match p.pkind with
-    | PVar x ->
-        let b, sc = bind env sc x bound in
-        (PVar b, sc)
-    | PTuple ps ->
-        let ps, sc =
-          List.fold_left
-            (fun (acc, sc) p ->
-              let p, sc = binding env sc bound p in
-              (p :: acc, sc))
-            ([], sc) ps
-        in
-        (PTuple (List.rev ps), sc)
-    | PRecord (t, fs) -> (
-        let fpats, sc =
-          List.fold_left
-            (fun (acc, sc) (f, p) ->
-              let p, sc = binding env sc bound p in
-              ((f, p) :: acc, sc))
-            ([], sc) fs.fpats
-        in
-        let fs = { fs with fpats = List.rev fpats } in
-        match Option.map (braces_name env sc) t with
-        | Some (Braced_ctor c) ->
-            (* a constructor might not match, which the parser couldn't
-               tell: it read `Rect { .. }` as a record's *)
-            let what =
-              match bound with
-              | By_loop | By_ref_loop | By_index -> "a `for`"
-              | By_lambda -> "a lambda's parameter"
-              | _ -> "a `let`"
-            in
-            report env p.ploc
-              ~help:
-                "take it apart with a `match`, which says what happens when it \
-                 doesn't match"
-              (sprintf
-                 "%s takes apart only a tuple or a record, of names and `_`, \
-                  which always matches, but `%s` might not"
-                 what (show_pattern p));
-            (PCon_named (c, fs), sc)
-        | Some (Braced_type t) -> (PRecord (Some t, fs), sc)
-        | None -> (PRecord (None, fs), sc))
-    | PWild -> (PWild, sc)
-    | PInt _ | PBool _ | PCon _ | PCon_named _ | PFail _ | PFail_any | PFail_in _
-    | POr _ ->
-        (* the parser lets only names, `_`, tuples and records through *)
-        assert false
-  in
-  ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
+(* The pattern of a `let`, a `for` or a block's parameter, whose names are
+   bound as [bound] says: a loop's are its loop variables. Exhaust checks
+   it always matches, or that a `let ... else` might not (compiler.md,
+   "Data stage", "Patterns that always match"). *)
+let binding env sc bound (p : Parsed.pattern) = pattern env ~how:bound sc p
+
+(* Whether [e], the `else` of a `let ... else`, leaves: it's a `fail` or a
+   `break`, or a block whose last line leaves, an `if` with an `else`
+   whose branches both do, or a `match` whose every arm does. Ren has no
+   `return`, and `todo` comes with the errors that teach the model
+   (compiler.md, "Data stage", "`let ... else`"). *)
+let rec leaves (e : Parsed.expr) =
+  match e.kind with
+  | Fail _ | Break -> true
+  | Block (_, last) -> leaves last
+  | If (_, t, Some f) -> leaves t && leaves f
+  | Match (_, arms) -> List.for_all (fun (a : Parsed.arm) -> leaves a.arm_body) arms
+  | _ -> false
+
+(* The line a block ends in, which is where it doesn't leave. *)
+let rec last_line (e : Parsed.expr) =
+  match e.kind with Block (_, l) -> last_line l | _ -> e
 
 (* `Stack.of`, which the parser reads as the field `of` of a constructor
    `Stack`, is a member of the type when `Stack` names a type.
@@ -2057,11 +2028,20 @@ and block_stmts ?(finally = false) env sc (stmts : Parsed.stmt list) =
                 note_type sc b (Some (TyName (n, [])))
             | _ -> note_type sc b t);
             (Let { name = b; ty = t; value; mut } :: acc, sc)
-        | Let_tuple { pat; value } ->
+        | Let_pattern { pat; value; else_ } ->
             let value = expr env sc value in
+            (* the `else` runs where the pattern didn't match, so it sees
+               nothing the pattern binds *)
+            let else_ = Option.map (expr env sc) else_ in
+            (match s with
+            | Let_pattern { else_ = Some e; _ } when not (leaves e) ->
+                report env (last_line e).loc
+                  ~help:"end it with `fail`, `break` or `todo`"
+                  "the `else` of a `let ... else` has to leave"
+            | _ -> ());
             no_duplicates env "variables" (pattern_vars pat);
             let pat, sc = binding env sc By_let pat in
-            (Let_tuple { pat; value } :: acc, sc)
+            (Let_pattern { pat; value; else_ } :: acc, sc)
         | Expr e -> (Expr (expr env sc e) :: acc, sc)
         | Finally f ->
             if not finally then
@@ -2474,16 +2454,22 @@ and forwards env x (body : Resolved.expr) =
         go ~again:true n body
     | Lambda (_, b) | Inline_handler b -> go ~again:true before b
     | Block (stmts, last) ->
+        (* a `let ... else`'s `else` is another path, which leaves the
+           block *)
+        let left = ref 0 in
         let n =
           List.fold_left
             (fun n (s : Resolved.stmt) ->
               match s with
-              | Let { value; _ } | Let_tuple { value; _ } | Expr value ->
-                  go ~again n value
+              | Let { value; _ } | Expr value -> go ~again n value
+              | Let_pattern { value; else_; _ } ->
+                  let n = go ~again n value in
+                  Option.iter (fun e -> left := max !left (go ~again n e)) else_;
+                  n
               | Finally f -> go ~again:true n f)
             before stmts
         in
-        go ~again n last
+        max !left (go ~again n last)
     | _ -> List.fold_left (fun n c -> go ~again n c) before (children e)
   in
   ignore (go ~again:false 0 body)
@@ -3505,7 +3491,7 @@ let no_kept_blocks env (items : Resolved.program) =
   let rec expr (e : Resolved.expr) =
     let stmt = function
       | Let { ty = Some t; _ } -> inner t
-      | Let _ | Let_tuple _ | Expr _ | Finally _ -> ()
+      | Let _ | Let_pattern _ | Expr _ | Finally _ -> ()
     in
     (match e.kind with
     | Lambda (ps, _) ->

@@ -18,6 +18,7 @@ type env = {
       (** every type the module can see, by path *)
   nodes : Infer.node Infer.Nodes.t;  (** what inference found in the function *)
   names : Path.t -> string;  (** how the module writes a type's name *)
+  source : expr -> string option;  (** an expression as it's written *)
   sink : Diag.sink;
 }
 
@@ -25,7 +26,9 @@ type env = {
 
    Maranget's algorithm ("Warnings for pattern matching", 2007), the one
    OCaml and Rust use. Patterns are simplified to two shapes: [Any] (a
-   wildcard or variable) and [Ctor] (a constructor with sub-patterns).
+   wildcard or variable), [Ctor] (a constructor with sub-patterns) and [Or]
+   (an or-pattern's alternatives, which a row is one of each: Maranget's
+   section on or-patterns).
    Literals are constructors too: `true`/`false` of a two-constructor type,
    and each Int a constructor of a type with infinitely many.
 
@@ -56,7 +59,7 @@ and owner =
   | Tuple of int
   | Record of Path.t * string list
 
-type space = Any | Ctor of head * space list
+type space = Any | Ctor of head * space list | Or of space list
 
 let bool_path = Path.prelude "Bool"
 let result_path = Path.prelude "Result"
@@ -81,7 +84,16 @@ let ctor_of env path name =
       List.find_opt (fun (k : Iface.ctor) -> k.cname = name) cs
   | _ -> None
 
-let rec simplify env (p : pattern) =
+(* [p] as a space. With [swap], the subpattern whose node is its first is
+   the space it gives instead: how an alternative of an or-pattern is
+   checked on its own (see [alternatives]). *)
+let rec simplify ?swap env (p : pattern) =
+  let simplify = simplify ?swap in
+  match (swap, p.pkind) with
+  | Some (n, s), _ when n = p.pnode -> s
+  | _, POr ps -> Or (List.map (simplify env) ps)
+  | _, PAs (q, _) -> simplify env q
+  | _ ->
   match p.pkind with
   | PWild | PVar _ -> Any
   | PInt n -> Ctor ({ name = Int64.to_string n; owner = No_list }, [])
@@ -141,13 +153,22 @@ let rec simplify env (p : pattern) =
                   List.map field names )
           | _ -> Any (* inference reported it *))
       | _ -> Any)
-  | PFail _ | PFail_any | PFail_in _ | POr _ ->
-      (* a whole arm's, which [outcomes] simplifies *)
+  | PFail _ | PFail_any | PFail_in _ | POr _ | PAs _ ->
+      (* a whole arm's, which [outcomes] simplifies; the others are above *)
       invalid_arg "Exhaust.simplify: a `fail` pattern inside another"
 
+(* Whether [p] is `fail` patterns, an arm's whole pattern. *)
+let is_fails (p : pattern) =
+  match p.pkind with
+  | PFail _ | PFail_any | PFail_in _ -> true
+  | POr (q :: _) -> (
+      match q.pkind with PFail _ | PFail_any | PFail_in _ -> true | _ -> false)
+  | _ -> false
+
 (* The rows an arm's pattern adds to the matrix of a `match` with `fail`
-   arms: one per alternative of an or-pattern. *)
-let rec outcomes env (p : pattern) =
+   arms: one per alternative of an or-pattern of `fail` patterns. *)
+let rec outcomes ?swap env (p : pattern) =
+  let simplify = simplify ?swap in
   match p.pkind with
   | PFail (t, ps) ->
       let owner =
@@ -161,7 +182,7 @@ let rec outcomes env (p : pattern) =
             [ Ctor ({ name = t.name; owner }, List.map (simplify env) ps) ] );
       ]
   | PFail_any | PFail_in _ -> [ Ctor (failed, [ Any ]) ]
-  | POr ps -> List.concat_map (outcomes env) ps
+  | POr ps when is_fails p -> List.concat_map (outcomes ?swap env) ps
   | _ -> [ Ctor (value, [ simplify env p ]) ]
 
 (* A space as a pattern is written. A record's, and a by-name
@@ -169,6 +190,7 @@ let rec outcomes env (p : pattern) =
    and `..` for the rest, `{ paid: false, .. }`, `Rect { .. }`. *)
 let rec show_space env = function
   | Any -> "_"
+  | Or ss -> String.concat " | " (List.map (show_space env) ss)
   | Ctor ({ owner = Outcome; name = "value" }, [ v ]) -> show_space env v
   | Ctor ({ owner = Outcome; _ }, [ e ]) -> "fail " ^ show_space env e
   | Ctor ({ owner = Tuple _; _ }, args) ->
@@ -222,6 +244,15 @@ let siblings env c =
   | Record (_, names) -> Some [ (c, List.length names) ]
   | No_list -> None
 
+(* The rows with an or-pattern first made a row for each alternative,
+   which is what the row means: any of them. *)
+let rec expand rows =
+  List.concat_map
+    (function
+      | Or alts :: rest -> expand (List.map (fun a -> a :: rest) alts)
+      | row -> [ row ])
+    rows
+
 (* The rows that still apply once we know the first value was built with
    constructor [c]: their first pattern is replaced by its [arity]
    sub-patterns, and rows starting with a different constructor drop out. *)
@@ -230,16 +261,18 @@ let specialize c arity rows =
     (function
       | Ctor (c', args) :: rest -> if c' = c then Some (args @ rest) else None
       | Any :: rest -> Some (wilds arity @ rest)
-      | [] -> None)
-    rows
+      | Or _ :: _ | [] -> None)
+    (expand rows)
 
 (* The rows that apply when the first value is a constructor no row names. *)
 let default rows =
-  List.filter_map (function Any :: rest -> Some rest | _ -> None) rows
+  List.filter_map (function Any :: rest -> Some rest | _ -> None) (expand rows)
 
 let head_ctors rows =
   List.sort_uniq compare
-    (List.filter_map (function Ctor (c, _) :: _ -> Some c | _ -> None) rows)
+    (List.filter_map
+       (function Ctor (c, _) :: _ -> Some c | _ -> None)
+       (expand rows))
 
 (* The whole constructor list, if the first column names every constructor
    of its type. *)
@@ -255,6 +288,7 @@ let complete env heads =
 let rec useful env rows q =
   match q with
   | [] -> rows = []
+  | Or alts :: rest -> List.exists (fun a -> useful env rows (a :: rest)) alts
   | Ctor (c, args) :: rest ->
       useful env (specialize c (List.length args) rows) (args @ rest)
   | Any :: rest -> (
@@ -298,6 +332,67 @@ let rec missing env rows n =
             first :: w)
           (missing env (default rows) (n - 1))
 
+(* The or-patterns in [p], at any depth, each one's node and its
+   alternatives: an or-pattern of `fail` patterns, an arm's whole, isn't
+   one of them (see [alternatives]). *)
+let rec ors (p : pattern) =
+  match p.pkind with
+  | POr ps when is_fails p -> List.concat_map ors ps
+  | POr ps -> (p.pnode, ps) :: List.concat_map ors ps
+  | PAs (q, _) -> ors q
+  | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map ors ps
+  | PRecord (_, fs) | PCon_named (_, fs) -> List.concat_map (fun (_, q) -> ors q) fs.fpats
+  | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
+
+(* Each alternative of each or-pattern in an arm's pattern [p], which
+   matches something new, is checked to: against [rows], the arms above,
+   and the alternatives before it. An alternative is checked as [p] with
+   its or-pattern swapped for it, and the ones before it as [p] with the
+   or-pattern swapped for theirs, so the rest of [p] is what it is.
+   Alternatives of `fail` patterns are each a row of their own. *)
+and alternatives env ~handles rows (p : pattern) =
+  let never (q : pattern) =
+    Diag.report env.sink
+      (Diag.make q.ploc
+         ~help:
+           "the alternatives before it, or the arms above, already match all \
+            of it"
+         "this alternative never matches")
+  in
+  let rows_of ?swap (p : pattern) =
+    if handles then List.map (fun s -> [ s ]) (outcomes ?swap env p)
+    else [ [ simplify ?swap env p ] ]
+  in
+  let each rows (whole : pattern) =
+    List.iter
+      (fun (n, (alts : pattern list)) ->
+        List.iteri
+          (fun i (q : pattern) ->
+            let before = List.filteri (fun j _ -> j < i) alts in
+            let earlier =
+              if before = [] then []
+              else
+                rows_of ~swap:(n, Or (List.map (simplify env) before)) whole
+            in
+            let these = rows_of ~swap:(n, simplify env q) whole in
+            if not (List.exists (useful env (rows @ earlier)) these) then
+              never q)
+          alts)
+      (ors whole)
+  in
+  match p.pkind with
+  | POr qs when is_fails p ->
+      (* `fail A | fail B`: a row each *)
+      ignore
+        (List.fold_left
+           (fun rows (q : pattern) ->
+             let these = rows_of q in
+             if not (List.exists (useful env rows) these) then never q
+             else each rows q;
+             rows @ these)
+           rows qs)
+  | _ -> each rows p
+
 (* Check one `match`. [passes_on] says it's a `try match`, which passes on
    the errors its arms don't handle, so only its values have to be
    covered. *)
@@ -339,7 +434,8 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
         if not (List.exists (useful env rows) alts) then
           Diag.error a.arm_pat.ploc
             ~help:"the arms above already match everything this one does"
-            "this arm can never match";
+            "this arm can never match"
+        else alternatives env ~handles rows a.arm_pat;
         (* `fail on` matches only the tags it's given, which aren't known
            here, so it counts as a guard does *)
         let rec tags_in (p : pattern) =
@@ -450,6 +546,12 @@ let rec no_bound_errors env (p : pattern) =
       | Errors _ ->
           Diag.report env.sink (Infer_msg.bound_error p.ploc b.ident.name)
       | _ -> ())
+  | PAs (q, b) -> (
+      no_bound_errors env q;
+      match (Infer.Nodes.find p.pnode env.nodes).ty with
+      | Errors _ ->
+          Diag.report env.sink (Infer_msg.bound_error b.ident.loc b.ident.name)
+      | _ -> ())
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.iter (no_bound_errors env) ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
@@ -477,11 +579,16 @@ let rec check_expr env (e : expr) =
   | If (c, t, f) -> List.iter (check_expr env) (c :: t :: Option.to_list f)
   | Array xs | Tuple xs -> List.iter (check_expr env) xs
   | Assign { target; value; _ } -> List.iter (check_expr env) [ target; value ]
-  | For _ | While _ -> List.iter (check_expr env) (children e)
+  | For { pat; _ } ->
+      guard env (fun () -> takes_apart env "a `for`" pat);
+      List.iter (check_expr env) (children e)
+  | While _ -> List.iter (check_expr env) (children e)
   | Call (f, args) -> List.iter (check_expr env) (f :: args)
   | Lambda (_, body) -> check_expr env body
   | Inline_handler l -> check_expr env l
-  | Block _ -> List.iter (check_expr env) (children e)
+  | Block (stmts, _) ->
+      check_stmts env stmts;
+      List.iter (check_expr env) (children e)
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) | Con_named (_, fields) ->
       List.iter (fun (_, v) -> check_expr env v) fields
@@ -489,7 +596,9 @@ let rec check_expr env (e : expr) =
   | Match (subject, arms) -> check_match_expr env e subject arms
   | With { items; body } ->
       List.iter (check_expr env) (with_links items @ [ body ])
-  | Handler _ -> List.iter (check_expr env) (children e)
+  | Handler { state; _ } ->
+      check_stmts env state;
+      List.iter (check_expr env) (children e)
 
 and check_match_expr env ?passes_on e subject arms =
   check_expr env subject;
@@ -501,6 +610,51 @@ and check_match_expr env ?passes_on e subject arms =
       check_expr env a.arm_body)
     arms
 
+(* The `let`s among [stmts] that take apart: each pattern always matches,
+   unless it has an `else`, and then it might not (compiler.md, "Data
+   stage", "Patterns that always match"). A block's parameter taken apart
+   is a `let` of it at the start of the body, of a name no program
+   writes (parser.ml, [lambda_pattern]). *)
+and check_stmts env stmts =
+  List.iter
+    (function
+      | Let_pattern { pat; value; else_ } ->
+          guard env (fun () ->
+              let shown = pattern_source ~type_name:env.names pat in
+              match (else_, value.kind) with
+              | None, Var (Local b) when b.ident.name.[0] = '$' ->
+                  takes_apart env "a block's parameter" pat
+              | None, _ when not (always env pat) ->
+                  let v = Option.value (env.source value) ~default:"..." in
+                  Diag.error pat.ploc
+                    ~help:
+                      (sprintf
+                         "add one that leaves, `let %s = %s else fail ...`, or \
+                          use a `match`"
+                         shown v)
+                    (sprintf "`%s` might not match, so this `let` needs an `else`"
+                       shown)
+              | Some _, _ when always env pat ->
+                  Diag.error pat.ploc ~help:"remove the `else`"
+                    "this pattern always matches, so the `else` never runs"
+              | _ -> ())
+      | Let _ | Expr _ | Finally _ -> ())
+    stmts
+
+(* Whether [p] matches every value of its type. *)
+and always env (p : pattern) = missing env [ [ simplify env p ] ] 1 = None
+
+(* [p], the pattern of [what], "a `for`", which only takes apart, so it
+   has to always match. *)
+and takes_apart env what (p : pattern) =
+  if not (always env p) then
+    Diag.error p.ploc
+      ~help:
+        "take it apart with a `match`, which says what happens when it doesn't \
+         match"
+      (sprintf "%s takes apart only what always matches, but `%s` might not"
+         what (pattern_source ~type_name:env.names p))
+
 (* [inferred] is what inference found in the module, and [reachable] the
    interfaces of every module reachable through its imports. *)
 let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
@@ -511,5 +665,9 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
   List.iter
     (fun (f : fn_def) ->
       let nodes = Path.Map.find (Ast.fn_path r.home f) inferred.nodes in
-      check_expr { types; nodes; names = Resolve.type_name r; sink } f.body)
+      let names = Resolve.type_name r in
+      let source =
+        Ast.source ~type_name:names ~value_name:(Resolve.value_name r)
+      in
+      check_expr { types; nodes; names; source; sink } f.body)
     (Ast.functions r.prog)

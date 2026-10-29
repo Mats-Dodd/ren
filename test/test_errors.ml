@@ -1393,10 +1393,11 @@ fn main() = ()
 |};
   [%expect
     {|
-    error: `x` is a `Bool` here, but an `Int` in the first alternative
+    error: `x` is an `Int` in `fail NotFound(x)`, but a `Bool` in `fail Bad(x)`
       ┌─ test.ren:5:33
     5 │     fail NotFound(x) | fail Bad(x) => 0
       │                                 ^
+      help: bind it to one type in every alternative
     |}]
 
 let%expect_test "a match handles every value and every error" =

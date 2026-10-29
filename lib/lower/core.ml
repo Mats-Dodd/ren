@@ -431,6 +431,9 @@ and pattern_kind =
           leaves out *)
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
+  | PAs of pattern * var
+      (** [p as x]: what [p] matches, the whole bound to [x] too (compiler.md,
+          "Data stage", "`as`") *)
 
 (* Where a function came from. The specializer makes the others, each
    from what the program wrote (specialize.ml). *)
@@ -865,6 +868,7 @@ let rec pattern_sexp p =
   | PRecord (p, ps) ->
       List (atom "record" :: Atom (Path.local p) :: List.map pattern_sexp ps)
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
+  | PAs (q, v) -> List [ atom "as"; pattern_sexp q; var v ]
 
 (* A descriptor, as a print shows it: a type, or a hidden type
    parameter. *)

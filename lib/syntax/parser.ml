@@ -29,9 +29,10 @@
      param    := ["inout"] (IDENT | "self") [":" type]
      lparam   := ["&"] IDENT [":" type]             (`&`: one the block
                                                      changes)
-              |  "(" pattern, ... ")" [":" type]     (a tuple taken apart:
-                                                     names, `_` and tuples)
-              |  [tyname] "{" fpats "}" [":" type]  (a record taken apart)
+              |  ("(" | "{" | UIDENT) pattern [":" type]
+                                                    (taken apart, by a pattern
+                                                     Exhaust checks always
+                                                     matches)
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [members]
      members  := INDENT op { NEWLINE op } DEDENT
                                                    (or, after an indented
@@ -91,11 +92,11 @@
      body     := INDENT block | line
      block    := stmt { NEWLINE stmt } DEDENT       (last stmt is the value)
      stmt     := ("let" | "var") IDENT [":" type] "=" body
-              |  "let" "(" pattern, ... ")" "=" body (a tuple taken apart:
-                                                     names, `_` and tuples)
-              |  "let" [tyname] "{" fpats "}" "=" body
-                                                    (a record taken apart)
-              |  "for" [IDENT ","] (IDENT | tuple_pat | [tyname] "{" fpats "}") "in"
+              |  "let" pattern "=" body             (one that always matches:
+                                                     Exhaust checks)
+              |  "let" pattern "=" line "else" body (one that might not; the
+                                                     `else` leaves, Resolve)
+              |  "for" [IDENT ","] pattern "in"
                  (expr | expr ".." expr) INDENT block
                                                     (a range only here; the
                                                      IDENT before "," is
@@ -149,13 +150,17 @@
               |  "match" expr INDENT arm { NEWLINE arm } DEDENT
               |  "fail" UIDENT ["(" con_args ")"]
      arm      := (pattern | fails) ["if" expr] "=>" body
-     fails    := fail_pat { "|" fail_pat }
+     fails    := fail_pat { "|" fail_pat }   (never with `as`)
      fail_pat := "fail" "_" | "fail" UIDENT ["(" pattern, ... ")"]
      lambda   := "fn" "(" lparam, ... ")" "=>" body
                                                    (inside brackets too, the
                                                     lexer opens its block)
-     pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
+     pattern  := alt ["as" IDENT]                  (`as` binds looser than
+                                                    `|`: the whole)
+     alt      := single { "|" single }
+     single   := "_" | IDENT | INT | "-" INT | "true" | "false"
               |  ctor_ref ["(" pattern, ... ")"]   (never `..` in it)
+              |  "(" pattern ")"                   (grouping)
               |  "(" pattern "," pattern ["," pattern] ")"
               |  [tyname] "{" fpats "}"            (a record, of the type
                                                     named or matched, or a
@@ -881,7 +886,39 @@ let at_record_pattern ?(after = 0) p =
   | IDENT m, DOT, IDENT t, LBRACE -> (not (is_upper m)) && is_upper t
   | _ -> false
 
+(* A pattern: alternatives joined by `|`, then `as` and a name for the
+   whole, which binds looser than `|`: `A | B as x` names what either
+   matched (compiler.md, "Data stage", "Or-patterns, `as`"). *)
 let rec parse_pattern p : pattern =
+  let start = loc p in
+  let alt = parse_alternatives p in
+  if peek p = AS then (
+    advance p;
+    match peek p with
+    | IDENT name when not (is_upper name) ->
+        let x = ident p in
+        mk_pattern p start (PAs (alt, x))
+    | _ ->
+        Diag.error (loc p) ~help:"write `as` and a lowercase name: `... as p`"
+          (Printf.sprintf "`as` names the whole of what's matched, but %s isn't a name"
+             (describe (peek p))))
+  else alt
+
+(* One pattern or several joined by `|`, any of which matches. *)
+and parse_alternatives p : pattern =
+  let start = loc p in
+  let first = parse_single p in
+  let rec rest acc =
+    if peek p = PIPE then (
+      advance p;
+      rest (parse_single p :: acc))
+    else List.rev acc
+  in
+  match rest [ first ] with
+  | [ only ] -> only
+  | alts -> mk_pattern p start (POr alts)
+
+and parse_single p : pattern =
   let start = loc p in
   let finish = mk_pattern p start in
   match peek p with
@@ -943,11 +980,20 @@ let rec parse_pattern p : pattern =
       Diag.error (loc p)
         ~help:"match the error in an arm of its own, `fail Tag(...) => ...`"
         "a `fail` pattern can't be inside another pattern"
-  | LPAREN ->
+  | LPAREN -> (
       advance p;
-      let ps = sep_list p ~close:RPAREN parse_pattern in
-      tuple_size (Loc.span start (last_loc p)) (List.length ps);
-      finish (PTuple ps)
+      let first = parse_pattern p in
+      match peek p with
+      | RPAREN ->
+          (* `(A as x) | B`: in parentheses, one pattern is itself *)
+          advance p;
+          first
+      | COMMA ->
+          advance p;
+          let ps = first :: sep_list p ~close:RPAREN parse_pattern in
+          tuple_size (Loc.span start (last_loc p)) (List.length ps);
+          finish (PTuple ps)
+      | _ -> fail_expected p "`,` or `)`")
   | _ -> fail_expected p "a pattern"
 
 (* A record pattern's fields, in braces: `{ id, lines: ls, .. }`, each
@@ -1006,46 +1052,6 @@ and parse_fields p : fields =
   in
   go []
 
-(* A pattern that always matches, which a `let`, a `for` or a lambda's
-   parameter can take a tuple or a record apart with: names, `_`, and
-   tuples and records of them. A braced name is taken to be a record
-   type's here; Resolve refuses one that's a by-name constructor, which
-   might not match (compiler.md, "Data stage", "By-name variants"). *)
-let rec irrefutable (pat : pattern) =
-  match pat.pkind with
-  | PVar _ | PWild -> true
-  | PTuple ps -> List.for_all irrefutable ps
-  | PRecord (_, fs) -> List.for_all (fun (_, q) -> irrefutable q) fs.fpats
-  | PInt _ | PBool _ | PCon _ | PCon_named _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
-      false
-
-(* A pattern after a `let` or a `for`, or a lambda's parameter ([what],
-   "a `let`"), that might not match: a constructor's is taken apart by a
-   `match`, which says what happens when it doesn't. *)
-let might_not_match (q : pattern) ~what =
-  Diag.error q.ploc
-    ~help:
-      "take it apart with a `match`, which says what happens when it doesn't \
-       match"
-    (Printf.sprintf
-       "%s takes apart only a tuple or a record, of names and `_`, which \
-        always matches, but `%s` might not"
-       what (show_pattern q))
-
-(* The tuple or record pattern after a `let` or a `for`, or a lambda's
-   parameter, which has to always match. *)
-let binding_pattern p ~what =
-  let pat = parse_pattern p in
-  let rec refutable (q : pattern) =
-    match q.pkind with
-    | PTuple ps -> List.find_map refutable ps
-    | PRecord (_, fs) -> List.find_map (fun (_, q) -> refutable q) fs.fpats
-    | _ when irrefutable q -> None
-    | _ -> Some q
-  in
-  Option.iter (might_not_match ~what) (refutable pat);
-  pat
-
 (* An arm's pattern: an ordinary one, or `fail` patterns, which match an
    error (errors.md, "Handling: `match`"), one or several combined with
    `|`. *)
@@ -1096,9 +1102,22 @@ let parse_arm_pattern p : pattern =
         rest (fail_pattern p :: acc))
       else List.rev acc
     in
-    match rest [ first ] with
-    | [ only ] -> only
-    | alternatives -> mk_pattern p start (POr alternatives)
+    let fails =
+      match rest [ first ] with
+      | [ only ] -> only
+      | alternatives -> mk_pattern p start (POr alternatives)
+    in
+    (if peek p = AS then
+       (* an error is never a value (errors.md, "Keeping an error") *)
+       let name = match peek2 p with IDENT n -> n | _ -> "e" in
+       Diag.error (loc p)
+         ~help:
+           (Printf.sprintf
+              "match each tag, like `fail NotFound`, or keep the whole \
+               outcome as a value with `attempt`, and match `Err(%s)`"
+              name)
+         "a `fail` pattern can't bind the whole error to a name");
+    fails
 
 (* ---- expressions ---- *)
 
@@ -1152,7 +1171,7 @@ and parse_block p =
         ~help:"add the value this block should produce as its last line"
         (Printf.sprintf "this block ends with a `%s`, so it has no value"
            (if mut then "var" else "let"))
-  | Let_tuple { pat; _ } :: _ ->
+  | Let_pattern { pat; _ } :: _ ->
       Diag.error pat.ploc
         ~help:"add the value this block should produce as its last line"
         "this block ends with a `let`, so it has no value"
@@ -1165,9 +1184,13 @@ and parse_block p =
 
 and parse_stmt p =
   match (peek p, peek2 p) with
-  | LET, (LPAREN | LBRACE) ->
+  | LET, IDENT x when (not (is_upper x)) && peek3 p <> DOT -> parse_let p
+  | LET, (IDENT _ | LPAREN | LBRACE | INT _ | MINUS | TRUE | FALSE | FLOAT _) ->
+      (* `let (k, v) = pair`, `let { id, .. } = order`, `let Team(n) = p
+         else fail NotTeam`: a pattern, which Exhaust checks always
+         matches, or has an `else` if it might not *)
       advance p;
-      let pat = binding_pattern p ~what:"a `let`" in
+      let pat = parse_pattern p in
       if peek p = COLON then
         Diag.error (loc p)
           ~help:
@@ -1178,18 +1201,8 @@ and parse_stmt p =
           | PRecord _ -> "a `let` that takes a record apart has no type written"
           | _ -> "a `let` that takes a tuple apart has no type written");
       expect p EQ;
-      Let_tuple { pat; value = parse_body p }
-  | LET, IDENT _ when at_record_pattern ~after:1 p ->
-      (* `let User { id, .. } = u`, `let rows.Row { id, .. } = r`: a
-         record of the type named *)
-      advance p;
-      let pat = binding_pattern p ~what:"a `let`" in
-      expect p EQ;
-      Let_tuple { pat; value = parse_body p }
-  | LET, IDENT c when is_upper c && (peek3 p = LPAREN || peek3 p = DOT) ->
-      (* `let Some(x) = o` *)
-      advance p;
-      might_not_match (parse_pattern p) ~what:"a `let`"
+      let value, else_ = let_value p in
+      Let_pattern { pat; value; else_ }
   | VAR, (LPAREN | LBRACE) ->
       Diag.error (loc p)
         ~help:
@@ -1197,34 +1210,60 @@ and parse_stmt p =
            changes: `var x = a`"
         (if peek2 p = LBRACE then "a `var` can't take a record apart"
          else "a `var` can't take a tuple apart")
-  | (LET | VAR), _ ->
-      let kw = peek p in
-      advance p;
-      let name = ident p in
-      let ty =
-        if peek p = COLON then (
-          advance p;
-          Some (parse_ty p))
-        else None
-      in
-      expect p EQ;
-      Let { name; ty; value = parse_body p; mut = kw = VAR }
+  | (LET | VAR), _ -> parse_let p
   | FOR, _ -> Expr (parse_for p)
   | WHILE, _ -> Expr (parse_while p)
   | FINALLY, _ -> parse_finally p
   | _ -> Expr (parse_line p)
 
+(* `let x = e` or `var x = e`, with its type if it's written. A `let x = e
+   else ...` is the pattern form's, of a pattern that always matches,
+   which Exhaust refuses. *)
+and parse_let p =
+  let kw = peek p in
+  advance p;
+  let name = ident p in
+  let ty =
+    if peek p = COLON then (
+      advance p;
+      Some (parse_ty p))
+    else None
+  in
+  expect p EQ;
+  if kw = LET && ty = None then
+    match let_value p with
+    | value, None -> Let { name; ty; value; mut = false }
+    | value, else_ ->
+        let pk = if name.name = "_" then PWild else PVar name in
+        p.node <- p.node + 1;
+        let pat = { pkind = pk; ploc = name.loc; pnode = p.node } in
+        Let_pattern { pat; value; else_ }
+  else Let { name; ty; value = parse_body p; mut = kw = VAR }
+
+(* A `let`'s value, and its `else`, if it has one: the value is on the
+   `let`'s line and the `else` after it, its body a line or an indented
+   block, as an `if`'s is (compiler.md, "Data stage", "`let ... else`").
+   An `if` in the value takes its own `else` first. *)
+and let_value p =
+  if peek p = INDENT then (parse_body p, None)
+  else
+    let value = parse_line p in
+    if peek p = ELSE then (
+      advance p;
+      (value, Some (parse_body p)))
+    else (value, None)
+
 and parse_for p =
   let start = loc p in
   expect p FOR;
+  (* a name, or a pattern, which Exhaust checks always matches *)
   let one () =
-    match peek p with
-    | LPAREN | LBRACE -> binding_pattern p ~what:"a `for`"
-    | IDENT _ when at_record_pattern p -> binding_pattern p ~what:"a `for`"
-    | _ ->
+    match (peek p, peek2 p) with
+    | IDENT x, (COMMA | IN) when not (is_upper x) ->
         let l = loc p in
         let x = ident p in
         mk_pattern p l (PVar x)
+    | _ -> parse_pattern p
   in
   let first = one () in
   (* `for i, x in xs`: the index, then the element *)
@@ -1232,13 +1271,13 @@ and parse_for p =
     if peek p = COMMA then (
       advance p;
       (match first.pkind with
-      | PTuple _ | PRecord _ ->
+      | PVar _ | PWild -> ()
+      | _ ->
           Diag.error first.ploc
             ~help:
               (Printf.sprintf "write `for i, %s in ...`, the index first"
                  (show_pattern first))
-            "the index before the `,` in a `for` is a name, or `_`"
-      | _ -> ());
+            "the index before the `,` in a `for` is a name, or `_`");
       (Some first, one ()))
     else (None, first)
   in
@@ -1701,15 +1740,18 @@ and parse_lambda p =
   let rec names (pat : pattern) =
     match pat.pkind with
     | PVar x -> [ x ]
-    | PTuple ps -> List.concat_map names ps
-    | PRecord (_, fs) -> List.concat_map (fun (_, q) -> names q) fs.fpats
+    | PAs (q, x) -> names q @ [ x ]
+    | PTuple ps | PCon (_, ps) -> List.concat_map names ps
+    | POr (q :: _) -> names q
+    | PRecord (_, fs) | PCon_named (_, fs) ->
+        List.concat_map (fun (_, q) -> names q) fs.fpats
     | _ -> []
   in
   let bound =
     List.concat_map
       (fun ((param : param), take) ->
         match take with
-        | Some (Let_tuple { pat; _ }) -> names pat
+        | Some (Let_pattern { pat; _ }) -> names pat
         | _ -> [ param.pname ])
       params
   in
@@ -1739,7 +1781,7 @@ and parse_lambda p =
 and parse_lambda_param p =
   match peek p with
   | LPAREN | LBRACE -> lambda_pattern p
-  | IDENT _ when at_record_pattern p -> lambda_pattern p
+  | IDENT x when is_upper x || at_module_type p -> lambda_pattern p
   | AMP ->
       (* `fn(&lo, &hi) => ...`: one the block changes, written as a call
          passes it (compiler.md, "Blocks with `inout` parameters") *)
@@ -1762,7 +1804,7 @@ and parse_lambda_param p =
 
 (* A lambda's parameter that takes a tuple or a record apart. *)
 and lambda_pattern p =
-  let pat = binding_pattern p ~what:"a lambda's parameter" in
+  let pat = parse_pattern p in
   let pty =
     if peek p = COLON then (
       advance p;
@@ -1774,7 +1816,7 @@ and lambda_pattern p =
   let pname = { name = Printf.sprintf "$%d" pat.pnode; loc = pat.ploc } in
   let value = node p (Var (Bare pname.name)) pat.ploc in
   ({ pname; pty; pmode = Read; pblock = Ordinary; pdefault = None },
-   Some (Let_tuple { pat; value }))
+   Some (Let_pattern { pat; value; else_ = None }))
 
 (* A constructor's arguments, in parentheses. *)
 and con_args p start c =
@@ -1869,6 +1911,21 @@ and parse_field_init p =
 and parse_if p =
   let start = loc p in
   expect p IF;
+  if peek p = LET then (
+    (* the pattern and the value, for the help *)
+    let at = loc p in
+    advance p;
+    let pat = parse_pattern p in
+    expect p EQ;
+    let value = parse_expr p in
+    let shown =
+      match value.kind with Var (Bare x) -> x | _ -> "..."
+    in
+    Diag.error at
+      ~help:
+        (Printf.sprintf "write a `match`, or `let %s = %s else ...`"
+           (show_pattern pat) shown)
+      "Ren has no `if let`");
   let cond = parse_expr p in
   expect p THEN;
   let then_ = parse_body p in

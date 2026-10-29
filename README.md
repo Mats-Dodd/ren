@@ -114,6 +114,19 @@ fn seat_limit(p: Plan) -> Int =
     Enterprise(_) => Int.max
 ```
 
+An arm can match several shapes with `|` between them, each binding the same names, and `as` names the whole of what it matched. A `let` takes apart what might not match when it has an `else`, which has to leave, with `fail` or `break`:
+
+```ren
+fn upgraded(p: Plan) -> Plan =
+  match p
+    Pro(n) as old => if n > 5 then Enterprise(big_contract) else old
+    Free | Enterprise(_) as other => other    // `as` names what either matched
+
+fn seats(p: Plan) -> Int ! NotPro =
+  let Pro(seats) = p else fail NotPro          // no `if let`: this, or a `match`
+  seats
+```
+
 Ren has no null. Optional values are written `T?`.
 
 ### 2. `let` and `var`: value semantics

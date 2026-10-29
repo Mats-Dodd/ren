@@ -100,6 +100,7 @@ and pattern (p : Core.pattern) : Core.pattern =
     | PCon (t, c, ps) -> PCon (t, c, List.map pattern ps)
     | PTag (t, ps) -> PTag (t, List.map pattern ps)
     | POr ps -> POr (List.map pattern ps)
+    | PAs (q, v) -> PAs (pattern q, v)
     | PTuple ps -> PTuple (List.map pattern ps)
     | PRecord (t, ps) -> PRecord (t, List.map pattern ps)
   in

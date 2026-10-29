@@ -390,6 +390,9 @@ and pattern_kind =
           leaves out *)
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
+  | PAs of pattern * var
+      (** [p as x]: what [p] matches, the whole bound to [x] too (compiler.md,
+          "Data stage", "`as`") *)
 
 (* Where a function came from. The specializer makes the others, each
    from what the program wrote (specialize.ml). *)

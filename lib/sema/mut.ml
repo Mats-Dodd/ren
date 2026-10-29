@@ -330,7 +330,10 @@ let rec walk cx (e : expr) =
 
 (* A statement: a `finally`, in a handler, is an arm's lambda too. *)
 and stmt cx = function
-  | Let { value; _ } | Let_tuple { value; _ } | Expr value -> walk cx value
+  | Let { value; _ } | Expr value -> walk cx value
+  | Let_pattern { value; else_; _ } ->
+      walk cx value;
+      Option.iter (walk cx) else_
   | Finally f -> (
       match f.kind with
       | Lambda (ps, body) ->

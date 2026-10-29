@@ -331,3 +331,18 @@ fn wide(s: Shape) -> Shape =
 //                                ^ constructor
 //                                       ^ operator
     _ => s
+
+fn seats(p: Plan, o: Option<Int>) -> Int ! Missing =
+  let Some(n) = o else fail Missing
+//^ keyword
+//                ^ keyword
+//                     ^ keyword.failure
+  let f = fn(Meters(k)) => k
+//           ^ constructor
+//                  ^ variable.parameter
+  match p
+    Pro(m) | Team(m) as q => m + n
+//  ^ constructor
+//         ^ operator
+//                   ^ keyword
+    Free => 1

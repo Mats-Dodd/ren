@@ -280,6 +280,9 @@ let rec match_pattern types p v env =
   | PTag (t, ps), VTag { name; args; _ } when t = name ->
       match_all types ps args env
   | POr ps, _ -> List.find_map (fun p -> match_pattern types p v env) ps
+  | PAs (p, x), _ ->
+      (* the whole is the value itself *)
+      Option.map (Env.add x.id (ref v)) (match_pattern types p v env)
   | PTuple ps, VTuple xs -> match_all types ps xs env
   | PRecord (path, ps), VRecord fields -> (
       match Hashtbl.find_opt types path with

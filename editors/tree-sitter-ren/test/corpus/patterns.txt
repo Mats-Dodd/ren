@@ -1,0 +1,260 @@
+================================================================================
+or-patterns over constructors, nested
+================================================================================
+
+fn seats(p: Plan) -> Int =
+  match p
+    Pro(n) | Team(n) | Enterprise { seats: n, .. } => n
+    Some(Pro(_) | Team(_)) => 1
+    fail Short(x) | fail Late(x) => x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (match_expression
+        (identifier)
+        (match_arm
+          (or_pattern
+            (or_pattern
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (identifier))
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (identifier)))
+            (record_pattern
+              (type_name
+                (type_identifier))
+              (field_pattern
+                (identifier)
+                (identifier))
+              (rest_pattern)))
+          (identifier))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_identifier))
+            (or_pattern
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (wildcard))
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (wildcard))))
+          (number))
+        (match_arm
+          (or_pattern
+            (fail_pattern
+              (type_identifier)
+              (identifier))
+            (fail_pattern
+              (type_identifier)
+              (identifier)))
+          (identifier))))))
+
+================================================================================
+`as` binds the whole, looser than `|`
+================================================================================
+
+fn f(p: Plan) =
+  match p
+    Pro(n) as old => old
+    Free | Team(_) as other => other
+    Some(Pro(_) as inner) as whole => whole
+    (A as x) | B => x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (match_expression
+        (identifier)
+        (match_arm
+          (as_pattern
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))
+              (identifier))
+            (identifier))
+          (identifier))
+        (match_arm
+          (as_pattern
+            (or_pattern
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier)))
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (wildcard)))
+            (identifier))
+          (identifier))
+        (match_arm
+          (as_pattern
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))
+              (as_pattern
+                (constructor_pattern
+                  (constructor_ref
+                    (type_identifier))
+                  (wildcard))
+                (identifier)))
+            (identifier))
+          (identifier))
+        (match_arm
+          (or_pattern
+            (parenthesized_pattern
+              (as_pattern
+                (constructor_pattern
+                  (constructor_ref
+                    (type_identifier)))
+                (identifier)))
+            (constructor_pattern
+              (constructor_ref
+                (type_identifier))))
+          (identifier))))))
+
+================================================================================
+`let ... else`, and patterns in a `let`, a `for` and a block's parameter
+================================================================================
+
+fn f(o: Option<Int>, ps: Array<Plan>) -> Int ! Missing =
+  let Some(n) = o else fail Missing
+  let Some(m) = if n > 1 then Some(n) else None else
+    print("said")
+    fail Missing
+  let x = n else break
+  for Team(s) in ps
+    print(s)
+  let g = fn(Meters(k)) => k
+  let Open { lines, .. } = cart else fail Missing
+  m
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (block
+      (let_statement
+        (constructor_pattern
+          (constructor_ref
+            (type_identifier))
+          (identifier))
+        (identifier)
+        (let_else
+          (fail_expression
+            (type_identifier))))
+      (let_statement
+        (constructor_pattern
+          (constructor_ref
+            (type_identifier))
+          (identifier))
+        (if_expression
+          (binary_expression
+            (identifier)
+            (number))
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))
+            (constructor_arguments
+              (identifier)))
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))))
+        (let_else
+          (block
+            (call_expression
+              (identifier)
+              (arguments
+                (string)))
+            (fail_expression
+              (type_identifier)))))
+      (let_statement
+        (identifier)
+        (identifier)
+        (let_else
+          (break)))
+      (for_statement
+        (constructor_pattern
+          (constructor_ref
+            (type_identifier))
+          (identifier))
+        (identifier)
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (let_statement
+        (identifier)
+        (lambda
+          (parameters
+            (tuple_parameter
+              (constructor_pattern
+                (constructor_ref
+                  (type_identifier))
+                (identifier))))
+          (identifier)))
+      (let_statement
+        (record_pattern
+          (type_name
+            (type_identifier))
+          (field_pattern
+            (identifier))
+          (rest_pattern))
+        (identifier)
+        (let_else
+          (fail_expression
+            (type_identifier))))
+      (identifier))))

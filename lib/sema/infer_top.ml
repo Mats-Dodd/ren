@@ -100,6 +100,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     pattern p;
     match p.pkind with
     | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
+    | PAs (q, _) -> pattern_ q
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
     | PRecord (_, fs) | PCon_named (_, fs) ->
         List.iter (fun (_, q) -> pattern_ q) fs.fpats
@@ -153,9 +154,10 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Let { ty = t; value; _ } ->
         Option.iter ty_ t;
         expr value
-    | Let_tuple { pat; value } ->
+    | Let_pattern { pat; value; else_ } ->
         pattern_ pat;
-        expr value
+        expr value;
+        Option.iter expr else_
     | Expr e | Finally e -> expr e
   in
   let fn_ (f : fn_def) =
@@ -1977,7 +1979,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         walk Said value
     | Let { name; value; _ } ->
         walk (if state then Kept Elsewhere else Let_value name.ident.name) value
-    | Let_tuple { value; _ } -> walk (Kept Elsewhere) value
+    | Let_pattern { value; else_; _ } ->
+        walk (Kept Elsewhere) value;
+        Option.iter (walk (Kept Elsewhere)) else_
     | Expr e -> walk (Kept Elsewhere) e
     | Finally f ->
         (* a block the handler, or its arm, is made of *)

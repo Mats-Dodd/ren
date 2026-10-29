@@ -1124,7 +1124,7 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
   (* where the new line's value is, for a message *)
   let at =
     match List.hd rev with
-    | Let { value; _ } | Let_tuple { value; _ } | Expr value | Finally value ->
+    | Let { value; _ } | Let_pattern { value; _ } | Expr value | Finally value ->
         value.loc
   in
   let loc = Loc.point ~file:console_file 1 1 in
@@ -1313,6 +1313,7 @@ let console_spec ~load ~dir ~home ~file ~src ~name lines =
     let rec names (p : Ast.Parsed.pattern) =
       match p.pkind with
       | PVar b -> [ b.name ]
+      | PAs (q, b) -> names q @ [ b.name ]
       | PCon (_, ps) | PFail (_, ps) | PTuple ps | POr ps ->
           List.concat_map names ps
       | PRecord (_, fs) | PCon_named (_, fs) ->
@@ -1321,7 +1322,7 @@ let console_spec ~load ~dir ~home ~file ~src ~name lines =
     in
     match parsed text with
     | Some (_, Let { name; _ }) -> [ name.name ]
-    | Some (_, Let_tuple { pat; _ }) -> names pat
+    | Some (_, Let_pattern { pat; _ }) -> names pat
     | _ -> []
   in
   let uses text =

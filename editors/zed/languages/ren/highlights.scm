@@ -106,6 +106,9 @@
 (tuple_parameter (tuple_pattern (identifier) @variable.parameter))
 (tuple_parameter
   (tuple_pattern (tuple_pattern (identifier) @variable.parameter)))
+(tuple_parameter (constructor_pattern (identifier) @variable.parameter))
+(tuple_parameter
+  (parenthesized_pattern (as_pattern name: (identifier) @variable.parameter)))
 (function_type_parameter name: (identifier) @variable.parameter)
 
 ; ---- modules ----

@@ -899,7 +899,10 @@ and stmt cx = function
       (* no access where it's bound: its captures are made where it's
          called or passed *)
       Hashtbl.replace cx.blocks name.id (block cx value)
-  | Let { value; _ } | Let_tuple { value; _ } -> walk cx value
+  | Let { value; _ } -> walk cx value
+  | Let_pattern { value; else_; _ } ->
+      walk cx value;
+      Option.iter (walk cx) else_
   | Expr e -> walk cx e
   | Finally { kind = Lambda (_, body); _ } ->
       (* in an arm: it runs in the arm's frame, after the rest of it *)

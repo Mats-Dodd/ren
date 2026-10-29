@@ -398,11 +398,13 @@ let try_hint env cx (a : expr) t =
   | _ -> None
 
 (* A `fail` pattern, which matches an error rather than a value (errors.md,
-   "Handling: `match`"). The parser combines only `fail` patterns with
-   `|`. *)
+   "Handling: `match`"). The parser combines `fail` patterns with `|` only
+   with each other. *)
 let is_fail (p : pattern) =
   match p.pkind with
-  | PFail _ | PFail_any | PFail_in _ | POr _ -> true
+  | PFail _ | PFail_any | PFail_in _ -> true
+  | POr (q :: _) -> (
+      match q.pkind with PFail _ | PFail_any | PFail_in _ -> true | _ -> false)
   | _ -> false
 
 (* Whether a `match` handles errors: whether it has a `fail` arm. *)

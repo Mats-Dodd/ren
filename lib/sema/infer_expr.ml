@@ -1063,6 +1063,7 @@ and cursor env cx (iter : expr) tc =
 and pattern_binders (p : pattern) =
   match p.pkind with
   | PVar b -> [ b ]
+  | PAs (q, b) -> pattern_binders q @ [ b ]
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.concat_map pattern_binders ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
@@ -1164,8 +1165,11 @@ and stmt env cx = function
             (Hashtbl.replace cx.let_blocks name.id)
             (Hashtbl.find_opt lambda_calls value.node)
       | _ -> ())
-  | Let_tuple { pat; value } ->
+  | Let_pattern { pat; value; else_ = None } ->
       bind_pattern ~binding:true env cx (infer env cx value) pat
+  | Let_pattern { pat; value; else_ = Some _ } ->
+      (* a test, as an arm's is; [block] checks the `else` *)
+      bind_pattern env cx (infer env cx value) pat
   | Expr e -> dropped env cx e (infer env cx e)
   | Finally f ->
       (* only among a handler's state ([Infer_handlers.handler]) or an
@@ -1180,6 +1184,13 @@ and block env cx stmts (last : ctx -> ty) =
   | [] -> last cx
   | Finally f :: rest ->
       finally_stmt env cx f (fun cx -> block env cx rest last)
+  | (Let_pattern { else_ = Some e; _ } as s) :: rest ->
+      (* the `else` leaves (Resolve), so it's of any type: the rest's,
+         which a `match` of the two lowers to *)
+      stmt env cx s;
+      let t = block env cx rest last in
+      check env cx e t;
+      t
   | s :: rest ->
       stmt env cx s;
       block env cx rest last
@@ -3065,9 +3076,21 @@ and bind_fail env cx errs (p : pattern) =
   match p.pkind with
   | PFail (c, ps) -> tag_pattern env cx ~arm:true p c ps errs
   | PFail_any | PFail_in _ -> ()
-  | POr [] -> ()
-  | POr (first :: rest) ->
-      bind_fail env cx errs first;
+  | POr ps -> alternatives env cx ps (bind_fail env cx errs)
+  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PCon_named _ | PTuple _
+  | PRecord _ | PAs _ ->
+      (* the parser combines only `fail` patterns *)
+      bind_pattern env cx TError p
+
+(* The alternatives [ps] of an or-pattern, each bound by [bind]: each
+   binds the same names (Resolve), which have to have one type, the
+   first's. *)
+and alternatives env cx ps bind =
+  match ps with
+  | [] -> ()
+  | first :: rest ->
+      bind first;
+      let shown = Ast.pattern_source ~type_name:(type_name env) in
       List.iter
         (fun alt ->
           let before =
@@ -3075,21 +3098,20 @@ and bind_fail env cx errs (p : pattern) =
               (fun (b, loc) -> (b, loc, Hashtbl.find_opt cx.locals b.id))
               (binders alt)
           in
-          bind_fail env cx errs alt;
+          bind alt;
           List.iter
             (fun ((b : binder), loc, t) ->
               match (t, Hashtbl.find_opt cx.locals b.id) with
-              | Some first, Some here ->
-                  unify_at env loc ~found:here ~expected:first
-                    ~msg:(alternative b.ident.name);
-                  Hashtbl.replace cx.locals b.id first
+              | Some t1, Some here ->
+                  unify_at env loc ~found:here ~expected:t1
+                    ~msg:
+                      (alternative b.ident.name ~first:(shown first)
+                         ~here:(shown alt))
+                    ~help:"bind it to one type in every alternative";
+                  Hashtbl.replace cx.locals b.id t1
               | _ -> ())
             before)
         rest
-  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PCon_named _ | PTuple _
-  | PRecord _ ->
-      (* the parser combines only `fail` patterns *)
-      bind_pattern env cx TError p
 
 (* Check a pattern against the type of the value it matches, and give the
    variables it binds their types. A constructor is found through that
@@ -3180,7 +3202,13 @@ and bind_pattern ?(binding = false) env cx t (p : pattern) =
             ~expected:t ~msg:pattern_for ?help;
           List.iter2 (bind_pattern env cx) parts ps
       | PRecord (name, fs) -> record_pattern ~binding env cx t p name fs
-      | PFail _ | PFail_any | PFail_in _ | POr _ ->
+      | POr ps -> alternatives env cx ps (bind_pattern env cx t)
+      | PAs (q, b) ->
+          (* the whole of what's matched; a by-name constructor's variant
+             type is step 4's *)
+          bind_pattern env cx t q;
+          Hashtbl.replace cx.locals b.id t
+      | PFail _ | PFail_any | PFail_in _ ->
           (* a `fail` pattern is a whole arm's (the parser says so), and
              [infer_match] binds it with [bind_fail] *)
           ())

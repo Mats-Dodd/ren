@@ -1206,6 +1206,7 @@ let rec pattern_vars (p : C.pattern) =
   match p.pkind with
   | PWild | PInt _ | PBool _ -> []
   | PVar v -> [ v ]
+  | PAs (p, v) -> pattern_vars p @ [ v ]
   | PCon (_, _, ps) | PTag (_, ps) | PTuple ps | PRecord (_, ps) ->
       List.concat_map pattern_vars ps
   | POr (p :: _) -> pattern_vars p
@@ -3355,17 +3356,30 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
               (v, fresh fs v.name (layout_at fs a.pat.ploc v.ty)))
             (pattern_vars a.pat)
         in
-        (a, vars, label fs))
+        (a, vars, ref [ (vars, label fs) ]))
       arms
   in
   List.iter
     (fun (_, vars, _) -> List.iter (fun (_, m) -> emit fs (Decl m)) vars)
     arms;
+  (* the variables an alternative of an or-pattern binds its names to,
+     its own (see [test]'s [POr]), declared with the arm's, before the
+     [Joins] *)
+  let alt_decls = ref [] in
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
   let no_arm = new_site cx e.loc in
-  (* the arm [a] has matched: count what its pattern bound, check its
-     guard, and go to its body *)
-  let matched ((a : C.arm), vars, l) =
+  (* the arm [a] has matched, its pattern's names bound to [vars]: count
+     what they hold, check its guard, and go to its body, the join of
+     those [vars], one for each set of them *)
+  let matched ((a : C.arm), _, joins) vars =
+    let l =
+      match List.assq_opt vars !joins with
+      | Some l -> l
+      | None ->
+          let l = label fs in
+          joins := !joins @ [ (vars, l) ];
+          l
+    in
     List.iter (fun (_, (m : var)) -> dup fs (Var m)) vars;
     let go () =
       List.iter
@@ -3388,12 +3402,18 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
         in
         emit fs (If (c, yes, no))
   in
+  (* the Mem variable of the pattern's variable [v], by its id: each
+     alternative of an or-pattern binds the same, though lowering may have
+     made a record of it for each *)
+  let slot vars (v : C.var) =
+    snd (List.find (fun ((u : C.var), _) -> u.id = v.id) vars)
+  in
   (* the statements that test [pats] in order, each a pattern and the atom
-     it's matched against, then do [k]; [known] is a subject whose tag a
-     switch knows *)
+     it's matched against, then do [k] with the variables its names were
+     set in; [known] is a subject whose tag a switch knows *)
   let rec test ~known vars pats k =
     match pats with
-    | [] -> k ()
+    | [] -> k vars
     | ((p : C.pattern), x) :: rest -> (
         let rest_then () = test ~known vars rest k in
         let check rhs =
@@ -3422,8 +3442,13 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
         match p.pkind with
         | PWild -> rest_then ()
         | PVar v ->
-            emit fs (Set (List.assq v vars, x));
+            emit fs (Set (slot vars v, x));
             rest_then ()
+        | PAs (q, v) ->
+            (* the whole is the subject itself, counted as a [PVar]'s is
+               where the arm matched: `as` never copies *)
+            emit fs (Set (slot vars v, x));
+            test ~known vars ((q, x) :: rest) k
         | PInt n -> check (Compare (Eq, x, Int n))
         | PBool true -> emit fs (If (x, block fs rest_then, []))
         | PBool false -> emit fs (If (x, [], block fs rest_then))
@@ -3441,10 +3466,10 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
                test *)
             let sh = record_shape cx (at fs p.ploc) p.pty in
             test ~known vars (fields sh ps @ rest) k
-        | POr alts ->
-            (* the first alternative that matches binds the variables, as
-               the interpreter does: a guard that fails after it goes on
-               to the next arm, not the next alternative *)
+        | POr alts when pattern_vars p = [] ->
+            (* the first alternative that matches is the one, as the
+               interpreter has it: a guard that fails after it goes on to
+               the next arm, not the next alternative *)
             let any = fresh fs "$or" Bool in
             emit fs (Decl any);
             emit fs (Set (any, Bool false));
@@ -3457,14 +3482,47 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
                        block fs (fun () ->
                            test ~known vars
                              [ (alt, x) ]
-                             (fun () -> emit fs (Set (any, Bool true)))) )))
+                             (fun _ -> emit fs (Set (any, Bool true)))) )))
               alts;
-            emit fs (If (Var any, block fs rest_then, [])))
+            emit fs (If (Var any, block fs rest_then, []))
+        | POr alts ->
+            (* the same, but each alternative sets the names it binds in
+               variables of its own, and goes on with the rest of the
+               pattern, and the arm, with those: each is set once, on its
+               own path, as a pattern's variable is without `|`, which
+               Perceus takes for a `let` (rc.ml's [set_once]), not for a
+               `var` set again *)
+            let any = fresh fs "$or" Bool in
+            emit fs (Decl any);
+            emit fs (Set (any, Bool false));
+            let bound = List.map (fun (v : C.var) -> v.id) (pattern_vars p) in
+            List.iter
+              (fun alt ->
+                let own =
+                  List.map
+                    (fun ((v : C.var), (m : var)) ->
+                      if List.mem v.id bound then (
+                        let m' = fresh fs m.name m.layout in
+                        alt_decls := m' :: !alt_decls;
+                        (v, m'))
+                      else (v, m))
+                    vars
+                in
+                emit fs
+                  (If
+                     ( Var any,
+                       [],
+                       block fs (fun () ->
+                           test ~known own
+                             [ (alt, x) ]
+                             (fun own ->
+                               emit fs (Set (any, Bool true));
+                               test ~known own rest k)) )))
+              alts)
   in
   let try_arms ~known arms =
     List.iter
-      (fun ((a, vars, _) as arm) ->
-        test ~known vars (columns a) (fun () -> matched arm))
+      (fun ((a, vars, _) as arm) -> test ~known vars (columns a) (matched arm))
       arms;
     emit fs (Panic (no_arm, "no arm of this `match` matched"))
   in
@@ -3473,6 +3531,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
     match p.pkind with
     | PCon (_, c, _) -> (ctor_shape cx (at fs p.ploc) p.pty c).tag = tag
     | POr alts -> List.exists (can_match tag) alts
+    | PAs (q, _) -> can_match tag q
     | _ -> true
   in
   let dispatch =
@@ -3481,7 +3540,9 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
         | None, [ x ], Some cs
           when List.exists
                  (fun ((a : C.arm), _, _) ->
-                   match a.pat.pkind with PCon _ -> true | _ -> false)
+                   match a.pat.pkind with
+                   | PCon _ | PAs ({ pkind = PCon _; _ }, _) -> true
+                   | _ -> false)
                  arms ->
             let t = borrowed fs "$tag" Int (Tag_of x) in
             let cases =
@@ -3504,18 +3565,22 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
   (* the subjects were dropped on the way to each arm *)
   List.iter (consume env) subjects;
   let joins =
-    List.map
-      (fun ((a : C.arm), vars, l) ->
-        ( l,
-          block fs (fun () ->
-              branch env (fun () ->
-                  List.iter (fun (_, m) -> own env m) vars;
-                  let y = expr fs (arm_env vars) a.body in
-                  consume env y;
-                  emit fs (Set (r, y));
-                  List.iter (fun (_, m) -> drop fs env (Var m)) vars)) ))
+    List.concat_map
+      (fun ((a : C.arm), _, joins) ->
+        List.map
+          (fun (vars, l) ->
+            ( l,
+              block fs (fun () ->
+                  branch env (fun () ->
+                      List.iter (fun (_, m) -> own env m) vars;
+                      let y = expr fs (arm_env vars) a.body in
+                      consume env y;
+                      emit fs (Set (r, y));
+                      List.iter (fun (_, m) -> drop fs env (Var m)) vars)) ))
+          !joins)
       arms
   in
+  List.iter (fun m -> emit fs (Decl m)) (List.rev !alt_decls);
   emit fs (Joins (dispatch, joins));
   own env r;
   Var r

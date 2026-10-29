@@ -703,24 +703,46 @@ module.exports = grammar({
         $._line,
       ),
 
-    // and `let (k, v) = pair`, a tuple taken apart, whose pattern the
-    // compiler checks always matches: names, `_` and tuples
+    // and `let (k, v) = pair`, taken apart by a pattern the compiler
+    // checks always matches, or `let Team(n) = p else fail NotTeam`, by
+    // one that might not, whose `else` leaves
     let_statement: ($) =>
       choice(
         seq(
           choice('let', 'var'),
-          field('name', $.identifier),
+          field('name', choice($.identifier, $.wildcard)),
           optional(seq(':', field('type', $._type))),
           '=',
           field('value', $._body),
+          optional($.let_else),
         ),
-        // let (k, v) = pair, let { id, lines } = order
+        // let (k, v) = pair, let { id, lines } = order, let Some(n) = o
+        // else ...
         seq(
           'let',
-          field('pattern', choice($.tuple_pattern, $.record_pattern)),
+          field('pattern', $._let_pattern),
           '=',
           field('value', $._body),
+          optional($.let_else),
         ),
+      ),
+
+    // the `else` of `let Some(n) = o else fail Missing`, on the `let`'s
+    // line, its body a line or an indented block
+    let_else: ($) => seq('else', field('body', $._body)),
+
+    // a `let`'s pattern: any but a name or `_`, which are the other form
+    _let_pattern: ($) =>
+      choice(
+        $.number,
+        $.negative_number,
+        $.boolean,
+        $.constructor_pattern,
+        $.tuple_pattern,
+        $.record_pattern,
+        $.or_pattern,
+        $.as_pattern,
+        $.parenthesized_pattern,
       ),
 
     // for x in xs, for (k, v) in m, for { qty, .. } in lines, for i in
@@ -731,10 +753,7 @@ module.exports = grammar({
         optional(
           seq(field('index', choice($.identifier, $.wildcard)), ','),
         ),
-        field(
-          'variable',
-          choice($.identifier, $.wildcard, $.tuple_pattern, $.record_pattern),
-        ),
+        field('variable', $._pattern),
         'in',
         field('iterable', choice($._expression, $.range)),
         field('body', $.block),
@@ -1026,11 +1045,21 @@ module.exports = grammar({
         optional(seq(':', field('type', $._type))),
       ),
 
-    // fn((k, v)) => ..., fn({ qty, .. }) => ...: a tuple or a record taken
-    // apart
+    // fn((k, v)) => ..., fn({ qty, .. }) => ..., fn(Meters(n)) => ...:
+    // taken apart by a pattern, which the compiler checks always matches.
+    // One with `|` or `as` is written in parentheses here, fn((A(n) as
+    // x)) => ..., so that `fn(_)` stays a parameter named `_`
     tuple_parameter: ($) =>
       seq(
-        field('pattern', choice($.tuple_pattern, $.record_pattern)),
+        field(
+          'pattern',
+          choice(
+            $.constructor_pattern,
+            $.tuple_pattern,
+            $.record_pattern,
+            $.parenthesized_pattern,
+          ),
+        ),
         optional(seq(':', field('type', $._type))),
       ),
 
@@ -1187,7 +1216,14 @@ module.exports = grammar({
 
     match_arm: ($) =>
       seq(
-        field('pattern', choice($._pattern, $.fail_pattern, $.or_pattern)),
+        field(
+          'pattern',
+          choice(
+            $._pattern,
+            $.fail_pattern,
+            alias($._fail_alternatives, $.or_pattern),
+          ),
+        ),
         optional(seq('if', field('guard', $._expression))),
         '=>',
         field('body', $._body),
@@ -1205,6 +1241,9 @@ module.exports = grammar({
         $.constructor_pattern,
         $.tuple_pattern,
         $.record_pattern,
+        $.or_pattern,
+        $.as_pattern,
+        $.parenthesized_pattern,
       ),
 
     wildcard: (_) => '_',
@@ -1224,8 +1263,24 @@ module.exports = grammar({
         ),
       ),
 
-    // fail NoSuchAccount(_) | fail SameAccount: so far, only of fail patterns
-    or_pattern: ($) => seq($.fail_pattern, repeat1(seq('|', $.fail_pattern))),
+    // Pro(n) | Team(n), anywhere a pattern goes
+    or_pattern: ($) => prec.left(2, seq($._pattern, '|', $._pattern)),
+
+    // fail NoSuchAccount(_) | fail SameAccount: an arm's whole pattern,
+    // of fail patterns only
+    _fail_alternatives: ($) =>
+      seq($.fail_pattern, repeat1(seq('|', $.fail_pattern))),
+
+    // Pro(n) as old: the whole of what's matched, named; looser than `|`,
+    // so A | B as x names the whole
+    as_pattern: ($) =>
+      prec.left(
+        1,
+        seq(field('pattern', $._pattern), 'as', field('name', $.identifier)),
+      ),
+
+    // (A as x) | B
+    parenthesized_pattern: ($) => seq('(', $._pattern, ')'),
 
     negative_number: ($) => seq('-', $.number),
 
