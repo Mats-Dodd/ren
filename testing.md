@@ -376,6 +376,19 @@ test "a recorded run of build replays" =
   error or a panic fails while the program still ends that way, and
   passes once it goes on past where the recording ended, the outputs it
   had made by then the same.
+- **A journal names the shapes it was recorded against.** Its entries
+  are derived from types' shapes, like `bin`'s bytes, and it's kept on
+  disk across builds, so its header records a hash of each shape it
+  encodes. Replaying it against a type that has changed since fails
+  before the first call, naming the type, instead of decoding a value
+  wrong ([formats.md](formats.md#layer-1-the-derived-encoding)):
+
+  ```
+  ──── replays bug.journal ── main.ren:91
+     the journal was recorded against an older `User`
+     = `User` gained `plan: Plan` since tests/bug.journal was recorded
+     help: record the run again, or keep the journal if `User` is meant to stay as it was
+  ```
 
   ```
   $ ren test --keep bug.journal

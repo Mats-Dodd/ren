@@ -70,9 +70,9 @@ judged by the bars above.
    exclusivity, sized integers for formats, slices of pages kept as
    values, snapshots read without a lock, vectorized checksums, hot
    paths that allocate nothing. Of the four designs it needed, views
-   into buffers and reads that take no lock are decided; explicit
-   layouts for formats on disk and control over allocation are still
-   open ([foundations.md](foundations.md#open-questions)).
+   into buffers, reads that take no lock, and explicit layouts for
+   formats on disk ([formats.md](formats.md)) are decided; control over
+   allocation is still open ([foundations.md](foundations.md#open-questions)).
    If Ren can host a credible one in idiomatic code, the ambition is
    earned.
 

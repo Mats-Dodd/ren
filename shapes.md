@@ -107,7 +107,8 @@ At the top level, the dependencies installed are the build's:
 ```ren
 User.shape        // a record's fields, or a sum's cases: names and types
 Users.shape       // a dependency's operations: names, arguments, errors
-Transfer.size     // bytes, once the memory stage decides layouts
+Transfer.size     // bytes, once the memory stage decides layouts: a fact of this build
+PageHeader.disk.size  // a format's size, promised (formats.md)
 handle_request.uses   // the dependencies a function uses, as a set
 ```
 
@@ -146,9 +147,18 @@ pub fn decode<T>(text: Str) -> T ! DecodeError =
   turns `decode<User>` into straight-line code, as fast as Rust's serde,
   without macros.
 - **Renames and defaults are settings on the format,** like
-  `json.decode(body, keys: camel_case)`. A wire format that differs more
-  than that is a type of its own, converted by hand. There are no per-field
-  attributes.
+  `json.decode(body, keys: camel_case)`. A format derived this way that
+  would need to differ more than that is a type of its own, converted by
+  hand. There are no per-field attributes on derived formats. Placing
+  each field is what declared formats are for: a binary layout on disk
+  or the wire is a `format` for the type ([formats.md](formats.md)),
+  with fields placed one by one, and a type can have several.
+- **`bin` is the binary one,** `bin.encode(v)` and `bin.decode<T>(b)`:
+  compact, nothing to declare, and **not for disk.** Its bytes follow
+  the type, so they change when the type does, and nothing records an
+  old version. It's for messages between processes of one build and
+  for caches thrown away; anything that outlives the build that wrote it
+  is a format ([formats.md](formats.md#layer-1-the-derived-encoding)).
 - **An opaque type's shape is opaque outside its module.** Outside, the
   shape of `Money` says only "opaque, built by its `parse`", so no library
   can build one that breaks its rule.
@@ -156,7 +166,11 @@ pub fn decode<T>(text: Str) -> T ! DecodeError =
   `==` ([operators.md](operators.md)).
 
 The structural walk that derived `==`, `hash` and `show` use is the same
-knowledge. The journal is the first format written this way.
+knowledge. The journal is the first format written this way. It's the
+one derived format kept on disk across builds, so it records a hash of
+each shape it encodes, and replaying it against a type that has
+changed fails, naming the type, instead of decoding wrong
+([testing.md](testing.md)).
 
 ### Handlers that work for any dependency
 

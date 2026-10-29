@@ -10,7 +10,9 @@ and three programs written against it: decision 17 is new, and 3, 4,
 7, 8, 10, 13, 14 and 15 changed. On 2026-10-28 it took 11a's
 follow-ups (decisions 7 and 10), then the actor design and the language
 record, [language.md](language.md): decision 18 is new, 3 is reframed,
-10 changed, and [Staging](#staging) is rewritten. language.md is the
+10 changed, and [Staging](#staging) is rewritten. On 2026-10-29 it took
+[formats.md](formats.md): decision 19 is new, and explicit layout is no
+longer open. language.md is the
 language a program is written in, data, services, the pipe and
 collections; this record is how it runs. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
@@ -1008,6 +1010,47 @@ try Docs.at(id) fn() => Doc.edit(op)
 | `per_core` | locked stripes | a stripe per core, never locked across threads | as `work_stealing`, without migration |
 | `sim` | as `single`, choices from the tape | at least two virtual workers, routing from the tape | as `single`, choices from the tape |
 
+### 19. Formats are views
+
+Bytes whose layout something outside the program fixes, a page on disk
+or a frame on the wire, are read and written through **formats**: a
+declaration for a type that says where each field sits in a `Bytes`
+slice, with what width and byte order ([formats.md](formats.md)). A
+record still promises no layout. Nothing here takes back the rule that
+representation is the compiler's choice.
+
+- **Accessors, never casts.** A view is a slice and a format. Reading a
+  field is a load at an offset the format fixes, inlined, the same code
+  as layer 3's `b.u32_le(at)`, which is what a format compiles to. No
+  record is ever laid over bytes, so the compiler keeps reordering,
+  packing, unboxing and storing `Table`s as columns.
+- **Alignment is the compiler's.** Loads are unaligned in principle,
+  and aligned where the compiler proves it. No program sees alignment.
+- **Checked once.** Making a view checks its length, constants, tags,
+  reserved bytes, UTF-8 and what `as` constructors refuse. After that,
+  reading a field can't fail and isn't checked again, as FlatBuffers'
+  verified accessors aren't.
+- **A view is a value,** a small one (decision 14): a slice and a
+  format, kept inline, counting its root as any kept slice does
+  (decision 17), and keeping its whole buffer alive the same way.
+  Fields of `Bytes` and `Str` are slices of the root, so reading them
+  copies nothing.
+- **Writing is in a block.** `T.disk.edit(&page[a..b]) fn(&h) => h.lsn
+  = x` gives the block a writable view, as `split_at` gives a block its
+  ranges: the `&` lasts the call, so a writable view is never stored,
+  two of one page in one call overlap as two indices do (decision 2),
+  and no exclusivity rule changes. A read view is a value; one kept
+  while its page is written makes the write copy the page, which debug
+  builds report.
+- **Offsets are free in errors.** A slice is a root and a range, so a
+  malformed field's offset is reported within the whole buffer, the
+  file's or the socket's, at no cost.
+- **Sizes and offsets are promised only by formats.** `T.disk.size` and
+  `T.disk.offset(f)` are shapes, checked at build time. A record's size
+  is a fact of this build, never a promise.
+- **Machine byte order and C layouts are `trust`.** Every format writes
+  its byte order.
+
 ## What's given up
 
 - **Stored closures.** Grammars, schemas and routers built at run time
@@ -1277,7 +1320,9 @@ and 32-bit references as the default.
    2.8× its time today), the inline slice and the uncounted view of a
    borrowed parameter's slice (item 3's gaps), `Map` natively, and
    `Table` and `Pool` ([language.md §9](language.md#9-collections-array-table-and-pool))
-   in the interpreter and natively. **Done when** the `just` builds
+   in the interpreter and natively, and formats with `Bytes`' reads at
+   an offset ([formats.md](formats.md), decision 19), since they're
+   built from bytes, slices and sized integers. **Done when** the `just` builds
    natively and its string kernels are within 2× of Rust's time. `ren
    review` with its "this is data" hint, and `ren profile`'s
    suggestions, come after.
@@ -1354,7 +1399,7 @@ need no native code.
   of borrowed reads at a publish every 10 µs, as `Arc` does.
 
 A storage engine, the flagship in [vision.md](vision.md#what-ren-is-for),
-needed four designs. Two are now decided, and two are open:
+needed four designs. Three are now decided, and one is open:
 
 - **Views into buffers: decided,** as slices that are values (decision
   17). The view that needs no lifetime is one the compiler finds.
@@ -1362,9 +1407,10 @@ needed four designs. Two are now decided, and two are open:
   `snapshot`'s reads, measured near Rust's arc-swap; sharded and striped
   state; and `Atomic` fields, sequentially consistent, with weaker
   orderings in `trust`.
-- **Explicit layout,** open, for formats on disk and on the wire: field
-  order, alignment, byte order. A type that declares one opts out of the
-  layout the compiler may choose (decision 16).
+- **Explicit layout: decided,** as formats, views over `Bytes` declared
+  for a type (decision 19, [formats.md](formats.md)). No type opts out
+  of the layout the compiler chooses, as this question once proposed:
+  the layout belongs to the format, and a type can have several.
 - **Control over allocation,** open: memory allocated up front, and the
   guarantee above. Arenas are decided (decision 10), as a tool for
   sharing, not an allocator.

@@ -32,6 +32,7 @@ noted so they aren't lost. Nothing here is implemented unless it says
 - [9. Collections: `Array`, `Table` and `Pool`](#9-collections-array-table-and-pool)
 - [10. Advice that isn't an error](#10-advice-that-isnt-an-error)
 - [11. Many stateful things: data or actors](#11-many-stateful-things-data-or-actors)
+- [12. Bytes: types and their formats](#12-bytes-types-and-their-formats)
 - [Domain-driven design in Ren](#domain-driven-design-in-ren)
 - [A program, end to end](#a-program-end-to-end)
 - [What changes from today](#what-changes-from-today)
@@ -187,7 +188,8 @@ Which gives three altitudes:
 
 The tension doesn't vanish. It narrows to two places: what the compiler
 picks silently versus what the programmer asks for (answered in §9), and
-formats on disk, where layout *is* meaning (still open in vision.md).
+formats on disk, where layout *is* meaning (answered in §12: the layout
+belongs to a format, not to the type).
 
 ### What Ren is not
 
@@ -238,6 +240,7 @@ The full map, including the questions about cost (§9):
 | One hot service on many cores? | `striped`, map-reduce over stripes (§11) |
 | Work alongside other work? | `Async.scope`, `Async.beside` |
 | Where can state change under me? | only at `release` |
+| How does it look as bytes? | a format for its type (§12) |
 
 The top half says what a program means, the bottom half what it costs
 and how it scales, and changing the bottom never changes the top.
@@ -1332,6 +1335,81 @@ Each stripe sweeps its own columns, `touch(id, ...)` goes to one
 stripe by the id's key, and `expire` runs on all sixteen and
 concatenates. The domain still sees `Sessions.expire(now)`.
 
+## 12. Bytes: types and their formats
+
+Ren has no structs with a layout promise. A record is a struct in every
+sense that affects how code is written, nominal, named fields, a value,
+stored inline when small, but it promises nothing about field order,
+padding or size. That's what lets the compiler reorder and pack fields,
+unbox values and store a `Table` as columns, and everything in §9
+depends on it. Where layout *is* the meaning, a page on disk or a frame
+on the wire, Ren uses **formats**. The full design is
+[formats.md](formats.md); how it runs is
+[foundations.md decision 19](foundations.md#19-formats-are-views).
+
+**A type says what a thing is. A format says how it looks as bytes.**
+
+```ren
+type PageHeader = { lsn: Lsn, count: Int, kind: PageKind }
+
+format disk for PageHeader, le, size 32 =
+  magic: UInt32 = 0x52454E31       // a constant: checked on read, written on write
+  checksum: Bytes[16]               // the format's own field
+  lsn: UInt64 as Lsn                // the type's field, placed; `Lsn`'s constructor runs
+  count: UInt16
+  kind: UInt8 { Leaf = 1, Branch = 2 }
+  _: reserved(1)
+
+let h = try PageHeader.disk.view(page[0..32])   // checked once
+h.lsn                                            // a load, can't fail
+try PageHeader.disk.edit(&page[0..32]) fn(&h) =>
+  h.lsn = next_lsn                               // one field, in place
+```
+
+The decisions:
+
+- **Every format is for a type, and a type can have several.**
+  Versions, disk and wire, and migrations are other formats of the same
+  type. Fields named like the type's are placed; constants, checksums,
+  reserved bytes, lengths, counts and tags belong only to the format,
+  so the domain type never mentions bytes. There are no standalone
+  formats.
+- **Accessors, never casts.** A view is a slice and a format; reading a
+  field is a load. No record is ever laid over bytes.
+- **Fields go in order; `at` is a checked note; `size` means every byte
+  belongs to a field.**
+- **Byte order is always written,** per format, overridable per field.
+  There's no default; machine order is `trust`.
+- **A closed set of field kinds,** variable-length and tagged ones
+  included: `Bytes[n]`, `Array<F>[n]`, `CStr`, `VarUInt`, bit fields, a
+  `case` on a tag. Tags, lengths and counts are filled in when writing.
+  An opaque type is placed with `as`, so its invariants are checked.
+- **`view` is the one way in.** It checks once; after that, reading
+  can't fail. `.value` decodes into the type, `.rest` is what follows.
+  Writing one field is a block, `edit(&page[..]) fn(&h) => h.lsn = x`,
+  so the borrow ends with it; `write` and `encode` take the whole value.
+- **Errors carry offsets** in the whole buffer: `Short(at, need)`,
+  `Malformed(at, path, why)`, `UnknownTag(at, tag)`.
+- **One writable format per type; older ones `reads`, with values for
+  what they lack. Released formats are frozen** by fingerprints in
+  `formats.lock`.
+- **No byte patterns in `match`.** Formats are the patterns, and
+  exhaustiveness lives on the decoded type.
+- **A format is what a protocol spec's tables say, and nothing more.**
+  Offsets that point elsewhere, backtracking and checksums are ordinary
+  code.
+
+Three layers, an omakase default and then sharper tools:
+
+| Layer | For | Promises |
+|---|---|---|
+| **1.** `bin.encode(v)`, derived from the type's shape | messages between your own processes, caches | nothing about layout or across versions: **not for disk**, and documented so |
+| **2.** formats | disk and wire formats | layout, byte order, validation, versions |
+| **3.** `b.u32_le(at)`, bit operations, slices | what formats deliberately don't do | what you write |
+
+Layer 2 compiles to layer 3's calls. Each layer is complete, and you go
+down one only where the one above doesn't fit.
+
 ## Domain-driven design in Ren
 
 Wlaschin's *Domain Modeling Made Functional* is domain-driven design done
@@ -1444,6 +1522,7 @@ What reading it tells you:
 | Data-oriented work by hand | `Table`, `Pool`, `ren profile` suggestions |
 | `Shape` and `Expr` as deps in docs and benchmarks | ADTs |
 | `sync.keyed(n, h)`, stripes held across their calls | `striped`, a map-reduce, and `actors`, one per key, both services |
+| Explicit layout, open: a type that opts out of the compiler's layout | formats: views over `Bytes` for a type, several per type |
 
 **Docs.** foundations.md decision 3 reframed, and new decisions for ADTs,
 services and wirings, the pipe and the collections. The README gains the
@@ -1457,7 +1536,7 @@ instead is decided when it's written.
 **Compiler.** Record update and patterns, or-patterns, `as`, `let ...
 else`, by-name variants, variant types, the layout fixes, wirings, `|>`
 with its `try` rule and errors, the stateless-only rule for operation
-calls, `Table`, `Pool`, the hint.
+calls, `Table`, `Pool`, the hint, formats.
 
 ## Where it could go wrong
 
