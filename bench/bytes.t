@@ -255,3 +255,12 @@ line of what `ren build` said. Layer 3 landed natively in step 2, `Map`,
   bytes/take_panic.ren, release: the same, exit 1, objects live at exit 6
   bytes/take_panic.ren, tcc: the same, exit 1, objects live at exit 7
   bytes/take_panic.ren, ren run --release: the same
+
+Added in step 3's review: a type with a `show` and a `key` of its own.
+`ren run` calls its `show`; a native build, whose walks call a `key`
+but not a `show`, refuses it rather than print the representation.
+
+  $ spec bytes/show_key.ren
+  bytes/show_key.ren: as specified
+  $ native bytes/show_key.ren
+  bytes/show_key.ren: not native yet: error: a value of `Tag`, which has a `show` of its own isn't in the native slice yet

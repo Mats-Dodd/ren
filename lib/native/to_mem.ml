@@ -101,6 +101,9 @@ type ctx = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
   fns : (Path.t, C.fn_def) Hashtbl.t;
   own_members : (Path.t, string) Hashtbl.t;
+      (** the types with a member of their own the walks can't call, a
+          `show`, by the type, with what it is; a `key` is apart, in
+          [key_fns], so a type with both is still refused *)
   key_fns : (Path.t, Path.t) Hashtbl.t;
       (** each type's own `key`, by the type, which its declaration's walks
           call ([decl_id]) *)
@@ -832,15 +835,18 @@ and decl_id cx loc (p : Path.t) : int =
          struct's type is kept boxed *)
       let key =
         match (Hashtbl.find_opt cx.own_members p, Hashtbl.find_opt cx.key_fns p) with
-        | Some _, Some k when d.params = [] && not (fn_fails (Hashtbl.find cx.fns k))
-          -> (
-            match (Hashtbl.find cx.fns k).scheme.ty with
-            | Fun (_, r, _, _) -> Some (k, r)
-            | _ -> bug "a `key` without a function type")
         | Some what, _ ->
             unsupported loc
               (sprintf "a value of `%s`, which has %s of its own" p.name what)
-        | None, _ -> None
+        | None, Some k
+          when d.params = [] && not (fn_fails (Hashtbl.find cx.fns k)) -> (
+            match (Hashtbl.find cx.fns k).scheme.ty with
+            | Fun (_, r, _, _) -> Some (k, r)
+            | _ -> bug "a `key` without a function type")
+        | None, Some _ ->
+            unsupported loc
+              (sprintf "a value of `%s`, which has a `key` of its own" p.name)
+        | None, None -> None
       in
       let n = Hashtbl.length cx.decls in
       Hashtbl.replace cx.decls p n;
@@ -4069,9 +4075,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       in
       List.iter
         (fun (t, k) ->
-          if not (itself k) then (
-            Hashtbl.replace cx.own_members t "a `key`";
-            Hashtbl.replace cx.key_fns t k))
+          if not (itself k) then Hashtbl.replace cx.key_fns t k)
         m.keys;
       List.iter
         (fun ((t, req), _) -> Hashtbl.replace cx.own_ops (t, req) ())

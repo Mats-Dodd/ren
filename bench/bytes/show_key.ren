@@ -1,0 +1,17 @@
+// A type with a `show` and a `key` of its own: `ren run` calls its
+// `show`, so a native build, whose walks can't call a `show`, must
+// refuse it rather than print the representation (step 3's review).
+
+pub type Tag = opaque Str
+  pub fn of(s: Str) -> Tag = s
+  pub fn key(self) -> Str = self.lower()
+  pub fn show(self) -> Str = "Tag(".concat(self).concat(")")
+
+fn main() uses Console =
+  let t = Tag.of("Hi")
+  print(show(t))
+  print(t)
+  var m: Map<Tag, Int> = Map.empty
+  &m.set(t, 1)
+  &m.set(Tag.of("hI"), 2)
+  print(m)

@@ -1,0 +1,4 @@
+Tag(Hi)
+Tag(Hi)
+Map.of([(Tag(Hi), 2)])
+exit 0
