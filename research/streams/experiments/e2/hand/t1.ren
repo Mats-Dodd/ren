@@ -1,0 +1,4 @@
+fn main() uses Console =
+  let f = fn(x: Int) => x + 1
+  let g = fn() => try f(2)
+  print(try g())

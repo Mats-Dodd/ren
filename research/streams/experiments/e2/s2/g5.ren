@@ -1,0 +1,28 @@
+// amendments.md "Concurrency, where `yield` can go": `yield` inside a
+// `with` (a transaction) in an effectful generator; `break` rolls back
+dep Tx =
+  row: fn(i: Int) -> Int
+
+handler transaction() for Tx uses Console =
+  let begun = print("begin")
+  finally(r) =>
+    match r
+      Ok(_) => print("commit")
+      Err(_) => print("rollback")
+    try r
+  row(i) => i * 100
+
+gen fn orders_in_tx(n: Int) -> Int uses Console =
+  with transaction() in
+    var i = 0
+    while i < n
+      yield Tx.row(i)
+      i += 1
+
+fn main() uses Console =
+  for o in orders_in_tx(2)
+    print(o)
+  for o in orders_in_tx(100)
+    print(o)
+    if o == 100 then break
+  print("done")

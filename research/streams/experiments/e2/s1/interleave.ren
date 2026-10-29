@@ -1,0 +1,16 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+type Nums = { xs: Array<Int> }
+  fn cursor(self) -> Each = Each { xs: self.xs, i: 0 }
+// the source is written at each step, not for the pipeline's life
+fn main() uses Console =
+  var r = Each { xs: [1, 2, 3, 4, 5, 6], i: 0 }
+  let p = &r.take(4)
+  for x in p
+    print(x)
+    print(&r.next())

@@ -1,0 +1,28 @@
+# ren journal 2 · recipes.ren · deps: Clock Console Os Proc
+1 main Os.args() → []
+2 main/main:0 Console.error("true")
+3 main/main:0 Clock.sleep(300) …
+4 main/main:1 Console.error("exit 0")
+5 main/main:1 Clock.sleep(100) …
+6 main/main:2 Console.error("test 1 = 1")
+7 main/main:2 Clock.sleep(200) …
+8 poll main/main:1
+9 main/main:1 →
+10 main/main:1 Proc.run("sh", ["-c", "exit 0"]) …
+11 poll main/main:1
+12 main/main:1 → Ok(0)
+13 main/main:1 Console.write("ran exit 0")
+14 poll main/main:2
+15 main/main:2 →
+16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"]) …
+17 poll main/main:2
+18 main/main:2 → Ok(0)
+19 main/main:2 Console.write("ran test 1 = 1")
+20 poll main/main:0
+21 main/main:0 →
+22 main/main:0 Proc.run("sh", ["-c", "true"]) …
+23 poll main/main:0
+24 main/main:0 → Ok(0)
+25 main/main:0 Console.write("ran true")
+26 main Console.write("all ran")
+27 main exit 0

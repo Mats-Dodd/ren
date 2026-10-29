@@ -1,0 +1,15 @@
+# v3  runs=11 load start 2.27 end 2.98
+json/C-inplace               total 157.52 (147.44-163.22) ms | proc 704 Mcyc 3057 Minstr rss 342.3 MiB
+json/C-builder               total 158.82 (153.17-165.18) ms | proc 712 Mcyc 3081 Minstr rss 320.8 MiB
+json/C-iolist                total 426.70 (367.30-451.94) ms | proc 1408 Mcyc 6140 Minstr rss 760.7 MiB
+json/C-iolist-stream         total 337.94 (326.14-347.32) ms | proc 1185 Mcyc 5862 Minstr rss 220.2 MiB
+json/rust-string             total 123.77 (114.59-133.12) ms | proc 952 Mcyc 3932 Minstr rss 277.3 MiB
+json/go-builder              total 159.21 (146.85-185.88) ms | proc 1998 Mcyc 9461 Minstr rss 548.0 MiB
+logs/C-inplace               total 93.49 (87.73-99.29) ms | proc 573 Mcyc 2088 Minstr rss 516.0 MiB
+logs/C-builder               total 92.15 (84.75-99.77) ms | proc 565 Mcyc 1970 Minstr rss 516.0 MiB
+logs/C-iolist                total 341.77 (289.10-352.06) ms | proc 1218 Mcyc 4831 Minstr rss 833.0 MiB
+logs/C-iolist-stream         total 235.16 (233.01-246.36) ms | proc 952 Mcyc 4581 Minstr rss 389.4 MiB
+logs/rust-string             total 88.36 (82.03-93.78) ms | proc 877 Mcyc 3542 Minstr rss 368.8 MiB
+logs/go-builder              total 142.92 (133.17-153.64) ms | proc 1779 Mcyc 8405 Minstr rss 725.9 MiB
+json5k/C-concat              total 522.19 (517.23-533.19) ms | proc 1426 Mcyc 5077 Minstr rss 117.8 MiB
+json5k/C-inplace             total 0.77 (0.70-0.82) ms | proc 44 Mcyc 107 Minstr rss 115.5 MiB

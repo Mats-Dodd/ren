@@ -1,0 +1,24 @@
+// a gen fn taking a block: a user stage, a pipeline on a one-shot fiber
+gen fn dedup_by<T, K>(src: fn() -> Option<T>, key: fn(T) -> K) -> T =
+  var last: Option<K> = None
+  for x in try src
+    let k = try key(x)
+    if Some(k) != last then
+      last = Some(k)
+      yield x
+
+gen fn upto(n: Int) -> Int =
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console =
+  let xs = [1, 1, 2, 2, 2, 3, 1, 1, 4]
+  var c = upto(xs.len())
+  for x in dedup_by(&c.map(fn(i) => xs[i]), fn(x) => x)
+    print(x)
+  print(dedup_by(upto(9).map(fn(i) => xs[i]), fn(x) => x).select(fn(x) => x > 1).take(2).to_array())
+  let d = dedup_by(upto(9).map(fn(i) => xs[i]), fn(x) => x / 2)
+  for x in d
+    print(x)

@@ -1,0 +1,44 @@
+# b2  runs=5 load start 2.12 end 2.17
+keep/C-A-share               total 204.75 (204.64-207.58) ms | proc 633 Mcyc 1029 Minstr rss 522.2 MiB
+keep/C-A-n8                  total 203.02 (200.90-209.79) ms | proc 622 Mcyc 1031 Minstr rss 522.2 MiB
+keep/C-A-n16                 total 211.03 (204.85-214.69) ms | proc 647 Mcyc 1032 Minstr rss 522.3 MiB
+keep/C-A-n24                 total 208.93 (201.94-211.86) ms | proc 641 Mcyc 1031 Minstr rss 522.4 MiB
+keep/C-A-n32                 total 205.84 (201.91-214.53) ms | proc 629 Mcyc 1032 Minstr rss 522.4 MiB
+keep/C-A-n64                 total 209.82 (190.30-214.38) ms | proc 643 Mcyc 1032 Minstr rss 522.5 MiB
+keep/C-A-store               total 202.23 (197.39-222.53) ms | proc 540 Mcyc 875 Minstr rss 18.5 MiB
+keep/C-B-share               total 207.32 (203.81-211.61) ms | proc 638 Mcyc 1033 Minstr rss 522.0 MiB
+keep/C-B-n8                  total 209.38 (178.92-211.98) ms | proc 636 Mcyc 1024 Minstr rss 522.0 MiB
+keep/C-B-n16                 total 205.72 (203.51-210.40) ms | proc 632 Mcyc 1018 Minstr rss 522.1 MiB
+keep/C-B-n24                 total 204.26 (183.97-211.81) ms | proc 628 Mcyc 1018 Minstr rss 522.2 MiB
+keep/C-B-n32                 total 209.55 (204.02-212.47) ms | proc 643 Mcyc 1019 Minstr rss 522.3 MiB
+keep/C-B-n64                 total 207.91 (203.93-212.20) ms | proc 635 Mcyc 1019 Minstr rss 522.3 MiB
+keep/C-B-store               total 200.25 (197.13-227.95) ms | proc 533 Mcyc 876 Minstr rss 18.4 MiB
+keep/C-SSO-share             total 206.90 (202.69-217.22) ms | proc 636 Mcyc 1018 Minstr rss 522.0 MiB
+keep/C-SSO-n8                total 205.61 (202.72-207.02) ms | proc 634 Mcyc 1016 Minstr rss 522.0 MiB
+keep/C-SSO-n16               total 205.77 (205.68-210.94) ms | proc 634 Mcyc 1018 Minstr rss 522.0 MiB
+keep/C-SSO-n24               total 207.30 (202.13-207.54) ms | proc 637 Mcyc 1013 Minstr rss 522.1 MiB
+keep/C-SSO-n32               total 207.22 (203.93-209.44) ms | proc 636 Mcyc 1013 Minstr rss 522.2 MiB
+keep/C-SSO-n64               total 207.89 (204.65-209.65) ms | proc 637 Mcyc 1013 Minstr rss 522.2 MiB
+keep/C-SSO-store             total 199.31 (198.49-218.40) ms | proc 531 Mcyc 876 Minstr rss 18.3 MiB
+keep/rust-own                total 192.15 (186.79-198.82) ms | proc 513 Mcyc 1331 Minstr rss 10.8 MiB
+keep/go-share                total 233.72 (200.02-234.55) ms | proc 643 Mcyc 982 Minstr rss 663.5 MiB
+keep/go-clone                total 156.55 (153.96-160.04) ms | proc 494 Mcyc 892 Minstr rss 46.2 MiB
+tok/C-A-share                scan 22.38 (21.60-23.04) ms | use 2.40 (2.12-2.44) ms | drop 2.04 (1.95-2.07) ms | total 26.84 (25.66-27.55) ms | proc 83 Mcyc 244 Minstr rss 59.5 MiB
+tok/C-A-n8                   scan 25.27 (24.60-25.34) ms | use 2.44 (2.42-2.48) ms | drop 4.08 (4.02-4.16) ms | total 31.77 (31.16-31.93) ms | proc 97 Mcyc 272 Minstr rss 65.5 MiB
+tok/C-A-n16                  scan 26.25 (25.75-26.72) ms | use 2.14 (2.11-2.47) ms | drop 2.77 (2.67-2.86) ms | total 31.25 (30.71-31.63) ms | proc 95 Mcyc 280 Minstr rss 68.3 MiB
+tok/C-A-n24                  scan 27.19 (27.08-27.58) ms | use 2.50 (2.11-2.57) ms | drop 2.41 (2.26-2.60) ms | total 32.00 (31.55-32.36) ms | proc 97 Mcyc 282 Minstr rss 69.6 MiB
+tok/C-A-n32                  scan 27.16 (26.80-27.25) ms | use 2.49 (2.14-2.51) ms | drop 2.44 (2.26-2.45) ms | total 32.07 (31.20-32.19) ms | proc 98 Mcyc 282 Minstr rss 69.6 MiB
+tok/C-A-n64                  scan 27.53 (26.85-27.74) ms | use 2.48 (2.15-2.51) ms | drop 2.14 (2.04-2.18) ms | total 32.15 (31.05-32.36) ms | proc 97 Mcyc 283 Minstr rss 69.9 MiB
+tok/C-A-store                scan 29.18 (28.76-29.75) ms | use 2.49 (2.46-2.55) ms | drop 2.16 (2.04-2.21) ms | total 33.81 (33.46-34.26) ms | proc 102 Mcyc 325 Minstr rss 69.9 MiB
+tok/C-B-share                scan 16.34 (15.93-16.90) ms | use 1.74 (1.57-1.76) ms | drop 2.02 (1.98-2.05) ms | total 20.05 (19.51-20.68) ms | proc 66 Mcyc 171 Minstr rss 42.5 MiB
+tok/C-B-n8                   scan 22.49 (21.97-23.13) ms | use 2.61 (2.53-4.55) ms | drop 3.58 (3.52-3.96) ms | total 28.97 (28.56-30.48) ms | proc 89 Mcyc 243 Minstr rss 55.9 MiB
+tok/C-B-n16                  scan 24.83 (24.11-25.06) ms | use 3.59 (3.32-4.16) ms | drop 2.49 (2.41-2.61) ms | total 30.79 (30.59-31.00) ms | proc 94 Mcyc 260 Minstr rss 61.3 MiB
+tok/C-B-n24                  scan 25.38 (24.64-25.67) ms | use 3.66 (3.06-3.98) ms | drop 2.00 (1.99-2.16) ms | total 30.75 (30.72-31.04) ms | proc 94 Mcyc 265 Minstr rss 63.4 MiB
+tok/C-B-n32                  scan 25.32 (24.80-25.67) ms | use 3.62 (3.60-4.13) ms | drop 2.14 (2.00-2.21) ms | total 31.13 (31.03-31.48) ms | proc 95 Mcyc 265 Minstr rss 63.4 MiB
+tok/C-B-n64                  scan 25.42 (24.79-25.77) ms | use 3.78 (3.16-4.01) ms | drop 1.77 (1.71-1.82) ms | total 30.61 (30.29-31.28) ms | proc 94 Mcyc 266 Minstr rss 63.8 MiB
+tok/C-B-store                scan 26.56 (25.91-26.82) ms | use 3.71 (3.13-4.21) ms | drop 1.79 (1.71-1.83) ms | total 31.83 (31.41-32.34) ms | proc 97 Mcyc 280 Minstr rss 63.8 MiB
+tok/C-SSO-share              scan 18.13 (17.34-18.25) ms | use 2.29 (2.08-2.33) ms | drop 1.24 (1.21-1.28) ms | total 21.62 (20.95-21.76) ms | proc 70 Mcyc 189 Minstr rss 42.4 MiB
+tok/rust-borrow              scan 19.72 (19.20-20.56) ms | use 1.99 (1.83-2.68) ms | drop 0.00 (0.00-0.00) ms | total 21.79 (21.05-22.66) ms | proc 71 Mcyc 209 Minstr rss 36.9 MiB
+tok/rust-own                 scan 32.65 (32.11-33.77) ms | use 4.32 (3.23-5.13) ms | drop 10.59 (10.41-15.75) ms | total 47.63 (47.25-53.52) ms | proc 140 Mcyc 543 Minstr rss 63.5 MiB
+tok/go-share                 scan 47.79 (46.88-55.91) ms | use 1.26 (1.25-1.27) ms | total 49.04 (48.15-57.17) ms | proc 231 Mcyc 1125 Minstr rss 75.3 MiB
+tok/go-clone                 scan 54.90 (54.50-56.47) ms | use 1.31 (1.28-1.33) ms | total 56.22 (55.80-57.80) ms | proc 245 Mcyc 960 Minstr rss 73.0 MiB

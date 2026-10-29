@@ -1,0 +1,202 @@
+=== ok1
+20
+30
+4
+5
+6
+7
+=== ok2
+(0, 3)
+(1, 4)
+(2, 5)
+(3, 9)
+(4, 6)
+[3, 1, 4, 1, 5]
+3
+800
+4
+Some(4)
+=== keep1
+error: a generic `T` can't be a block
+   ┌─ keep1.ren:14:16
+14 │   let p = keep(ns.cursor().map(fn(x) => x + k))
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a block
+   = a type variable stands for data, which can be stored or returned
+   help: pass a block only to a parameter written `fn(...)`
+=== keep2
+error: a block can't be stored in a record
+   ┌─ keep2.ren:13:20
+13 │   let b = Box { v: &r.take(2) }
+   │                    ^^^^^^^^^^ a block
+   = a block lives only as long as the call it's passed to
+   help: hold data instead, an enum to `match` on, or a handler's description, and pass the block to the call that runs it
+=== keep3
+error: a block can't be returned
+   ┌─ keep3.ren:10:21
+10 │ fn make(ns: Nums) = ns.cursor().take(2)
+   │                     ^^^^^^^^^^^^^^^^^^^ a block
+   = a block lives only as long as the call it's passed to
+   help: take the block's arguments as parameters too, and return what it gives
+=== keep4
+error: a block can't be returned
+   ┌─ keep4.ren:10:22
+10 │ fn make(ns: Nums) -> fn() -> Option<Int> = ns.cursor().take(2)
+   │                      ^^^^^^^^^^^^^^^^^^^ a block's type
+   = a block lives only as long as the call it's passed to
+   help: take the block's arguments as parameters too, and return what it gives
+=== drive1
+error: `c`, a block parameter, can't be passed to `k`
+   ┌─ drive1.ren:13:84
+13 │ fn drive(c: fn() -> Option<Int>, k: fn(fn() -> Option<Int>) -> Int) -> Int = try k(c)
+   │                                                                                    ^
+   = `k` is a block parameter, and a block given to one can't reach one, or it could run inside itself
+   help: write it as a named recursive function
+=== drive2
+error: a generic `C` can't be a block
+   ┌─ drive2.ren:14:15
+14 │   print(drive(ns.cursor().map(fn(x) =>
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^ a block
+   = a type variable stands for data, which can be stored or returned
+   help: pass a block only to a parameter written `fn(...)`
+=== consume
+error: `limit` is read by this block while the call changes it
+   ┌─ consume.ren:19:49
+19 │   print(consume(xs.cursor().select(fn(x) => x < limit), &limit))
+   │                                                 ^^^^^ read here
+   │                                                         ------ changed for the whole call
+   = a block runs during the call it's passed to
+   help: read it first: `let before = limit`, and use `before` in the block
+=== chosen
+error: `let` binds one block written right there
+   ┌─ chosen.ren:13:11
+13 │   let p = if short then &r.take(1) else &r.take(2)
+   │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a `fn` written here
+   = a `let` names one block, so the code it runs is known where it's called
+   help: choose inside one block: `let p = fn() => if ... then f() else g()`
+=== twoheads
+5
+=== conc
+error: `r` can't change in a block that runs on several tasks at once
+   ┌─ conc.ren:12:12
+12 │   let p = &r.take(2)
+   │            ^ changed here
+   = a block that runs on several tasks at once can only read what it captures
+   help: give back what each one makes, and add them up after: `Async.map(xs) fn(x) => ...`, then `.sum()`
+
+error: `$taken28` can't change in a block that runs on several tasks at once
+   ┌─ conc.ren:12:12
+12 │   let p = &r.take(2)
+   │            ^^^^^^^^^ changed here
+   = a block that runs on several tasks at once can only read what it captures
+   help: give back what each one makes, and add them up after: `Async.map(xs) fn(x) => ...`, then `.sum()`
+=== interleave
+1
+Some(2)
+3
+Some(4)
+5
+Some(6)
+=== noamp
+error: `Each` has no method named `map`
+   ┌─ noamp.ren:12:14
+12 │   for x in r.map(fn(x) => x + 1)
+   │              ^^^
+   help: its methods: `next`
+=== g1
+1
+2
+3
+4
+Some(0)
+Some(1)
+Some(2)
+Some(3)
+Some(2)
+3
+4
+[20, 30, 40]
+=== g2
+1
+2
+3
+1
+4
+[2, 3]
+1
+2
+1
+4
+=== g3
+-1000
+0
+-1001
+1
+-1002
+2
+-1000
+-1001
+(0, 10)
+-1002
+(10, 20)
+-1000
+0
+-1001
+-1000
+-1001
+-1002
+-1003
+-1004
+-1005
+-1006
+6
+-1007
+Err(Bad(7))
+=== g4
+0
+1
+finally: returned
+0
+1
+finally: stopped
+after
+=== g5
+begin
+0
+100
+commit
+begin
+0
+100
+rollback
+done
+=== r1
+error: a block can't be returned
+   ┌─ r1.ren:11:14
+11 │ fn later() = ticks(3)
+   │              ^^^^^^^^ a block
+   = a block lives only as long as the call it's passed to
+   help: take the block's arguments as parameters too, and return what it gives
+
+error: a block can't be stored in a record
+   ┌─ r1.ren:14:20
+14 │   let b = Box { v: ticks(3) }
+   │                    ^^^^^^^^ a block
+   = a block lives only as long as the call it's passed to
+   help: hold data instead, an enum to `match` on, or a handler's description, and pass the block to the call that runs it
+=== r2
+1
+Some(1)
+=== r3
+error: `$frame45` can't change in a block that runs on several tasks at once
+   ┌─ r3.ren:14:11
+14 │   let p = evens(upto(10).map(fn(x) => x))
+   │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ changed here
+   = a block that runs on several tasks at once can only read what it captures
+   help: give back what each one makes, and add them up after: `Async.map(xs) fn(x) => ...`, then `.sum()`
+
+error: `$src28` can't change in a block that runs on several tasks at once
+   ┌─ r3.ren:14:17
+14 │   let p = evens(upto(10).map(fn(x) => x))
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^ changed here
+   = a block that runs on several tasks at once can only read what it captures
+   help: give back what each one makes, and add them up after: `Async.map(xs) fn(x) => ...`, then `.sum()`

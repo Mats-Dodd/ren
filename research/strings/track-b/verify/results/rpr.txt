@@ -1,0 +1,10 @@
+# rpr  runs=11 load start 2.48 end 2.44
+rpr-logs.txt/C-none          read 20.07 (18.44-20.92) ms | validate 0.00 (0.00-0.00) ms | parse_respond 160.30 (158.28-185.32) ms | write 0.05 (0.03-0.06) ms | total 180.96 (177.38-203.81) ms | proc 481 Mcyc 2158 Minstr rss 180.0 MiB
+rpr-logs.txt/C-ren           read 19.09 (15.54-21.78) ms | validate 37.25 (36.64-38.38) ms | parse_respond 172.14 (155.77-185.79) ms | write 0.04 (0.03-0.07) ms | total 230.53 (208.60-241.35) ms | proc 609 Mcyc 2720 Minstr rss 180.0 MiB
+rpr-logs.txt/C-neon          read 19.85 (15.78-23.02) ms | validate 4.27 (2.58-5.57) ms | parse_respond 169.39 (158.61-185.69) ms | write 0.04 (0.03-0.08) ms | total 194.81 (180.84-210.45) ms | proc 518 Mcyc 2183 Minstr rss 180.0 MiB
+rpr-people.csv/C-none        read 12.72 (10.97-13.27) ms | validate 0.00 (0.00-0.00) ms | parse_respond 153.40 (144.18-154.88) ms | write 0.04 (0.04-0.07) ms | total 166.46 (156.22-167.90) ms | proc 444 Mcyc 1457 Minstr rss 114.4 MiB
+rpr-people.csv/C-ren         read 12.28 (8.02-13.36) ms | validate 24.04 (23.78-24.88) ms | parse_respond 143.66 (136.30-153.89) ms | write 0.04 (0.03-0.10) ms | total 179.94 (168.31-191.33) ms | proc 479 Mcyc 1813 Minstr rss 114.4 MiB
+rpr-people.csv/C-neon        read 12.73 (7.01-14.27) ms | validate 1.87 (1.62-3.07) ms | parse_respond 144.51 (137.47-154.16) ms | write 0.04 (0.03-0.07) ms | total 158.75 (153.26-169.88) ms | proc 423 Mcyc 1476 Minstr rss 114.4 MiB
+rpr-cjk-big.txt/C-none       read 14.41 (12.00-15.07) ms | validate 0.00 (0.00-0.00) ms | parse_respond 80.22 (74.67-86.83) ms | write 0.06 (0.03-0.08) ms | total 94.80 (87.17-101.95) ms | proc 256 Mcyc 840 Minstr rss 100.0 MiB
+rpr-cjk-big.txt/C-ren        read 13.74 (10.77-15.42) ms | validate 64.19 (63.00-66.10) ms | parse_respond 79.11 (73.78-85.55) ms | write 0.06 (0.03-0.08) ms | total 157.97 (152.23-161.20) ms | proc 423 Mcyc 1738 Minstr rss 100.0 MiB
+rpr-cjk-big.txt/C-neon       read 14.00 (10.31-15.32) ms | validate 8.30 (7.45-9.00) ms | parse_respond 85.29 (78.97-86.41) ms | write 0.06 (0.05-0.07) ms | total 105.06 (98.12-109.64) ms | proc 283 Mcyc 927 Minstr rss 100.0 MiB

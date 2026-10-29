@@ -1,0 +1,51 @@
+# b4  runs=11 load start 3.40 end 2.21
+map/C-A-wy                   build 160.09 (154.48-170.46) ms | lookup 136.16 (131.13-145.89) ms | drop 3.42 (3.11-4.02) ms | total 299.87 (288.86-319.49) ms | proc 871 Mcyc 1542 Minstr rss 185.3 MiB
+map/C-A-fx                   build 180.56 (177.97-186.25) ms | lookup 155.61 (152.49-183.24) ms | drop 3.35 (3.16-4.00) ms | total 340.11 (335.03-365.69) ms | proc 980 Mcyc 1525 Minstr rss 185.3 MiB
+map/C-A-prefix               build 1262.41 (1245.36-1297.18) ms | lookup 1113.04 (1109.64-1143.68) ms | drop 2.17 (1.96-3.67) ms | total 2376.49 (2358.94-2426.83) ms | proc 6304 Mcyc 18581 Minstr rss 185.3 MiB
+map/C-A-nohashcmp            build 165.65 (163.21-175.12) ms | lookup 135.83 (134.13-142.45) ms | drop 3.43 (1.98-4.19) ms | total 304.08 (300.77-320.05) ms | proc 868 Mcyc 1510 Minstr rss 185.3 MiB
+map/C-B-wy                   build 149.70 (145.34-157.27) ms | lookup 124.46 (123.06-129.52) ms | drop 3.46 (3.13-4.24) ms | total 278.34 (271.83-286.12) ms | proc 814 Mcyc 1530 Minstr rss 181.1 MiB
+map/C-B-fx                   build 169.24 (166.09-171.24) ms | lookup 147.06 (145.70-151.99) ms | drop 3.53 (3.17-4.45) ms | total 321.09 (315.62-325.73) ms | proc 928 Mcyc 1487 Minstr rss 181.1 MiB
+map/C-B-prefix               build 1120.85 (1105.77-1135.96) ms | lookup 1002.71 (975.06-1013.18) ms | drop 2.82 (2.01-3.51) ms | total 2127.47 (2083.10-2151.44) ms | proc 5644 Mcyc 19161 Minstr rss 181.1 MiB
+map/C-B-nohashcmp            build 148.50 (144.61-155.60) ms | lookup 121.62 (120.65-129.92) ms | drop 3.48 (3.00-4.27) ms | total 275.08 (269.15-283.34) ms | proc 790 Mcyc 1486 Minstr rss 181.1 MiB
+map/C-SSO-wy                 build 153.17 (148.53-156.49) ms | lookup 133.92 (131.27-137.29) ms | drop 3.69 (3.07-4.47) ms | total 290.64 (285.52-294.75) ms | proc 843 Mcyc 1677 Minstr rss 181.1 MiB
+map/C-SSO-fx                 build 170.97 (169.31-174.80) ms | lookup 160.68 (158.03-165.28) ms | drop 3.51 (3.09-4.19) ms | total 336.61 (331.00-341.06) ms | proc 964 Mcyc 1650 Minstr rss 181.1 MiB
+map/C-SSO-prefix             build 1181.37 (1158.28-1201.77) ms | lookup 1053.70 (1027.17-1062.76) ms | drop 3.09 (2.21-3.67) ms | total 2239.45 (2188.15-2266.81) ms | proc 5945 Mcyc 20264 Minstr rss 181.1 MiB
+map/C-SSO-nohashcmp          build 151.11 (149.36-159.88) ms | lookup 132.02 (131.34-137.39) ms | drop 4.21 (3.39-4.44) ms | total 288.46 (284.33-301.55) ms | proc 838 Mcyc 1649 Minstr rss 181.1 MiB
+map/C-G-wy                   build 168.55 (163.99-171.62) ms | lookup 142.80 (140.63-154.27) ms | drop 3.52 (3.18-4.47) ms | total 316.19 (308.05-325.90) ms | proc 909 Mcyc 1669 Minstr rss 185.1 MiB
+map/C-G-fx                   build 180.32 (179.27-188.81) ms | lookup 160.27 (156.73-164.11) ms | drop 3.58 (3.04-4.56) ms | total 345.26 (340.48-356.23) ms | proc 991 Mcyc 1634 Minstr rss 185.1 MiB
+map/C-G-prefix               build 1307.61 (1264.97-1325.09) ms | lookup 1170.35 (1143.18-1195.52) ms | drop 2.35 (2.06-3.46) ms | total 2483.71 (2410.49-2523.55) ms | proc 6583 Mcyc 20487 Minstr rss 185.1 MiB
+map/C-G-nohashcmp            build 167.73 (162.47-171.79) ms | lookup 142.80 (139.98-151.49) ms | drop 3.73 (3.26-4.41) ms | total 314.31 (306.18-326.58) ms | proc 892 Mcyc 1642 Minstr rss 185.1 MiB
+map/rust-borrow-std          build 210.85 (205.87-218.76) ms | lookup 183.57 (178.67-200.31) ms | drop 0.32 (0.20-0.43) ms | total 394.13 (385.86-419.26) ms | proc 1096 Mcyc 3160 Minstr rss 100.2 MiB
+map/rust-borrow-fx           build 148.75 (145.62-157.82) ms | lookup 126.55 (124.37-133.12) ms | drop 0.33 (0.30-0.39) ms | total 275.92 (271.21-286.12) ms | proc 790 Mcyc 2082 Minstr rss 100.2 MiB
+map/rust-borrow-ahash        build 149.89 (147.37-152.79) ms | lookup 131.03 (128.12-136.51) ms | drop 0.36 (0.30-0.44) ms | total 281.19 (277.31-287.84) ms | proc 801 Mcyc 2074 Minstr rss 100.2 MiB
+map/rust-borrow-fold         build 150.61 (148.87-154.84) ms | lookup 132.46 (130.51-141.76) ms | drop 0.33 (0.31-0.38) ms | total 283.94 (280.86-296.84) ms | proc 810 Mcyc 2093 Minstr rss 100.2 MiB
+map/rust-own-std             build 193.38 (192.01-199.15) ms | lookup 168.27 (167.41-173.58) ms | drop 3.24 (3.11-3.65) ms | total 366.27 (363.13-371.28) ms | proc 1026 Mcyc 3196 Minstr rss 108.7 MiB
+map/rust-own-fx              build 141.47 (140.59-143.74) ms | lookup 117.54 (116.65-120.02) ms | drop 3.18 (3.09-3.37) ms | total 262.44 (260.88-264.95) ms | proc 755 Mcyc 2133 Minstr rss 108.7 MiB
+map/rust-own-ahash           build 139.05 (137.66-142.46) ms | lookup 122.40 (120.31-126.36) ms | drop 3.22 (3.00-3.33) ms | total 264.98 (262.29-269.12) ms | proc 761 Mcyc 2113 Minstr rss 108.7 MiB
+map/rust-own-fold            build 142.95 (140.69-145.36) ms | lookup 140.61 (139.18-141.93) ms | drop 3.17 (3.14-3.56) ms | total 286.56 (283.02-289.14) ms | proc 818 Mcyc 2093 Minstr rss 108.7 MiB
+map/go-share                 build 243.19 (238.59-252.51) ms | lookup 156.36 (152.89-163.25) ms | total 399.60 (393.00-412.40) ms | proc 1161 Mcyc 2903 Minstr rss 178.0 MiB
+group/C-A-wy                 total 212.51 (208.92-215.64) ms | proc 660 Mcyc 1655 Minstr rss 221.5 MiB
+group/C-A-fx                 total 209.55 (208.36-217.10) ms | proc 659 Mcyc 1629 Minstr rss 221.5 MiB
+group/C-A-prefix             total 219.10 (217.65-226.11) ms | proc 684 Mcyc 1684 Minstr rss 221.5 MiB
+group/C-A-nohashcmp          total 234.66 (231.76-237.65) ms | proc 729 Mcyc 1636 Minstr rss 221.5 MiB
+group/C-B-wy                 total 208.01 (205.22-214.08) ms | proc 656 Mcyc 1703 Minstr rss 221.4 MiB
+group/C-B-fx                 total 216.21 (211.41-219.87) ms | proc 678 Mcyc 1693 Minstr rss 221.4 MiB
+group/C-B-prefix             total 217.30 (215.12-221.42) ms | proc 680 Mcyc 1726 Minstr rss 221.4 MiB
+group/C-B-nohashcmp          total 218.49 (216.67-223.22) ms | proc 683 Mcyc 1692 Minstr rss 221.4 MiB
+group/C-SSO-wy               total 217.48 (216.15-222.84) ms | proc 679 Mcyc 1796 Minstr rss 221.4 MiB
+group/C-SSO-fx               total 218.37 (215.12-227.16) ms | proc 683 Mcyc 1775 Minstr rss 221.4 MiB
+group/C-SSO-prefix           total 227.66 (225.23-258.28) ms | proc 708 Mcyc 1831 Minstr rss 221.4 MiB
+group/C-SSO-nohashcmp        total 218.73 (215.35-224.01) ms | proc 683 Mcyc 1789 Minstr rss 221.4 MiB
+group/C-G-wy                 total 220.43 (216.00-222.47) ms | proc 687 Mcyc 1757 Minstr rss 221.4 MiB
+group/C-G-fx                 total 218.71 (215.23-228.66) ms | proc 682 Mcyc 1749 Minstr rss 221.4 MiB
+group/C-G-prefix             total 229.62 (225.75-237.56) ms | proc 716 Mcyc 1796 Minstr rss 221.4 MiB
+group/C-G-nohashcmp          total 218.67 (216.05-221.82) ms | proc 686 Mcyc 1730 Minstr rss 221.5 MiB
+group/rust-borrow-std        total 271.11 (267.75-272.05) ms | proc 808 Mcyc 3013 Minstr rss 111.8 MiB
+group/rust-borrow-fx         total 227.64 (226.65-231.76) ms | proc 694 Mcyc 2460 Minstr rss 111.8 MiB
+group/rust-borrow-ahash      total 226.72 (225.45-227.81) ms | proc 692 Mcyc 2405 Minstr rss 111.8 MiB
+group/rust-borrow-fold       total 237.79 (235.96-240.17) ms | proc 723 Mcyc 2550 Minstr rss 111.8 MiB
+group/rust-own-std           total 265.90 (264.50-268.18) ms | proc 795 Mcyc 2992 Minstr rss 111.9 MiB
+group/rust-own-fx            total 226.00 (224.24-231.09) ms | proc 692 Mcyc 2447 Minstr rss 111.9 MiB
+group/rust-own-ahash         total 226.65 (224.09-228.14) ms | proc 691 Mcyc 2396 Minstr rss 111.9 MiB
+group/rust-own-fold          total 238.05 (236.19-247.17) ms | proc 722 Mcyc 2516 Minstr rss 111.8 MiB
+group/go-share               total 277.89 (273.82-279.64) ms | proc 876 Mcyc 2924 Minstr rss 225.7 MiB

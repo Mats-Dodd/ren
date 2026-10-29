@@ -1,0 +1,18 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+type Nums = { xs: Array<Int> }
+  fn cursor(self) -> Each = Each { xs: self.xs, i: 0 }
+// amendments.md "Pipelines": a let-bound chain over `&r`, looped, then `r` resumed
+fn main() uses Console =
+  var r = Each { xs: [1, 2, 3, 4, 5, 6, 7], i: 0 }
+  let k = 10
+  let big = &r.map(fn(x) => x * k).select(fn(y) => y > 15).take(2)
+  for e in big
+    print(e)
+  for x in &r
+    print(x)

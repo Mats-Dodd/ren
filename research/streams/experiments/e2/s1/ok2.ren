@@ -1,0 +1,28 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+type Nums = { xs: Array<Int> }
+  fn cursor(self) -> Each = Each { xs: self.xs, i: 0 }
+// a temporary head, fused in a for, a sink, with_index, take_while,
+// and a pipeline passed to a block parameter
+fn total(rows: fn() -> Option<Int>) -> Int =
+  var t = 0
+  for x in try rows
+    t += x
+  t
+
+fn main() uses Console =
+  let ns = Nums { xs: [3, 1, 4, 1, 5, 9, 2, 6] }
+  for (i, x) in ns.cursor().select(fn(x) => x > 2).with_index()
+    print((i, x))
+  print(ns.cursor().take_while(fn(x) => x < 9).to_array())
+  print(ns.cursor().select(fn(x) => x % 2 == 0).count())
+  print(total(ns.cursor().map(fn(x) => x * 100).take(3)))
+  var r = ns.cursor()
+  let firsts = &r.take(2)
+  print(total(firsts))
+  print(&r.next())

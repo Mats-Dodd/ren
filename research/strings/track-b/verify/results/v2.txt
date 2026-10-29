@@ -1,0 +1,20 @@
+# v2  runs=11 load start 2.17 end 2.38
+keep/C-A-share               total 208.48 (194.56-216.22) ms | proc 637 Mcyc 1031 Minstr rss 522.3 MiB
+keep/C-A-n16                 total 209.89 (203.33-217.38) ms | proc 643 Mcyc 1035 Minstr rss 522.3 MiB
+keep/C-A-n64                 total 206.90 (195.82-219.06) ms | proc 634 Mcyc 1035 Minstr rss 522.5 MiB
+keep/C-A-store               total 199.99 (194.97-227.07) ms | proc 533 Mcyc 874 Minstr rss 18.5 MiB
+keep/C-B-share               total 207.25 (191.57-212.44) ms | proc 635 Mcyc 1035 Minstr rss 522.0 MiB
+keep/C-B-n16                 total 208.57 (204.38-214.53) ms | proc 636 Mcyc 1019 Minstr rss 522.1 MiB
+keep/C-B-n64                 total 205.61 (188.65-213.57) ms | proc 635 Mcyc 1022 Minstr rss 522.4 MiB
+keep/C-B-store               total 198.78 (191.53-235.16) ms | proc 529 Mcyc 876 Minstr rss 18.4 MiB
+keep/C-SSO-share             total 205.36 (194.03-211.24) ms | proc 631 Mcyc 1018 Minstr rss 522.0 MiB
+keep/C-SSO-n16               total 208.26 (206.40-216.79) ms | proc 640 Mcyc 1019 Minstr rss 522.0 MiB
+keep/C-SSO-n64               total 207.94 (201.96-211.17) ms | proc 639 Mcyc 1013 Minstr rss 522.2 MiB
+keep/C-SSO-store             total 202.58 (196.54-227.93) ms | proc 539 Mcyc 876 Minstr rss 18.3 MiB
+keep/rust-own                total 193.40 (183.60-207.24) ms | proc 514 Mcyc 1332 Minstr rss 10.8 MiB
+keep/go-share                total 234.33 (207.74-242.53) ms | proc 646 Mcyc 981 Minstr rss 663.4 MiB
+keep/go-clone                total 153.61 (150.65-162.35) ms | proc 497 Mcyc 885 Minstr rss 38.6 MiB
+tok/C-B-share                scan 16.26 (15.07-16.83) ms | use 1.60 (1.55-2.79) ms | drop 2.05 (2.02-2.47) ms | total 19.94 (18.69-21.62) ms | proc 65 Mcyc 172 Minstr rss 42.5 MiB
+tok/C-B-store                scan 26.81 (24.27-27.27) ms | use 4.57 (3.12-5.51) ms | drop 1.85 (1.65-2.08) ms | total 32.90 (29.04-34.25) ms | proc 100 Mcyc 283 Minstr rss 63.8 MiB
+tok/C-A-store                scan 29.04 (26.36-29.75) ms | use 2.90 (2.13-4.52) ms | drop 2.14 (2.03-2.38) ms | total 33.85 (31.50-35.86) ms | proc 102 Mcyc 325 Minstr rss 70.0 MiB
+tok/C-SSO-share              scan 17.72 (17.41-18.46) ms | use 2.36 (2.10-2.74) ms | drop 1.29 (1.22-1.37) ms | total 21.40 (20.80-22.35) ms | proc 69 Mcyc 189 Minstr rss 42.4 MiB

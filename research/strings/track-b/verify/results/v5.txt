@@ -1,0 +1,19 @@
+# v5  runs=11 load start 2.24 end 2.60
+ascii-64/C-ren               total 115.08 (114.23-116.76) ms | GB/s 2.33 (2.30-2.35) | proc 388 Mcyc 2097 Minstr rss 5.3 MiB
+ascii-64/C-neon              total 14.52 (14.44-14.80) ms | GB/s 18.48 (18.14-18.59) | proc 126 Mcyc 713 Minstr rss 5.4 MiB
+ascii-64/rust-simdutf8       total 14.47 (12.95-14.66) ms | GB/s 18.55 (18.32-20.73) | proc 48 Mcyc 273 Minstr rss 5.4 MiB
+cjk-64/C-ren                 total 119.99 (114.02-123.72) ms | GB/s 2.24 (2.17-2.35) | proc 361 Mcyc 1621 Minstr rss 5.3 MiB
+cjk-64/C-neon                total 32.65 (32.52-32.90) ms | GB/s 8.22 (8.16-8.25) | proc 134 Mcyc 795 Minstr rss 5.3 MiB
+cjk-64/rust-simdutf8         total 44.79 (44.54-45.62) ms | GB/s 5.99 (5.88-6.03) | proc 127 Mcyc 621 Minstr rss 5.4 MiB
+mixed-64/C-ren               total 190.12 (189.18-192.67) ms | GB/s 1.41 (1.39-1.42) | proc 611 Mcyc 2271 Minstr rss 5.3 MiB
+mixed-64/C-neon              total 52.72 (52.03-54.47) ms | GB/s 5.09 (4.93-5.16) | proc 254 Mcyc 1020 Minstr rss 5.3 MiB
+mixed-64/rust-simdutf8       total 46.43 (45.52-47.12) ms | GB/s 5.78 (5.70-5.90) | proc 132 Mcyc 490 Minstr rss 5.4 MiB
+ascii-1048576/C-ren          total 103.13 (102.75-103.79) ms | GB/s 2.60 (2.59-2.61) | proc 297 Mcyc 1735 Minstr rss 2.3 MiB
+ascii-1048576/C-neon         total 3.67 (3.66-4.37) ms | GB/s 73.14 (61.44-73.38) | proc 37 Mcyc 196 Minstr rss 2.3 MiB
+ascii-1048576/rust-simdutf8  total 3.70 (3.68-3.77) ms | GB/s 72.64 (71.12-73.04) | proc 19 Mcyc 74 Minstr rss 2.4 MiB
+cjk-1048576/C-ren            total 246.43 (244.97-258.78) ms | GB/s 1.09 (1.04-1.10) | proc 662 Mcyc 3668 Minstr rss 2.3 MiB
+cjk-1048576/C-neon           total 29.79 (29.70-30.27) ms | GB/s 9.01 (8.87-9.04) | proc 96 Mcyc 424 Minstr rss 2.3 MiB
+cjk-1048576/rust-simdutf8    total 29.83 (29.73-30.07) ms | GB/s 9.00 (8.93-9.03) | proc 87 Mcyc 376 Minstr rss 2.4 MiB
+mixed-1048576/C-ren          total 157.67 (156.86-162.35) ms | GB/s 1.70 (1.65-1.71) | proc 446 Mcyc 1841 Minstr rss 2.3 MiB
+mixed-1048576/C-neon         total 19.88 (19.81-20.25) ms | GB/s 13.50 (13.26-13.55) | proc 87 Mcyc 404 Minstr rss 2.3 MiB
+mixed-1048576/rust-simdutf8  total 20.02 (19.91-20.86) ms | GB/s 13.41 (12.87-13.48) | proc 62 Mcyc 272 Minstr rss 2.4 MiB

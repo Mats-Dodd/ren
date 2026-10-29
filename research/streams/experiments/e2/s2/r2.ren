@@ -1,0 +1,9 @@
+// a gen fn that says no `uses` but reaches one anyway: is its call still a
+// value cursor? (the spike classifies by what's written)
+gen fn sneaky(n: Int) -> Int =
+  print(n)
+  yield n
+
+fn main() uses Console =
+  var c = sneaky(1)
+  print(&c.next())

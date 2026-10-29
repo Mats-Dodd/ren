@@ -1,0 +1,165 @@
+File "examples/journal.t", line 1, characters 0-0:
+diff --git a/_build/default/examples/journal.t b/_build/default/examples/journal.t.corrected
+index 8bddde2..0be7716 100644
+--- a/_build/default/examples/journal.t
++++ b/_build/default/examples/journal.t.corrected
+@@ -363,26 +363,24 @@ tenth of a second apart, so the order they end in is the same each run;
+   5 main/main:1 Clock.sleep(100) …
+   6 main/main:2 Console.error("test 1 = 1")
+   7 main/main:2 Clock.sleep(200) …
+-  8 poll main/main:1
++  8 poll main/main:1 main/main:2
+   9 main/main:1 →
+   10 main/main:1 Proc.run("sh", ["-c", "exit 0"]) …
+-  11 poll main/main:1
+-  12 main/main:1 → Ok(0)
+-  13 main/main:1 Console.write("ran exit 0")
+-  14 poll main/main:2
+-  15 main/main:2 →
+-  16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"]) …
+-  17 poll main/main:2
+-  18 main/main:2 → Ok(0)
+-  19 main/main:2 Console.write("ran test 1 = 1")
+-  20 poll main/main:0
+-  21 main/main:0 →
+-  22 main/main:0 Proc.run("sh", ["-c", "true"]) …
+-  23 poll main/main:0
+-  24 main/main:0 → Ok(0)
+-  25 main/main:0 Console.write("ran true")
+-  26 main Console.write("all ran")
+-  27 main exit 0
++  11 main/main:2 →
++  12 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"]) …
++  13 poll main/main:2 main/main:1
++  14 main/main:2 → Ok(0)
++  15 main/main:2 Console.write("ran test 1 = 1")
++  16 main/main:1 → Ok(0)
++  17 main/main:1 Console.write("ran exit 0")
++  18 poll main/main:0
++  19 main/main:0 →
++  20 main/main:0 Proc.run("sh", ["-c", "true"]) …
++  21 poll main/main:0
++  22 main/main:0 → Ok(0)
++  23 main/main:0 Console.write("ran true")
++  24 main Console.write("all ran")
++  25 main exit 0
+ 
+ `ren replay` follows the polls, so its tasks run in the recorded order,
+ and it prints what the run printed, byte for byte, but its own last
+@@ -407,11 +405,11 @@ recording did:
+   8 poll main/main:1
+   9 main/main:1 →
+   10 main/main:1 Proc.run("sh", ["-c", "false"]) …
+-  11 poll main/main:1
++  11 poll main/main:1 main/main:2
+   12 main/main:1 → Ok(1)
+-  13 main/main:0 cancelled
++  13 main/main:2 →
+   14 main/main:2 cancelled
+-  15 main error Failed("false")
++  15 main/main:0 cancelled
+   $ ren replay failed.journal > replay.out 2>&1
+   [1]
+   $ diff run.out replay.out
+@@ -432,10 +430,10 @@ first call's end that isn't the recording's next:
+   exit 0
+   test 1 = 1
+   error: the replay went differently at call 8 of 14
+-    ┌─ recipes.ren:5:3
+-  5 │   Clock.sleep(Duration.ms(r.takes))
+-    │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-    = the recording has: main/main:1 →, the end of its call
+-    = this program made: main/main:2 →, the end of its call
+-    help: the code changed since this was recorded; record it again
++     ┌─ level.journal:10:1
++  10 │ 9 main/main:1 →
++     │ ^
++     = the recording has: main/main:1 →, the end of its call
++     = this program has: main/main:2 waiting for nothing a poll ends
++     help: the code changed since this was recorded; record it again
+   [1]
+File "test/test_ops.ml", line 1, characters 0-0:
+diff --git a/_build/default/test/test_ops.ml b/_build/default/test/test_ops.ml.corrected
+index d371dcb..2d24d0c 100644
+--- a/_build/default/test/test_ops.ml
++++ b/_build/default/test/test_ops.ml.corrected
+@@ -882,13 +882,49 @@ fn main() =
+ |};
+   [%expect
+     {|
+-    error: `b` is passed with `&` and read by the same call
++    error: `Bag` has no method named `next`
++      ┌─ test.ren:6:3
++    6 │   &b.take(Bag { items: [b.items[0] + 1] })
++      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++      help: its methods: `take`
++
++    error: this is a `fn() -> Option<_>`, and it's thrown away
++      ┌─ test.ren:6:3
++    6 │   &b.take(Bag { items: [b.items[0] + 1] })
++      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++      help: use it, or write `let _ = ...` if you mean to drop it
++
++    error: a block can only be called or passed where it's written
++      ┌─ test.ren:6:3
++    6 │   &b.take(Bag { items: [b.items[0] + 1] })
++      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a block
++      = a block lives only as long as the call it's passed to
++      help: call it here, or pass it straight to a function
++
++    error: `<` compares two values of the same type, but this is a `Bag` and the left side is an `Int`
++      ┌─ test.ren:6:11
++    6 │   &b.take(Bag { items: [b.items[0] + 1] })
++      │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++      │    --------------------------------------- this is an `Int`
++
++    error: `Bag` has no method named `next`
++      ┌─ test.ren:7:3
++    7 │   &b.take(b)
++      │   ^^^^^^^^^^
++      help: its methods: `take`
++
++    error: a block can't be returned
++      ┌─ test.ren:7:3
++    7 │   &b.take(b)
++      │   ^^^^^^^^^^ a block
++      = a block lives only as long as the call it's passed to
++      help: take the block's arguments as parameters too, and return what it gives
++
++    error: `<` compares two values of the same type, but this is a `Bag` and the left side is an `Int`
+       ┌─ test.ren:7:11
+     7 │   &b.take(b)
+-      │           ^ read for the whole call
+-      │    - passed with `&` here
+-      = an argument passed with `&` has to be the only way the call can reach that value
+-      help: read it into a `let` before the call, `let before = b`, and pass that
++      │           ^
++      │    --------- this is an `Int`
+     |}]
+ 
+ let%expect_test "another module's private method" =
+File "test/test_journal.ml", line 1, characters 0-0:
+diff --git a/_build/default/test/test_journal.ml b/_build/default/test/test_journal.ml.corrected
+index f59d1fd..1c63915 100644
+--- a/_build/default/test/test_journal.ml
++++ b/_build/default/test/test_journal.ml.corrected
+@@ -829,14 +829,13 @@ let%expect_test "each entry names its task, and a call that waits is two lines"
+     2 main/main:0 Clock.sleep(40) …
+     3 main/main:1 Console.error("fast")
+     4 main/main:1 Clock.sleep(5) …
+-    5 poll main/main:1
++    5 poll main/main:1 main/main:0
+     6 main/main:1 →
+     7 main/main:1 Console.write("fast")
+-    8 poll main/main:0
+-    9 main/main:0 →
+-    10 main/main:0 Console.write("slow")
+-    11 main Console.write("done")
+-    12 main exit 0
++    8 main/main:0 →
++    9 main/main:0 Console.write("slow")
++    10 main Console.write("done")
++    11 main exit 0
+     slow
+     fast
+     fast

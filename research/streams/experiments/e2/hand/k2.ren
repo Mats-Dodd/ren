@@ -1,0 +1,12 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+type Holder = { f: fn() -> Option<Int> }
+fn main() uses Console =
+  var r = Each { xs: [1, 2, 3], i: 0 }
+  let p = fn() => &r.next()
+  let h = Holder { f: p }
+  print(0)

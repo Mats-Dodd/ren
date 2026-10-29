@@ -1,0 +1,11 @@
+# v6  runs=11 load start 3.27 end 3.03
+group/C-A                    total 211.08 (209.04-214.61) ms | proc 661 Mcyc 1648 Minstr rss 221.5 MiB
+group/C-B                    total 208.58 (207.34-211.61) ms | proc 653 Mcyc 1698 Minstr rss 221.4 MiB
+group/C-B24                  total 208.54 (205.21-210.21) ms | proc 655 Mcyc 1613 Minstr rss 221.4 MiB
+group/C-SSO                  total 217.48 (214.93-219.53) ms | proc 680 Mcyc 1790 Minstr rss 221.4 MiB
+group/C-G                    total 219.98 (218.16-227.85) ms | proc 684 Mcyc 1751 Minstr rss 221.4 MiB
+logs/C-A                     parse 121.06 (117.18-124.05) ms | query 13.78 (11.84-19.53) ms | drop 15.21 (12.08-15.84) ms | total 150.99 (144.19-152.76) ms | proc 478 Mcyc 1976 Minstr rss 428.7 MiB
+logs/C-B                     parse 116.41 (114.91-118.57) ms | query 12.57 (8.24-15.14) ms | drop 23.52 (20.47-24.50) ms | total 151.94 (145.06-155.96) ms | proc 486 Mcyc 2090 Minstr rss 342.9 MiB
+logs/C-B24                   parse 95.61 (92.93-102.45) ms | query 16.83 (16.02-20.08) ms | drop 27.29 (23.95-30.32) ms | total 141.37 (137.30-147.54) ms | proc 459 Mcyc 1497 Minstr rss 412.6 MiB
+logs/C-SSO                   parse 125.63 (125.12-128.31) ms | query 14.44 (9.52-15.19) ms | drop 16.02 (12.97-20.43) ms | total 156.52 (148.12-163.93) ms | proc 499 Mcyc 2362 Minstr rss 342.8 MiB
+logs/C-G                     parse 137.50 (136.00-138.81) ms | query 16.38 (8.37-18.82) ms | drop 18.91 (9.98-21.28) ms | total 171.73 (156.50-178.58) ms | proc 537 Mcyc 2213 Minstr rss 377.1 MiB

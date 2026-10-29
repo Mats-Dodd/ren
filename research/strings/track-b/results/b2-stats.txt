@@ -1,0 +1,3 @@
+A stats allocs=10103 copies=0 copied_bytes=0 peak_bytes=537175952 live_end=537175952
+B stats allocs=64 copies=0 copied_bytes=0 peak_bytes=536853616 live_end=536853616
+SSO stats allocs=64 copies=0 copied_bytes=0 peak_bytes=536853616 live_end=536853616

@@ -1,0 +1,20 @@
+// `break` out of a `for` over a temporary pipeline: its `finally` runs,
+// and sees why it ended
+gen fn guarded(n: Int) -> Int uses Console =
+  finally(r) =>
+    match r
+      Ok(_) => print("finally: returned")
+      Err(_) => print("finally: stopped")
+    ()
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console =
+  for x in guarded(2)
+    print(x)
+  for x in guarded(10)
+    print(x)
+    if x == 1 then break
+  print("after")

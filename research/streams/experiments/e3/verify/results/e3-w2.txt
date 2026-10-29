@@ -1,0 +1,17 @@
+# e3 w2/ runs=11
+# start: 12:08  up 39 days, 22:53, 2 users, load averages: 5.64 4.07 3.26
+# end:   12:09  up 39 days, 22:55, 2 users, load averages: 7.54 5.22 3.80
+w2/C-hand                  123.4 ms (90.7-139.1) | proc 845 Mcyc 3951 Minstr rss 393.1 MiB
+w2/C-hand-stack            144.0 ms (103.4-166.5) | proc 897 Mcyc 3599 Minstr rss 393.1 MiB
+w2/C-push                  124.1 ms (86.4-162.9) | proc 827 Mcyc 3981 Minstr rss 393.1 MiB
+w2/C-pull-box             1601.7 ms (1219.6-1767.5) | proc 5249 Mcyc 27948 Minstr rss 393.2 MiB
+w2/C-pull-reuse           1200.5 ms (902.3-1238.6) | proc 3963 Mcyc 18329 Minstr rss 393.1 MiB
+w2/C-pull-stack            182.0 ms (134.3-201.5) | proc 999 Mcyc 3978 Minstr rss 393.1 MiB
+w2/C-pull-stack2           133.6 ms (92.7-145.2) | proc 839 Mcyc 3650 Minstr rss 393.1 MiB
+w2/rust-push               105.9 ms (75.4-124.9) | proc 952 Mcyc 3944 Minstr rss 312.3 MiB
+w2/rust-stack              120.0 ms (83.0-124.4) | proc 985 Mcyc 3757 Minstr rss 312.4 MiB
+w2/rust-boxed             1912.0 ms (1437.0-2066.6) | proc 6240 Mcyc 34386 Minstr rss 312.5 MiB
+w2/rust-oc-push            109.9 ms (79.2-123.8) | proc 986 Mcyc 3953 Minstr rss 312.3 MiB
+w2/rust-oc-stack           118.3 ms (86.4-144.8) | proc 1027 Mcyc 3756 Minstr rss 312.4 MiB
+w2/go-push                 202.7 ms (150.0-218.2) | proc 2620 Mcyc 12752 Minstr rss 421.5 MiB
+w2/go-pull                 505.2 ms (381.4-539.2) | proc 3451 Mcyc 14267 Minstr rss 421.6 MiB

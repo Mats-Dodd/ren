@@ -1,0 +1,31 @@
+// an effectful, failing gen fn: a pipeline; `try` on the `for`; a user
+// stage over it; break part way. `producing` lines are printed as -1000-i
+gen fn lines(n: Int) -> Int ! Bad(at: Int) uses Console =
+  var i = 0
+  while i < n
+    print(0 - 1000 - i)
+    if i == 7 then fail Bad(i)
+    yield i
+    i += 1
+
+gen fn pairs<T>(src: fn() -> Option<T>) -> (T, T) =
+  var prev: Option<T> = None
+  for x in try src
+    match prev
+      Some(p) => yield (p, x)
+      None => ()
+    prev = Some(x)
+
+fn big() ! Bad(at: Int) uses Console =
+  for x in try lines(10).select(fn(x) => x > 5)
+    print(x)
+
+fn main() uses Console =
+  for x in try lines(3)
+    print(x)
+  for (a, b) in try pairs(lines(3).map(fn(x) => x * 10))
+    print((a, b))
+  for x in try lines(100)
+    if x == 1 then break
+    print(x)
+  print(attempt big())

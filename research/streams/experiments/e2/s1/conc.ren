@@ -1,0 +1,13 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+type Nums = { xs: Array<Int> }
+  fn cursor(self) -> Each = Each { xs: self.xs, i: 0 }
+fn main() uses Console, Async =
+  var r = Each { xs: [1, 2, 3, 4], i: 0 }
+  let p = &r.take(2)
+  Async.each([1, 2], fn(x) => print(p()))

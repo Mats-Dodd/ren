@@ -1,0 +1,15 @@
+[package]
+name = "strb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustc-hash = "2.1.2"
+ahash = "0.8.12"
+foldhash = "0.2.0"
+simdutf8 = "0.1.5"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true

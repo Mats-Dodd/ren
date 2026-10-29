@@ -1,0 +1,43 @@
+{
+ "uptime_start": "12:09  up 39 days, 22:55, 2 users, load averages: 7.54 5.22 3.80",
+ "uptime_end": "12:10  up 39 days, 22:55, 2 users, load averages: 7.54 5.29 3.84",
+ "runs": 11,
+ "rows": {
+  "w4/C-hand": {
+   "ms": 174.985,
+   "min": 172.124,
+   "max": 184.999,
+   "proc_mcyc": 802.953767,
+   "proc_minstr": 3273.601901,
+   "rss_mib": 129.3125,
+   "check": "15762056858381000"
+  },
+  "w4/C-push1": {
+   "ms": 195.782,
+   "min": 186.3,
+   "max": 204.024,
+   "proc_mcyc": 883.058118,
+   "proc_minstr": 2980.032703,
+   "rss_mib": 129.3125,
+   "check": "15762056858381000"
+  },
+  "w4/C-pull": {
+   "ms": 218.363,
+   "min": 214.026,
+   "max": 222.615,
+   "proc_mcyc": 974.316068,
+   "proc_minstr": 2627.649424,
+   "rss_mib": 129.3125,
+   "check": "15762056858381000"
+  },
+  "w4/C-pull-ni": {
+   "ms": 328.029,
+   "min": 326.324,
+   "max": 331.053,
+   "proc_mcyc": 1410.559805,
+   "proc_minstr": 6109.105611,
+   "rss_mib": 129.3125,
+   "check": "15762056858381000"
+  }
+ }
+}

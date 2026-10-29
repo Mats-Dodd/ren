@@ -1,0 +1,34 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+// by hand: `let p = &r.map(fn(x) => x * 10).select(fn(x) => x > 15).take(2)`
+fn main() uses Console =
+  var r = Each { xs: [1, 2, 3, 4, 5], i: 0 }
+  let n0 = 2
+  var taken = 0
+  let p = fn() =>
+    if taken < n0 then
+      var out = None
+      var go = true
+      while go
+        match &r.next()
+          None => go = false
+          Some(x) =>
+            let y = x * 10
+            if y > 15 then
+              out = Some(y)
+              go = false
+      match out
+        None => None
+        Some(v) =>
+          taken += 1
+          Some(v)
+    else None
+  print(p())
+  print(p())
+  print(p())
+  print(&r.next())

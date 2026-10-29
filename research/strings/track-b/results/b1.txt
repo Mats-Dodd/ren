@@ -1,0 +1,40 @@
+# b1  runs=11 load start 1.79 end 1.97
+tok/C-A                      scan 22.26 (21.22-23.47) ms | use 2.41 (2.13-2.50) ms | drop 2.08 (1.98-2.20) ms | total 26.70 (25.72-27.93) ms | proc 84 Mcyc 244 Minstr rss 59.5 MiB
+tok/C-B                      scan 16.33 (16.10-16.73) ms | use 1.74 (1.56-1.88) ms | drop 2.04 (1.99-2.20) ms | total 20.23 (19.66-20.50) ms | proc 67 Mcyc 171 Minstr rss 42.5 MiB
+tok/C-SSO                    scan 21.17 (20.61-21.61) ms | use 2.35 (2.16-2.44) ms | drop 1.25 (1.22-1.33) ms | total 24.73 (24.27-25.19) ms | proc 78 Mcyc 220 Minstr rss 42.4 MiB
+tok/C-G                      scan 21.22 (20.47-21.41) ms | use 1.66 (1.44-1.77) ms | drop 2.00 (1.97-2.06) ms | total 24.69 (24.27-25.04) ms | proc 78 Mcyc 220 Minstr rss 44.4 MiB
+tok/rust-borrow              scan 19.97 (19.46-20.49) ms | use 1.99 (1.82-2.71) ms | drop 0.00 (0.00-0.00) ms | total 21.95 (21.31-22.81) ms | proc 72 Mcyc 209 Minstr rss 36.9 MiB
+tok/rust-own                 scan 32.35 (31.48-33.03) ms | use 3.96 (3.08-5.16) ms | drop 10.65 (10.16-10.94) ms | total 46.32 (45.77-48.66) ms | proc 136 Mcyc 542 Minstr rss 63.5 MiB
+tok/rust-rc                  scan 36.20 (34.87-37.16) ms | use 4.50 (4.26-6.10) ms | drop 14.81 (13.99-20.11) ms | total 55.50 (53.95-59.48) ms | proc 160 Mcyc 624 Minstr rss 69.2 MiB
+tok/go-share                 scan 50.33 (46.93-57.76) ms | use 1.26 (1.24-1.64) ms | total 51.58 (48.21-59.23) ms | proc 246 Mcyc 1244 Minstr rss 88.4 MiB
+map/C-A                      build 155.56 (153.48-163.84) ms | lookup 136.77 (131.90-141.87) ms | drop 3.35 (3.28-3.91) ms | total 297.85 (288.67-309.62) ms | proc 840 Mcyc 1525 Minstr rss 185.3 MiB
+map/C-B                      build 145.51 (142.88-150.66) ms | lookup 126.05 (123.02-133.15) ms | drop 3.44 (3.29-4.34) ms | total 276.10 (269.32-284.08) ms | proc 805 Mcyc 1522 Minstr rss 181.1 MiB
+map/C-SSO                    build 152.75 (149.52-156.27) ms | lookup 132.10 (128.89-138.03) ms | drop 4.22 (3.21-4.40) ms | total 288.04 (283.64-297.51) ms | proc 833 Mcyc 1678 Minstr rss 181.1 MiB
+map/C-G                      build 166.87 (162.49-186.98) ms | lookup 146.90 (140.05-153.79) ms | drop 3.60 (2.77-4.73) ms | total 319.66 (306.76-338.77) ms | proc 912 Mcyc 1659 Minstr rss 185.1 MiB
+map/rust-borrow              build 207.80 (204.42-215.54) ms | lookup 185.29 (177.86-194.04) ms | drop 0.32 (0.22-0.43) ms | total 393.16 (384.23-409.80) ms | proc 1088 Mcyc 3159 Minstr rss 100.2 MiB
+map/rust-own                 build 193.48 (191.88-198.30) ms | lookup 170.74 (167.08-186.74) ms | drop 3.24 (3.13-3.39) ms | total 367.44 (362.15-382.40) ms | proc 1028 Mcyc 3194 Minstr rss 108.7 MiB
+map/rust-rc                  build 196.12 (193.02-218.09) ms | lookup 176.59 (171.00-186.28) ms | drop 4.02 (3.78-4.23) ms | total 373.82 (369.21-408.39) ms | proc 1041 Mcyc 3235 Minstr rss 106.7 MiB
+map/go-share                 build 240.82 (225.03-254.82) ms | lookup 157.95 (151.18-181.87) ms | total 398.38 (376.21-436.69) ms | proc 1161 Mcyc 2902 Minstr rss 178.0 MiB
+sort/C-A                     slice 23.56 (22.12-24.43) ms | sort 308.86 (293.55-318.62) ms | drop 8.43 (7.15-10.75) ms | total 341.75 (322.81-350.98) ms | proc 918 Mcyc 1148 Minstr rss 87.2 MiB
+sort/C-B                     slice 21.02 (20.88-21.45) ms | sort 238.65 (237.86-242.64) ms | drop 1.67 (1.66-2.18) ms | total 261.33 (260.59-265.76) ms | proc 711 Mcyc 1143 Minstr rss 52.2 MiB
+sort/C-SSO                   slice 27.27 (26.51-27.54) ms | sort 262.65 (261.42-266.13) ms | drop 1.75 (1.74-1.78) ms | total 291.32 (290.56-294.98) ms | proc 790 Mcyc 1300 Minstr rss 52.2 MiB
+sort/C-G                     slice 29.32 (27.47-30.09) ms | sort 252.46 (247.84-266.63) ms | drop 5.21 (3.82-7.02) ms | total 286.31 (282.49-302.77) ms | proc 774 Mcyc 1170 Minstr rss 66.9 MiB
+sort/rust-borrow             slice 24.97 (23.43-25.61) ms | sort 121.31 (117.25-128.23) ms | drop 0.01 (0.00-0.01) ms | total 146.39 (140.68-153.85) ms | proc 404 Mcyc 964 Minstr rss 46.3 MiB
+sort/rust-own                slice 52.01 (51.40-52.92) ms | sort 132.36 (131.87-135.42) ms | drop 22.68 (21.88-27.87) ms | total 207.66 (206.48-215.19) ms | proc 566 Mcyc 1565 Minstr rss 79.7 MiB
+sort/rust-rc                 slice 54.56 (52.58-56.55) ms | sort 131.47 (128.45-135.12) ms | drop 35.52 (32.27-51.02) ms | total 220.96 (213.61-236.85) ms | proc 602 Mcyc 1469 Minstr rss 89.3 MiB
+sort/go-share                slice 45.18 (35.78-49.46) ms | sort 211.79 (210.91-217.08) ms | total 258.36 (247.57-261.36) ms | proc 766 Mcyc 1887 Minstr rss 102.8 MiB
+group/C-A                    total 211.49 (206.93-223.97) ms | proc 654 Mcyc 1651 Minstr rss 221.5 MiB
+group/C-B                    total 207.67 (205.58-216.52) ms | proc 649 Mcyc 1697 Minstr rss 221.4 MiB
+group/C-SSO                  total 216.70 (211.77-218.64) ms | proc 667 Mcyc 1785 Minstr rss 221.4 MiB
+group/C-G                    total 219.54 (216.17-231.00) ms | proc 679 Mcyc 1746 Minstr rss 221.4 MiB
+group/rust-borrow            total 269.53 (269.11-273.19) ms | proc 803 Mcyc 3009 Minstr rss 111.8 MiB
+group/rust-own               total 267.81 (264.74-270.60) ms | proc 796 Mcyc 2990 Minstr rss 111.9 MiB
+group/go-share               total 274.45 (271.26-280.06) ms | proc 862 Mcyc 2917 Minstr rss 225.7 MiB
+logs/C-A                     parse 119.39 (118.01-123.40) ms | query 11.65 (8.91-20.79) ms | drop 13.78 (11.57-16.01) ms | total 144.29 (140.16-158.30) ms | proc 461 Mcyc 1964 Minstr rss 428.7 MiB
+logs/C-B                     parse 115.49 (113.50-119.47) ms | query 11.25 (4.53-18.82) ms | drop 22.28 (18.61-25.61) ms | total 148.89 (137.16-163.90) ms | proc 478 Mcyc 2081 Minstr rss 342.9 MiB
+logs/C-SSO                   parse 124.51 (122.74-130.57) ms | query 13.33 (9.24-16.96) ms | drop 16.90 (11.72-17.83) ms | total 154.74 (145.16-161.59) ms | proc 494 Mcyc 2073 Minstr rss 342.8 MiB
+logs/C-G                     parse 136.41 (133.92-140.59) ms | query 14.58 (6.48-28.84) ms | drop 18.78 (12.12-20.40) ms | total 169.85 (154.65-184.66) ms | proc 531 Mcyc 2204 Minstr rss 377.1 MiB
+logs/rust-borrow             parse 94.42 (91.58-97.30) ms | query 14.74 (9.35-17.01) ms | drop 1.26 (0.00-1.52) ms | total 109.92 (103.30-114.88) ms | proc 364 Mcyc 1197 Minstr rss 253.7 MiB
+logs/rust-own                parse 202.15 (199.34-204.72) ms | query 23.21 (16.27-29.18) ms | drop 76.31 (68.25-98.62) ms | total 303.49 (286.00-318.14) ms | proc 871 Mcyc 3485 Minstr rss 436.2 MiB
+logs/rust-rc                 parse 213.71 (209.22-214.45) ms | query 30.21 (20.52-35.95) ms | drop 96.13 (89.22-113.70) ms | total 341.71 (324.92-354.87) ms | proc 970 Mcyc 3761 Minstr rss 457.8 MiB
+logs/go-share                parse 297.51 (215.47-329.96) ms | query 10.40 (8.25-11.31) ms | total 305.90 (225.86-340.65) ms | proc 1349 Mcyc 5557 Minstr rss 573.0 MiB

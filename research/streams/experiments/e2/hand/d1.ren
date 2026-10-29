@@ -1,0 +1,14 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+fn drive(c: fn() -> Option<Int>, k: fn(fn() -> Option<Int>) -> Int) -> Int = try k(c)
+fn main() uses Console =
+  var r = Each { xs: [1, 2, 3], i: 0 }
+  var n = 0
+  let p = fn() =>
+    n += 1
+    &r.next()
+  print(drive(p, fn(q) => n))

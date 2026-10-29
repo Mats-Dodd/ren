@@ -1,0 +1,9 @@
+gen fn upto(n: Int) -> Int =
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console =
+  var c = upto(5)
+  print(&c.next())

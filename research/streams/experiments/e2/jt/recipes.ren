@@ -1,0 +1,18 @@
+type Recipe = { line: Str, takes: Int }
+
+fn run(r: Recipe) ! ProcError | Failed(line: Str) uses Proc, Console, Clock =
+  Console.error(r.line)
+  Clock.sleep(Duration.ms(r.takes))
+  let code = try Proc.run("sh", ["-c", r.line])
+  if code != 0 then fail Failed(r.line)
+  print("ran ".concat(r.line))
+
+fn main() ! ProcError | Failed(line: Str) uses Proc, Console, Clock, Async, Os =
+  let slow = Os.args().len() > 0
+  let level = [
+    Recipe { line: "true", takes: 300 },
+    Recipe { line: if slow then "false" else "exit 0", takes: 100 },
+    Recipe { line: "test 1 = 1", takes: 200 }
+  ]
+  try Async.each(level, max: 8) fn(r) => try run(r)
+  print("all ran")

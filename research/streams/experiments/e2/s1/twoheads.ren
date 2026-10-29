@@ -1,0 +1,18 @@
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+type Nums = { xs: Array<Int> }
+  fn cursor(self) -> Each = Each { xs: self.xs, i: 0 }
+fn both(a: fn() -> Option<Int>, b: fn() -> Option<Int>) -> Int =
+  var t = 0
+  for x in try a
+    for y in try b
+      t += x * y
+  t
+fn main() uses Console =
+  var r = Each { xs: [1, 2, 3, 4], i: 0 }
+  print(both(&r.take(2), &r.take(2)))

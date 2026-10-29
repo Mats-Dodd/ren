@@ -1,0 +1,9 @@
+# v4  runs=11 load start 2.90 end 2.48
+map/C-A-wy                   build 167.77 (156.83-182.79) ms | lookup 141.34 (134.72-180.46) ms | drop 3.30 (3.20-4.38) ms | total 316.87 (295.94-366.98) ms | proc 902 Mcyc 1543 Minstr rss 185.3 MiB
+map/C-B-wy                   build 158.12 (145.29-168.45) ms | lookup 132.28 (123.64-161.05) ms | drop 3.92 (2.70-4.38) ms | total 298.95 (275.01-333.89) ms | proc 850 Mcyc 1532 Minstr rss 181.1 MiB
+map/rust-borrow-std          build 216.62 (207.94-246.59) ms | lookup 199.33 (184.36-231.60) ms | drop 0.34 (0.26-0.45) ms | total 414.84 (392.71-469.83) ms | proc 1152 Mcyc 3160 Minstr rss 100.2 MiB
+map/rust-borrow-fx           build 151.36 (146.71-170.31) ms | lookup 132.54 (126.23-161.76) ms | drop 0.33 (0.23-0.43) ms | total 282.35 (275.10-331.17) ms | proc 803 Mcyc 2083 Minstr rss 100.2 MiB
+map/rust-borrow-ahash        build 156.18 (148.59-170.99) ms | lookup 141.99 (131.26-167.74) ms | drop 0.31 (0.12-0.42) ms | total 298.67 (282.30-335.00) ms | proc 862 Mcyc 2076 Minstr rss 100.2 MiB
+map/rust-own-std             build 198.80 (192.67-220.32) ms | lookup 175.66 (172.35-194.01) ms | drop 3.31 (3.17-4.76) ms | total 379.94 (368.77-404.08) ms | proc 1060 Mcyc 3198 Minstr rss 108.7 MiB
+map/rust-own-fx              build 142.86 (140.80-163.16) ms | lookup 122.38 (119.15-143.11) ms | drop 3.44 (3.26-5.58) ms | total 268.14 (265.28-311.84) ms | proc 776 Mcyc 2135 Minstr rss 108.7 MiB
+map/rust-own-ahash           build 140.59 (138.09-169.56) ms | lookup 127.76 (123.16-145.10) ms | drop 3.26 (3.18-5.01) ms | total 270.61 (267.89-319.67) ms | proc 777 Mcyc 2116 Minstr rss 108.7 MiB

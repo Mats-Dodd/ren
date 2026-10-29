@@ -1,0 +1,14 @@
+// pre-existing? a `for` over a cursor held in a field, no generators
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+
+type Job = { name: Str, rest: Each }
+
+fn main() uses Console =
+  let job = Job { name: "j", rest: Each { xs: [1, 2], i: 0 } }
+  for x in job.rest
+    print(x)

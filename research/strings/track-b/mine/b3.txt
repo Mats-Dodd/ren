@@ -1,0 +1,26 @@
+# b3  runs=11 load start 2.41 end 3.39
+json/C-inplace               total 153.22 (148.77-167.62) ms | proc 720 Mcyc 3064 Minstr rss 320.8 MiB
+json/C-builder               total 162.58 (152.50-169.90) ms | proc 729 Mcyc 3106 Minstr rss 262.8 MiB
+json/C-iolist                total 441.20 (379.00-453.43) ms | proc 1461 Mcyc 6169 Minstr rss 706.0 MiB
+json/rust-string             total 124.20 (117.78-133.51) ms | proc 940 Mcyc 3947 Minstr rss 277.6 MiB
+json/go-builder              total 157.39 (146.27-174.18) ms | proc 2025 Mcyc 9466 Minstr rss 562.7 MiB
+logs/C-inplace               total 95.24 (89.98-100.04) ms | proc 590 Mcyc 2101 Minstr rss 516.0 MiB
+logs/C-builder               total 94.72 (90.00-102.79) ms | proc 591 Mcyc 1998 Minstr rss 444.0 MiB
+logs/C-iolist                total 312.37 (290.52-347.54) ms | proc 1159 Mcyc 4787 Minstr rss 755.3 MiB
+logs/rust-string             total 88.33 (84.44-91.39) ms | proc 879 Mcyc 3552 Minstr rss 368.8 MiB
+logs/go-builder              total 146.99 (137.77-163.78) ms | proc 1795 Mcyc 8422 Minstr rss 726.6 MiB
+http/C-inplace               total 54.96 (53.99-55.58) ms | proc 153 Mcyc 516 Minstr rss 3.3 MiB
+http/C-builder               total 46.66 (46.55-47.42) ms | proc 131 Mcyc 396 Minstr rss 3.4 MiB
+http/C-iolist                total 55.39 (54.89-55.88) ms | proc 154 Mcyc 551 Minstr rss 3.3 MiB
+http/C-concat                total 54.65 (53.87-55.29) ms | proc 152 Mcyc 519 Minstr rss 3.4 MiB
+http/rust-string             total 66.10 (64.83-67.31) ms | proc 183 Mcyc 741 Minstr rss 2.4 MiB
+http/rust-iovec              total 53.16 (52.84-53.54) ms | proc 149 Mcyc 520 Minstr rss 2.4 MiB
+http/go-builder              total 73.35 (72.94-73.89) ms | proc 240 Mcyc 747 Minstr rss 10.2 MiB
+json5k/C-concat              total 521.75 (512.54-532.05) ms | proc 1417 Mcyc 5081 Minstr rss 117.4 MiB
+json5k/C-inplace             total 0.76 (0.71-0.81) ms | proc 49 Mcyc 112 Minstr rss 115.5 MiB
+json5k/C-builder             total 0.83 (0.77-0.90) ms | proc 61 Mcyc 112 Minstr rss 115.6 MiB
+json5k/C-iolist              total 1.90 (1.80-2.12) ms | proc 70 Mcyc 126 Minstr rss 116.6 MiB
+logs5k/C-concat              total 545.19 (537.84-551.24) ms | proc 1523 Mcyc 5481 Minstr rss 183.8 MiB
+logs5k/C-inplace             total 0.44 (0.41-0.47) ms | proc 74 Mcyc 149 Minstr rss 181.4 MiB
+logs5k/C-builder             total 0.46 (0.43-0.48) ms | proc 99 Mcyc 148 Minstr rss 181.4 MiB
+logs5k/C-iolist              total 1.35 (1.29-1.38) ms | proc 102 Mcyc 162 Minstr rss 182.1 MiB

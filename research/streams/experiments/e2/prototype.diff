@@ -1,0 +1,1063 @@
+diff --git a/lib/core/intrinsic.ml b/lib/core/intrinsic.ml
+index 9f2960d..bcc25d5 100644
+--- a/lib/core/intrinsic.ml
++++ b/lib/core/intrinsic.ml
+@@ -160,6 +160,13 @@ type t =
+   | Float_sqrt
+   | Str_lower
+   | Hash
++  (* SPIKE (streams.ml): generators *)
++  | Gen_next
++  | Gen_yield
++  | Gen_frame
++  | Gen_resume
++  | Gen_cursor
++  | Gen_close
+ 
+ (* Its path in the prelude (path.ml): a function's, [show], or a built-in
+    type's member's, [Array.push]. *)
+@@ -293,6 +300,12 @@ let path x =
+   (* `x.hash()` on a value of any type with `hash`, which the checker finds
+      for a type with no `hash` of its own (compiler.md, "Bytes stage") *)
+   | Hash -> fn "hash_of"
++  | Gen_next -> member "Gen" "next"
++  | Gen_yield -> fn "$gen_yield"
++  | Gen_frame -> fn "$gen_frame"
++  | Gen_resume -> fn "$gen_resume"
++  | Gen_cursor -> fn "$gen_cursor"
++  | Gen_close -> fn "$gen_close"
+ 
+ let name x = Path.local (path x)
+ let member_name x = Path.short (path x)
+diff --git a/lib/core/intrinsic.mli b/lib/core/intrinsic.mli
+index aa927a7..f5e869b 100644
+--- a/lib/core/intrinsic.mli
++++ b/lib/core/intrinsic.mli
+@@ -139,6 +139,13 @@ type t =
+   | Float_sqrt
+   | Str_lower
+   | Hash
++  (* SPIKE (streams.ml): generators *)
++  | Gen_next
++  | Gen_yield
++  | Gen_frame
++  | Gen_resume
++  | Gen_cursor
++  | Gen_close
+       (** `x.hash()`, the derived hash a program can call: unseeded, the same
+           on every run *)
+ 
+diff --git a/lib/core/prelude.ml b/lib/core/prelude.ml
+index a8b0c5c..c0a736d 100644
+--- a/lib/core/prelude.ml
++++ b/lib/core/prelude.ml
+@@ -889,6 +889,12 @@ handler single_runtime() for Async =
+   yield() => async_yield()
+   tick() => async_tick()
+ 
++// SPIKE (streams.ml): a value cursor, the token a `yield` goes through,
++// and a pipeline's frame, a hidden local of its caller
++pub type Gen<T> = builtin
++pub type GenYield<T> = builtin
++pub type GenFrame<T> = builtin
++
+ // what `Async.scope` gives its body: it's passed and called, never kept
+ // (foundations.md, decision 2, rule D)
+ pub type Scope = builtin
+@@ -1131,6 +1137,39 @@ let scheme (x : Intrinsic.t) =
+   (* fn<T>(T) -> Str, which the interpreter runs itself, since it shows a
+      value through its type (eval.ml) *)
+   | Show -> fn [ read (Var 0) ] str
++  (* SPIKE (streams.ml): generators *)
++  | Gen_next ->
++      fn [ inout (Con (Path.prelude "Gen", [ Var 0 ])) ] (option (Var 0))
++  | Gen_yield ->
++      fn [ read (Var 0); read (Con (Path.prelude "GenYield", [ Var 0 ])) ] unit
++  | Gen_frame -> fn [] (Con (Path.prelude "GenFrame", [ Var 0 ]))
++  | Gen_close -> fn [ inout (Con (Path.prelude "GenFrame", [ Var 0 ])) ] unit
++  | Gen_resume ->
++      (* what the generator fails with and uses, the step does *)
++      fn
++        [
++          inout (Con (Path.prelude "GenFrame", [ Var 0 ]));
++          read
++            (Fun
++               ( [ read (Con (Path.prelude "GenYield", [ Var 0 ])) ],
++                 unit,
++                 open_row 0,
++                 open_row 1 ));
++        ]
++        (option (Var 0))
++  | Gen_cursor ->
++      (* a value cursor's generator fails with nothing and uses nothing *)
++      let empty : Ty.row = { labels = []; tail = None } in
++      fn
++        [
++          read
++            (Fun
++               ( [ read (Con (Path.prelude "GenYield", [ Var 0 ])) ],
++                 unit,
++                 empty,
++                 empty ));
++        ]
++        (Con (Path.prelude "Gen", [ Var 0 ]))
+   (* fn() -> Int, the real `Clock.now` and `Clock.instant` *)
+   | Clock_now | Clock_instant -> fn [] int
+   (* fn(Int) *)
+@@ -1515,7 +1554,8 @@ let reaches (x : Intrinsic.t) =
+   | Array_split_at | Str_split_at | Bytes_split_at | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
+   | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
+   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
+-  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower | Hash ->
++  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower | Hash
++  | Gen_next | Gen_yield | Gen_frame | Gen_resume | Gen_cursor | Gen_close ->
+       None
+ 
+ (* Who can call it. Any program can, unless only the prelude's own
+@@ -1613,6 +1653,11 @@ let fns : Intrinsic.t list =
+     Task_random;
+     Task_drain;
+     Hash;
++    Gen_yield;
++    Gen_frame;
++    Gen_resume;
++    Gen_cursor;
++    Gen_close;
+   ]
+ 
+ (* ---- built-in types ----
+@@ -1705,6 +1750,9 @@ let types =
+     t "Tags";
+     (* a task's scope, and a task's handle (stage 11a): their members are
+        the source's *)
++    t "Gen" ~arity:1 ~methods:[ Gen_next ];
++    t "GenYield" ~arity:1;
++    t "GenFrame" ~arity:1;
+     t "Scope";
+     t "Task" ~arity:1;
+     t "Map" ~arity:2
+diff --git a/lib/eval/builtins.ml b/lib/eval/builtins.ml
+index affd638..b7de55e 100644
+--- a/lib/eval/builtins.ml
++++ b/lib/eval/builtins.ml
+@@ -492,7 +492,9 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
+   (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,
+      [run_program]) *)
+   | Net_listen | Net_accept | Net_accept_until | Net_read | Net_write
+-  | Net_close | Proc_run ->
++  | Net_close | Proc_run
++  (* SPIKE: and generators, which run blocks on fibers *)
++  | Gen_next | Gen_yield | Gen_frame | Gen_resume | Gen_cursor | Gen_close ->
+       fun _ ->
+         failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
+   (* the real `Clock.now` and `Clock.instant` *)
+diff --git a/lib/eval/eval.ml b/lib/eval/eval.ml
+index e3c75e7..92e24b3 100644
+--- a/lib/eval/eval.ml
++++ b/lib/eval/eval.ml
+@@ -96,6 +96,45 @@ let recorded_panic loc ~at ~msg ~instead =
+ (* An error on its way to the [Handle] that catches it. *)
+ exception Failed of Value.t
+ 
++(* SPIKE (syntax/streams.ml): generators, each on a one-shot fiber.
++
++   A pipeline's frame, [Gen_frame_v], is a hidden local of its caller:
++   started by its first step, suspended at each `yield`, resumed by the
++   next step, never copied by a program, since no program can name it.
++   A value cursor, [Gen_cursor_v], is a value: its generator, the
++   arguments it captured, and how many items it has given. Its `next`
++   continues the one live fiber if that fiber is exactly where this copy
++   is ([cache]), and otherwise replays the generator from the start,
++   skipping what this copy has given: so a copy is an honest fork. *)
++type gen_step = Yielded of Value.t | Ended of (Value.t, Value.t) result
++type _ Effect.t += Gen_yield_eff : Value.t -> unit Effect.t
++type gen_k = (unit, gen_step) Effect.Deep.continuation
++type frame_state = Unstarted | Suspended of gen_k | Over
++
++type gen_cursor = {
++  start : unit -> (Value.t, Value.t) result;
++  pos : int;
++  cache : (int * gen_k) option ref;
++}
++
++type Value.sched += Gen_frame_v of frame_state ref | Gen_cursor_v of gen_cursor
++
++let gen_fiber (body : unit -> (Value.t, Value.t) result) ~(on_yield : gen_k -> unit) =
++  Effect.Deep.match_with body ()
++    {
++      retc = (fun r -> Ended r);
++      exnc = raise;
++      effc =
++        (fun (type a) (eff : a Effect.t) ->
++          match eff with
++          | Gen_yield_eff v ->
++              Some
++                (fun (k : (a, gen_step) Effect.Deep.continuation) ->
++                  on_yield k;
++                  Yielded v)
++          | _ -> None);
++    }
++
+ (* A [Break] on its way to the [While] it leaves. Core Lint makes sure
+    there's one around it, in the same function or block. *)
+ exception Broke
+@@ -1386,6 +1425,10 @@ and builtin ?loc cx f args =
+         tys,
+         dicts ) ->
+       tasks ?loc cx x tys dicts args
++  | VBuiltin
++      (((Gen_next | Gen_yield | Gen_frame | Gen_resume | Gen_cursor | Gen_close) as x), _, _)
++    ->
++      generators ?loc cx x args
+   | VBuiltin (Proc_run, _, _) -> (
+       (* the real `Proc.run`: the task waits for its program, and the
+          others run *)
+@@ -1441,6 +1484,81 @@ and net cx (x : Intrinsic.t) args =
+ 
+    The scheduler's intrinsics, which `Async.scope` and the members of
+    `Scope` and `Task` call (prelude.ml), from [loc], in the prelude. *)
++(* SPIKE: the generators' built-ins (see [gen_step]) *)
++and generators ?loc cx (x : Intrinsic.t) args =
++  let loc =
++    match loc with Some l -> l | None -> Loc.point ~file:Prelude.file 1 1
++  in
++  let some v = VCon { ty = Path.prelude "Option"; name = "Some"; args = [ v ] }
++  and none = VCon { ty = Path.prelude "Option"; name = "None"; args = [] } in
++  let run start () = fst (call_at cx loc start [ VUnit ] (VEvidence [])) in
++  match (x, args) with
++  | Gen_yield, [ v; _ ] ->
++      Effect.perform (Gen_yield_eff v);
++      (Ok VUnit, args)
++  | Gen_frame, [] -> (Ok (VSched (Gen_frame_v (ref Unstarted))), args)
++  | Gen_resume, [ VSched (Gen_frame_v st); start ] -> (
++      let was = !st in
++      (* while it runs, a step of it from inside it would find it over *)
++      st := Over;
++      let step =
++        match was with
++        | Over -> Ended (Ok VUnit)
++        | Unstarted -> gen_fiber (run start) ~on_yield:(fun k -> st := Suspended k)
++        | Suspended k -> Effect.Deep.continue k ()
++      in
++      match step with
++      | Yielded v -> (Ok (some v), args)
++      | Ended (Ok _) -> (Ok none, args)
++      | Ended (Error e) -> (Error e, args))
++  | Gen_close, [ VSched (Gen_frame_v st) ] ->
++      (* the consumer stopped: a suspended generator is ended as a
++         cancel ends a task, so its `finally` sees `Err(Cancelled)` *)
++      (match !st with
++      | Suspended k -> (
++          st := Over;
++          match Effect.Deep.discontinue k Sched.Cancelled with
++          | _ -> ()
++          | exception Sched.Cancelled -> ())
++      | Unstarted | Over -> st := Over);
++      (Ok VUnit, args)
++  | Gen_cursor, [ start ] ->
++      let c = { start = run start; pos = 0; cache = ref None } in
++      (Ok (VSched (Gen_cursor_v c)), args)
++  | Gen_next, [ VSched (Gen_cursor_v c) ] ->
++      let take () =
++        match !(c.cache) with
++        | Some (_, k) ->
++            c.cache := None;
++            Effect.Deep.continue k ()
++        | None -> bug "a generator's fiber that's gone"
++      in
++      let step =
++        match !(c.cache) with
++        | Some (p, _) when p = c.pos -> take ()
++        | _ ->
++            (* replay: a fresh fiber, past the items this copy has given *)
++            let count = ref 0 in
++            let first =
++              gen_fiber c.start ~on_yield:(fun k ->
++                  incr count;
++                  c.cache := Some (!count, k))
++            in
++            let rec skip = function
++              | Yielded _ when !count <= c.pos -> skip (take ())
++              | s -> s
++            in
++            skip first
++      in
++      let r, c' =
++        match step with
++        | Yielded v -> (Ok (some v), { c with pos = c.pos + 1 })
++        | Ended (Ok _) -> (Ok none, c)
++        | Ended (Error e) -> (Error e, c)
++      in
++      (r, [ VSched (Gen_cursor_v c') ])
++  | _ -> bug "a generator's built-in given the wrong values"
++
+ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
+   let loc =
+     match loc with Some l -> l | None -> Loc.point ~file:Prelude.file 1 1
+diff --git a/lib/sema/infer_expr.ml b/lib/sema/infer_expr.ml
+index 9a0f01c..d94d9c4 100644
+--- a/lib/sema/infer_expr.ml
++++ b/lib/sema/infer_expr.ml
+@@ -880,6 +880,9 @@ and synth env cx (e : expr) : ty =
+       (* the `try` around a group's test in a run of it, which needn't
+          cover anything: the test may fail with nothing *)
+       if e.node = Test_items.passed_on then m.failed <- true;
++      (* SPIKE: a `try` the compiler wrote around a pipeline's step
++         (streams.ml), which may cover nothing *)
++      if e.node < Test_items.passed_on then m.failed <- true;
+       let t = infer env { cx with markers = m :: cx.markers } a in
+       (match (a.kind, Hashtbl.find_opt cx.found a.node) with
+       | Con (_, [ (_, tag) ]), Some (Ctor_of (p, "Err")) when p = result_path ->
+diff --git a/lib/sema/resolve.ml b/lib/sema/resolve.ml
+index 2d383ce..95e6184 100644
+--- a/lib/sema/resolve.ml
++++ b/lib/sema/resolve.ml
+@@ -1966,7 +1966,9 @@ and block_stmts ?(finally = false) env sc (stmts : Parsed.stmt list) =
+             (Let_tuple { pat; value } :: acc, sc)
+         | Expr e -> (Expr (expr env sc e) :: acc, sc)
+         | Finally f ->
+-            if not finally then
++            (* SPIKE (streams.ml): and in a gen fn's body, whose token
++               `$w` is in scope *)
++            if not (finally || Env.mem "$w" sc.locals) then
+               report env
+                 {
+                   f.loc with
+diff --git a/lib/syntax/parser.ml b/lib/syntax/parser.ml
+index 36b68ce..3f0d655 100644
+--- a/lib/syntax/parser.ml
++++ b/lib/syntax/parser.ml
+@@ -163,6 +163,7 @@ type t = {
+   mutable tags : string list;
+       (** the parameters of the function being parsed written of type `Tags`,
+           which `fail on` can name *)
++  mutable in_gen : bool;  (** SPIKE: in a `gen fn`'s body, where `yield` is *)
+ }
+ 
+ let peek p = fst p.toks.(p.i)
+@@ -1217,6 +1218,26 @@ and parse_unary p =
+       | _ ->
+           let e = parse_unary p in
+           mk (Unop (Neg, e, onode p)) start p)
++  | IDENT "yield" when p.in_gen && peek2 p <> DOT -> (
++      (* SPIKE (streams.ml): `yield e` is `$gen_yield(e, $w)`, and
++         `yield from g(..)` is `g(.., $w)`, on the same fiber *)
++      let start = loc p in
++      advance p;
++      let w () = node p (Var (Bare "$w")) start in
++      if peek p = IDENT "from" then (
++        advance p;
++        let e = parse_expr p in
++        let rec add (e : expr) =
++          match e.kind with
++          | Call (f, args) -> { e with kind = Call (f, args @ [ w () ]) }
++          | Try a -> { e with kind = Try (add a) }
++          | _ -> Diag.error e.loc "spike: `yield from` takes a gen fn's call"
++        in
++        add e)
++      else
++        let e = parse_expr p in
++        let f = node p (Var (Bare "$gen_yield")) start in
++        mk (Call (f, [ e; w () ])) start p)
+   | AMP ->
+       let start = loc p in
+       advance p;
+@@ -2605,12 +2626,50 @@ let parse_group p ~pub =
+              group_tests;
+            })
+ 
++(* SPIKE (streams.ml): `gen fn g(..) -> T = body` is
++   `fn g(.., $w: GenYield<T>) = body`, its `yield`s calls through `$w`. A
++   call of it gives a value cursor if it uses nothing, can't fail and
++   takes no block; otherwise a pipeline. *)
++let parse_gen_fn p ~pub =
++  advance p;
++  p.in_gen <- true;
++  let f =
++    Fun.protect ~finally:(fun () -> p.in_gen <- false) (fun () -> parse_fn p ~pub)
++  in
++  let item =
++    match f.ret with
++    | Some t -> t
++    | None -> Diag.error f.loc "spike: a gen fn says what it yields, `-> T`"
++  in
++  let kind =
++    if
++      f.uses <> None || f.errors <> None
++      || List.exists
++           (fun (q : param) -> match q.pty with Some (TyFn _) -> true | _ -> false)
++           f.params
++    then Streams.Pipeline_gen
++    else Streams.Value_gen
++  in
++  Hashtbl.replace Streams.gens f.name.name kind;
++  let gy : tyname = { tmod = None; tid = { name = "GenYield"; loc = f.loc } } in
++  let w : param =
++    {
++      pname = { name = "$w"; loc = f.loc };
++      pty = Some (TyName (gy, [ item ]));
++      pmode = Read;
++      pblock = Ordinary;
++      pdefault = None;
++    }
++  in
++  { f with params = f.params @ [ w ]; ret = None }
++
+ let parse_item ~prelude p =
+   p.node <- 0;
+   let pub = peek p = PUB in
+   if pub then advance p;
+   match peek p with
+   | FN -> Fn (parse_fn p ~pub)
++  | IDENT "gen" when peek2 p = FN -> Fn (parse_gen_fn p ~pub)
+   | TYPE -> Type (parse_type ~prelude p ~pub)
+   | DEP -> Type (parse_dep p ~pub)
+   | HANDLER -> Fn (parse_handler p ~pub)
+@@ -2668,13 +2727,15 @@ let skip_to_item p ~start =
+     done)
+ 
+ let parse_program ?(prelude = false) sink toks =
+-  let p = { toks; i = 0; node = 0; sink; tags = [] } in
++  let p = { toks; i = 0; node = 0; sink; tags = []; in_gen = false } in
++  Hashtbl.reset Streams.gens;
+   let rec loop acc =
+     if peek p = EOF then List.rev acc
+     else
+       let start = p.i in
+       match
+         let item = parse_item ~prelude p in
++        let item = Streams.item ~node:p.node item in
+         if peek p = NEWLINE then advance p
+         else if peek p <> EOF then fail_expected p "a new line";
+         item
+@@ -2702,7 +2763,7 @@ let parse_program ?(prelude = false) sink toks =
+    so the whole session numbers them once; the last one this line used is
+    returned with it. *)
+ let parse_session_line sink toks ~node =
+-  let p = { toks; i = 0; node; sink; tags = [] } in
++  let p = { toks; i = 0; node; sink; tags = []; in_gen = false } in
+   let s = parse_stmt p in
+   if peek p = NEWLINE then advance p;
+   if peek p <> EOF then fail_expected p "the end of the line";
+diff --git a/lib/syntax/streams.ml b/lib/syntax/streams.ml
+new file mode 100644
+index 0000000..74db331
+--- /dev/null
++++ b/lib/syntax/streams.ml
+@@ -0,0 +1,616 @@
++(* SPIKE (streams E2): "a pipeline is a block" and "a gen fn call follows
++   its signature", written as a rewrite of the parsed tree, so that every
++   existing check (resolve, infer, exclusivity, Core Lint) runs unchanged
++   on exactly the code the compiler would write.
++
++   A real implementation would do this in inference, by type: here a
++   chain is recognised by its spelling (an `&place` head, a `.cursor()`
++   head, a gen fn call, or a name known to be a pipeline), which is the
++   spike's main shortcut.
++
++   - A chain `&r.map(f).select(p).take(n)` becomes a literal block,
++     `fn() => PULL`, whose stage state (`take`'s counter) is a hidden local
++     (`$`-named) declared just before the statement the chain is in.
++   - `for x in CHAIN` is fused: a `while` over PULL, no block at all.
++   - `for x in p`, where `p` is a let-bound pipeline or a parameter
++     written `fn() -> ...`, is a `while` over `p()`.
++   - A sink, `.to_array()` or `.count()`, ends a chain in a loop.
++   - A gen fn takes a hidden last parameter, `$w: GenYield<T>`, and
++     `yield e` is `$gen_yield(e, $w)` (parser.ml). A call of a pure gen fn
++     taking only values is a value cursor, `$gen_cursor(fn($w) => g(.., $w))`;
++     any other's is a pipeline: a hidden `var $g = $gen_frame()` and the
++     block `fn() => $gen_resume(&$g, fn($w) => g(.., $w))`, run on a
++     one-shot fiber by the interpreter (eval.ml). *)
++
++open Ast
++open Ast.Parsed
++
++type gen_kind = Value_gen | Pipeline_gen
++
++(* the module's gen fns, by name, which the parser fills *)
++let gens : (string, gen_kind) Hashtbl.t = Hashtbl.create 8
++
++(* compiler-written `try`s, which may cover nothing: numbered below -1,
++   once in the whole program, so no two share a node (infer_expr.ml) *)
++let quiet = ref (-2)
++
++let quiet_node () =
++  decr quiet;
++  !quiet
++
++(* the pipeline frames started while a `for`'s source is written *)
++let opened : string list ref = ref []
++
++type st = { mutable node : int }
++
++let mk st kind loc : expr =
++  st.node <- st.node + 1;
++  { kind; loc; node = st.node }
++
++let pat st pkind ploc : pattern =
++  st.node <- st.node + 1;
++  { pkind; ploc; pnode = st.node }
++
++let fresh st base =
++  st.node <- st.node + 1;
++  Printf.sprintf "$%s%d" base st.node
++
++let id name loc : ident = { name; loc }
++let var st n loc = mk st (Var (Bare n)) loc
++let call st f args loc = mk st (Call (f, args)) loc
++let meth st recv m args loc = call st (mk st (Field (recv, id m loc)) loc) args loc
++let ctor n loc : ctor_ref = { qual = None; name = id n loc }
++let some st e loc = mk st (Con (ctor "Some" loc, [ (None, e) ])) loc
++let none st loc = mk st (Con (ctor "None" loc, [])) loc
++let unit st loc = mk st Unit loc
++let bool st b loc = mk st (Bool b) loc
++let int st n loc = mk st (Int (Int64.of_int n)) loc
++
++let let_ ?(mut = false) ?ty n (v : expr) =
++  Let { name = id n v.loc; ty; value = v; mut }
++
++let assign st ?op target value loc =
++  st.node <- st.node + 1;
++  let onode = st.node in
++  mk st (Assign { target; op; value; onode }) loc
++
++let block st stmts last loc =
++  if stmts = [] then last else mk st (Block (stmts, last)) loc
++
++let arm p body : arm = { arm_pat = p; arm_guard = None; arm_body = body }
++
++let quiet_try (e : expr) : expr =
++  { kind = Try e; loc = e.loc; node = quiet_node () }
++
++let binop st op a b loc =
++  st.node <- st.node + 1;
++  let o = st.node in
++  mk st (Binop (op, a, b, o)) loc
++
++(* `match UP` with `None => none_case` and `Some(x) => some_case x` *)
++let match_opt st up ~none_case ~some_case loc =
++  let x = fresh st "x" in
++  mk st
++    (Match
++       ( up,
++         [
++           arm (pat st (PCon (ctor "None" loc, [])) loc) none_case;
++           arm
++             (pat st (PCon (ctor "Some" loc, [ pat st (PVar (id x loc)) loc ])) loc)
++             (some_case (var st x loc));
++         ] ))
++    loc
++
++(* ---- what's a pipeline ---- *)
++
++let stages = [ "map"; "select"; "take"; "take_while"; "with_index" ]
++let sinks = [ "to_array"; "count" ]
++let is_stage m = List.mem m stages
++let is_sink m = List.mem m sinks
++
++(* [e] as a head and its stages, in order *)
++let rec spine (e : expr) =
++  match e.kind with
++  | Call ({ kind = Field (recv, m); _ }, args)
++    when (is_stage m.name || is_sink m.name)
++         && List.length args
++            = (if m.name = "with_index" || is_sink m.name then 0 else 1) ->
++      let h, ss = spine recv in
++      (h, ss @ [ (m.name, args, e.loc) ])
++  | _ -> (e, [])
++
++type env = { pulls : string list }
++
++let is_pull_ty (t : ty option) =
++  match t with Some (TyFn ([], Some _, _, _, _)) -> true | _ -> false
++
++let gen_call (e : expr) =
++  match e.kind with
++  | Call (_, args)
++    when match List.rev args with
++         | { kind = Var (Bare "$w"); _ } :: _ -> true (* `yield from` *)
++         | _ -> false ->
++      None
++  | Call ({ kind = Var (Bare g); _ }, args) -> (
++      match Hashtbl.find_opt gens g with Some k -> Some (g, args, k) | None -> None)
++  | Try { kind = Call ({ kind = Var (Bare g); _ }, args); _ } -> (
++      match Hashtbl.find_opt gens g with
++      | Some k -> Some (g, args, k)
++      | None -> None)
++  | _ -> None
++
++type source =
++  | Place of expr  (** `&r`: [r.next()] steps [r] itself *)
++  | Temp of expr  (** a cursor value, held in a hidden `var` *)
++  | Pull of string  (** a pipeline already: call it *)
++  | Gen_pipeline of string * expr list
++
++let source env (head : expr) ~under_ref =
++  if under_ref then
++    match head.kind with Var _ | Field _ | Index _ -> Some (Place head) | _ -> None
++  else
++    match head.kind with
++    | Call ({ kind = Field (_, { name = "cursor"; _ }); _ }, []) -> Some (Temp head)
++    | Var (Bare n) when List.mem n env.pulls -> Some (Pull n)
++    | _ -> (
++        match gen_call head with
++        | Some (_, _, Value_gen) -> Some (Temp head)
++        | Some (g, args, Pipeline_gen) -> Some (Gen_pipeline (g, args))
++        | None -> None)
++
++(* Whether [e] is a pipeline: what a `let` of it makes known as one. *)
++let is_pipeline env (e : expr) =
++  let under_ref, inner = match e.kind with Ref i -> (true, i) | _ -> (false, e) in
++  let h, ss = spine inner in
++  match ss with
++  | [] -> (
++      (not under_ref)
++      && match gen_call e with Some (_, _, Pipeline_gen) -> true | _ -> false)
++  | _ ->
++      (match List.rev ss with (m, _, _) :: _ -> not (is_sink m) | [] -> false)
++      && source env h ~under_ref <> None
++
++(* ---- the rewrite ---- *)
++
++let rec expr st env (h : stmt list ref) (e : expr) : expr =
++  let re = expr st env h in
++  let sc = scoped st env in
++  let chain_of ~under_ref inner =
++    let head, ss = spine inner in
++    match ss with
++    | [] -> None
++    | _ -> (
++        match source env head ~under_ref with
++        | None -> None
++        | Some src -> Some (src, ss))
++  in
++  match e.kind with
++  | Ref inner -> (
++      match chain_of ~under_ref:true inner with
++      | Some (src, ss) -> compile_value st env h src ss e.loc
++      | None -> { e with kind = Ref (re inner) })
++  | Call ({ kind = Field (_, m); _ }, _) when is_stage m.name || is_sink m.name
++    -> (
++      match chain_of ~under_ref:false e with
++      | Some (src, ss) -> compile_value st env h src ss e.loc
++      | None -> map_children st env h e)
++  | Call ({ kind = Var (Bare g); _ }, args)
++    when Hashtbl.mem gens g
++         && not
++              (match List.rev args with
++              | { kind = Var (Bare "$w"); _ } :: _ -> true (* `yield from` *)
++              | _ -> false) -> (
++      let args = List.map re args in
++      match Hashtbl.find gens g with
++      | Value_gen -> value_cursor st h g args e.loc
++      | Pipeline_gen ->
++          let pull = gen_pull st h g args e.loc in
++          mk st (Lambda ([], quiet_try pull)) e.loc)
++  | For { index = None; pat = p; over = Each iter; body } -> (
++      let tried, it =
++        match iter.kind with Try i -> (Some iter, i) | _ -> (None, iter)
++      in
++      let under_ref, inner =
++        match it.kind with Ref i -> (true, i) | _ -> (false, it)
++      in
++      let found =
++        match chain_of ~under_ref inner with
++        | Some (src, ss)
++          when (match List.rev ss with (m, _, _) :: _ -> not (is_sink m) | _ -> false) ->
++            Some (fun () -> pull_of st env h src ss e.loc)
++        | _ -> (
++            match (it.kind, gen_call it) with
++            | _, Some (g, args, Pipeline_gen) ->
++                Some (fun () -> gen_pull st h g (List.map re args) e.loc)
++            | Var (Bare n), _ when List.mem n env.pulls ->
++                Some (fun () -> call st (var st n it.loc) [] it.loc)
++            | _ -> None)
++      in
++      match found with
++      | Some pull ->
++          let was = !opened in
++          opened := [];
++          let up = pull () in
++          let frames = !opened in
++          opened := was;
++          let up =
++            match tried with Some t -> { t with kind = Try up } | None -> up
++          in
++          let l = loop st up p (sc body) e.loc in
++          (* the frames this `for` started over its temporaries end with
++             it, after a `break` too: each generator's `finally` runs *)
++          let close f =
++            Expr
++              (call st (var st "$gen_close" e.loc)
++                 [ mk st (Ref (var st f e.loc)) e.loc ]
++                 e.loc)
++          in
++          if frames = [] then l
++          else block st (Expr l :: List.map close frames) (unit st e.loc) e.loc
++      | None -> for_generic st env h e)
++  | Block (ss, last) ->
++      let ss, last = stmts st env ss last in
++      { e with kind = Block (ss, last) }
++  | Lambda (ps, body) ->
++      let env =
++        {
++          pulls =
++            List.filter_map
++              (fun (q : param) -> if is_pull_ty q.pty then Some q.pname.name else None)
++              ps
++            @ env.pulls;
++        }
++      in
++      { e with kind = Lambda (ps, scoped st env body) }
++  | If (c, t, f) -> { e with kind = If (re c, sc t, Option.map sc f) }
++  | Match (s, arms) ->
++      {
++        e with
++        kind =
++          Match
++            ( re s,
++              List.map
++                (fun a ->
++                  { a with arm_guard = Option.map sc a.arm_guard; arm_body = sc a.arm_body })
++                arms );
++      }
++  | While { cond; body } -> { e with kind = While { cond = sc cond; body = sc body } }
++  | For _ -> for_generic st env h e
++  | With { items; body } ->
++      let items =
++        List.map
++          (fun i -> { i with chain = List.map (fun l -> { l with link = re l.link }) i.chain })
++          items
++      in
++      { e with kind = With { items; body = sc body } }
++  | _ -> map_children st env h e
++
++and for_generic st env h (e : expr) : expr =
++  match e.kind with
++  | For { index; pat = p; over; body } ->
++      let over =
++        match over with
++        | Each i -> Each (expr st env h i)
++        | Range (a, b) -> Range (expr st env h a, expr st env h b)
++      in
++      { e with kind = For { index; pat = p; over; body = scoped st env body } }
++  | _ -> e
++
++and map_children st env h (e : expr) : expr =
++  let re = expr st env h in
++  let kind =
++    match e.kind with
++    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> e.kind
++    | Unop (o, a, n) -> Unop (o, re a, n)
++    | Binop (o, a, b, n) -> Binop (o, re a, re b, n)
++    | Call (f, args) -> Call (re f, List.map re args)
++    | Con (c, args) -> Con (c, List.map (fun (n, a) -> (n, re a)) args)
++    | Record (t, fs) -> Record (t, List.map (fun (n, a) -> (n, re a)) fs)
++    | Field (a, f) -> Field (re a, f)
++    | Array xs -> Array (List.map re xs)
++    | Tuple xs -> Tuple (List.map re xs)
++    | Index (a, b) -> Index (re a, re b)
++    | Slice (a, b, c) -> Slice (re a, re b, re c)
++    | Ref a -> Ref (re a)
++    | Assign a -> Assign { a with target = re a.target; value = re a.value }
++    | Fail (t, args) -> Fail (t, List.map (fun (n, a) -> (n, re a)) args)
++    | Try a -> Try (re a)
++    | Attempt a -> Attempt (re a)
++    | Assert a -> Assert (re a)
++    | Named (n, a) -> Named (n, re a)
++    | Inline_handler a -> Inline_handler (re a)
++    | Handler hd ->
++        Handler
++          {
++            hd with
++            state = List.map (stmt_shallow st env) hd.state;
++            arms = List.map (fun a -> { a with arm_impl = re a.arm_impl }) hd.arms;
++          }
++    | Lambda _ | Block _ | If _ | Match _ | While _ | For _ | With _ ->
++        (expr st env h e).kind
++  in
++  { e with kind }
++
++and stmt_shallow st env (s : stmt) : stmt =
++  let sc = scoped st env in
++  match s with
++  | Let l -> Let { l with value = sc l.value }
++  | Let_tuple l -> Let_tuple { l with value = sc l.value }
++  | Expr e -> Expr (sc e)
++  | Finally e -> Finally (sc e)
++
++(* [e] in a scope of its own: what it hoists goes just before it *)
++and scoped st env (e : expr) : expr =
++  match e.kind with
++  | Block (ss, last) ->
++      let ss, last = stmts st env ss last in
++      { e with kind = Block (ss, last) }
++  | _ ->
++      let h = ref [] in
++      let e' = expr st env h e in
++      block st (List.rev !h) e' e.loc
++
++and stmts st env ss last =
++  let rec go env acc = function
++    | [] ->
++        let h = ref [] in
++        let last' = expr st env h last in
++        (List.rev acc @ List.rev !h, last')
++    | s :: rest ->
++        let h = ref [] in
++        let s', env =
++          match s with
++          | Let l ->
++              let pipe = is_pipeline env l.value in
++              let v = expr st env h l.value in
++              ( Let { l with value = v },
++                if pipe then { pulls = l.name.name :: env.pulls } else env )
++          | Let_tuple l -> (Let_tuple { l with value = expr st env h l.value }, env)
++          | Expr e -> (Expr (expr st env h e), env)
++          | Finally e -> (Finally (expr st env h e), env)
++        in
++        go env ((s' :: !h) @ acc) rest
++  in
++  go env [] ss
++
++(* A chain in a value's place: a block, or a sink's loop. *)
++and compile_value st env h src ss loc =
++  match List.rev ss with
++  | (m, _, sloc) :: before when is_sink m ->
++      let up = pull_of st env h src (List.rev before) loc in
++      sink st m up sloc
++  | _ ->
++      let up = pull_of st env h src ss loc in
++      mk st (Lambda ([], quiet_try up)) loc
++
++(* The expression that, evaluated, gives the chain's next item. *)
++and pull_of st env h src ss loc =
++  let head =
++    match src with
++    | Place r -> mk st (Ref (meth st (expr st env h r) "next" [] loc)) loc
++    | Temp c ->
++        let c = expr st env h c in
++        let n = fresh st "src" in
++        h := let_ ~mut:true n c :: !h;
++        mk st (Ref (meth st (var st n loc) "next" [] loc)) loc
++    | Pull n -> call st (var st n loc) [] loc
++    | Gen_pipeline (g, args) -> gen_pull st h g (List.map (expr st env h) args) loc
++  in
++  List.fold_left (fun up s -> stage st env h up s) head ss
++
++(* [f] applied to [x]: a literal block inlined, `{ let p = x; body }`;
++   anything else called *)
++and apply st env h (f : expr) (x : expr) loc =
++  match f.kind with
++  | Lambda ([ q ], body) ->
++      let body = scoped st env body in
++      block st [ Let { name = q.pname; ty = q.pty; value = x; mut = false } ] body loc
++  | _ -> call st (expr st env h f) [ x ] loc
++
++and hoist_value st env h (a : expr) =
++  match a.kind with
++  | Int _ | Var _ -> expr st env h a
++  | _ ->
++      let n = fresh st "arg" in
++      h := let_ n (expr st env h a) :: !h;
++      var st n a.loc
++
++and stage st env h up (m, args, loc) =
++  match (m, args) with
++  | "map", [ f ] ->
++      match_opt st up ~none_case:(none st loc)
++        ~some_case:(fun x -> some st (apply st env h f x loc) loc)
++        loc
++  | "select", [ f ] ->
++      (* `{ var out = None; var go = true; while go: match UP ... ; out }` *)
++      let out = fresh st "out" and go = fresh st "go" in
++      let stop = assign st (var st go loc) (bool st false loc) loc in
++      let body =
++        match_opt st up ~none_case:stop
++          ~some_case:(fun x ->
++            mk st
++              (If
++                 ( apply st env h f x loc,
++                   block st
++                     [ Expr (assign st (var st out loc) (some st x loc) loc) ]
++                     stop loc,
++                   None ))
++              loc)
++          loc
++      in
++      block st
++        [
++          let_ ~mut:true out (none st loc);
++          let_ ~mut:true go (bool st true loc);
++          Expr (mk st (While { cond = var st go loc; body }) loc);
++        ]
++        (var st out loc) loc
++  | "take", [ n ] ->
++      let n = hoist_value st env h n in
++      let taken = fresh st "taken" in
++      h := let_ ~mut:true taken (int st 0 loc) :: !h;
++      mk st
++        (If
++           ( binop st Lt (var st taken loc) n loc,
++             match_opt st up ~none_case:(none st loc)
++               ~some_case:(fun x ->
++                 block st
++                   [ Expr (assign st ~op:Add (var st taken loc) (int st 1 loc) loc) ]
++                   (some st x loc) loc)
++               loc,
++             Some (none st loc) ))
++        loc
++  | "take_while", [ f ] ->
++      let fin = fresh st "done" in
++      h := let_ ~mut:true fin (bool st false loc) :: !h;
++      mk st
++        (If
++           ( var st fin loc,
++             none st loc,
++             Some
++               (match_opt st up ~none_case:(none st loc)
++                  ~some_case:(fun x ->
++                    mk st
++                      (If
++                         ( apply st env h f x loc,
++                           some st x loc,
++                           Some
++                             (block st
++                                [ Expr (assign st (var st fin loc) (bool st true loc) loc) ]
++                                (none st loc) loc) ))
++                      loc)
++                  loc) ))
++        loc
++  | "with_index", [] ->
++      let i = fresh st "i" and j = fresh st "j" in
++      h := let_ ~mut:true i (int st 0 loc) :: !h;
++      match_opt st up ~none_case:(none st loc)
++        ~some_case:(fun x ->
++          block st
++            [
++              let_ j (var st i loc);
++              Expr (assign st ~op:Add (var st i loc) (int st 1 loc) loc);
++            ]
++            (some st (mk st (Tuple [ var st j loc; x ]) loc) loc)
++            loc)
++        loc
++  | _ -> Diag.error loc (Printf.sprintf "spike: the stage `%s` isn't written" m)
++
++(* `for p in ..` over [up]: `var go = true; while go: match up ...` *)
++and loop st up (p : pattern) body loc =
++  let go = fresh st "go" in
++  let stop = assign st (var st go loc) (bool st false loc) loc in
++  let some_arm =
++    arm (pat st (PCon (ctor "Some" loc, [ p ])) loc)
++      (block st [ Expr body ] (unit st loc) loc)
++  in
++  let none_arm = arm (pat st (PCon (ctor "None" loc, [])) loc) stop in
++  block st
++    [
++      let_ ~mut:true go (bool st true loc);
++      Expr
++        (mk st
++           (While { cond = var st go loc; body = mk st (Match (up, [ none_arm; some_arm ])) loc })
++           loc);
++    ]
++    (unit st loc) loc
++
++and sink st m up loc =
++  let acc = fresh st "acc" and go = fresh st "go" in
++  let stop = assign st (var st go loc) (bool st false loc) loc in
++  let init, add =
++    match m with
++    | "to_array" ->
++        ( mk st (Array []) loc,
++          fun x -> mk st (Ref (meth st (var st acc loc) "push" [ x ] loc)) loc )
++    | _ ->
++        ( int st 0 loc,
++          fun _ -> assign st ~op:Add (var st acc loc) (int st 1 loc) loc )
++  in
++  block st
++    [
++      let_ ~mut:true acc init;
++      let_ ~mut:true go (bool st true loc);
++      Expr
++        (mk st
++           (While
++              {
++                cond = var st go loc;
++                body = match_opt st up ~none_case:stop ~some_case:add loc;
++              })
++           loc);
++    ]
++    (var st acc loc) loc
++
++(* a pure gen fn's call: a value cursor of its own arguments *)
++and value_cursor st h g args loc =
++  let held = List.map (fun (a : expr) ->
++      match a.kind with
++      | Int _ | Str _ | Bool _ -> a
++      | _ ->
++          let n = fresh st "arg" in
++          h := let_ n a :: !h;
++          var st n a.loc) args
++  in
++  let w = id "$w" loc in
++  let start =
++    mk st
++      (Lambda
++         ( [ { pname = w; pty = None; pmode = Read; pblock = Ordinary; pdefault = None } ],
++           call st (var st g loc) (held @ [ var st "$w" loc ]) loc ))
++      loc
++  in
++  call st (var st "$gen_cursor" loc) [ start ] loc
++
++(* a pipeline gen fn's call: its frame a hidden local, resumed by each
++   pull *)
++and gen_pull st h g args loc =
++  let held =
++    List.map
++      (fun (a : expr) ->
++        match a.kind with
++        | Int _ | Str _ | Bool _ | Var _ -> a
++        | _ ->
++            let n = fresh st "arg" in
++            h := let_ n a :: !h;
++            var st n a.loc)
++      args
++  in
++  let frame = fresh st "frame" in
++  opened := frame :: !opened;
++  h := let_ ~mut:true frame (call st (var st "$gen_frame" loc) [] loc) :: !h;
++  let w = id "$w" loc in
++  let start =
++    mk st
++      (Lambda
++         ( [ { pname = w; pty = None; pmode = Read; pblock = Ordinary; pdefault = None } ],
++           quiet_try (call st (var st g loc) (held @ [ var st "$w" loc ]) loc) ))
++      loc
++  in
++  call st (var st "$gen_resume" loc) [ mk st (Ref (var st frame loc)) loc; start ] loc
++
++(* ---- items ---- *)
++
++let fn_def st (f : fn_def) =
++  let env =
++    {
++      pulls =
++        List.filter_map
++          (fun (q : param) -> if is_pull_ty q.pty then Some q.pname.name else None)
++          f.params;
++    }
++  in
++  { f with body = scoped st env f.body }
++
++let item ~node (i : item) : item =
++  let st = { node } in
++  match i with
++  | Fn f -> Fn (fn_def st f)
++  | Type t ->
++      Type
++        {
++          t with
++          type_ops =
++            List.map (fun (o : op) -> { o with op_fn = fn_def st o.op_fn }) t.type_ops;
++        }
++  | i -> i
