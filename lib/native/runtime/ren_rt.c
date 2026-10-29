@@ -1482,12 +1482,14 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
       ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner, w);
       ren_puts(b, decl->opaque ? ")" : " }");
     } else {
+      /* a by-name constructor's fields after their names, in braces,
+         as it's built: `Rect { w: 2, h: 3 }` */
       const ren_ctor_info *c = &decl->ctors[ren_ctor_tag(decl, v)];
       ren_puts(b, c->name);
       if (c->nfields > 0) {
-        ren_puts(b, "(");
-        ren_show_fields(b, v.o, c, c->nfields, NULL, c->types, &inner, w);
-        ren_puts(b, ")");
+        ren_puts(b, c->fields != NULL ? " { " : "(");
+        ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner, w);
+        ren_puts(b, c->fields != NULL ? " }" : ")");
       }
     }
     break;

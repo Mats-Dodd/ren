@@ -713,6 +713,32 @@ and expr_of cx (e : expr) : C.expr =
             (Record
                (p, List.map (fun ((f : ident), v) -> (f.name, expr cx v)) fields))
       | _ -> bug "a record literal whose type isn't a record")
+  | Con_named (_, fields) -> (
+      match (node cx e.node).found with
+      | Some (Ctor_of (p, c)) ->
+          (* each value, in the order written, then the constructor's
+             fields in the order declared: written in that order, they're
+             the constructor's arguments as they are *)
+          let decl = ctor_decl cx p c in
+          let names = List.map (fun ((f : ident), _) -> f.name) fields in
+          if names = List.map (fun (d : Iface.field) -> d.fname) decl then
+            here (Con (p, c, List.map (fun (_, v) -> expr cx v) fields))
+          else
+            let given =
+              List.map
+                (fun ((f : ident), v) ->
+                  let v = expr cx v in
+                  (f.name, temp cx f.name v.ty, v))
+                fields
+            in
+            let arg (d : Iface.field) =
+              let _, v, _ = List.find (fun (f, _, _) -> f = d.fname) given in
+              local v e.loc
+            in
+            lets
+              (List.map (fun (_, v, value) -> (v, value)) given)
+              (here (Con (p, c, List.map arg decl)))
+      | _ -> bug "a by-name constructor inference didn't find")
   | Update { base; fields; _ } -> update cx e base fields
   | Field (r, f) -> (
       match (node cx e.node).found with
@@ -2297,6 +2323,25 @@ and pattern cx (p : pattern) : C.pattern =
     | PFail_in _ -> bug "`fail on` other than as a whole arm's pattern"
     | POr ps -> POr (List.map (pattern cx) ps)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
+    | PCon_named (_, fs) -> (
+        (* the positional constructor, a pattern for every field, in
+           declaration order, `_` for one left out *)
+        match ((node cx p.pnode).found, pty) with
+        | Some (Ctor_of (path, c)), Con (_, args) ->
+            let field (d : Iface.field) =
+              match
+                List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+              with
+              | Some (_, q) -> pattern cx q
+              | None ->
+                  {
+                    pkind = PWild;
+                    pty = Ty.apply { tys = args; rows = [] } d.fty;
+                    ploc = p.ploc;
+                  }
+            in
+            PCon (path, c, List.map field (ctor_decl cx path c))
+        | _ -> bug "a by-name constructor pattern inference didn't find")
     | PRecord (_, fs) -> (
         (* a pattern for every field, in declaration order, `_` for one
            left out *)
@@ -2318,6 +2363,16 @@ and pattern cx (p : pattern) : C.pattern =
         | _ -> bug "a record pattern whose type isn't a record")
   in
   { pkind; pty; ploc = p.ploc }
+
+(* The fields of the constructor [c] of the sum type [path], as they're
+   declared. *)
+and ctor_decl cx path c =
+  match cx.types path with
+  | Some { body = Sum cs; _ } -> (
+      match List.find_opt (fun (k : Iface.ctor) -> k.cname = c) cs with
+      | Some k -> k.cfields
+      | None -> bug "a constructor its type doesn't have")
+  | _ -> bug "a constructor of something that isn't a sum type"
 
 (* The fields of the record type [path], as it's declared. *)
 and record_decl cx path =
@@ -2359,20 +2414,24 @@ and update cx (e : expr) base fields =
     | Con (p, _) -> p
     | _ -> bug "an update of something that isn't a record"
   in
-  match t with
-  | Con (path, _) ->
-      let field (d : Iface.field) =
-        match List.find_opt (fun (f, _, _) -> f = d.fname) given with
-        | Some (_, v, _) -> (d.fname, local v loc)
-        | None ->
-            ( d.fname,
-              mk
-                (Field (local bv loc, bpath, d.fname))
-                (field_ty cx b.ty bpath d.fname)
-                loc )
-      in
-      lets
-        ((bv, b) :: List.map (fun (_, v, value) -> (v, value)) given)
+  let field (d : Iface.field) =
+    match List.find_opt (fun (f, _, _) -> f = d.fname) given with
+    | Some (_, v, _) -> (d.fname, local v loc)
+    | None ->
+        ( d.fname,
+          mk
+            (Field (local bv loc, bpath, d.fname))
+            (field_ty cx b.ty bpath d.fname)
+            loc )
+  in
+  let bound = (bv, b) :: List.map (fun (_, v, value) -> (v, value)) given in
+  match ((node cx e.node).found, t) with
+  | Some (Ctor_of (path, c)), _ ->
+      (* `Placed { ..draft, id }`: the sum, built by the constructor *)
+      lets bound
+        (mk (Con (path, c, List.map snd (List.map field (ctor_decl cx path c)))) t loc)
+  | _, Con (path, _) ->
+      lets bound
         (mk (Record (path, List.map field (record_decl cx path))) t loc)
   | _ -> bug "an update whose type isn't a record"
 
@@ -2523,7 +2582,8 @@ let max_binder (f : fn_def) =
         List.iter stmt stmts;
         go last
     | Con (_, args) -> List.iter (fun (_, a) -> go a) args
-    | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
+    | Record (_, fields) | Con_named (_, fields) ->
+        List.iter (fun (_, v) -> go v) fields
     | Update { base; fields; _ } ->
         go base;
         List.iter (fun (_, v) -> go v) fields
@@ -2558,7 +2618,7 @@ let max_binder (f : fn_def) =
     match p.pkind with
     | PVar b -> see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
-    | PRecord (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
+    | PRecord (_, fs) | PCon_named (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
     | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;

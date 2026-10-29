@@ -613,18 +613,21 @@ let%expect_test "[s3 accept] a block parameter passed on (row 11)" =
     {|
 type Tree =
   | Leaf
-  | Node(l: Tree, v: Int, r: Tree)
+  | Node { l: Tree, v: Int, r: Tree }
 
 fn walk(t: Tree, f: fn(Int)) =
   match t
     Leaf => ()
-    Node(l, v, r) =>
+    Node { l, v, r } =>
       try walk(l, f)
       try f(v)
       try walk(r, f)
 
 fn main() uses Console =
-  walk(Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf)), fn(v) => print(v))
+  walk(
+    Node { l: Node { l: Leaf, v: 1, r: Leaf }, v: 2, r: Node { l: Leaf, v: 3, r: Leaf } },
+    fn(v) => print(v),
+  )
 |};
   [%expect {|
     1
@@ -1127,19 +1130,22 @@ let%expect_test
     {|
 type Tree =
   | Leaf
-  | Node(l: Tree, v: Int, r: Tree)
+  | Node { l: Tree, v: Int, r: Tree }
 
 fn walk(t: Tree, f: fn(Int)) =
   match t
     Leaf => ()
-    Node(l, v, r) =>
+    Node { l, v, r } =>
       try walk(l, f)
       try f(v)
       try walk(r, f)
 
 fn main() uses Console =
   var total = 0
-  walk(Node(Node(Leaf, 1, Leaf), 2, Node(Leaf, 3, Leaf)), fn(v) => total += v)
+  walk(
+    Node { l: Node { l: Leaf, v: 1, r: Leaf }, v: 2, r: Node { l: Leaf, v: 3, r: Leaf } },
+    fn(v) => total += v,
+  )
   print(total)
 |};
   [%expect {|

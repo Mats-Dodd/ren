@@ -7,55 +7,55 @@
 type Expr =
   | Var(name: Int)
   | Val(value: Int)
-  | Add(l: Expr, r: Expr)
-  | Mul(l: Expr, r: Expr)
+  | Add { l: Expr, r: Expr }
+  | Mul { l: Expr, r: Expr }
 
 fn mk_expr(n: Int, v: Int) -> Expr =
   if n == 0 then (if v == 0 then Var(1) else Val(v))
-  else Add(mk_expr(n - 1, v + 1), mk_expr(n - 1, if v > 1 then v - 1 else 0))
+  else Add { l: mk_expr(n - 1, v + 1), r: mk_expr(n - 1, if v > 1 then v - 1 else 0) }
 
 fn append_add(e0: Expr, e3: Expr) -> Expr =
   match e0
-    Add(e1, e2) => Add(e1, append_add(e2, e3))
-    _ => Add(e0, e3)
+    Add { l, r } => Add { l, r: append_add(r, e3) }
+    _ => Add { l: e0, r: e3 }
 
 fn append_mul(e0: Expr, e3: Expr) -> Expr =
   match e0
-    Mul(e1, e2) => Mul(e1, append_mul(e2, e3))
-    _ => Mul(e0, e3)
+    Mul { l, r } => Mul { l, r: append_mul(r, e3) }
+    _ => Mul { l: e0, r: e3 }
 
 fn reassoc(e: Expr) -> Expr =
   match e
-    Add(e1, e2) => append_add(reassoc(e1), reassoc(e2))
-    Mul(e1, e2) => append_mul(reassoc(e1), reassoc(e2))
+    Add { l, r } => append_add(reassoc(l), reassoc(r))
+    Mul { l, r } => append_mul(reassoc(l), reassoc(r))
     _ => e
 
 fn cfold(e: Expr) -> Expr =
   match e
-    Add(e1, e2) =>
-      let a = cfold(e1)
-      let b = cfold(e2)
+    Add { l, r } =>
+      let a = cfold(l)
+      let b = cfold(r)
       match (a, b)
         (Val(x), Val(y)) => Val(x + y)
-        (Val(x), Add(f, Val(y))) => Add(Val(x + y), f)
-        (Val(x), Add(Val(y), f)) => Add(Val(x + y), f)
-        _ => Add(a, b)
-    Mul(e1, e2) =>
-      let a = cfold(e1)
-      let b = cfold(e2)
+        (Val(x), Add { l: f, r: Val(y) }) => Add { l: Val(x + y), r: f }
+        (Val(x), Add { l: Val(y), r: f }) => Add { l: Val(x + y), r: f }
+        _ => Add { l: a, r: b }
+    Mul { l, r } =>
+      let a = cfold(l)
+      let b = cfold(r)
       match (a, b)
         (Val(x), Val(y)) => Val(x * y)
-        (Val(x), Mul(f, Val(y))) => Mul(Val(x * y), f)
-        (Val(x), Mul(Val(y), f)) => Mul(Val(x * y), f)
-        _ => Mul(a, b)
+        (Val(x), Mul { l: f, r: Val(y) }) => Mul { l: Val(x * y), r: f }
+        (Val(x), Mul { l: Val(y), r: f }) => Mul { l: Val(x * y), r: f }
+        _ => Mul { l: a, r: b }
     _ => e
 
 fn eval(e: Expr) -> Int =
   match e
     Var(_) => 0
     Val(v) => v
-    Add(l, r) => eval(l) + eval(r)
-    Mul(l, r) => eval(l) * eval(r)
+    Add { l, r } => eval(l) + eval(r)
+    Mul { l, r } => eval(l) * eval(r)
 
 pub fn run(n: Int) uses Console =
   let e = mk_expr(n, 1)

@@ -1,0 +1,190 @@
+================================================================================
+variants by position and by name
+================================================================================
+
+type Shape =
+  | Dot
+  | Circle(r: Int)
+  | Static(Int)
+  | Rect { w: Int, h: Int }
+  | Draft { lines: Array<Line> }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier)
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (variant
+        (type_identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (variant
+        (type_identifier)
+        (record_type
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (variant
+        (type_identifier)
+        (record_type
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier)))))))))))
+
+================================================================================
+by-name constructors, and after their type
+================================================================================
+
+fn f(o: Order) =
+  let a = Rect { w: 2, h }
+  let b = Shape.Rect { w: 2, h: 3 }
+  let c = geo.Shape.Rect { w, h }
+  Order.Placed { ..draft, id, total: 3 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (let_statement
+        (identifier)
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (number))
+          (field_initializer
+            (identifier))))
+      (let_statement
+        (identifier)
+        (constructor_expression
+          (constructor_ref
+            (type_name
+              (type_identifier))
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (number))
+          (field_initializer
+            (identifier)
+            (number))))
+      (let_statement
+        (identifier)
+        (constructor_expression
+          (constructor_ref
+            (type_name
+              (identifier)
+              (type_identifier))
+            (type_identifier))
+          (field_initializer
+            (identifier))
+          (field_initializer
+            (identifier))))
+      (constructor_expression
+        (constructor_ref
+          (type_name
+            (type_identifier))
+          (type_identifier))
+        (identifier)
+        (field_initializer
+          (identifier))
+        (field_initializer
+          (identifier)
+          (number))))))
+
+================================================================================
+by-name constructor patterns, and after their type
+================================================================================
+
+fn f(s: Shape) -> Int =
+  match s
+    Rect { w, h: 0 } => w
+    Shape.Rect { w: width, .. } => width
+    geo.Shape.Frame { .. } => 0
+    Circle(r) => r
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (match_expression
+        (identifier)
+        (match_arm
+          (record_pattern
+            (type_name
+              (type_identifier))
+            (field_pattern
+              (identifier))
+            (field_pattern
+              (identifier)
+              (number)))
+          (identifier))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_name
+                (type_identifier))
+              (type_identifier))
+            (field_pattern
+              (identifier)
+              (identifier))
+            (rest_pattern))
+          (identifier))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_name
+                (identifier)
+                (type_identifier))
+              (type_identifier))
+            (rest_pattern))
+          (number))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (type_identifier))
+            (identifier))
+          (identifier))))))

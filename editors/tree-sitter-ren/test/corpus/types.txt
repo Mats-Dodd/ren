@@ -47,7 +47,7 @@ a sum indented under its name, with fields
 type Plan =
   | Free
   | Pro(seats: Int)
-  | Enterprise(contract: Int, seats: Int)
+  | Enterprise { contract: Int, seats: Int }
 
 fn f() = 1
 
@@ -68,16 +68,17 @@ fn f() = 1
               (type_identifier)))))
       (variant
         (type_identifier)
-        (field_declaration
-          (identifier)
-          (named_type
-            (type_name
-              (type_identifier))))
-        (field_declaration
-          (identifier)
-          (named_type
-            (type_name
-              (type_identifier)))))))
+        (record_type
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))))))
   (function_definition
     (identifier)
     (parameters)

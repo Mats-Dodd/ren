@@ -340,17 +340,25 @@ module.exports = grammar({
 
     numeric: (_) => 'numeric',
 
-    // | Free | Pro(seats: Int), and indented, one `|` per line
+    // | Free | Pro(seats: Int) | Rect { w: Int, h: Int }, and indented, one
+    // `|` per line
     sum_type: ($) =>
       seq(
         optional('|'),
         sep1($.variant, seq(optional($._newline), '|')),
       ),
 
+    // Free; Flat(off: Money) or Flat(Money), one field by position, its
+    // name only documenting it; Rect { w: Int, h: Int }, by name
     variant: ($) =>
       seq(
         field('name', $.type_identifier),
-        optional(seq('(', commaSep($.field_declaration), ')')),
+        optional(
+          choice(
+            seq('(', choice($.field_declaration, field('type', $._type)), ')'),
+            field('fields', $.record_type),
+          ),
+        ),
       ),
 
     field_declaration: ($) =>
@@ -1028,14 +1036,28 @@ module.exports = grammar({
 
     _bracket_block: ($) => seq(sep1($._statement, $._newline), $._dedent),
 
-    // Free, Pro(5), Pro(seats: 5), Plan.Free, billing.Plan.Free
+    // Free, Pro(5), Plan.Free, billing.Plan.Free; by name after its type,
+    // Shape.Rect { w: 2, h: 3 } and Order.Placed { ..draft, id }. A bare
+    // Rect { ... } is a record_expression, as the compiler parses it, and
+    // its Resolve decides which it is
     constructor_expression: ($) =>
-      prec.right(
+      choice(
+        prec.right(
+          seq(
+            field('constructor', $.constructor_ref),
+            optional(field('arguments', $.constructor_arguments)),
+          ),
+        ),
         seq(
-          field('constructor', $.constructor_ref),
-          optional(field('arguments', $.constructor_arguments)),
+          field('constructor', alias($._qualified_constructor_ref, $.constructor_ref)),
+          '{',
+          optional($._record_body),
+          '}',
         ),
       ),
+
+    _qualified_constructor_ref: ($) =>
+      seq(field('type', $.type_name), '.', field('name', $.type_identifier)),
 
     constructor_ref: ($) =>
       seq(
@@ -1065,15 +1087,18 @@ module.exports = grammar({
       seq(
         optional(field('type', $.type_name)),
         '{',
-        choice(
-          seq(
-            '..',
-            field('spread', $._expression),
-            optional(seq(',', commaSep($.field_initializer))),
-          ),
-          commaSep($.field_initializer),
-        ),
+        optional($._record_body),
         '}',
+      ),
+
+    _record_body: ($) =>
+      choice(
+        seq(
+          '..',
+          field('spread', $._expression),
+          optional(seq(',', commaSep($.field_initializer))),
+        ),
+        commaSep1($.field_initializer),
       ),
 
     // `id: 1`, or just `id`, meaning `id: id`
@@ -1213,16 +1238,17 @@ module.exports = grammar({
       seq(
         optional(field('type', $.type_name)),
         '{',
-        optional(
-          choice(
-            seq(
-              sep1($.field_pattern, ','),
-              optional(seq(',', optional($.rest_pattern))),
-            ),
-            $.rest_pattern,
-          ),
-        ),
+        optional($._field_patterns),
         '}',
+      ),
+
+    _field_patterns: ($) =>
+      choice(
+        seq(
+          sep1($.field_pattern, ','),
+          optional(seq(',', optional($.rest_pattern))),
+        ),
+        $.rest_pattern,
       ),
 
     // `id: n`, or just `id`, which binds `id`
@@ -1234,10 +1260,20 @@ module.exports = grammar({
 
     rest_pattern: (_) => '..',
 
+    // Some(x), Plan.Free; by name after its type, Shape.Rect { w, .. }
+    // (a bare Rect { w, .. } is a record_pattern, as for an expression)
     constructor_pattern: ($) =>
-      seq(
-        field('constructor', $.constructor_ref),
-        optional(seq('(', commaSep($._pattern), ')')),
+      choice(
+        seq(
+          field('constructor', $.constructor_ref),
+          optional(seq('(', commaSep($._pattern), ')')),
+        ),
+        seq(
+          field('constructor', alias($._qualified_constructor_ref, $.constructor_ref)),
+          '{',
+          optional($._field_patterns),
+          '}',
+        ),
       ),
 
     // ---- names ----

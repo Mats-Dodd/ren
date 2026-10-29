@@ -72,10 +72,10 @@ twin without it, in the same file, and print both checksums:
 
 - **`nested`** writes each element of a grid, an `Array<Array<Int>>`,
   by its indices, maps the grid with `map` inside `map`, and builds and
-  scales a list of a million cells by recursion, `Cons(i, build(...))`.
-  The first two need a row moved out of the grid while it's changed
-  (swap.ml), the third a loop that fills a hole (trmc.ml). The Rust
-  writes `g[i][j]`, maps with `into_iter().map().collect()`, which
+  scales a list of a million cells by recursion, `Cons { head: i, tail:
+  build(...) }`. The first two need a row moved out of the grid while
+  it's changed (swap.ml), the third a loop that fills a hole (trmc.ml).
+  The Rust writes `g[i][j]`, maps with `into_iter().map().collect()`, which
   reuses each Vec, and builds its list front to back through a `&mut`
   to the next link, as one too long to recurse over must be; the Go is
   the same with pointers, its `map` writing new slices.

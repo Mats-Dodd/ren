@@ -331,18 +331,57 @@ let ctor_arity loc (c : Ast.ident) (ctor : Iface.ctor) given =
            `%s((%s))`"
           c.name
           (if given = 2 then "a, b" else "a, b, c")
+    | [ { fname = ""; _ } ] -> sprintf "write it with one value: `%s(...)`" c.name
     | fs -> sprintf "its field%s: %s" (plural n) (quote (field_names fs))
   in
   Diag.make loc ~help
     (sprintf "`%s` has %d field%s but was given %d" c.name n (plural n) given)
 
-let some_labels loc (c : Ast.ident) =
-  Diag.make loc (sprintf "label every field of `%s`, or none of them" c.name)
+(* ---- by-name variants (compiler.md, "Data stage", "By-name
+   variants") ----
 
-let wrong_label (l : Ast.ident) (f : Iface.field) =
-  Diag.make l.loc
-    ~help:"labels are written in the order the fields are declared"
-    (sprintf "expected the label `%s` here, found `%s`" f.fname l.name)
+   A variant's declaration decides how it's written: in braces, by name,
+   or by position, in parentheses, with one field at most. Each of these
+   is said where it's written the other way, at the whole constructor
+   or pattern, and its help is the one way, written out in full, which
+   replaces exactly what's underlined. [c] is the constructor as it's
+   written, `Rect` or `Shape.Rect`. *)
+
+(* `Rect(2, 3)` or `Rect(w: 2, h: 3)`, of a by-name variant, [written]
+   its fields given their names: `Rect { w: 2, h: 3 }`. *)
+let built_by_name loc c ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s`" written)
+    (sprintf "`%s` has named fields, so it's built with them" c)
+
+(* `Rect(w, tall)`, a pattern of a by-name variant, [written] by name:
+   `Rect { w, h: tall }`. *)
+let matched_by_name loc c ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s`" written)
+    (sprintf "`%s` has named fields, so it's matched by them" c)
+
+(* `Circle(r: 2)` or `Circle { r: 2 }`, of a variant with one field,
+   built, or matched if [pattern], [written] by position: `Circle(2)`.
+   One with no fields, `Dot { }`, is written alone. *)
+let by_position loc c ~fields ~pattern ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s`" written)
+    (if fields = 0 then sprintf "`%s` has no fields, so it's written alone" c
+     else
+       sprintf "`%s` has one field, so it's %s by position" c
+         (if pattern then "matched" else "built"))
+
+(* `{ w, .. }` matched against the sum type [shown]: [written] names a
+   variant it could be, `Rect { w, .. }`, if there's one with named
+   fields. *)
+let record_pattern_of_sum loc shown ~written =
+  Diag.make loc
+    ~help:
+      (match written with
+      | Some w -> sprintf "name the variant: `%s`" w
+      | None -> "match its variants instead")
+    (sprintf "`%s` is a sum type, so a record pattern doesn't match it" shown)
 
 (* `Plan { ... }`, where `Plan` isn't a record *)
 let not_a_record ~names ?(test = false) loc (td : Iface.type_decl) =
@@ -409,13 +448,15 @@ let nearest name names =
 
 (* A field [f] that [path], whose fields are [decl], doesn't have: the one
    it's likely a misspelling of, if one is near, or else all of them. *)
-let no_such_field ~names ?(what = "field") (f : Ast.ident) path decl =
+let no_such_field ~names ?(what = "field") ?owner (f : Ast.ident) path decl =
   Diag.make f.loc
     ~help:
       (match nearest f.name (field_names decl) with
       | Some near -> sprintf "did you mean `%s`?" near
       | None -> sprintf "its %ss: %s" what (quote (field_names decl)))
-    (sprintf "`%s` has no %s named `%s`" (names path) what f.name)
+    (sprintf "`%s` has no %s named `%s`"
+       (match owner with Some o -> o | None -> names path)
+       what f.name)
 
 (* ---- record update, `{ ..base, f: v }` (compiler.md, "Data stage",
    "Record update") ----
@@ -578,13 +619,15 @@ let impl_record_made loc ~dep ~name arms =
             head arm)
     (sprintf "an implementation of `%s` is a handler, not a record" dep)
 
-let missing_fields ~names loc path missing =
+(* A record literal, or a by-name constructor, [what], `Order` or `Rect`,
+   that doesn't give [missing]. *)
+let missing_fields loc what missing =
   Diag.make loc
     ~help:
       (sprintf "give %s a value too, like `%s: ...`"
          (if List.length missing = 1 then "it" else "each")
          (List.hd missing))
-    (sprintf "this `%s` is missing %s" (names path) (quote missing))
+    (sprintf "this `%s` is missing %s" what (quote missing))
 
 let needs_record (f : Ast.ident) shown =
   Diag.make f.loc
@@ -1187,6 +1230,7 @@ let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
     | PCon (c, ps) -> c.name.name ^ args ps
     | PTuple ps -> args ps
     | PRecord (_, fs) -> Ast.show_fields shown fs
+    | PCon_named (c, fs) -> c.name.name ^ " " ^ Ast.show_fields shown fs
     | PWild | PFail _ | PFail_any | PFail_in _ | POr _ -> "_"
   in
   let parts =

@@ -917,9 +917,9 @@ below zero. The tests that check nothing moved show the two banks, and
   
      seed 736 · rerun: ren test b12 --only "a debit" --seed 736
   
-  ──── an overdraft is refused, and nothing moves ── bank.ren:111
+  ──── an overdraft is refused, and nothing moves ── bank.ren:113
       │
-  111 │   assert acme == before
+  113 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
       left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(-100), ...)), ...]), ...)
@@ -928,9 +928,9 @@ below zero. The tests that check nothing moved show the two banks, and
   
       seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
   
-  ──── a batch that fails moves nothing ── bank.ren:149
+  ──── a batch that fails moves nothing ── bank.ren:151
       │
-  149 │   assert acme == before
+  151 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
       left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(1100), ...)), ...]), ...)

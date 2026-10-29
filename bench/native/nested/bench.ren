@@ -4,13 +4,14 @@
 // it's changed (swap.ml), so neither is copied. `map` maps a grid of
 // rows with `map` inside `map`, each round's result the next round's
 // input: each row is moved out, changed in place, and put back. `list`
-// builds a list of a million cells by recursion, `Cons(i, build(...))`,
-// and scales it by recursion, `Cons(h * k, scale(t, k))`: each is a loop
-// that fills a hole (trmc.ml), so neither takes stack, and `scale`
-// reuses the cells it takes apart. Each prints a checksum.
+// builds a list of a million cells by recursion, `Cons { head: i, tail:
+// build(...) }`, and scales it by recursion, `Cons { head: h * k, tail:
+// scale(t, k) }`: each is a loop that fills a hole (trmc.ml), so neither
+// takes stack, and `scale` reuses the cells it takes apart. Each prints
+// a checksum.
 
 type List =
-  | Cons(head: Int, tail: List)
+  | Cons { head: Int, tail: List }
   | Nil
 
 fn grid_of(n: Int) -> Array<Array<Int>> =
@@ -44,11 +45,11 @@ pub fn map(rounds: Int) -> Int =
   total(g)
 
 fn build(i: Int, n: Int) -> List =
-  if i == n then Nil else Cons(i, build(i + 1, n))
+  if i == n then Nil else Cons { head: i, tail: build(i + 1, n) }
 
 fn scale(l: List, k: Int) -> List =
   match l
-    Cons(h, t) => Cons(h * k % 1000003, scale(t, k))
+    Cons { head: h, tail: t } => Cons { head: h * k % 1000003, tail: scale(t, k) }
     Nil => Nil
 
 fn sum(l: List) -> Int =
@@ -57,7 +58,7 @@ fn sum(l: List) -> Int =
   var go = true
   while go
     match c
-      Cons(h, t) =>
+      Cons { head: h, tail: t } =>
         s = (s + h) % 1000003
         c = t
       Nil => go = false

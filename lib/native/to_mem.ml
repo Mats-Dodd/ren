@@ -753,7 +753,7 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         | D_named k -> (
             match (Hashtbl.find cx.decl_bodies k).dbody with
             | Record_decl _ -> true
-            | Sum_decl cs -> List.exists (fun (_, ts) -> ts <> []) cs
+            | Sum_decl cs -> List.exists (fun (_, _, ts) -> ts <> []) cs
             (* an opaque type's is what it's represented as, which the
                runtime finds from its template ([ren_counted_in]) *)
             | Rep_decl _ ->
@@ -815,6 +815,9 @@ and decl_id cx loc (p : Path.t) : int =
               (List.map
                  (fun (c : Iface.ctor) ->
                    ( c.cname,
+                     (if c.cnamed then
+                        Some (List.map (fun (f : Iface.field) -> f.fname) c.cfields)
+                      else None),
                      List.map (fun (f : Iface.field) -> tmpl f.fty) c.cfields ))
                  cs)
         | Opaque (Rep r) -> Rep_decl (tmpl r)

@@ -4840,14 +4840,14 @@ let%expect_test "a failed assert leaves out what its two sides share" =
      fields, the other elements and an element only one side has *)
   test
     {|
-pub type Shape = Dot | Box(w: Int, h: Int)
+pub type Shape = Dot | Box { w: Int, h: Int }
 pub type P = { name: Str, at: Int, shapes: Array<Shape> }
 
 test "a payload" =
-  assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
+  assert P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 2 }] } == P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 3 }] }
 
 test "two constructors" =
-  assert [Dot, Dot, Dot] == [Dot, Box(1, 1), Dot]
+  assert [Dot, Dot, Dot] == [Dot, Box { w: 1, h: 1 }, Dot]
 
 test "one side is longer" =
   assert [1, 2, 3, 4] == [1, 2]
@@ -4881,22 +4881,22 @@ test "apart first, left longer" =
 
     ──── a payload ── test.ren:5
       │
-    5 │   assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
-      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    5 │   assert P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 2 }] } == P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 3 }] }
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       │
-      left:  P { ..., shapes: [..., Box(..., 2)] }
-      right: P { ..., shapes: [..., Box(..., 3)] }
-                                             ^ differs here
+      left:  P { ..., shapes: [..., Box { ..., h: 2 }] }
+      right: P { ..., shapes: [..., Box { ..., h: 3 }] }
+                                                  ^ differs here
 
       seed 4626 · rerun: ren test test.ren --only "a payload" --seed 4626
 
     ──── two constructors ── test.ren:8
       │
-    8 │   assert [Dot, Dot, Dot] == [Dot, Box(1, 1), Dot]
-      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    8 │   assert [Dot, Dot, Dot] == [Dot, Box { w: 1, h: 1 }, Dot]
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       │
       left:  [..., Dot, ...]
-      right: [..., Box(1, 1), ...]
+      right: [..., Box { w: 1, h: 1 }, ...]
                    ^ differs here
 
       seed 446 · rerun: ren test test.ren --only "two constructors" --seed 446

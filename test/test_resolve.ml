@@ -82,18 +82,18 @@ fn main() =
 let%expect_test "a pattern can't bind the same name twice" =
   run
     {|
-type Pair = P(a: Int, b: Int)
+type Pair = P { a: Int, b: Int }
 fn main() =
-  match P(1, 2)
-    P(x, x) => print(x)
+  match P { a: 1, b: 2 }
+    P { a: x, b: x } => print(x)
 |};
   [%expect
     {|
     error: there are two pattern variables named `x`
-      ┌─ test.ren:4:10
-    4 │     P(x, x) => print(x)
-      │          ^
-      │       - the first `x` is here
+      ┌─ test.ren:4:18
+    4 │     P { a: x, b: x } => print(x)
+      │                  ^
+      │            - the first `x` is here
       help: rename one of them
     |}]
 

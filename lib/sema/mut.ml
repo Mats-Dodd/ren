@@ -283,7 +283,8 @@ let rec walk cx (e : expr) =
       List.iter (stmt cx) stmts;
       walk cx last
   | Con (_, args) -> List.iter (fun (_, a) -> walk cx a) args
-  | Record (_, fields) -> List.iter (fun (_, v) -> walk cx v) fields
+  | Record (_, fields) | Con_named (_, fields) ->
+      List.iter (fun (_, v) -> walk cx v) fields
   | Update { base; fields; _ } ->
       walk cx base;
       List.iter (fun (_, v) -> walk cx v) fields

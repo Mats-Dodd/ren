@@ -23,7 +23,7 @@ type field = { fname : string; fty : Ty.ty }
    payload's types, or another named set, which stands for all of its own.
    Only the payload's types are the tag's: its fields' names document it. *)
 type error = Tag of string * Ty.ty list | Set of Path.t
-type ctor = { cname : string; cfields : field list; cloc : Loc.t }
+type ctor = { cname : string; cfields : field list; cnamed : bool; cloc : Loc.t }
 
 type body =
   | Builtin  (** built into the compiler, like [Int] *)
@@ -535,6 +535,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
                {
                  cname = c.ctor_name.name;
                  cfields = List.map field c.ctor_fields;
+                 cnamed = c.ctor_named;
                  cloc = c.ctor_name.loc;
                })
              cs)

@@ -101,7 +101,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
     match p.pkind with
     | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
-    | PRecord (_, fs) -> List.iter (fun (_, q) -> pattern_ q) fs.fpats
+    | PRecord (_, fs) | PCon_named (_, fs) ->
+        List.iter (fun (_, q) -> pattern_ q) fs.fpats
   in
   let rec expr (e : expr) =
     let go = List.iter expr in
@@ -132,7 +133,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
         List.iter stmt state;
         go (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
     | Con (_, args) | Fail (_, args) -> go (List.map snd args)
-    | Record (_, fields) -> go (List.map snd fields)
+    | Record (_, fields) | Con_named (_, fields) -> go (List.map snd fields)
     | Update { base; fields; _ } -> go (base :: List.map snd fields)
     | Match (s, arms) ->
         expr s;
@@ -1934,6 +1935,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         List.iter (walk Said) xs
     | Tuple xs -> all In_tuple xs
     | Con (c, args) -> all (In_payload c.name.name) (List.map snd args)
+    | Con_named (c, fields) -> all (In_payload c.name.name) (List.map snd fields)
     | Record (name, fields) ->
         (* a record of a dependency's operations: inference reports it, as
            a handler to write *)

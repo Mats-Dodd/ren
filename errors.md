@@ -224,8 +224,8 @@ For all-or-nothing, change a copy and keep it only if nothing failed:
 pub fn transfer(inout self, t: Transfer) ! TransferError =
   ...
   var draft = self
-  try &draft.accounts[i].debit(t.amount, Sent(t.amount, t.to))
-  try &draft.accounts[j].credit(t.amount, Received(t.amount, t.from))
+  try &draft.accounts[i].debit(t.amount, Sent { amount: t.amount, to: t.to })
+  try &draft.accounts[j].credit(t.amount, Received { amount: t.amount, from: t.from })
   self = draft
 ```
 

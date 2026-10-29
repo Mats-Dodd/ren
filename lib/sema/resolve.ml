@@ -172,6 +172,11 @@ type env = {
   own_aliases : (string, tyname) Hashtbl.t;
       (** the module's own aliases of a dependency, `dep Jobs = Chan<Job>`, by
           name, each with the name of the one it names *)
+  named_ctors : (string, string) Hashtbl.t;
+      (** each by-name constructor of a sum type in scope bare, by its name,
+          with the sum's name: which a bare `Name { ... }` can also mean (see
+          [braces_name]) *)
+  sums : (string, unit) Hashtbl.t;  (** the sum types in scope bare, by name *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -1302,7 +1307,8 @@ let rec pattern_vars (p : Parsed.pattern) =
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
   | PVar x -> [ x ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
-  | PRecord (_, fs) -> List.concat_map (fun (_, q) -> pattern_vars q) fs.fpats
+  | PRecord (_, fs) | PCon_named (_, fs) ->
+      List.concat_map (fun (_, q) -> pattern_vars q) fs.fpats
   | POr ps ->
       (* each alternative binds the same names (see [pattern]) *)
       Option.fold ~none:[] ~some:pattern_vars (List.nth_opt ps 0)
@@ -1367,6 +1373,38 @@ let record_name env sc (t : tyname) =
   | Some n -> n
   | None -> { tref = Named (Path.make env.home t.tid.name); tloc = tyname_loc t }
 
+(* What a bare `Name { ... }` is, in a value, an update or a pattern
+   (compiler.md, "Data stage", "The grammar"): the record type [Name] if a
+   type of that name is in scope, and otherwise the by-name constructor
+   [Name], which inference finds through a type, as it finds a bare
+   constructor. A type in scope that's also a by-name constructor of a sum
+   the module can name bare is refused, never picked, unless the type is
+   that sum, or another sum, which has no fields to build: `type Point = |
+   Point { x: Int, y: Int }`. A name with its module in front, `rows.Row {
+   ... }`, is always a record's. *)
+type braced = Braced_type of tname | Braced_ctor of Resolved.ctor_ref
+
+let braces_name env sc (t : tyname) =
+  let name = t.tid.name in
+  let is_type =
+    index_of name 0 sc.tparams <> None || Hashtbl.mem env.types name
+  in
+  match (t.tmod, Hashtbl.find_opt env.named_ctors name) with
+  | Some _, _ -> Braced_type (record_name env sc t)
+  | None, None when is_type -> Braced_type (record_name env sc t)
+  | None, None -> Braced_ctor { qual = None; name = t.tid }
+  | None, Some sum when is_type && not (Hashtbl.mem env.sums name) ->
+      report env t.tid.loc
+        ~help:
+          (sprintf
+             "write `%s.%s { ... }` for the constructor, or `{ ... }` with the \
+              type left out for the record"
+             sum name)
+        (sprintf "`%s` is a record type here, and a constructor of `%s` too"
+           name sum);
+      Braced_type (record_name env sc t)
+  | None, Some _ -> Braced_ctor { qual = None; name = t.tid }
+
 (* A pattern, and the scope its names are bound in. [same] are the
    binders the first alternative of an or-pattern bound, which the names
    of the others are: `fail Short(_, by) | fail Late(by)` binds one `by`. *)
@@ -1411,16 +1449,23 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
     | PCon (c, ps) ->
         let ps, sc = patterns sc ps in
         (PCon (ctor_ref env sc c, ps), sc)
+    | PCon_named (c, fs) ->
+        let qs, sc = patterns sc (List.map snd fs.fpats) in
+        let fpats = List.combine (List.map fst fs.fpats) qs in
+        (PCon_named (ctor_ref env sc c, { fs with fpats }), sc)
     | PFail (t, ps) ->
         let ps, sc = patterns sc ps in
         (PFail (t, ps), sc)
     | PTuple ps ->
         let ps, sc = patterns sc ps in
         (PTuple ps, sc)
-    | PRecord (t, fs) ->
+    | PRecord (t, fs) -> (
         let qs, sc = patterns sc (List.map snd fs.fpats) in
         let fpats = List.combine (List.map fst fs.fpats) qs in
-        (PRecord (Option.map (record_name env sc) t, { fs with fpats }), sc)
+        match Option.map (braces_name env sc) t with
+        | Some (Braced_ctor c) -> (PCon_named (c, { fs with fpats }), sc)
+        | Some (Braced_type t) -> (PRecord (Some t, { fs with fpats }), sc)
+        | None -> (PRecord (None, { fs with fpats }), sc))
     | POr [] -> assert false (* the parser makes one of two or more *)
     | POr (first :: rest) ->
         (* `fail on` takes what its tags are, which an alternative beside
@@ -1496,7 +1541,7 @@ let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
             ([], sc) ps
         in
         (PTuple (List.rev ps), sc)
-    | PRecord (t, fs) ->
+    | PRecord (t, fs) -> (
         let fpats, sc =
           List.fold_left
             (fun (acc, sc) (f, p) ->
@@ -1504,11 +1549,31 @@ let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
               ((f, p) :: acc, sc))
             ([], sc) fs.fpats
         in
-        ( PRecord
-            (Option.map (record_name env sc) t, { fs with fpats = List.rev fpats }),
-          sc )
+        let fs = { fs with fpats = List.rev fpats } in
+        match Option.map (braces_name env sc) t with
+        | Some (Braced_ctor c) ->
+            (* a constructor might not match, which the parser couldn't
+               tell: it read `Rect { .. }` as a record's *)
+            let what =
+              match bound with
+              | By_loop | By_ref_loop | By_index -> "a `for`"
+              | By_lambda -> "a lambda's parameter"
+              | _ -> "a `let`"
+            in
+            report env p.ploc
+              ~help:
+                "take it apart with a `match`, which says what happens when it \
+                 doesn't match"
+              (sprintf
+                 "%s takes apart only a tuple or a record, of names and `_`, \
+                  which always matches, but `%s` might not"
+                 what (show_pattern p));
+            (PCon_named (c, fs), sc)
+        | Some (Braced_type t) -> (PRecord (Some t, fs), sc)
+        | None -> (PRecord (None, fs), sc))
     | PWild -> (PWild, sc)
-    | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
+    | PInt _ | PBool _ | PCon _ | PCon_named _ | PFail _ | PFail_any | PFail_in _
+    | POr _ ->
         (* the parser lets only names, `_`, tuples and records through *)
         assert false
   in
@@ -1803,13 +1868,26 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Con (c, args) ->
         let c = ctor_ref env sc c in
         Con (c, List.map (fun (l, a) -> (l, go a)) args)
-    | Record (name, fields) ->
-        let name = Option.map (record_name env sc) name in
-        Record (name, List.map (fun (f, v) -> (f, expr env sc v)) fields)
+    | Record (name, fields) -> (
+        let fields = List.map (fun (f, v) -> (f, expr env sc v)) fields in
+        match Option.map (braces_name env sc) name with
+        | Some (Braced_ctor c) -> Con_named (c, fields)
+        | Some (Braced_type t) -> Record (Some t, fields)
+        | None -> Record (None, fields))
+    | Con_named (c, fields) ->
+        let c = ctor_ref env sc c in
+        Con_named (c, List.map (fun (f, v) -> (f, go v)) fields)
     | Update { target; base; fields } ->
         (* the base first, then the fields, as they're evaluated *)
         let target =
-          Option.map (fun (Into_type t) -> Into_type (record_name env sc t)) target
+          Option.map
+            (function
+              | Into_type t -> (
+                  match braces_name env sc t with
+                  | Braced_ctor c -> Into_ctor c
+                  | Braced_type t -> Into_type t)
+              | Into_ctor c -> Into_ctor (ctor_ref env sc c))
+            target
         in
         let base = go base in
         Update
@@ -3077,6 +3155,7 @@ let type_def env (td : Parsed.type_def) :
                {
                  ctor_name = c.ctor_name;
                  ctor_fields = List.map field c.ctor_fields;
+                 ctor_named = c.ctor_named;
                })
              cs)
     | Opaque { rep; numeric } ->
@@ -3733,6 +3812,8 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       own_sets = Hashtbl.create 8;
       own_deps = Hashtbl.create 8;
       own_aliases = Hashtbl.create 8;
+      named_ctors = Hashtbl.create 8;
+      sums = Hashtbl.create 8;
       modules =
         List.fold_left
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
@@ -3895,6 +3976,43 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                 (Path.make home name.name, List.length td.type_params))
       | Fn _ | Import _ | Testing _ -> ())
     prog;
+  (* the sum types in scope bare, and their by-name constructors, which a
+     bare `Name { ... }` can mean ([braces_name]) *)
+  Hashtbl.iter
+    (fun name ((p : Path.t), _) ->
+      let ctors =
+        if p.home = home then
+          List.find_map
+            (function
+              | Type ({ type_body = Ctors cs; _ } as td : Parsed.type_def)
+                when td.type_name.name = p.name ->
+                  Some
+                    (List.filter_map
+                       (fun (c : Parsed.ctor) ->
+                         if c.ctor_named then Some c.ctor_name.name else None)
+                       cs)
+              | _ -> None)
+            prog
+        else
+          match
+            List.find_map
+              (fun (i : Iface.t) ->
+                if i.home = p.home then Iface.find_type i p.name else None)
+              env.ifaces
+          with
+          | Some { body = Sum cs; _ } ->
+              Some
+                (List.filter_map
+                   (fun (c : Iface.ctor) -> if c.cnamed then Some c.cname else None)
+                   cs)
+          | _ -> None
+      in
+      Option.iter
+        (fun cs ->
+          Hashtbl.replace env.sums name ();
+          List.iter (fun c -> Hashtbl.replace env.named_ctors c name) cs)
+        ctors)
+    env.types;
   (* the functions in scope: the prelude's, then this module's own *)
   List.iter
     (fun (iface : Iface.t) ->

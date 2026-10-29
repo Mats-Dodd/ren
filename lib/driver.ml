@@ -1315,7 +1315,8 @@ let console_spec ~load ~dir ~home ~file ~src ~name lines =
       | PVar b -> [ b.name ]
       | PCon (_, ps) | PFail (_, ps) | PTuple ps | POr ps ->
           List.concat_map names ps
-      | PRecord (_, fs) -> List.concat_map (fun (_, q) -> names q) fs.fpats
+      | PRecord (_, fs) | PCon_named (_, fs) ->
+          List.concat_map (fun (_, q) -> names q) fs.fpats
       | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
     in
     match parsed text with

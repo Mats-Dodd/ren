@@ -13,7 +13,11 @@ type field = { fname : string; fty : Ty.ty }
 (* One of a named error set's errors, as it's declared: a tag, with its
    payload's types, or another named set, which stands for all of its own. *)
 type error = Tag of string * Ty.ty list | Set of Path.t
-type ctor = { cname : string; cfields : field list; cloc : Loc.t }
+(* A sum type's constructor: its fields, and whether they're by name,
+   [cnamed], `Rect { w: Int, h: Int }`, or else positional, one at most,
+   whose name, `off` in `Flat(off: Money)`, only documents it, and is [""]
+   if it isn't written (compiler.md, "Data stage", "By-name variants"). *)
+type ctor = { cname : string; cfields : field list; cnamed : bool; cloc : Loc.t }
 
 type body =
   | Builtin  (** built into the compiler, like [Int] *)

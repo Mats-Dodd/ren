@@ -2434,7 +2434,7 @@ release loop, `out[i] = f(out[i])`, is the pairing.
 
 **Tail recursion modulo cons** (trmc.ml), in Perceus builds. A
 function whose recursive call's result is put in a constructor and
-returned, `Cons(i, build(i + 1, n))`, runs as a loop instead, which
+returned, `Cons { head: i, tail: build(i + 1, n) }`, runs as a loop instead, which
 builds each constructor first, with a scalar in the slot the call's
 result goes in, and fills that slot, the hole, on the next turn: Koka's
 (Leijen and Lorenzen, POPL'22; Core/CTail.hs, `ctailExpr` :264,
@@ -6919,7 +6919,8 @@ revisit if a step finds it wrong:
 | step | commit | done | left |
 |---|---|---|---|
 | 0 | f313084 | this section: the grammar, the AST, each step's rules, passes and files, every error with its help, the layout faults and their fixes, the choices where the design is silent; the inventory of by-name sites (324, counted by a scratchpad script); test/test_data.ml, every test of a feature behind `until "sN"`, the guards written plainly; bench/data/ (update, byname, orpat, variants, todo_panic, shapes, and step 7's nested, rows, optional and interp) and its section of bench/build.t, step 7's three kernels already as specified | steps 1 to 8; nothing of the language is built yet |
-| 1 | this commit | record update, `{ ..o, f: v }` and `T { ..o, f: v }`, and record patterns, `{ f: p, g, .. }` and `T { .. }`, in a `match`, a `let`, a `for` and a block's parameter, through the parser, Resolve, Infer (`infer_update`, `record_pattern`), Exhaust (a record is one constructor), Core (`PRecord`) and Core Lint, the interpreter, and Mem IR in both builds; the fourteen refusals; tree-sitter's `record_expression` with a `spread`, `record_pattern`, `field_pattern` and `rest_pattern`, its corpus (records.txt) and Zed's highlights; test_data.ml's s1 tests on, and bench/data/update in build.t's `same`, `release` and `tcc_same`, with its reuse shown (`--stats`: the loop of 1000 updates allocates nothing, each a reuse); the README and language.md's "What Ren has today". Choices: below the table | steps 2 to 8 |
+| 1 | cff7c15 | record update, `{ ..o, f: v }` and `T { ..o, f: v }`, and record patterns, `{ f: p, g, .. }` and `T { .. }`, in a `match`, a `let`, a `for` and a block's parameter, through the parser, Resolve, Infer (`infer_update`, `record_pattern`), Exhaust (a record is one constructor), Core (`PRecord`) and Core Lint, the interpreter, and Mem IR in both builds; the fourteen refusals; tree-sitter's `record_expression` with a `spread`, `record_pattern`, `field_pattern` and `rest_pattern`, its corpus (records.txt) and Zed's highlights; test_data.ml's s1 tests on, and bench/data/update in build.t's `same`, `release` and `tcc_same`, with its reuse shown (`--stats`: the loop of 1000 updates allocates nothing, each a reuse); the README and language.md's "What Ren has today". Choices: below the table | steps 2 to 8 |
+| 2 | this commit | the language change, by-name variants, through the whole pipeline: the parser (`parse_ctor_decl`'s braces and one positional field, labelled or not; `Shape.Rect { ... }` and `Shape.Rect { .. }`; `..` refused in parentheses), Resolve (`braces_name`, the record-or-constructor refusal; a by-name constructor refused where a binding pattern must always match), Infer (`infer_con_named`, `con_pattern`, `ctor_shape` down to arity, the by-name and by-position refusals with their fix-its, an update into a by-name constructor), Exhaust (`Rect { .. }`), lowering (to `Con` and `PCon`, so Core, Core Lint, the interpreter and Mem IR are unchanged), `show` in the interpreter, its `assert` diff, the journal, and natively (`ren_ctor_info.fields`); tree-sitter's `variant`, `constructor_expression` and `constructor_pattern` with fields, the corpus (variants.txt, and types.txt's declaration moved), Zed's highlights; test_data.ml's s2 tests on, bench/data/byname in `same`, `release` and `tcc_same` (and `shapes` and `interp` now as specified) ; and the migration, every site of the inventory moved to the new forms, 318 of its 324: bench/ 100 (packed, review_lists, review_values, sized, trmc, trmc_panic, values), bench/native 103 (binary-trees, blocks, cfold, deriv, nested, nqueens, rbtree; their Rust and Go twins and checksums unchanged), bench/build.t's heredocs 12, examples/ 17 (bank 7, `Sent { amount: t.amount, to: t.to }`; shop 3, vm 4, infer.ren and plans.ren 3), test/ 81 (test_native 38, test_eval 12, test_blocks 10, test_deps 10 with 6 printed, test_resolve 4 with 1 printed, test_infer 3, test_modules 2, test_ops 1, test_syntax 1), the corpus 2 (types.txt, expressions.txt), the docs 3 (README.md's `Pro(5)`, errors.md's `Sent` and `Received`) and their prose (README.md, bench/native/README.md, the Native slice's trmc paragraph); the outputs promoted, each diff only `show`'s braces, the step's error texts and the bank's line numbers. Left as they are, 6: formats.md's `Query(sql: CStr)`, a format's `case`; test_infer.ml's `Pro(seat: 5)` and `Pt(x: 1, 2)` and their printed copies, now tests of the errors that replace theirs; test_modules.ml's printed `Full(row: Row)`, a declaration of one field. Choices: below the table | steps 3 to 8 |
 
 Step 1's choices, where the sections above are silent:
 
@@ -6948,6 +6949,95 @@ Step 1's choices, where the sections above are silent:
   with the old record's cell (bench/data/update's 1000 dups and drops of
   `lines`): reuse.ml doesn't yet move a reused object's kept fields
   across. Step 7 may.
+
+Step 2's choices, where the sections above are silent:
+
+- A positional field with no name written, `Static(Int)`, has the name
+  `""` in the AST and in `Iface.ctor`; messages that list a
+  constructor's fields say "write it with one value" for it.
+- The parser reports a declaration with several fields in parentheses
+  and goes on, reading it as the declaration its help writes (an
+  unnamed field named by the first free letter), so one run reports
+  every such declaration in a file; the driver still stops after
+  parsing. A variant in braces with no fields, `Rect { }`, is refused:
+  "a variant in braces names its fields, but this has none", help
+  "write `Rect` alone".
+- A constructor with no fields written in braces, `Dot { }` or `Dot {
+  .. }`, is refused like a one-field one: "`Dot` has no fields, so it's
+  written alone", help "write `Dot`".
+- `braces_name`: a bare `Name { ... }` where `Name` is a sum type in
+  scope, and also a by-name constructor (`type Point = | Point { x: Int,
+  y: Int }`), is the constructor: a sum has no record to build, so
+  there's nothing to refuse. A name that's neither a type nor a by-name
+  constructor bare in scope is a constructor, found through a type by
+  inference, so `Nope { x: 1 }` says "there's no constructor named
+  `Nope`" (it was "there's no type named `Nope`"). The ambiguity error
+  points at the name, not the whole value.
+- A bare `Rect { .. }` in a `let`, a `for` or a block's parameter is
+  read as a record pattern by the parser, which can't tell; Resolve,
+  finding it's a constructor, refuses it with the parser's message ("a
+  `let` takes apart only a tuple or a record ... but `Rect { w, h }`
+  might not") until step 3 moves that check to Exhaust.
+- Every by-name and by-position refusal points at the whole
+  constructor or pattern, and its help is `write `...`` holding exactly
+  the text that replaces what's underlined (`Rect(2, 3)` becomes `Rect {
+  w: 2, h: 3 }`), so a script can apply it; an argument
+  `Ast.source` can't print (a block, an `if`, a lambda, a `match`) is
+  `...` there. With the wrong number of arguments the help still names
+  each field, `...` for one not given. A by-name pattern written by
+  position still binds its names at their fields' types when the count
+  is right, and a labelled one-field construction is still checked, so
+  each gives one error, not a cascade.
+- `ctor_shape` checks only the count: labels in parentheses are never
+  right now, so "label every field of `Pt`, or none of them" and
+  "expected the label `seats` here" are gone, replaced by the by-name
+  error (several fields) or the by-position one (one field).
+- A by-name construction whose fields are written in declaration order
+  lowers straight to `Con`, its values evaluated in that order; in any
+  other order each value is bound first, in the order written, as an
+  update's are. So a program moved to by-name lowers to the Core it
+  lowered to before.
+- An update into a by-name constructor, `Placed { ..r, id }`, is built
+  in step 2 for a base that's a record (step 4 adds a variant type's):
+  the base's type has to be known where it's written, since the
+  constructor's sum isn't a record to take it from, or it's
+  `no_record_fits`.
+- Exhaust writes a by-name constructor from its declaration
+  (`show_space` looks it up) rather than from field names in `head`;
+  one whose every field matters is written without `..`, `Rect { w: 0,
+  h: 0 }`.
+- A record pattern matched against a sum names the first by-name
+  variant that has every field it names, `name the variant: `Rect { w,
+  .. }``; with none, "match its variants instead".
+- The journal (journal.ml) writes and reads a by-name variant in braces,
+  as `show` does.
+- Tree-sitter: a bare `Rect { ... }` stays a `record_expression` or
+  `record_pattern`, as the compiler's parser reads it; `Shape.Rect {
+  ... }` is a `constructor_expression` or `constructor_pattern` with the
+  fields inline. A `variant` takes one field in parentheses, `off:
+  Money` or a type, or a `record_type`, so the grammar no longer parses
+  several fields in parentheses (types.txt's one such declaration is
+  moved in this step, as the grammar's check needs it).
+- bench/data's `shapes` and `interp` need only by-name variants, so
+  they're as specified now; build.t says so, and steps 6 and 7 still
+  add them to the loops.
+- The migration chose punning where a pattern's names could become its
+  fields' without a clash (`Node { left, key, value, right }` in
+  rbtree's `ins`), and kept short names where the code reads as a
+  formula (deriv's `Add { l: f, r: g }`) or a test's printed IR names
+  them (test_native.ml); a construction too long for a line is written
+  a field to a line, with a trailing comma, as a record literal is.
+- bench/review_values.ren declares records `A` and `B` and constructors
+  `A` and `B` of `Mix`, which by name would be the record-or-constructor
+  refusal: the constructors are written `Mix.A { ... }` and the records
+  `{ ... }` with the type left out, so the names it checks stay the
+  same.
+- Tests that pinned an error by-name variants remove keep what they
+  tested: test_infer.ml's `Pt(x: 1, 2)`, "label every field of `Pt`, or
+  none of them", is now the by-name refusal of the same program with
+  `Pt` declared by name; its `Pro(seat: 5)`, "expected the label
+  `seats`", is now the by-position refusal; test_resolve.ml's `P(x, x)`
+  is `P { a: x, b: x }` and keeps "two pattern variables named `x`".
 
 ## The runtime model
 

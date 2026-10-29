@@ -156,6 +156,7 @@
 (range ".." @operator)
 ; "the rest": an update's, `{ ..order, paid: true }`, and a pattern's
 (record_expression ".." @operator)
+(constructor_expression ".." @operator)
 (rest_pattern) @operator
 ["=" "=>" "->" "|"] @operator
 

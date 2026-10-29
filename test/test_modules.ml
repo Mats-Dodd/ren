@@ -689,7 +689,7 @@ pub fn latest() -> invoice.Invoice = invoice.make(7)
       {|
 pub type Invoice = { total: Int, plan: Plan }
 pub type Plan = Free | Pro(seats: Int)
-pub fn make(total: Int) -> Invoice = Invoice { total: total, plan: Pro(seats: 2) }
+pub fn make(total: Int) -> Invoice = Invoice { total: total, plan: Pro(2) }
 |}
     );
   ]
@@ -728,7 +728,7 @@ fn price(p: billing.Plan) -> Int =
   match p
     Free => 0
     billing.Plan.Pro(seats) => seats * 10
-fn main() = price(Pro(seats: 3)) + price(billing.Plan.Free)
+fn main() = price(Pro(3)) + price(billing.Plan.Free)
 |}
       );
       billing;

@@ -7,9 +7,9 @@
 type Expr =
   | Val(value: Int)
   | Var(name: Str)
-  | Add(l: Expr, r: Expr)
-  | Mul(l: Expr, r: Expr)
-  | Pow(l: Expr, r: Expr)
+  | Add { l: Expr, r: Expr }
+  | Mul { l: Expr, r: Expr }
+  | Pow { l: Expr, r: Expr }
   | Ln(e: Expr)
 
 // `a` to the power `b`, by squaring; a negative `b` counts as 0 or 1, as
@@ -27,10 +27,10 @@ fn add(n0: Expr, m0: Expr) -> Expr =
     (Val(0), f) => f
     (f, Val(0)) => f
     (f, Val(n)) => add(Val(n), f)
-    (Val(n), Add(Val(m), f)) => add(Val(n + m), f)
-    (f, Add(Val(n), g)) => add(Val(n), add(f, g))
-    (Add(f, g), h) => add(f, add(g, h))
-    (f, g) => Add(f, g)
+    (Val(n), Add { l: Val(m), r: f }) => add(Val(n + m), f)
+    (f, Add { l: Val(n), r: g }) => add(Val(n), add(f, g))
+    (Add { l: f, r: g }, h) => add(f, add(g, h))
+    (f, g) => Add { l: f, r: g }
 
 fn mul(n0: Expr, m0: Expr) -> Expr =
   match (n0, m0)
@@ -40,10 +40,10 @@ fn mul(n0: Expr, m0: Expr) -> Expr =
     (Val(1), f) => f
     (f, Val(1)) => f
     (f, Val(n)) => mul(Val(n), f)
-    (Val(n), Mul(Val(m), f)) => mul(Val(n * m), f)
-    (f, Mul(Val(n), g)) => mul(Val(n), mul(f, g))
-    (Mul(f, g), h) => mul(f, mul(g, h))
-    (f, g) => Mul(f, g)
+    (Val(n), Mul { l: Val(m), r: f }) => mul(Val(n * m), f)
+    (f, Mul { l: Val(n), r: g }) => mul(Val(n), mul(f, g))
+    (Mul { l: f, r: g }, h) => mul(f, mul(g, h))
+    (f, g) => Mul { l: f, r: g }
 
 fn powr(m0: Expr, n0: Expr) -> Expr =
   match (m0, n0)
@@ -51,7 +51,7 @@ fn powr(m0: Expr, n0: Expr) -> Expr =
     (_, Val(0)) => Val(1)
     (f, Val(1)) => f
     (Val(0), _) => Val(0)
-    (f, g) => Pow(f, g)
+    (f, g) => Pow { l: f, r: g }
 
 fn ln(n: Expr) -> Expr =
   match n
@@ -63,9 +63,9 @@ fn d(x: Str, e: Expr) -> Expr =
   match e
     Val(_) => Val(0)
     Var(y) => if x == y then Val(1) else Val(0)
-    Add(f, g) => add(d(x, f), d(x, g))
-    Mul(f, g) => add(mul(f, d(x, g)), mul(g, d(x, f)))
-    Pow(f, g) =>
+    Add { l: f, r: g } => add(d(x, f), d(x, g))
+    Mul { l: f, r: g } => add(mul(f, d(x, g)), mul(g, d(x, f)))
+    Pow { l: f, r: g } =>
       mul(powr(f, g), add(mul(mul(g, d(x, f)), powr(f, Val(-1))), mul(ln(f), d(x, g))))
     Ln(f) => mul(d(x, f), powr(f, Val(-1)))
 
@@ -74,9 +74,9 @@ fn count(e: Expr) -> Int =
   match e
     Val(_) => 1
     Var(_) => 1
-    Add(f, g) => count(f) + count(g)
-    Mul(f, g) => count(f) + count(g)
-    Pow(f, g) => count(f) + count(g)
+    Add { l: f, r: g } => count(f) + count(g)
+    Mul { l: f, r: g } => count(f) + count(g)
+    Pow { l: f, r: g } => count(f) + count(g)
     Ln(f) => count(f)
 
 pub fn run(n: Int) uses Console =

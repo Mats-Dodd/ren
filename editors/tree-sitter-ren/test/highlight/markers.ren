@@ -311,3 +311,23 @@ fn paid(o: Order) -> Int =
     { total, .. } => total
 //    ^ property
 //           ^ operator
+
+type Shape =
+  | Dot
+  | Static(Int)
+//  ^ constructor
+//         ^ type
+  | Rect { w: Int, h: Int }
+//  ^ constructor
+//         ^ property
+
+fn wide(s: Shape) -> Shape =
+  match s
+    Shape.Rect { w, .. } => Shape.Rect { ..s2, w }
+//  ^ type
+//        ^ constructor
+//               ^ property
+//                  ^ operator
+//                                ^ constructor
+//                                       ^ operator
+    _ => s

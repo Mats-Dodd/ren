@@ -74,6 +74,13 @@ let set_of (t : Ty.ty) =
            labels)
   | _ -> None
 
+(* The constructor [name] of the sum type [path], as it's declared. *)
+let ctor_of env path name =
+  match Hashtbl.find_opt env.types path with
+  | Some { body = Sum cs; _ } ->
+      List.find_opt (fun (k : Iface.ctor) -> k.cname = name) cs
+  | _ -> None
+
 let rec simplify env (p : pattern) =
   match p.pkind with
   | PWild | PVar _ -> Any
@@ -92,6 +99,23 @@ let rec simplify env (p : pattern) =
         | _ -> assert false (* inference found it, or reported an error *)
       in
       Ctor ({ name = c.name.name; owner }, List.map (simplify env) ps)
+  | PCon_named (c, fs) -> (
+      (* a by-name constructor is its positional one, every declared field
+         in order, one the pattern leaves out an [Any] *)
+      match (Infer.Nodes.find p.pnode env.nodes).found with
+      | Some (Ctor_of (path, name)) -> (
+          match ctor_of env path name with
+          | Some k ->
+              let field (d : Iface.field) =
+                match
+                  List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+                with
+                | Some (_, q) -> simplify env q
+                | None -> Any
+              in
+              Ctor ({ name = c.name.name; owner = Of_type path }, List.map field k.cfields)
+          | None -> Any)
+      | _ -> Any (* inference reported it *))
   | PTuple ps ->
       let n = List.length ps in
       Ctor ({ name = "(,)"; owner = Tuple n }, List.map (simplify env) ps)
@@ -140,24 +164,38 @@ let rec outcomes env (p : pattern) =
   | POr ps -> List.concat_map (outcomes env) ps
   | _ -> [ Ctor (value, [ simplify env p ]) ]
 
-let rec show_space = function
+(* A space as a pattern is written. A record's, and a by-name
+   constructor's, are written in braces, by name: the fields that matter,
+   and `..` for the rest, `{ paid: false, .. }`, `Rect { .. }`. *)
+let rec show_space env = function
   | Any -> "_"
-  | Ctor ({ owner = Outcome; name = "value" }, [ v ]) -> show_space v
-  | Ctor ({ owner = Outcome; _ }, [ e ]) -> "fail " ^ show_space e
+  | Ctor ({ owner = Outcome; name = "value" }, [ v ]) -> show_space env v
+  | Ctor ({ owner = Outcome; _ }, [ e ]) -> "fail " ^ show_space env e
   | Ctor ({ owner = Tuple _; _ }, args) ->
-      "(" ^ String.concat ", " (List.map show_space args) ^ ")"
+      "(" ^ String.concat ", " (List.map (show_space env) args) ^ ")"
   | Ctor ({ owner = Record (_, names); _ }, args) ->
-      (* the fields that matter, and `..` for the rest *)
-      let named =
-        List.filter_map
-          (fun (f, a) ->
-            match a with Any -> None | a -> Some (f ^ ": " ^ show_space a))
-          (List.combine names args)
-      in
-      "{ " ^ String.concat ", " (named @ [ ".." ]) ^ " }"
+      show_named env "{ " names args ~all:false
+  | Ctor ({ name; owner = Of_type p }, args)
+    when match ctor_of env p name with Some k -> k.cnamed | None -> false ->
+      let k = Option.get (ctor_of env p name) in
+      show_named env (name ^ " { ")
+        (List.map (fun (f : Iface.field) -> f.fname) k.cfields)
+        args ~all:true
   | Ctor (c, []) -> c.name
   | Ctor (c, args) ->
-      c.name ^ "(" ^ String.concat ", " (List.map show_space args) ^ ")"
+      c.name ^ "(" ^ String.concat ", " (List.map (show_space env) args) ^ ")"
+
+(* The fields [names] after [start], each of [args] that matters, and
+   `..` for the rest, if any are left out or, unless [all], always. *)
+and show_named env start names args ~all =
+  let named =
+    List.filter_map
+      (fun (f, a) ->
+        match a with Any -> None | a -> Some (f ^ ": " ^ show_space env a))
+      (List.combine names args)
+  in
+  let rest = (not all) || List.length named < List.length names in
+  start ^ String.concat ", " (named @ if rest then [ ".." ] else []) ^ " }"
 
 let wilds n = List.init n (fun _ -> Any)
 
@@ -368,7 +406,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
         | None, _, _ -> "every possible value"
       in
       let notes =
-        ("missing: " ^ String.concat ", " (List.map show_space ws))
+        ("missing: " ^ String.concat ", " (List.map (show_space env) ws))
         ::
         (if List.exists (fun a -> a.arm_guard <> None) arms then
            [
@@ -395,10 +433,10 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
             sprintf
               "add an arm for `%s`, or a `fail _ =>` arm for the rest, or pass \
                them on with `try match`"
-              (show_space w)
+              (show_space env w)
         | w ->
             sprintf "add an arm for `%s`, or a `_ =>` arm for the rest"
-              (show_space w)
+              (show_space env w)
       in
       Diag.error keyword ~notes ~help
         (sprintf "this `match` doesn't handle %s" what)
@@ -414,7 +452,8 @@ let rec no_bound_errors env (p : pattern) =
       | _ -> ())
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.iter (no_bound_errors env) ps
-  | PRecord (_, fs) -> List.iter (fun (_, q) -> no_bound_errors env q) fs.fpats
+  | PRecord (_, fs) | PCon_named (_, fs) ->
+      List.iter (fun (_, q) -> no_bound_errors env q) fs.fpats
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
 
 (* ---- walking the program ---- *)
@@ -444,7 +483,8 @@ let rec check_expr env (e : expr) =
   | Inline_handler l -> check_expr env l
   | Block _ -> List.iter (check_expr env) (children e)
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
-  | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
+  | Record (_, fields) | Con_named (_, fields) ->
+      List.iter (fun (_, v) -> check_expr env v) fields
   | Update _ -> List.iter (check_expr env) (children e)
   | Match (subject, arms) -> check_match_expr env e subject arms
   | With { items; body } ->

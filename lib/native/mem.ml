@@ -564,7 +564,9 @@ type desc = { dkind : dkind; dargs : int list; dcounted : bool }
    templates, among the program's [descs]. *)
 type decl_body =
   | Record_decl of (string * int) list
-  | Sum_decl of (string * int list) list  (** its constructors, by tag *)
+  | Sum_decl of (string * string list option * int list) list
+      (** its constructors, by tag: each one's name, its fields' names if it's
+          by name, which `show` writes, and its fields' templates *)
   | Rep_decl of int  (** an opaque type: what it's represented as *)
 
 type decl = {

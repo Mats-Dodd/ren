@@ -1475,9 +1475,9 @@ let static_types add (descs : desc list) (decls : decl list) =
               "NULL" )
         | Sum_decl cs ->
             ( "REN_DECL_SUM",
-              List.for_all (fun (_, ts) -> ts = []) cs,
+              List.for_all (fun (_, _, ts) -> ts = []) cs,
               List.length cs,
-              ctors_of (List.map (fun (c, ts) -> (c, None, ts)) cs),
+              ctors_of cs,
               "NULL" )
         | Rep_decl r -> ("REN_DECL_REP", false, 0, "NULL", desc_ref r)
       in

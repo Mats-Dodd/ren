@@ -707,22 +707,23 @@ fn main() = print(Pro(seat: 5))
 |});
   [%expect
     {|
-    error: expected the label `seats` here, found `seat`
-      ┌─ test.ren:8:23
+    error: `Pro` has one field, so it's built by position
+      ┌─ test.ren:8:19
     8 │ fn main() = print(Pro(seat: 5))
-      │                       ^^^^
-      help: labels are written in the order the fields are declared
+      │                   ^^^^^^^^^^^^
+      help: write `Pro(5)`
     |}];
   run {|
-type P = Pt(x: Int, y: Int)
+type P = Pt { x: Int, y: Int }
 fn main() = print(Pt(x: 1, 2))
 |};
   [%expect
     {|
-    error: label every field of `Pt`, or none of them
+    error: `Pt` has named fields, so it's built with them
       ┌─ test.ren:2:19
     2 │ fn main() = print(Pt(x: 1, 2))
       │                   ^^^^^^^^^^^
+      help: write `Pt { x: 1, y: 2 }`
     |}]
 
 let%expect_test "pattern of the wrong type" =
@@ -2085,9 +2086,9 @@ let%expect_test "everything else has ==, when what's in it does" =
 type Point = { x: Int, y: Int }
 type Shape =
   | Dot
-  | Line(from: Point, to: Point)
+  | Line { from: Point, to: Point }
 fn main() =
-  assert Line(Point { x: 1, y: 2 }, Point { x: 3, y: 4 }) != Dot
+  assert Line { from: Point { x: 1, y: 2 }, to: Point { x: 3, y: 4 } } != Dot
   assert [Some("a"), None] == [Some("a"), None]
   assert Ok(1) != Err(Gone)
   [Point { x: 1, y: 2 }] == [Point { x: 1, y: 2 }]

@@ -267,11 +267,11 @@ Tested against the compiler on 2026-10-28:
 
 | Feature | Today |
 |---|---|
-| Constructor arguments | positional `Rect(2, 3)` or labelled `Rect(w: 2, h: 3)`, labels in declaration order; mixing is an error |
+| Constructor arguments | positional `Rect(2, 3)` or labelled `Rect(w: 2, h: 3)`, labels in declaration order; mixing is an error. Since the data stage's step 2: a variant with several fields is declared, built and matched by name, `Rect { w: Int, h: Int }`, `Rect { w: 2, h: 3 }`, `Rect { w, .. }`, and one with one field by position, `Flat(5)`; the other spelling is an error whose help writes this one |
 | Punning in record literals | `P { x, y }` works |
 | Record update | none: `{ p with x: 5 }` and `P { ..p, x: 5 }` don't parse; only `var p` then `p.x = 5`. Since the data stage's step 1: `{ ..p, x: 5 }` and `Q { ..p, x: 5 }` work, in the interpreter and natively, a unique `p` updated in place |
 | Record patterns, `let { id } = u` | don't parse. Since step 1: `{ id, .. }` and `User { id, .. }` in a `match`, a `let`, a `for` and a block's parameter |
-| Labels in a pattern, `Rect(h: hh, ..)` | don't parse; patterns are positional, with no `..` |
+| Labels in a pattern, `Rect(h: hh, ..)` | don't parse; patterns are positional, with no `..`. Since step 2: `Rect { h: hh, .. }` |
 | Nested patterns and guards | work: `Some(Active(Pro(n))) if n > 3 =>` |
 | Or-patterns | only on `fail` tags; `A(n) \| B(n)` doesn't parse |
 | `as` | doesn't parse |

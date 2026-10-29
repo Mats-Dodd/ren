@@ -474,20 +474,9 @@ type Shape =
 
 let%expect_test "[s2 accept] a variant with several fields is built and matched by name" =
   (* a brace form is a record literal: its fields in any order, punned *)
-  until "s2"
-    ~want:
-      {|
-Rect { w: 2, h: 3 }
-Rect { w: 4, h: 5 }
-6
-20
-true
-()
-|}
-    (fun () ->
-      run
-        (shape_types
-       ^ {|
+  run
+    (shape_types
+   ^ {|
 fn area(s: Shape) -> Int =
   match s
     Dot => 0
@@ -504,32 +493,20 @@ fn main() uses Console =
   print(area(a))
   print(area(b))
   print(Shape.Rect { w: 2, h: 3 } == a)
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
-
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:21:20
-    21 │   print(Shape.Rect { w: 2, h: 3 } == a)
-       │                    ^
+    Rect { w: 2, h: 3 }
+    Rect { w: 4, h: 5 }
+    6
+    20
+    true
+    ()
     |}]
 
 let%expect_test "[s2 accept] a by-name pattern with `..`, renamed and nested" =
-  until "s2"
-    ~want:{|
-flat 4
-3
-0
-()
-|}
-    (fun () ->
-      run
-        (shape_types
-       ^ {|
+  run
+    (shape_types
+   ^ {|
 fn describe(s: Shape) -> Str =
   match s
     Rect { h: 0, w } => "flat ".concat(show(w))
@@ -540,26 +517,17 @@ fn main() uses Console =
   print(describe(Rect { w: 4, h: 0 }))
   print(describe(Rect { w: 3, h: 1 }))
   print(describe(Dot))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    flat 4
+    3
+    0
+    ()
     |}]
 
 let%expect_test "[s2 accept] a variant with one field is positional, its label documentation" =
-  until "s2"
-    ~want:{|
-Flat(5)
-5
-Static(3)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Discount =
   | NoDiscount
   | Flat(off: Int)
@@ -577,25 +545,17 @@ fn main() uses Console =
   print(Flat(5))
   print(off(Flat(5)))
   print(Static(3))
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected `:`, found `)`
-      ┌─ test.ren:7:15
-    7 │   | Static(Int)
-      │               ^
+    Flat(5)
+    5
+    Static(3)
+    ()
     |}]
 
 let%expect_test "[s2 accept] a variant with one field may name it, in braces" =
-  until "s2"
-    ~want:{|
-Draft { lines: [1, 2] }
-2
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Order =
   | Draft { lines: Array<Int> }
   | Cancelled
@@ -608,27 +568,18 @@ fn count(o: Order) -> Int =
 fn main() uses Console =
   print(Draft { lines: [1, 2] })
   print(count(Draft { lines: [1, 2] }))
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
+    Draft { lines: [1, 2] }
+    2
+    ()
     |}]
 
 let%expect_test "[s2 accept] a by-name constructor of another module's type" =
-  until "s2"
-    ~want:{|
-Rect { w: 1, h: 2 }
-2
-()
-|}
-    (fun () ->
-      run_files
-        [
-          ( "main.ren",
-            {|
+  run_files
+    [
+      ( "main.ren",
+        {|
 import geo
 fn main() uses Console =
   let r = geo.Shape.Rect { w: 1, h: 2 }
@@ -637,20 +588,18 @@ fn main() uses Console =
     geo.Shape.Rect { h, .. } => print(h)
     _ => print(0)
 |}
-          );
-          ( "geo.ren",
-            {|
+      );
+      ( "geo.ren",
+        {|
 pub type Shape =
   | Dot
   | Rect { w: Int, h: Int }
 |} );
-        ]);
+    ];
   [%expect {|
-    (until s2)
-    error: expected the end of the line, found `{`
-      ┌─ main.ren:3:26
-    3 │   let r = geo.Shape.Rect { w: 1, h: 2 }
-      │                          ^
+    Rect { w: 1, h: 2 }
+    2
+    ()
     |}]
 
 let%expect_test "[s2 accept] error tags stay positional" =
@@ -671,336 +620,241 @@ fn main() uses Console =
     |}]
 
 let%expect_test "[s2 reject] a variant with several fields is declared by name" =
-  until "s2"
-    ~says:
-      [
-        "error: a variant with several fields names them, in braces";
-        "help: write `Rect { w: Int, h: Int }`";
-      ]
-    (fun () ->
-      check_error {|
+  check_error {|
 type Shape =
   | Dot
   | Rect(w: Int, h: Int)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s2)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: a variant with several fields names them, in braces
+      ┌─ test.ren:3:5
+    3 │   | Rect(w: Int, h: Int)
+      │     ^^^^^^^^^^^^^^^^^^^^
+      help: write `Rect { w: Int, h: Int }`
     |}]
 
 let%expect_test "[s2 reject] a variant with several fields, unnamed" =
-  until "s2"
-    ~says:
-      [
-        "error: a variant with several fields names them, in braces";
-        "help: give each field a name, in braces: `Rect { a: Int, b: Int }`";
-      ]
-    (fun () -> check_error {|
+  check_error {|
 type Shape =
   | Dot
   | Rect(Int, Int)
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected `:`, found `,`
-      ┌─ test.ren:3:13
+    error: a variant with several fields names them, in braces
+      ┌─ test.ren:3:5
     3 │   | Rect(Int, Int)
-      │             ^
+      │     ^^^^^^^^^^^^^^
+      help: give each field a name, in braces: `Rect { a: Int, b: Int }`
     |}]
 
 let%expect_test "[s2 reject] a variant with named fields isn't built by position" =
-  until "s2"
-    ~says:
-      [
-        "error: `Rect` has named fields, so it's built with them";
-        "help: write `Rect { w: 2, h: 3 }`";
-      ]
-    (fun () ->
-      check_error (shape_types ^ {|
+  check_error (shape_types ^ {|
 fn main() uses Console = print(Rect(2, 3))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Rect` has named fields, so it's built with them
+      ┌─ test.ren:6:32
+    6 │ fn main() uses Console = print(Rect(2, 3))
+      │                                ^^^^^^^^^^
+      help: write `Rect { w: 2, h: 3 }`
     |}]
 
 let%expect_test "[s2 reject] a variant with named fields isn't built with labels in parens" =
-  until "s2"
-    ~says:
-      [
-        "error: `Rect` has named fields, so it's built with them";
-        "help: write `Rect { w: 2, h: 3 }`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types ^ {|
+  check_error
+    (shape_types ^ {|
 fn main() uses Console = print(Rect(w: 2, h: 3))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Rect` has named fields, so it's built with them
+      ┌─ test.ren:6:32
+    6 │ fn main() uses Console = print(Rect(w: 2, h: 3))
+      │                                ^^^^^^^^^^^^^^^^
+      help: write `Rect { w: 2, h: 3 }`
     |}]
 
 let%expect_test "[s2 reject] a variant with named fields isn't matched by position" =
   (* the fix-it: a name that's the field's is punned, `_` is left out *)
-  until "s2"
-    ~says:
-      [
-        "error: `Rect` has named fields, so it's matched by them";
-        "help: write `Rect { w, h: tall }`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types
-       ^ {|
+  check_error
+    (shape_types
+   ^ {|
 fn f(s: Shape) -> Int =
   match s
     Rect(w, tall) => w + tall
     _ => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Rect` has named fields, so it's matched by them
+      ┌─ test.ren:8:5
+    8 │     Rect(w, tall) => w + tall
+      │     ^^^^^^^^^^^^^
+      help: write `Rect { w, h: tall }`
     |}]
 
 let%expect_test "[s2 reject] a positional pattern's `_` becomes `..`" =
-  until "s2"
-    ~says:
-      [
-        "error: `Rect` has named fields, so it's matched by them";
-        "help: write `Rect { w, .. }`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types
-       ^ {|
+  check_error
+    (shape_types
+   ^ {|
 fn f(s: Shape) -> Int =
   match s
     Rect(w, _) => w
     _ => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Rect` has named fields, so it's matched by them
+      ┌─ test.ren:8:5
+    8 │     Rect(w, _) => w
+      │     ^^^^^^^^^^
+      help: write `Rect { w, .. }`
     |}]
 
 let%expect_test "[s2 reject] a variant with one field is built by position" =
-  until "s2"
-    ~says:
-      [
-        "error: `Circle` has one field, so it's built by position";
-        "help: write `Circle(2)`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types ^ {|
+  check_error
+    (shape_types ^ {|
 fn main() uses Console = print(Circle(r: 2))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Circle` has one field, so it's built by position
+      ┌─ test.ren:6:32
+    6 │ fn main() uses Console = print(Circle(r: 2))
+      │                                ^^^^^^^^^^^^
+      help: write `Circle(2)`
     |}]
 
 let%expect_test "[s2 reject] a variant with one field isn't built in braces" =
-  until "s2"
-    ~says:
-      [
-        "error: `Circle` has one field, so it's built by position";
-        "help: write `Circle(2)`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types ^ {|
+  check_error
+    (shape_types ^ {|
 fn main() uses Console = print(Circle { r: 2 })
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Circle` has one field, so it's built by position
+      ┌─ test.ren:6:32
+    6 │ fn main() uses Console = print(Circle { r: 2 })
+      │                                ^^^^^^^^^^^^^^^
+      help: write `Circle(2)`
     |}]
 
 let%expect_test "[s2 reject] a variant with one field isn't matched in braces" =
-  until "s2"
-    ~says:
-      [
-        "error: `Circle` has one field, so it's matched by position";
-        "help: write `Circle(r)`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types
-       ^ {|
+  check_error
+    (shape_types
+   ^ {|
 fn f(s: Shape) -> Int =
   match s
     Circle { r } => r
     _ => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Circle` has one field, so it's matched by position
+      ┌─ test.ren:8:5
+    8 │     Circle { r } => r
+      │     ^^^^^^^^^^^^
+      help: write `Circle(r)`
     |}]
 
 let%expect_test "[s2 reject] a by-name pattern that leaves a field out without `..`" =
-  until "s2"
-    ~says:
-      [
-        "error: this pattern doesn't name `h`; add `h`, or `..` for the rest";
-        "help: write `Rect { w, .. }` to leave the rest out";
-      ]
-    (fun () ->
-      check_error
-        (shape_types
-       ^ {|
+  check_error
+    (shape_types
+   ^ {|
 fn f(s: Shape) -> Int =
   match s
     Rect { w } => w
     _ => 0
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: this pattern doesn't name `h`; add `h`, or `..` for the rest
+      ┌─ test.ren:8:5
+    8 │     Rect { w } => w
+      │     ^^^^^^^^^^
+      help: write `Rect { w, .. }` to leave the rest out
     |}]
 
 let%expect_test "[s2 reject] a by-name constructor missing a field" =
-  until "s2"
-    ~says:
-      [ "error: this `Rect` is missing `h`"; "help: give it a value too, like `h: ...`" ]
-    (fun () ->
-      check_error
-        (shape_types ^ {|
+  check_error
+    (shape_types ^ {|
 fn main() uses Console = print(Rect { w: 2 })
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: this `Rect` is missing `h`
+      ┌─ test.ren:6:32
+    6 │ fn main() uses Console = print(Rect { w: 2 })
+      │                                ^^^^^^^^^^^^^
+      help: give it a value too, like `h: ...`
     |}]
 
 let%expect_test "[s2 reject] `..` isn't in a positional pattern" =
-  until "s2"
-    ~says:
-      [
-        "error: `..` stands for the fields a pattern in braces leaves out";
-        "help: write `_` for each field it leaves out";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(o: Option<Int>) -> Int =
   match o
     Some(..) => 1
     None => 0
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected a pattern, found `..`
+    error: `..` stands for the fields a pattern in braces leaves out
       ┌─ test.ren:3:10
     3 │     Some(..) => 1
       │          ^^
+      help: write `_` for each field it leaves out
     |}]
 
 let%expect_test "[s2 reject] a record type and a by-name constructor of one name" =
-  until "s2"
-    ~says:
-      [
-        "error: `Placed` is a record type here, and a constructor of `Order` \
-         too";
-        "help: write `Order.Placed { ... }` for the constructor, or `{ ... }` \
-         with the type left out for the record";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Placed = { id: Int, total: Int }
 type Order =
   | Draft
   | Placed { id: Int, total: Int }
 
 fn main() uses Console = print(Placed { id: 1, total: 2 })
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:12
-    4 │   | Placed { id: Int, total: Int }
-      │            ^
+    error: `Placed` is a record type here, and a constructor of `Order` too
+      ┌─ test.ren:6:32
+    6 │ fn main() uses Console = print(Placed { id: 1, total: 2 })
+      │                                ^^^^^^
+      help: write `Order.Placed { ... }` for the constructor, or `{ ... }` with the type left out for the record
     |}]
 
 let%expect_test "[s2 reject] a record pattern doesn't match a sum" =
-  until "s2"
-    ~says:
-      [
-        "error: `Shape` is a sum type, so a record pattern doesn't match it";
-        "help: name the variant: `Rect { w, .. }`";
-      ]
-    (fun () ->
-      check_error
-        (shape_types
-       ^ {|
+  check_error
+    (shape_types
+   ^ {|
 fn f(s: Shape) -> Int =
   match s
     { w, .. } => w
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: `Shape` is a sum type, so a record pattern doesn't match it
+      ┌─ test.ren:8:5
+    8 │     { w, .. } => w
+      │     ^^^^^^^^^
+      help: name the variant: `Rect { w, .. }`
     |}]
 
 let%expect_test "[s2 reject] a missing by-name variant is written as one" =
-  until "s2"
-    ~says:[ "missing: Rect { .. }" ]
-    (fun () ->
-      check_error
-        (shape_types
-       ^ {|
+  check_error
+    (shape_types
+   ^ {|
 fn f(s: Shape) -> Int =
   match s
     Dot => 0
     Circle(r) => r
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:4:10
-    4 │   | Rect { w: Int, h: Int }
-      │          ^
+    error: this `match` doesn't handle every `Shape`
+      ┌─ test.ren:7:3
+    7 │   match s
+      │   ^^^^^
+      = missing: Rect { .. }
+      help: add an arm for `Rect { .. }`, or a `_ =>` arm for the rest
     |}]
 
 (* ---- s3: or-patterns, `as`, `let ... else` ---- *)
@@ -1040,11 +894,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: expected `=>`, found `|`
       ┌─ test.ren:9:12
     9 │     Pro(n) | Team(n) | Enterprise { seats: n, .. } => n
@@ -1075,11 +924,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: expected `,` or `)`, found `|`
       ┌─ test.ren:9:17
     9 │     Some(Pro(_) | Team(_)) => true
@@ -1114,11 +958,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: expected `=>`, found `as`
       ┌─ test.ren:9:12
     9 │     Pro(n) as old => if n > 5 then Team(n) else old
@@ -1151,11 +990,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Team(n)` might not
       ┌─ test.ren:8:7
     8 │   let Team(n) = p else fail NotTeam
@@ -1191,11 +1025,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Team(s)` might not
        ┌─ test.ren:10:9
     10 │     let Team(s) = p else break
@@ -1259,11 +1088,6 @@ fn main() uses Console =
 |});
   [%expect {|
     (until s3)
-    error: expected `:`, found `)`
-      ┌─ test.ren:2:15
-    2 │   | Meters(Int)
-      │               ^
-
     error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Meters(n)` might not
       ┌─ test.ren:5:7
     5 │   let Meters(n) = Meters(3)
@@ -1306,11 +1130,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: expected `=>`, found `|`
       ┌─ test.ren:9:12
     9 │     Pro(n) | Free => n
@@ -1338,11 +1157,6 @@ fn main() = ()
 |});
   [%expect {|
     (until s3)
-    error: expected `:`, found `)`
-      ┌─ test.ren:2:10
-    2 │   | A(Int)
-      │          ^
-
     error: expected `=>`, found `|`
       ┌─ test.ren:7:10
     7 │     A(n) | B(n) => 0
@@ -1369,11 +1183,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:5:16
-    5 │   | Enterprise { seats: Int, contract: Int }
-      │                ^
-
     error: expected `=>`, found `|`
       ┌─ test.ren:9:12
     9 │     Pro(_) | Pro(_) => 1
@@ -1564,11 +1373,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `,` or `)`, found `.`
       ┌─ test.ren:6:18
     6 │ fn place(d: Order.Draft, id: Int) -> Order =
@@ -1614,11 +1418,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `=>`, found `as`
       ┌─ test.ren:8:19
     8 │     Placed { .. } as p =>
@@ -1643,11 +1442,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `,` or `)`, found `.`
       ┌─ test.ren:6:17
     6 │ fn back(p: Order.Placed) -> Order = Placed { ..p }
@@ -1690,11 +1484,6 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `,` or `}`, found `.`
       ┌─ test.ren:6:22
     6 │ type Box = { p: Order.Placed }
@@ -1750,11 +1539,6 @@ fn main() uses Console =
 |});
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:3:12
-    3 │   | Placed { id: Int, total: Int }
-      │            ^
-
     error: expected `=`, found `.`
        ┌─ test.ren:10:29
     10 │ fn placed(o: Order) -> Order.Placed =
@@ -1780,11 +1564,6 @@ fn main() = ()
 |});
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:3:10
-    3 │   | Node { left: Tree<T>, value: T, right: Tree<T> }
-      │          ^
-
     error: expected `,` or `)`, found `.`
       ┌─ test.ren:5:19
     5 │ fn left<T>(n: Tree.Node<T>) -> Tree<T> = n.left
@@ -1811,11 +1590,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `=>`, found `|`
       ┌─ test.ren:8:19
     8 │     Placed { .. } | Shipped { .. } as s => same(s)
@@ -1841,11 +1615,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `=`, found `.`
       ┌─ test.ren:6:19
     6 │ fn make() -> Order.Placed = Placed { id: 1, lines: [], total: 0 }
@@ -1869,11 +1638,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `,` or `)`, found `.`
       ┌─ test.ren:7:14
     7 │ fn f(p: Order.Placed) -> Int = total(p)
@@ -1917,11 +1681,6 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
-
     error: expected `,` or `)`, found `.`
       ┌─ test.ren:6:14
     6 │ fn f(p: Order.Placd) -> Int = 0
@@ -1968,10 +1727,11 @@ fn main() = ()
 |}));
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:11
-    2 │   | Draft { lines: Array<Int> }
-      │           ^
+    error: `..o` takes the rest from a record, but `o` is an `Order`
+      ┌─ test.ren:6:38
+    6 │ fn f(o: Order) -> Order = Placed { ..o, total: 0 }
+      │                                      ^
+      help: write every field, without `..`
     |}]
 
 let%expect_test "[s4 reject] a variant type has no methods of its own" =
@@ -1998,11 +1758,6 @@ fn main() = ()
 |});
   [%expect {|
     (until s4)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:3:12
-    3 │   | Placed { id: Int, total: Int }
-      │            ^
-
     error: expected `=>`, found `as`
       ┌─ test.ren:9:19
     9 │     Placed { .. } as p => p.size()
@@ -2036,10 +1791,10 @@ fn main() = ()
 |}));
   [%expect {|
     (until s5)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:3:10
-    3 │   | Rect { id: Int, w: Int, h: Int }
-      │          ^
+    error: `.r` needs a record, but this is a `Shape`
+      ┌─ test.ren:7:27
+    7 │ fn f(s: Shape) -> Int = s.r
+      │                           ^
     |}]
 
 let%expect_test "[s5 reject] a field two variants have" =
@@ -2057,10 +1812,10 @@ fn main() = ()
 |}));
   [%expect {|
     (until s5)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:3:10
-    3 │   | Rect { id: Int, w: Int, h: Int }
-      │          ^
+    error: `.id` needs a record, but this is a `Shape`
+      ┌─ test.ren:7:27
+    7 │ fn f(s: Shape) -> Int = s.id
+      │                           ^^
     |}]
 
 let%expect_test "[s5 reject] a field every variant has: hoist it" =
@@ -2083,10 +1838,10 @@ fn main() = ()
 |});
   [%expect {|
     (until s5)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:2:10
-    2 │   | Rect { id: Int, w: Int, h: Int }
-      │          ^
+    error: `.id` needs a record, but this is a `Shape`
+      ┌─ test.ren:5:27
+    5 │ fn f(s: Shape) -> Int = s.id
+      │                           ^^
     |}]
 
 let%expect_test "[s5 reject] a `match` that misses cases prints the arms to paste" =
@@ -2139,10 +1894,12 @@ fn main() = ()
 |}));
   [%expect {|
     (until s5)
-    error: expected the end of the block, found `{`
-      ┌─ test.ren:3:10
-    3 │   | Rect { id: Int, w: Int, h: Int }
-      │          ^
+    error: this `match` doesn't handle every `Shape`
+      ┌─ test.ren:8:3
+    8 │   match s
+      │   ^^^^^
+      = missing: Rect { .. }, Frame { .. }, Ring { .. }
+      help: add an arm for `Rect { .. }`, or a `_ =>` arm for the rest
     |}]
 
 let%expect_test "[s5 reject] a missing error is a `fail` arm to paste" =
@@ -2492,16 +2249,6 @@ test "an abandoned cart is refused" =
 |});
   [%expect {|
     (until s3)
-    error: expected the end of the block, found `{`
-       ┌─ test.ren:10:16
-    10 │   | OverAmount { min: Money, off: Money }
-       │                ^
-
-    error: expected the end of the block, found `{`
-       ┌─ test.ren:22:10
-    22 │   | Open { customer: Int, lines: Array<Line> }
-       │          ^
-
     error: expected the end of the line, found `else`
        ┌─ test.ren:34:33
     34 │   let Open { lines, .. } = cart else fail Empty

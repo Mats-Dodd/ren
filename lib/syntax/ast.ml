@@ -159,6 +159,11 @@ and ('b, 't) pattern_kind =
   | PBool of bool
   | PCon of 't ctor_ref * ('b, 't) pattern list
       (** [Free], [Pro(seats)], [Plan.Free] *)
+  | PCon_named of 't ctor_ref * ('b, 't) fields
+      (** [Shape.Rect { w, .. }]: a by-name constructor, its fields named
+          (compiler.md, "Data stage", "By-name variants"). The parser makes
+          one only of a constructor written after its type; [Rect { w, .. }]
+          is a [PRecord] until Resolve finds [Rect] isn't a type *)
   | PFail of ident * ('b, 't) pattern list
       (** [fail Short(_, by)]: an error, destructured. A `fail` pattern is a
           whole arm's, never part of another pattern *)
@@ -244,7 +249,14 @@ and ('v, 'b, 't) expr_kind =
   | Block of ('v, 'b, 't) stmt list * ('v, 'b, 't) expr
       (** statements, then the block's value *)
   | Con of 't ctor_ref * (ident option * ('v, 'b, 't) expr) list
-      (** a constructor: [Pro(5)], [Pro(seats: 5)] or [Plan.Pro(5)] *)
+      (** a constructor: [Pro(5)] or [Plan.Pro(5)]; [Pro(seats: 5)] parses,
+          and inference refuses it *)
+  | Con_named of 't ctor_ref * (ident * ('v, 'b, 't) expr) list
+      (** a by-name constructor, [Shape.Rect { w: 2, h: 3 }], its fields in
+          the order written, punned or not, as a record literal's. The parser
+          makes one only of a constructor written after its type; [Rect { w:
+          2, h: 3 }] is a [Record] until Resolve finds [Rect] isn't a type
+          (compiler.md, "Data stage", "By-name variants") *)
   | Record of 't option * (ident * ('v, 'b, 't) expr) list
       (** [User { id: 1 }], [rows.Row { id: 1 }], or [{ id: 1 }] with the type
           left out *)
@@ -355,8 +367,9 @@ and ('v, 'b, 't) expr_kind =
       (** [Flaky | Broken], the tags a `Tags` argument is given: tag names,
           without payloads, or named error sets. Only ever a [Named]'s value *)
 
-(* What an update builds, when it's written: the record type named. *)
-and 't target = Into_type of 't
+(* What an update builds, when it's written: the record type named, or a
+   by-name constructor, [Placed { ..draft, id }], which builds its sum. *)
+and 't target = Into_type of 't | Into_ctor of 't ctor_ref
 
 (* An item of a `with`: an implementation, or a chain of them joined by
    `over`, [chain], the top first, each over the next:
@@ -424,7 +437,15 @@ and ('v, 'b, 't) stmt =
 (* Type declarations. *)
 
 type 't field = { field_name : ident; field_ty : 't ty }
-type 't ctor = { ctor_name : ident; ctor_fields : 't field list }
+(* A constructor as it's declared: [Free], [Flat(off: Money)] or
+   [Flat(Money)], with one field, positional, whose name, if written, only
+   documents it (an unwritten one is [""]); or [Rect { w: Int, h: Int }],
+   by name, [ctor_named] (compiler.md, "Data stage", "By-name variants"). *)
+type 't ctor = {
+  ctor_name : ident;
+  ctor_fields : 't field list;
+  ctor_named : bool;
+}
 
 type 't type_body =
   | Fields of 't field list  (** a record: [{ id: Int, plan: Plan }] *)
@@ -658,7 +679,7 @@ let children (e : ('v, 'b, 't) expr) =
   | For { over = Range (lo, hi); body; _ } -> [ lo; hi; body ]
   | While { cond; body } -> [ cond; body ]
   | Con (_, args) | Fail (_, args) -> List.map snd args
-  | Record (_, fields) -> List.map snd fields
+  | Record (_, fields) | Con_named (_, fields) -> List.map snd fields
   | Update { base; fields; _ } -> base :: List.map snd fields
   | Block (stmts, last) -> List.map stmt stmts @ [ last ]
   | Match (s, arms) ->
@@ -966,6 +987,7 @@ let rec show_pattern (p : pattern) =
   | PRecord (name, fs) ->
       let name = match name with Some t -> show_tyname t ^ " " | None -> "" in
       name ^ show_fields show_pattern fs
+  | PCon_named (c, fs) -> show_ctor_ref c ^ " " ^ show_fields show_pattern fs
 
 let rec show_expr (e : expr) =
   match e.kind with
@@ -997,9 +1019,15 @@ let rec show_expr (e : expr) =
       let ty = match name with Some n -> [ show_tyname n ] | None -> [] in
       let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
       parens (("record" :: ty) @ List.map show_field fields)
+  | Con_named (c, fields) ->
+      let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
+      parens ("con" :: show_ctor_ref c :: "{}" :: List.map show_field fields)
   | Update { target; base; fields } ->
       let ty =
-        match target with Some (Into_type n) -> [ show_tyname n ] | None -> []
+        match target with
+        | Some (Into_type n) -> [ show_tyname n ]
+        | Some (Into_ctor c) -> [ show_ctor_ref c ]
+        | None -> []
       in
       let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
       parens
@@ -1152,14 +1180,21 @@ let show_type_def (td : type_def) =
         ^ String.concat ", " (List.map (fun (p : ident) -> p.name) ps)
         ^ ">"
   in
-  let show_field f = f.field_name.name ^ ":" ^ show_ty f.field_ty in
+  let show_field f =
+    (* a positional field's name, if it isn't written, is [""] *)
+    if f.field_name.name = "" then show_ty f.field_ty
+    else f.field_name.name ^ ":" ^ show_ty f.field_ty
+  in
   let body =
     match td.type_body with
     | Fields fs -> [ parens ("fields" :: List.map show_field fs) ]
     | Ctors cs ->
         List.map
           (fun c ->
-            parens (c.ctor_name.name :: List.map show_field c.ctor_fields))
+            parens
+              (c.ctor_name.name
+               :: ((if c.ctor_named then [ "{}" ] else [])
+                  @ List.map show_field c.ctor_fields)))
           cs
     | Opaque { rep; numeric = None } -> [ parens [ "opaque"; show_ty rep ] ]
     | Opaque { rep; numeric = Some _ } ->
@@ -1264,7 +1299,8 @@ let bound_in (e : Resolved.expr) =
     match p.pkind with
     | PVar b -> see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
-    | PRecord (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
+    | PRecord (_, fs) | PCon_named (_, fs) ->
+        List.iter (fun (_, q) -> pat q) fs.fpats
     | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   let rec go (e : Resolved.expr) =
@@ -1347,10 +1383,15 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         ^ String.concat ", "
             (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
         ^ " }"
+    | Con_named (c, fields) ->
+        ctor c ^ " { "
+        ^ String.concat ", " (List.map named fields)
+        ^ " }"
     | Update { target; base; fields } ->
         let t =
           match target with
           | Some (Into_type { tref = Named p; _ }) -> type_name p ^ " "
+          | Some (Into_ctor c) -> ctor c ^ " "
           | Some (Into_type { tref = Param _; _ }) | None -> ""
         in
         t ^ "{ .." ^ go base
@@ -1385,6 +1426,12 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Unop (Not, b, _) when 3 >= at -> ends_open n 3 b
     | _ -> false
   and list xs = String.concat ", " (List.map go xs)
+  (* a by-name constructor's field, punned where its value is a local of
+     its name *)
+  and named ((f : ident), (v : Resolved.expr)) =
+    match v.kind with
+    | Var (Local b) when b.ident.name = f.name -> f.name
+    | _ -> f.name ^ ": " ^ go v
   and con_args args =
     let arg = function
       | Some (l : ident), a -> l.name ^ ": " ^ go a
@@ -1426,3 +1473,4 @@ let rec pattern_source ~type_name (p : Resolved.pattern) =
       | Some { tref = Named t; _ } -> type_name t ^ " "
       | Some { tref = Param _; _ } | None -> "")
       ^ show_fields go fs
+  | PCon_named (c, fs) -> ctor c ^ " " ^ show_fields go fs

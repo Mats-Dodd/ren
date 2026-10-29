@@ -130,27 +130,16 @@ let find_ctor env (c : ctor_ref) ~expected =
               report env (ambiguous_ctor ~names:env.names c owners);
               None))
 
-(* Is [c] given as many arguments as it has fields, labelled correctly?
-   Each problem is reported. *)
-let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
-  let given = List.length labels in
+(* Is [c], a constructor whose fields are positional, given as many
+   arguments as it has fields? It's reported if it isn't. A label on its
+   one field, and a by-name constructor written in parentheses, are
+   refused by the caller, whose help writes it the one way it's written
+   (compiler.md, "Data stage", "By-name variants"). *)
+let ctor_shape env loc (c : ident) (ctor : Iface.ctor) given =
   if List.length ctor.cfields <> given then (
     report env (ctor_arity loc c ctor given);
     false)
-  else
-    let named = List.filter_map Fun.id labels in
-    if named = [] then true
-    else if List.length named <> given then (
-      report env (some_labels loc c);
-      false)
-    else
-      List.fold_left2
-        (fun ok (l : ident) (f : Iface.field) ->
-          if l.name <> f.fname then (
-            report env (wrong_label l f);
-            false)
-          else ok)
-        true named ctor.cfields
+  else true
 
 (* The fields a value of [td] can be read with, `r.f`: a record's. *)
 let record_fields (td : Iface.type_decl) =

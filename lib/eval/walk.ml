@@ -57,9 +57,16 @@ type view =
     }
       (** a record: its type's name, and its fields in the order they're
           declared, each with its type *)
-  | Ctor of { name : string; index : int; fields : (Ty.ty * Value.t) list }
+  | Ctor of {
+      name : string;
+      index : int;
+      fields : (Ty.ty * Value.t) list;
+      names : string list option;
+    }
       (** a constructor: its name, its place among its type's, which is the
-          order a sum type with no fields has, and its fields *)
+          order a sum type with no fields has, and its fields, with their
+          names if it's by name (compiler.md, "Data stage", "By-name
+          variants") *)
   | Opaque of string * Ty.ty
       (** an opaque value: its type's name, and what it's represented as, which
           the value is *)
@@ -129,6 +136,10 @@ let view (types : types) (t : Ty.ty) (v : Value.t) =
                       name = c.name;
                       index = i;
                       fields = List.combine (List.map field k.cfields) c.args;
+                      names =
+                        (if k.cnamed then
+                           Some (List.map (fun (f : Iface.field) -> f.fname) k.cfields)
+                         else None);
                     }
                 else Shape
             | _ :: rest -> find (i + 1) rest

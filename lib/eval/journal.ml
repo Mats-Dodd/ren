@@ -165,6 +165,10 @@ let rec write (types : Walk.types) (t : Ty.ty) (v : Value.t) =
       ^ list (List.map (fun (f, t, x) -> f ^ ": " ^ write t x) fields)
       ^ " }"
   | Ctor { name; fields = []; _ } | Tag (name, []) -> name
+  | Ctor { name; fields; names = Some names; _ } ->
+      name ^ " { "
+      ^ list (List.map2 (fun f (t, x) -> f ^ ": " ^ write t x) names fields)
+      ^ " }"
   | Ctor { name; fields; _ } ->
       name ^ "(" ^ list (List.map (fun (t, x) -> write t x) fields) ^ ")"
   | Tag (name, payload) ->
@@ -392,6 +396,20 @@ let rec read (types : Walk.types) (t : Ty.ty) r : Value.t =
           let name = ident r in
           match List.find_opt (fun (c : Iface.ctor) -> c.cname = name) cs with
           | Some { cfields = []; _ } -> VCon { ty = p; name; args = [] }
+          | Some ({ cnamed = true; _ } as c) ->
+              (* by name, in braces, as it's written *)
+              expect r "{";
+              let xs =
+                List.mapi
+                  (fun i (f : Iface.field) ->
+                    if i > 0 then expect r ",";
+                    expect r f.fname;
+                    expect r ":";
+                    read (Walk.subst args f.fty) r)
+                  c.cfields
+              in
+              expect r "}";
+              VCon { ty = p; name; args = xs }
           | Some c ->
               expect r "(";
               let xs =

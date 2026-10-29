@@ -79,15 +79,16 @@ let%expect_test
   mem ~rc:Naive
     {|
 type Tree =
-  | Node(left: Tree, key: Int, right: Tree)
+  | Node { left: Tree, key: Int, right: Tree }
   | Leaf
 
 fn size(t: Tree) -> Int =
   match t
-    Node(l, _, r) => size(l) + 1 + size(r)
+    Node { left: l, right: r, .. } => size(l) + 1 + size(r)
     Leaf => 0
 
-fn main() -> Int = size(Node(Leaf, 1, Node(Leaf, 2, Leaf)))
+fn main() -> Int =
+  size(Node { left: Leaf, key: 1, right: Node { left: Leaf, key: 2, right: Leaf } })
 |};
   [%expect
     {|
@@ -132,15 +133,16 @@ let%expect_test
   mem
     {|
 type Tree =
-  | Node(left: Tree, key: Int, right: Tree)
+  | Node { left: Tree, key: Int, right: Tree }
   | Leaf
 
 fn size(t: Tree) -> Int =
   match t
-    Node(l, _, r) => size(l) + 1 + size(r)
+    Node { left: l, right: r, .. } => size(l) + 1 + size(r)
     Leaf => 0
 
-fn main() -> Int = size(Node(Leaf, 1, Node(Leaf, 2, Leaf)))
+fn main() -> Int =
+  size(Node { left: Leaf, key: 1, right: Node { left: Leaf, key: 2, right: Leaf } })
 |};
   [%expect
     {|
@@ -176,7 +178,7 @@ type Color =
   | Black
 
 type Tree =
-  | Node(color: Color, left: Tree, key: Int, value: Bool, right: Tree)
+  | Node { color: Color, left: Tree, key: Int, value: Bool, right: Tree }
   | Leaf
 |}
 
@@ -187,13 +189,13 @@ let%expect_test "Perceus: rbtree's lookup borrows the tree, and counts nothing"
    ^ {|
 fn lookup(t: Tree, k: Int) -> Bool =
   match t
-    Node(_, l, kx, v, r) =>
+    Node { left: l, key: kx, value: v, right: r, .. } =>
       if k < kx then lookup(l, k)
       else if k > kx then lookup(r, k)
       else v
     Leaf => false
 
-fn main() -> Bool = lookup(Node(Black, Leaf, 1, true, Leaf), 1)
+fn main() -> Bool = lookup(Node { color: Black, left: Leaf, key: 1, value: true, right: Leaf }, 1)
 |}
     );
   [%expect
@@ -244,11 +246,42 @@ let rbtree_balance_right =
   {|
 fn balance_right(l: Tree, k: Int, v: Bool, r: Tree) -> Tree =
   match r
-    Node(_, Node(Red, lx, kx, vx, rx), ky, vy, ry) =>
-      Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, rx, ky, vy, ry))
-    Node(_, lx, kx, vx, Node(Red, ly, ky, vy, ry)) =>
-      Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, ly, ky, vy, ry))
-    Node(_, lx, kx, vx, rx) => Node(Black, l, k, v, Node(Red, lx, kx, vx, rx))
+    Node {
+      left: Node { color: Red, left: lx, key: kx, value: vx, right: rx },
+      key: ky,
+      value: vy,
+      right: ry,
+      ..
+    } =>
+      Node {
+        color: Red,
+        left: Node { color: Black, left: l, key: k, value: v, right: lx },
+        key: kx,
+        value: vx,
+        right: Node { color: Black, left: rx, key: ky, value: vy, right: ry },
+      }
+    Node {
+      left: lx,
+      key: kx,
+      value: vx,
+      right: Node { color: Red, left: ly, key: ky, value: vy, right: ry },
+      ..
+    } =>
+      Node {
+        color: Red,
+        left: Node { color: Black, left: l, key: k, value: v, right: lx },
+        key: kx,
+        value: vx,
+        right: Node { color: Black, left: ly, key: ky, value: vy, right: ry },
+      }
+    Node { left: lx, key: kx, value: vx, right: rx, .. } =>
+      Node {
+        color: Black,
+        left: l,
+        key: k,
+        value: v,
+        right: Node { color: Red, left: lx, key: kx, value: vx, right: rx },
+      }
     Leaf => Leaf
 |}
 
@@ -261,8 +294,8 @@ let%expect_test
     (rbtree_types ^ rbtree_balance_right
    ^ {|
 fn main() -> Bool =
-  match balance_right(Leaf, 1, true, Node(Red, Leaf, 2, true, Leaf))
-    Node(_, _, _, v, _) => v
+  match balance_right(Leaf, 1, true, Node { color: Red, left: Leaf, key: 2, value: true, right: Leaf })
+    Node { value: v, .. } => v
     Leaf => false
 |}
     );
@@ -304,24 +337,24 @@ let%expect_test
    ^ {|
 fn ins(t: Tree, k: Int, v: Bool) -> Tree =
   match t
-    Node(Black, l, kx, vx, r) =>
+    Node { color: Black, left: l, key: kx, value: vx, right: r } =>
       if k > kx then
         if is_red(r) then balance_right(l, kx, vx, ins(r, k, v))
-        else Node(Black, l, kx, vx, ins(r, k, v))
-      else Node(Black, l, k, v, r)
-    Node(Red, l, kx, vx, r) =>
-      if k > kx then Node(Red, l, kx, vx, ins(r, k, v))
-      else Node(Red, l, k, v, r)
-    Leaf => Node(Red, Leaf, k, v, Leaf)
+        else Node { color: Black, left: l, key: kx, value: vx, right: ins(r, k, v) }
+      else Node { color: Black, left: l, key: k, value: v, right: r }
+    Node { color: Red, left: l, key: kx, value: vx, right: r } =>
+      if k > kx then Node { color: Red, left: l, key: kx, value: vx, right: ins(r, k, v) }
+      else Node { color: Red, left: l, key: k, value: v, right: r }
+    Leaf => Node { color: Red, left: Leaf, key: k, value: v, right: Leaf }
 
 fn is_red(t: Tree) -> Bool =
   match t
-    Node(Red, _, _, _, _) => true
+    Node { color: Red, .. } => true
     _ => false
 
 fn main() -> Bool =
   match ins(ins(Leaf, 1, true), 2, false)
-    Node(_, _, _, v, _) => v
+    Node { value: v, .. } => v
     Leaf => false
 |}
     );
@@ -894,13 +927,13 @@ let%expect_test
   mem ~only:[ "ren_test_build" ]
     {|
 type List =
-  | Cons(head: Int, tail: List)
+  | Cons { head: Int, tail: List }
   | Nil
 fn build(i: Int, n: Int) -> List =
-  if i == n then Nil else Cons(i, build(i + 1, n))
+  if i == n then Nil else Cons { head: i, tail: build(i + 1, n) }
 fn main() -> Int =
   match build(0, 3)
-    Cons(h, _) => h
+    Cons { head: h, .. } => h
     Nil => 0
 |};
   [%expect {|

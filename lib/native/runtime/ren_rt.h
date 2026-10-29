@@ -1347,7 +1347,8 @@ typedef struct ren_desc {
 typedef struct {
   const char *name;
   int32_t nfields;
-  const char *const *fields; /* a record's field names; NULL for a sum */
+  const char *const *fields; /* a record's field names, or a by-name
+                                constructor's; NULL for a positional one */
   ren_desc *const *types;
   const uint32_t *at;
 } ren_ctor_info;

@@ -66,7 +66,10 @@
               |  errors                                  (a named error set)
               |  ["|"] ctor { "|" ctor }                  (a sum type; may be
                                                             indented, one per line)
-     ctor     := UIDENT ["(" field, ... ")"]
+     ctor     := UIDENT                                  (no fields)
+              |  UIDENT "(" [IDENT ":"] type ")"         (one field, positional;
+                                                           a name documents it)
+              |  UIDENT "{" field, ... "}"               (by name)
      field    := IDENT ":" type
      type     := tyname ["<" type, ... ">"]
               |  ["over"] tyname { "&" tyname } [errors] [uses]
@@ -129,6 +132,13 @@
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
               |  tyname "{" ".." expr {"," finit} "}"   (an update: the rest
                                                      from the value after `..`)
+                                                    (a bare `Name { ... }` is a
+                                                     record or a by-name
+                                                     constructor: Resolve
+                                                     decides)
+              |  tyname "." UIDENT "{" [".." expr ","] finit, ... "}"
+                                                    (`Shape.Rect { ... }`: a
+                                                     by-name constructor)
               |  tyname "." IDENT               (a member: `Stack.of`)
               |  "{" field_inits "}" | "{" ".." expr {"," finit} "}"
               |  "(" expr ")" | "[" expr, ... "]"
@@ -145,10 +155,13 @@
                                                    (inside brackets too, the
                                                     lexer opens its block)
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
-              |  ctor_ref ["(" pattern, ... ")"]
+              |  ctor_ref ["(" pattern, ... ")"]   (never `..` in it)
               |  "(" pattern "," pattern ["," pattern] ")"
               |  [tyname] "{" fpats "}"            (a record, of the type
-                                                    named or matched)
+                                                    named or matched, or a
+                                                    by-name constructor:
+                                                    Resolve decides)
+              |  tyname "." UIDENT "{" fpats "}"   (a by-name constructor)
      fpats    := fpat {"," fpat} ["," ".."] | ".." | (nothing)
      fpat     := IDENT [":" pattern]               (alone, it binds IDENT)
      finit    := IDENT [":" expr]                  (alone, `IDENT: IDENT`)
@@ -700,15 +713,93 @@ let parse_field_decl p =
   expect p COLON;
   { field_name; field_ty = parse_ty p }
 
+(* A constructor's declaration: `Free`; `Flat(off: Money)` or
+   `Flat(Money)`, one field, positional, whose name only documents it; or
+   `Rect { w: Int, h: Int }`, by name (compiler.md, "Data stage", "By-name
+   variants"). Several fields in parentheses are reported, with the
+   declaration by name as the help, and read as that declaration, so the
+   rest of the file is still parsed: a positional field's name is the
+   one written, or else a letter. *)
 let parse_ctor_decl p =
+  let start = loc p in
   let ctor_name = upper_ident p "a constructor name" in
-  let ctor_fields =
-    if peek p = LPAREN then (
+  match peek p with
+  | LBRACE ->
       advance p;
-      sep_list p ~close:RPAREN parse_field_decl)
-    else []
-  in
-  { ctor_name; ctor_fields }
+      let ctor_fields = sep_list p ~close:RBRACE parse_field_decl in
+      if ctor_fields = [] then
+        Diag.error
+          (Loc.span start (last_loc p))
+          ~help:(Printf.sprintf "write `%s` alone" ctor_name.name)
+          "a variant in braces names its fields, but this has none";
+      { ctor_name; ctor_fields; ctor_named = true }
+  | LPAREN -> (
+      advance p;
+      (* a field, `off: Money` or `Money`: its name, if written, its type,
+         and how the type is written *)
+      let field p =
+        let label =
+          match (peek p, peek2 p) with
+          | IDENT n, COLON when not (is_upper n) ->
+              let f = ident p in
+              advance p;
+              Some f
+          | _ -> None
+        in
+        let i = p.i in
+        let field_ty = parse_ty p in
+        (label, field_ty, spelled p i (p.i - 1))
+      in
+      match sep_list p ~close:RPAREN field with
+      | [ (label, field_ty, _) ] ->
+          let field_name =
+            match label with
+            | Some f -> f
+            | None -> { name = ""; loc = ctor_name.loc }
+          in
+          { ctor_name; ctor_fields = [ { field_name; field_ty } ]; ctor_named = false }
+      | [] -> { ctor_name; ctor_fields = []; ctor_named = false }
+      | fields ->
+          (* each unnamed field gets the first letter no field is named *)
+          let taken =
+            List.filter_map
+              (fun (l, _, _) -> Option.map (fun (f : ident) -> f.name) l)
+              fields
+          in
+          let letters =
+            List.filter
+              (fun c -> not (List.mem c taken))
+              (List.init 26 (fun i -> String.make 1 (Char.chr (97 + i))))
+          in
+          let _, named =
+            List.fold_left_map
+              (fun free (label, field_ty, shown) ->
+                match (label, free) with
+                | Some (f : ident), _ -> (free, ({ field_name = f; field_ty }, shown))
+                | None, l :: rest ->
+                    ( rest,
+                      ({ field_name = { name = l; loc = ctor_name.loc }; field_ty }, shown) )
+                | None, [] -> (free, ({ field_name = ctor_name; field_ty }, shown)))
+              letters fields
+          in
+          let written =
+            Printf.sprintf "%s { %s }" ctor_name.name
+              (String.concat ", "
+                 (List.map
+                    (fun ((f : field), shown) -> f.field_name.name ^ ": " ^ shown)
+                    named))
+          in
+          let help =
+            if List.for_all (fun (l, _, _) -> l <> None) fields then
+              Printf.sprintf "write `%s`" written
+            else Printf.sprintf "give each field a name, in braces: `%s`" written
+          in
+          Diag.report p.sink
+            (Diag.make
+               (Loc.span start (last_loc p))
+               ~help "a variant with several fields names them, in braces");
+          { ctor_name; ctor_fields = List.map fst named; ctor_named = true })
+  | _ -> { ctor_name; ctor_fields = []; ctor_named = false }
 
 (* The constructors of a sum type, separated by `|`. When the type is
    indented under `type X =`, each `|` may start its own line. *)
@@ -803,13 +894,27 @@ let rec parse_pattern p : pattern =
       let t = parse_tyname p in
       finish (PRecord (Some t, parse_fields p))
   | LBRACE -> finish (PRecord (None, parse_fields p))
-  | IDENT name when is_upper name || at_module_type p ->
+  | IDENT name when is_upper name || at_module_type p -> (
       let c = parse_ctor_ref p in
-      if peek p = LPAREN then (
-        advance p;
-        let args = sep_list p ~close:RPAREN parse_pattern in
-        finish (PCon (c, args)))
-      else finish (PCon (c, []))
+      match peek p with
+      | LPAREN ->
+          advance p;
+          (* `..` is a pattern in braces' "the rest", never a positional
+             one's *)
+          let arg p =
+            if peek p = DOTDOT then
+              Diag.error (loc p) ~help:"write `_` for each field it leaves out"
+                "`..` stands for the fields a pattern in braces leaves out"
+            else parse_pattern p
+          in
+          let args = sep_list p ~close:RPAREN arg in
+          finish (PCon (c, args))
+      | LBRACE ->
+          (* `Shape.Rect { w, .. }`: after its type, always a constructor;
+             a bare `Rect { .. }` is read as a record's, above, and Resolve
+             decides *)
+          finish (PCon_named (c, parse_fields p))
+      | _ -> finish (PCon (c, [])))
   | IDENT name ->
       advance p;
       finish (PVar { name; loc = Loc.span start (last_loc p) })
@@ -903,14 +1008,15 @@ and parse_fields p : fields =
 
 (* A pattern that always matches, which a `let`, a `for` or a lambda's
    parameter can take a tuple or a record apart with: names, `_`, and
-   tuples and records of them. A braced name is always a record type's
-   until by-name variants (compiler.md, "Data stage"). *)
+   tuples and records of them. A braced name is taken to be a record
+   type's here; Resolve refuses one that's a by-name constructor, which
+   might not match (compiler.md, "Data stage", "By-name variants"). *)
 let rec irrefutable (pat : pattern) =
   match pat.pkind with
   | PVar _ | PWild -> true
   | PTuple ps -> List.for_all irrefutable ps
   | PRecord (_, fs) -> List.for_all (fun (_, q) -> irrefutable q) fs.fpats
-  | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
+  | PInt _ | PBool _ | PCon _ | PCon_named _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
       false
 
 (* A pattern after a `let` or a `for`, or a lambda's parameter ([what],
@@ -1474,7 +1580,7 @@ and parse_primary p =
          `rows.Row { ... }` and `Row { ... }` records *)
       let t = parse_tyname p in
       match peek p with
-      | LBRACE -> parse_record p start (Some t)
+      | LBRACE -> parse_record p start (Some (`Type t))
       | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false
         -> (
           (* `stack.Stack.empty`: a member of the type. Without
@@ -1497,6 +1603,9 @@ and parse_primary p =
           in
           match peek p with
           | LPAREN -> con_args p start c
+          | LBRACE ->
+              (* `Shape.Rect { w: 2, h: 3 }`, a by-name constructor *)
+              parse_record p start (Some (`Ctor c))
           | _ -> mk (Con (c, [])) start p)
       | _ when t.tmod <> None ->
           Diag.error
@@ -1685,7 +1794,9 @@ and parse_con_arg p =
 (* A record literal, `User { id: 1 }`, or an update, `{ ..order, status:
    Paid }`: `..` and the value it takes the rest from, first and once,
    then the fields (compiler.md, "Data stage", "The grammar"). [name] is
-   the type written before the `{`, if any. *)
+   what's written before the `{`, if anything: a type, which Resolve may
+   find is a by-name constructor, or a constructor after its type,
+   `Shape.Rect { ... }`. *)
 and parse_record p start name =
   expect p LBRACE;
   (* `..e`, where [at] is the `..`: [e], and how it's written *)
@@ -1733,11 +1844,19 @@ and parse_record p start name =
             expect p RBRACE;
             []
       in
-      let target = Option.map (fun t -> Into_type t) name in
+      let target =
+        match name with
+        | Some (`Type t) -> Some (Into_type t)
+        | Some (`Ctor c) -> Some (Into_ctor c)
+        | None -> None
+      in
       mk (Update { target; base; fields }) start p
-  | _ ->
+  | _ -> (
       let fields = sep_list p ~close:RBRACE (field ~base:None) in
-      mk (Record (name, fields)) start p
+      match name with
+      | Some (`Ctor c) -> mk (Con_named (c, fields)) start p
+      | Some (`Type t) -> mk (Record (Some t, fields)) start p
+      | None -> mk (Record (None, fields)) start p)
 
 (* A field in a record literal: `id: 1`, or just `id` meaning `id: id`. *)
 and parse_field_init p =

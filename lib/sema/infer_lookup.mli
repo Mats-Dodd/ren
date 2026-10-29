@@ -27,13 +27,12 @@ val find_ctor :
   expected:Types.ty ->
   (Iface.type_decl * Iface.ctor) option
 
-(* Whether a constructor is given as many arguments as it has fields,
-   labelled correctly. Each problem is reported. *)
+(* Whether a positional constructor is given as many arguments as it has
+   fields; it's reported if it isn't. *)
 (* A record's fields, or [None] for any other type. *)
 val record_fields : Iface.type_decl -> Iface.field list option
 
-val ctor_shape :
-  env -> Loc.t -> Ast.ident -> Iface.ctor -> Ast.ident option list -> bool
+val ctor_shape : env -> Loc.t -> Ast.ident -> Iface.ctor -> int -> bool
 
 (* By name, in a type declaration: a dependency's operation, a member, and
    a record's field. *)

@@ -51,7 +51,7 @@ checked, and `loops_short` in the checked one of a loop bounds.ml made
 twice. `review_shrink` panics indexing an array a call
 shrank under its loop's count, which bounds.ml leaves checked.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -144,6 +144,8 @@ shrank under its loop's count, which bounds.ml leaves checked.
   11a/limit_panic.ren, naive: the same, exit 1, objects live at exit 5
   data/update.ren, perceus: the same, exit 0, objects live at exit 0
   data/update.ren, naive: the same, exit 0, objects live at exit 0
+  data/byname.ren, perceus: the same, exit 0, objects live at exit 0
+  data/byname.ren, naive: the same, exit 0, objects live at exit 0
 
 Every native benchmark, at its small size:
 
@@ -294,7 +296,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -341,6 +343,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   11a/limit.ren, release: the same, exit 0, objects live at exit 0
   11a/limit_panic.ren, release: the same, exit 1, objects live at exit 5
   data/update.ren, release: the same, exit 0, objects live at exit 0
+  data/byname.ren, release: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -674,8 +677,8 @@ holds next is the one reference the old value gave up, counted once,
 and a constant where the loop goes round holds none.
 
   $ cat > walks.ren <<'EOF'
-  > type List = Nil | Cons(h: Int, t: List)
-  > type T = Leaf | Node(l: T, r: T)
+  > type List = Nil | Cons { h: Int, t: List }
+  > type T = Leaf | Node { l: T, r: T }
   > 
   > fn count(xs: List) -> Int =
   >   var n = 0
@@ -683,7 +686,7 @@ and a constant where the loop goes round holds none.
   >   while true
   >     match cur
   >       Nil => break
-  >       Cons(_, t) =>
+  >       Cons { t, .. } =>
   >         n += 1
   >         cur = t
   >   n
@@ -695,7 +698,7 @@ and a constant where the loop goes round holds none.
   >   while go
   >     match cur
   >       Nil => go = false
-  >       Cons(_, t) =>
+  >       Cons { t, .. } =>
   >         n += 1
   >         cur = t
   >   n
@@ -706,7 +709,7 @@ and a constant where the loop goes round holds none.
   >   while true
   >     match cur
   >       Nil => break
-  >       Cons(h, _) =>
+  >       Cons { h, .. } =>
   >         n = h
   >         cur = Nil
   >   n
@@ -717,21 +720,21 @@ and a constant where the loop goes round holds none.
   >   for i in 0..100
   >     match cur
   >       Nil => out = out + 0
-  >       Cons(h, t) =>
+  >       Cons { h, t } =>
   >         out = h
   >         cur = t
   >   out
   > 
   > fn main() uses Console =
-  >   let xs = Cons(1, Cons(2, Cons(3, Nil)))
+  >   let xs = Cons { h: 1, t: Cons { h: 2, t: Cons { h: 3, t: Nil } } }
   >   print(count(xs) + count_go(xs) * 10 + first(xs) * 100 + last(xs) * 1000)
-  >   var t = Node(Node(Leaf, Leaf), Leaf)
+  >   var t = Node { l: Node { l: Leaf, r: Leaf }, r: Leaf }
   >   var n = 0
   >   var go = true
   >   while go
   >     match t
   >       Leaf => go = false
-  >       Node(l, _) =>
+  >       Node { l, .. } =>
   >         n += 1
   >         t = l
   >   print(n)
@@ -1349,7 +1352,7 @@ same objects alive at the end as clang's build above.
   >    fi)
   >   done
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update; do tcc_same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname; do tcc_same $f.ren; done
   fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
   deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1500,6 +1503,8 @@ same objects alive at the end as clang's build above.
   11a/limit_panic.ren, naive, tcc: the same, exit 1, objects live at exit 5
   data/update.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   data/update.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/byname.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/byname.ren, naive, tcc: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do tcc_same $f; done
   native/binary-trees/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/binary-trees/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
@@ -1679,20 +1684,22 @@ adds it to the loops above that check its native builds against `ren
 run`. `nested`, `rows` and `optional` are step 7's kernels, one for each
 layout fault: they run today, so they're as specified already, and step
 7 measures them before and after its fixes and adds them to the loops.
-`interp`, the milestone's kernel, needs step 2's by-name variants to
-run, and step 7 measures it against Rust.
+`interp`, the milestone's kernel, and `shapes`, step 6's ADT, needed
+only step 2's by-name variants to run, so they're as specified since
+step 2; step 7 measures `interp` against Rust, and steps 6 and 7 add
+them to the loops.
 
   $ for f in update byname orpat variants todo_panic shapes nested rows optional interp; do spec data/$f.ren; done
   data/update.ren: as specified
-  data/byname.ren: not yet
+  data/byname.ren: as specified
   data/orpat.ren: not yet
   data/variants.ren: not yet
   data/todo_panic.ren: not yet
-  data/shapes.ren: not yet
+  data/shapes.ren: as specified
   data/nested.ren: as specified
   data/rows.ren: as specified
   data/optional.ren: as specified
-  data/interp.ren: not yet
+  data/interp.ren: as specified
 
 An update of a unique record is built over it in place (compiler.md,
 "Data stage", "Record update"): the loop at the end of `update` updates

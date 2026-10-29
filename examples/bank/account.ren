@@ -16,8 +16,8 @@ pub type Refusal = ! Short(account: AccountId, by: Money) | Frozen(account: Acco
 // what moved money in or out
 pub type Movement =
   | Deposited(amount: Money)
-  | Sent(amount: Money, to: AccountId)
-  | Received(amount: Money, from: AccountId)
+  | Sent { amount: Money, to: AccountId }
+  | Received { amount: Money, from: AccountId }
 
 // a line of a statement: a movement, and when it happened, by whichever
 // clock is installed
@@ -75,7 +75,7 @@ test "a frozen account takes nothing in" =
 test "a debit can't go below zero" =
   var a = Account.open(AccountId.of(1))
   try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
-  let out = Sent(Money.dollars(7), AccountId.of(2))
+  let out = Sent { amount: Money.dollars(7), to: AccountId.of(2) }
   assert attempt &a.debit(Money.dollars(7), out) == Err(Short(AccountId.of(1), Money.dollars(2)))
   assert a.balance() == Money.dollars(5)
 

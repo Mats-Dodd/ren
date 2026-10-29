@@ -11,40 +11,76 @@ type Color =
   | Black
 
 type Tree =
-  | Node(color: Color, left: Tree, key: Int, value: Bool, right: Tree)
+  | Node { color: Color, left: Tree, key: Int, value: Bool, right: Tree }
   | Leaf
 
 fn ins(t: Tree, k: Int, v: Bool) -> Tree =
   match t
-    Node(c, l, kx, vx, r) =>
-      if k < kx then balance(Node(c, ins(l, k, v), kx, vx, r))
-      else if k > kx then balance(Node(c, l, kx, vx, ins(r, k, v)))
-      else Node(c, l, k, v, r)
-    Leaf => Node(Red, Leaf, k, v, Leaf)
+    Node { color, left, key, value, right } =>
+      if k < key then balance(Node { color, left: ins(left, k, v), key, value, right })
+      else if k > key then balance(Node { color, left, key, value, right: ins(right, k, v) })
+      else Node { color, left, key: k, value: v, right }
+    Leaf => Node { color: Red, left: Leaf, key: k, value: v, right: Leaf }
 
 fn balance(t: Tree) -> Tree =
   match t
-    Node(Black, Node(Red, Node(Red, a, xk, xv, b), yk, yv, c), zk, zv, d) =>
-      Node(Red, Node(Black, a, xk, xv, b), yk, yv, Node(Black, c, zk, zv, d))
-    Node(Black, a, xk, xv, Node(Red, b, yk, yv, Node(Red, c, zk, zv, d))) =>
-      Node(Red, Node(Black, a, xk, xv, b), yk, yv, Node(Black, c, zk, zv, d))
+    Node {
+      color: Black,
+      left: Node {
+        color: Red,
+        left: Node { color: Red, left: a, key: xk, value: xv, right: b },
+        key: yk,
+        value: yv,
+        right: c,
+      },
+      key: zk,
+      value: zv,
+      right: d,
+    } =>
+      Node {
+        color: Red,
+        left: Node { color: Black, left: a, key: xk, value: xv, right: b },
+        key: yk,
+        value: yv,
+        right: Node { color: Black, left: c, key: zk, value: zv, right: d },
+      }
+    Node {
+      color: Black,
+      left: a,
+      key: xk,
+      value: xv,
+      right: Node {
+        color: Red,
+        left: b,
+        key: yk,
+        value: yv,
+        right: Node { color: Red, left: c, key: zk, value: zv, right: d },
+      },
+    } =>
+      Node {
+        color: Red,
+        left: Node { color: Black, left: a, key: xk, value: xv, right: b },
+        key: yk,
+        value: yv,
+        right: Node { color: Black, left: c, key: zk, value: zv, right: d },
+      }
     _ => t
 
 fn blacken(t: Tree) -> Tree =
   match t
-    Node(_, l, k, v, r) => Node(Black, l, k, v, r)
+    Node { left, key, value, right, .. } => Node { color: Black, left, key, value, right }
     Leaf => Leaf
 
 fn trues(t: Tree) -> Int =
   match t
-    Node(_, l, _, true, r) => trues(l) + trues(r) + 1
-    Node(_, l, _, false, r) => trues(l) + trues(r)
+    Node { left, value: true, right, .. } => trues(left) + trues(right) + 1
+    Node { left, value: false, right, .. } => trues(left) + trues(right)
     Leaf => 0
 
 fn reds(t: Tree) -> Int =
   match t
-    Node(Red, l, _, _, r) => reds(l) + reds(r) + 1
-    Node(Black, l, _, _, r) => reds(l) + reds(r)
+    Node { color: Red, left, right, .. } => reds(left) + reds(right) + 1
+    Node { color: Black, left, right, .. } => reds(left) + reds(right)
     Leaf => 0
 
 type Level =
@@ -92,4 +128,4 @@ fn main() uses Console =
   print(x == z)
   print(first([y, x]).level == Low)
   print(first([x]))
-  print([Node(Red, Leaf, 1, true, Leaf), Leaf])
+  print([Node { color: Red, left: Leaf, key: 1, value: true, right: Leaf }, Leaf])

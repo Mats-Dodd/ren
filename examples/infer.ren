@@ -27,7 +27,7 @@ fn twice(f) =                          // f's dependencies are where it's writte
   f()
 
 fn main() =                            // uses Console, because `print` does
-  let alice = { id: 1, plan: Pro(seats: 5) }
+  let alice = { id: 1, plan: Pro(5) }
   print(seats(alice))
   print(first_or(map_option(Some(20), fn(n) => n + 1), 0))
   print(first_or(None, true))

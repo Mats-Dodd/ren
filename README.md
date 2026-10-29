@@ -125,7 +125,7 @@ let before = scores                    // a value, not a reference
 assert before == [3.0, 1.0, 2.0]       // nothing changes out from under you
 
 var user = load(id)
-user.plan = Pro(seats: 5)              // reads like mutation, means "new value"
+user.plan = Pro(5)                     // reads like mutation, means "new value"
 ```
 
 A record is updated by naming what changes, `..` taking the rest from another, and taken apart by naming its fields, `..` leaving out the rest. When the record updated isn't shared, its update is built over it in place:
@@ -706,7 +706,7 @@ fn step(inout ps: Array<Particle, soa>, dt: Float) =
 
 "No `Alloc`, no allocation" is only useful if you can predict allocation by reading the code. These rules make that possible.
 
-**What lives on the heap.** Scalars, records, tuples, and non-recursive enums are inline values, so `Some(i)`, `Vec3`, and `Pro(seats: 5)` never allocate. Heap values are `Array`, `Str`, `Map` and `Set`, recursive types (boxed only where they recurse), and `cold` fields.
+**What lives on the heap.** Scalars, records, tuples, and non-recursive enums are inline values, so `Some(i)`, `Vec3`, and `Pro(5)` never allocate. Heap values are `Array`, `Str`, `Map` and `Set`, recursive types (boxed only where they recurse), and `cold` fields.
 
 **What counts as allocating.** Creating or growing a heap value, copying a shared value before changing it (copy-on-write), and freeing a value whose count reaches zero.
 

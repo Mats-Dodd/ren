@@ -5,15 +5,15 @@
 // countings.
 
 type List =
-  | Cons(head: Int, tail: List)
+  | Cons { head: Int, tail: List }
   | Nil
 
 fn build(i: Int, n: Int) -> List =
-  if i == n then Nil else Cons(i * 1000000000000000000, build(i + 1, n))
+  if i == n then Nil else Cons { head: i * 1000000000000000000, tail: build(i + 1, n) }
 
 fn len(l: List) -> Int =
   match l
-    Cons(_, t) => 1 + len(t)
+    Cons { tail: t, .. } => 1 + len(t)
     Nil => 0
 
 fn main() uses Console =

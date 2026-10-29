@@ -11,15 +11,15 @@
 // prints what `ren run` prints.
 
 type List =
-  | Cons(head: Int, tail: List)
+  | Cons { head: Int, tail: List }
   | Nil
 
 type Words =
-  | More(word: Str, rest: Words)
+  | More { word: Str, rest: Words }
   | Done
 
 type Tree =
-  | Node(left: Tree, key: Int, right: Tree)
+  | Node { left: Tree, key: Int, right: Tree }
   | Leaf
 
 type Link = { id: Int, next: Chain }
@@ -29,16 +29,16 @@ type Chain =
   | Ends
 
 fn build(i: Int, n: Int) -> List =
-  if i == n then Nil else Cons(i, build(i + 1, n))
+  if i == n then Nil else Cons { head: i, tail: build(i + 1, n) }
 
 fn scale(l: List, k: Int) -> List =
   match l
-    Cons(h, t) => Cons(h * k, scale(t, k))
+    Cons { head: h, tail: t } => Cons { head: h * k, tail: scale(t, k) }
     Nil => Nil
 
 fn evens(l: List) -> List =
   match l
-    Cons(h, t) => if h % 2 == 0 then Cons(h, evens(t)) else evens(t)
+    Cons { head: h, tail: t } => if h % 2 == 0 then Cons { head: h, tail: evens(t) } else evens(t)
     Nil => Nil
 
 fn sum(l: List) -> Int =
@@ -47,7 +47,7 @@ fn sum(l: List) -> Int =
   var go = true
   while go
     match c
-      Cons(h, t) =>
+      Cons { head: h, tail: t } =>
         s = s + h
         c = t
       Nil => go = false
@@ -55,27 +55,27 @@ fn sum(l: List) -> Int =
 
 fn append(a: Words, b: Words) -> Words =
   match a
-    More(w, r) => More(w, append(r, b))
+    More { word: w, rest: r } => More { word: w, rest: append(r, b) }
     Done => b
 
 fn join(ws: Words) -> Str =
   match ws
-    More(w, r) => w.concat(join(r))
+    More { word: w, rest: r } => w.concat(join(r))
     Done => ""
 
 fn tree(d: Int, k: Int) -> Tree =
-  if d == 0 then Leaf else Node(tree(d - 1, k * 2), k, tree(d - 1, k * 2 + 1))
+  if d == 0 then Leaf else Node { left: tree(d - 1, k * 2), key: k, right: tree(d - 1, k * 2 + 1) }
 
 fn keys(t: Tree) -> Int =
   match t
-    Node(l, k, r) => keys(l) + k + keys(r)
+    Node { left: l, key: k, right: r } => keys(l) + k + keys(r)
     Leaf => 0
 
 fn checked(l: List, limit: Int) -> List ! TooBig(at: Int) =
   match l
-    Cons(h, t) =>
+    Cons { head: h, tail: t } =>
       if h > limit then fail TooBig(h)
-      Cons(h + 1, try checked(t, limit))
+      Cons { head: h + 1, tail: try checked(t, limit) }
     Nil => Nil
 
 fn chain(i: Int, n: Int) -> Chain =
@@ -95,7 +95,10 @@ fn main() uses Console =
   print(sum(doubled) - sum(big))
   print(sum(evens(big)))
   // strings
-  let ab = append(More("a", More("b", Done)), More("c", Done))
+  let ab = append(
+    More { word: "a", rest: More { word: "b", rest: Done } },
+    More { word: "c", rest: Done },
+  )
   print(join(append(ab, ab)))
   // a tree's right sides
   print(keys(tree(10, 1)))

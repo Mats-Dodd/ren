@@ -41,8 +41,8 @@ pub type Bank = opaque { accounts: Map<AccountId, Account>, next: Int }
     if not t.amount.positive() then fail NotPositive(t.amount)
     var from = try self.get(t.from)
     var to = try self.get(t.to)
-    try &from.debit(t.amount, Sent(t.amount, t.to))
-    try &to.credit(t.amount, Received(t.amount, t.from))
+    try &from.debit(t.amount, Sent { amount: t.amount, to: t.to })
+    try &to.credit(t.amount, Received { amount: t.amount, from: t.from })
     &self.accounts.set(t.from, from)
     &self.accounts.set(t.to, to)
 
@@ -97,9 +97,11 @@ test "a transfer moves money, and stamps both sides" =
   let now = Time.epoch + Duration.seconds(1)
   assert try acme.statement(a) == [
     Entry { at: Time.epoch, what: Deposited(Money.dollars(10)) },
-    Entry { at: now, what: Sent(Money.dollars(4), b) },
+    Entry { at: now, what: Sent { amount: Money.dollars(4), to: b } },
   ]
-  assert try acme.statement(b) == [Entry { at: now, what: Received(Money.dollars(4), a) }]
+  assert try acme.statement(b) == [
+    Entry { at: now, what: Received { amount: Money.dollars(4), from: a } },
+  ]
 
 test "an overdraft is refused, and nothing moves" =
   var acme = Bank.empty

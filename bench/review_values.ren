@@ -15,26 +15,26 @@
 // ---- v1
 type Pair = { a: Str, b: Str }
 type Mix =
-  | A(s: Str, n: Int)
-  | B(n: Int, s: Str)
+  | A { s: Str, n: Int }
+  | B { n: Int, s: Str }
   | C(k: Int)
   | D
 type Box<T> = { v: T }
-type Node = | Leaf | N(l: Node, p: Pair, r: Node)
+type Node = | Leaf | N { l: Node, p: Pair, r: Node }
 
 fn swap(p: Pair) -> Pair = Pair { a: p.b, b: p.a }
 fn keep<T>(x: T) -> T = x
 fn pick<T>(c: Bool, x: T, y: T) -> T = if c then x else y
 fn mk(i: Int) -> Mix =
   match i % 4
-    0 => A(show(i), i)
-    1 => B(i, show(i * 10))
+    0 => Mix.A { s: show(i), n: i }
+    1 => Mix.B { n: i, s: show(i * 10) }
     2 => C(i)
     _ => D
 fn desc(m: Mix) -> Str =
   match m
-    A(s, n) => s.concat("a").concat(show(n))
-    B(n, s) => show(n).concat("b").concat(s)
+    Mix.A { s, n } => s.concat("a").concat(show(n))
+    Mix.B { n, s } => show(n).concat("b").concat(s)
     C(k) => show(k)
     D => "d"
 fn edit(inout p: Pair) =
@@ -42,7 +42,7 @@ fn edit(inout p: Pair) =
 fn sum(t: Node) -> Str =
   match t
     Leaf => ""
-    N(l, p, r) => sum(l).concat(p.a).concat(sum(r))
+    N { l, p, r } => sum(l).concat(p.a).concat(sum(r))
 
 fn main_v1() uses Console =
   var p = Pair { a: "x", b: "y" }
@@ -77,7 +77,7 @@ fn main_v1() uses Console =
   print(f(q))
   var t = Leaf
   for i in 0..3
-    t = N(t, Pair { a: show(i), b: "" }, Leaf)
+    t = N { l: t, p: Pair { a: show(i), b: "" }, r: Leaf }
   print(sum(t))
   print(p == q)
   print(show(q))
@@ -96,17 +96,17 @@ fn main_v1() uses Console =
 // ---- f1
 type A = { x: Int, s: Str }
 type B = { y: Int, t: Str }
-type E1 = | P(n: Int, s: Str) | Q
-type E2 = | R(n: Int, s: Str) | S
-type L1 = | C1(h: Str, t: L1) | N1
-type L2 = | C2(h: Str, t: L2) | N2
+type E1 = | P { n: Int, s: Str } | Q
+type E2 = | R { n: Int, s: Str } | S
+type L1 = | C1 { h: Str, t: L1 } | N1
+type L2 = | C2 { h: Str, t: L2 } | N2
 
-fn mka(i: Int) -> A = A { x: i, s: show(i) }
-fn mkb(i: Int) -> B = B { y: i, t: show(i) }
-fn mke1(i: Int) -> E1 = if i > 0 then P(i, "p") else Q
-fn mke2(i: Int) -> E2 = if i > 0 then R(i, "p") else S
-fn l1(n: Int) -> L1 = if n == 0 then N1 else C1(show(n), l1(n - 1))
-fn l2(n: Int) -> L2 = if n == 0 then N2 else C2(show(n), l2(n - 1))
+fn mka(i: Int) -> A = { x: i, s: show(i) }
+fn mkb(i: Int) -> B = { y: i, t: show(i) }
+fn mke1(i: Int) -> E1 = if i > 0 then P { n: i, s: "p" } else Q
+fn mke2(i: Int) -> E2 = if i > 0 then R { n: i, s: "p" } else S
+fn l1(n: Int) -> L1 = if n == 0 then N1 else C1 { h: show(n), t: l1(n - 1) }
+fn l2(n: Int) -> L2 = if n == 0 then N2 else C2 { h: show(n), t: l2(n - 1) }
 fn box<T>(x: T) -> Array<T> = [x, x]
 
 fn main_f1() uses Console =
@@ -131,17 +131,19 @@ type Color = | Red | Green | Blue
 type Px = { r: UInt8, g: Int8, on: Bool, c: Color, w: Int16, f: Float32 }
 type Rec = { name: Str, a: Int8, b: Bool, n: Int, c: Color, u: UInt32, big: UInt64 }
 type Wrap<T> = { x: T, flag: Bool }
-type T2 = | Lf | Nd(l: T2, k: Int8, on: Bool, r: T2)
+type T2 = | Lf | Nd { l: T2, k: Int8, on: Bool, r: T2 }
 
 fn total(t: T2) -> Int =
   match t
     Lf => 0
-    Nd(l, k, on, r) => total(l) + (if on then k else 0 - k) + total(r)
+    Nd { l, k, on, r } => total(l) + (if on then k else 0 - k) + total(r)
 
 fn ins(t: T2, k: Int) -> T2 =
   match t
-    Lf => Nd(Lf, k, k % 2 == 0, Lf)
-    Nd(l, kk, on, r) => if k < kk then Nd(ins(l, k), kk, on, r) else Nd(l, kk, not on, ins(r, k))
+    Lf => Nd { l: Lf, k, on: k % 2 == 0, r: Lf }
+    Nd { l, k: kk, on, r } =>
+      if k < kk then Nd { l: ins(l, k), k: kk, on, r }
+      else Nd { l, k: kk, on: not on, r: ins(r, k) }
 
 fn gen<T>(xs: Array<T>) -> Array<T> =
   var out: Array<T> = []
