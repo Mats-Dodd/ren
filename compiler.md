@@ -5688,7 +5688,12 @@ with a test in test_tasks.ml's s9 section:
   now keeps its body's calls (`ctx.let_blocks`, from `lambda_calls`), and
   an operation's argument that's such a local is checked as one written
   there is (`op_block`). A block parameter passed on to an operation is
-  still not checked statically (low: the run time's panics cover it).
+  still not checked statically. The run time catches it: the deadlock
+  panic came only once every task waited, which a server's accept loop
+  never does, so a cycle of two tasks hung silently; now a call that
+  would queue for an instance follows the tasks each waits for
+  (`task.queued`, `Sched.holding`'s `chain`), and if they come back to
+  it, it's a panic at once that lists the cycle.
 - **The stale note on a state read across a dependency call:** the error
   stays, as decision 2's table has it, and its note says why now
   (`Excl.dep_call_note`).

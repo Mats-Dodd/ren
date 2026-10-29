@@ -3305,3 +3305,54 @@ fn main() uses Console, Async, Clock =
     outer done
     ()
     |}]
+
+let%expect_test "[s9 reject] a wait that closes a cycle is a panic at once, though another task runs" =
+  (* a block parameter passed on to an operation isn't checked by the
+     no-deadlock rule: `via`'s task holds `X` and waits for `Y`, whose
+     task waits for `X`. The third task keeps the run from being all
+     waits, as a server's accept loop does, so the deadlock panic would
+     never come; the wait that closes the cycle is the panic *)
+  run_error
+    {|
+dep Y =
+  poke: fn()
+
+dep X =
+  run: fn(f: fn())
+
+handler xh() for X uses Clock =
+  var n = 0
+  run(f) =>
+    n += 1
+    Clock.sleep(Duration.ms(50))
+    f()
+
+handler yh() for Y uses X, Clock =
+  var m = 0
+  poke() =>
+    m += 1
+    Clock.sleep(Duration.ms(50))
+    X.run(fn() => ())
+
+fn via(f: fn()) uses X = X.run(f)
+
+fn main() uses Console, Clock, Async =
+  with xh() in
+    with yh() in
+      Async.scope fn(s) =>
+        s.spawn fn() => via(fn() => Y.poke())
+        s.spawn fn() => Y.poke()
+        s.spawn fn() =>
+          Clock.sleep(Duration.seconds(60))
+          print("never")
+|};
+  [%expect {|
+    error: panic: `X.run` would wait for a task that waits for this one, so neither could go on
+       ┌─ test.ren:19:5
+    19 │     X.run(fn() => ())
+       │     ^^^^^^^^^^^^^^^^^
+       = in the task main/main:1
+       = main/main:1 waits for `X`, which another task is in
+       = main/main:0 waits for `Y`, which another task is in at test.ren:27:37
+       help: a block passed to an operation gets its dependencies only from its parameter's type: call it before the operation, outside the block
+    |}]

@@ -48,6 +48,8 @@ message and prints the answer; given a third argument, it says
 
   $ cat > client.py <<'END'
   > import socket, sys, time
+  > # it gives up after 10 seconds itself: macOS has no `timeout`
+  > socket.setdefaulttimeout(10)
   > port, msg = int(sys.argv[1]), sys.argv[2]
   > s = None
   > for _ in range(200):
@@ -71,20 +73,20 @@ A free port, and the server on it, in the background:
   $ port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
   $ ren run echo.ren -- $port > out 2>&1 &
   $ server=$!
-  $ timeout 10 python3 client.py $port hello
+  $ python3 client.py $port hello
   hello
 
 A slow request is in flight when SIGTERM comes: the server stops
 accepting, the request still gets its answer, and the server ends as
 `main` does, with 0:
 
-  $ timeout 10 python3 client.py $port slow > slow.out &
+  $ python3 client.py $port slow > slow.out &
   $ for i in $(seq 200); do grep -q 'got slow' out && break; sleep 0.05; done
   $ kill -TERM $server; wait $server; echo "exit $?"
   exit 0
   $ wait; cat slow.out
   slow
-  $ timeout 10 python3 client.py $port again refused
+  $ python3 client.py $port again refused
   refused
   $ cat out
   got hello
@@ -124,7 +126,7 @@ those waits; replaying it prints what the run printed, with no network:
 
   $ ren run --record net.journal echo.ren -- $port > out 2>&1 &
   $ server=$!
-  $ timeout 10 python3 client.py $port hello
+  $ python3 client.py $port hello
   hello
   $ kill -TERM $server; wait $server; echo "exit $?"
   exit 0

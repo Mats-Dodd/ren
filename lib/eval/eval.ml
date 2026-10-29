@@ -630,6 +630,19 @@ let rec eval cx env (e : expr) =
                       it would wait for itself"
                      name)
               in
+              (* a wait that would close a cycle: each task in it waits
+                 for an instance the next one is in *)
+              let cycle waits =
+                panic_at e.loc ~notes:waits
+                  ~help:
+                    "a block passed to an operation gets its dependencies \
+                     only from its parameter's type: call it before the \
+                     operation, outside the block"
+                  (Printf.sprintf
+                     "%s would wait for a task that waits for this one, so \
+                      neither could go on"
+                     name)
+              in
               let at =
                 if e.loc.file = Prelude.file then at_call cx else Some (where e.loc)
               in
@@ -640,7 +653,7 @@ let rec eval cx env (e : expr) =
                 if Sched.locked inst then Sched.point ?at ();
                 Sched.holding ?at
                   ~what:(Printf.sprintf "waits for `%s`, which another task is in" dep.name)
-                  ~reentered inst cx.site
+                  ~reentered ~cycle inst cx.site
                   (fun () -> fst (call_at cx e.loc f args (VEvidence outer)))
               in
               match cx.trace with

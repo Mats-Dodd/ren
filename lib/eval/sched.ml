@@ -95,6 +95,9 @@ type task = {
   mutable cleanup_by : float;
   mutable deadlines : deadline list;
       (** the `Async.timeout`s whose bodies it's running, the innermost first *)
+  mutable queued : int option;
+      (** the locked instance it's queued for, if it is ([holding]): what
+          a call that would close a cycle of waits follows *)
   mutable holding : (int * string) list;
       (** the instances whose operations it's in, by number, the innermost
           first, each with the label of the arm that's running, `gate.wait`:
@@ -618,6 +621,7 @@ let task ?(context = []) ~path ~root scope =
     asked_at = 0.;
     cleanup_by = 0.;
     deadlines = [];
+    queued = None;
     holding = [];
     isolates = [];
     through = [];
@@ -1457,14 +1461,19 @@ let leave_lock s inst =
    others waiting, and has it until it returns (compiler.md, "Operations
    that don't interleave"); [what] is what the deadlock panic says it
    waits for, and [at] the program's call. A call back into it from the
-   task in it could never go on, which [reentered] makes a panic of.
+   task in it could never go on, which [reentered] makes a panic of; and
+   so could one that would wait for a task that waits, through the tasks
+   each waits for, for this one, which [cycle] makes a panic of, given
+   what each task in the cycle waits for. It's raised at once, since
+   the deadlock panic comes only when every task waits, and a server's
+   accept loop never does.
 
    A panic that leaves it notes that it did, for `Async.isolate`
    ([isolatable]), and leaves the lock taken for good: what it was
    changing may be half changed, and only an isolate inside its `with` can
    go on, whose tasks are all cancelled. Without a scheduler, as when a
    value is made, it's just [f ()]. *)
-let holding ?at ~what ~reentered inst label f =
+let holding ?at ~what ~reentered ~cycle inst label f =
   match !running with
   | None -> f ()
   | Some s -> (
@@ -1476,9 +1485,30 @@ let holding ?at ~what ~reentered inst label f =
           lk.depth <- 1
       | Some { holder = Some h; _ } when h == t -> raise (reentered ())
       | Some lk ->
+          (* the tasks this one would wait for, each queued for an
+             instance the next is in: if they come back to this one, none
+             of them can go on *)
+          let rec chain (h : task) seen =
+            if h == t then Some (List.rev seen)
+            else if List.memq h seen then None
+            else
+              match h.queued with
+              | Some i -> (
+                  match Hashtbl.find_opt s.locks i with
+                  | Some { holder = Some h'; _ } -> chain h' (h :: seen)
+                  | _ -> None)
+              | None -> None
+          in
+          (match chain (Option.get lk.holder) [] with
+          | Some others ->
+              raise (cycle ((t.path ^ " " ^ what) :: List.map (fun u -> u.path ^ " " ^ u.what) others))
+          | None -> ());
           (* given it by [released] once it's this one's turn; or this
              task is cancelled, and it stays where it was *)
-          wait ?at what (fun wake -> Queue.push (t, wake) lk.callers);
+          t.queued <- Some inst;
+          Fun.protect
+            ~finally:(fun () -> t.queued <- None)
+            (fun () -> wait ?at what (fun wake -> Queue.push (t, wake) lk.callers));
           lk.depth <- lk.depth + 1
       | None -> ());
       t.holding <- (inst, label) :: t.holding;
