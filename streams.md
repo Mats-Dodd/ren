@@ -340,6 +340,12 @@ A generator's frame is a scope (rule 5). Its `finally` runs:
 - when its task is cancelled, shielded and under the cleanup deadline
   (async.md).
 
+A generator that was never stepped has run none of its body, so it has
+no `finally` to run: a transaction's `BEGIN` happens at the first step.
+Several generators in one scope close in reverse order, as `with`s do.
+In the interpreter this is the cleanup node `with` already uses, wrapped
+around the rest of the block that names the generator.
+
 Never when a count drops to zero (decision 11): a drop moves with borrow
 inference, runs twice on copies, and has no error channel.
 
@@ -459,10 +465,11 @@ Every operator takes its time from `Clock`, so under `sim` it runs on
 the simulated clock, schedules are explored over seeds, and a run that
 went wrong replays from its journal.
 
-**Actors** that loop over a reader they keep need decision 2's
-handler-state row narrowed to `Async.until`, `release` and
-block-parameter calls (**open**, see [Open](#open)). Until then, an actor
-copies a reader out of its state and back in around each loop.
+**Actors** loop over a reader they keep in their state: decision 2's
+handler-state row covers only `Async.until`, `release` and
+block-parameter calls, so a step that calls another service holds none
+of the actor's state. A model of service cycles under decision 10 found
+it sound (research/decision-11/).
 
 ## The standard library
 
@@ -670,7 +677,7 @@ A truncated frame at EOF is `Short(at, need)` with `at` in the stream.
 |---|---|
 | foundations.md, "What's given up": generic lazy pipelines | given up instead: storable generic adapters over any cursor (`Peekable<C>` in a record), and storing a generator that uses a dependency |
 | decision 1: a `let` binds one literal block | one block made here: a literal, a chain, or a call that gives a block |
-| decision 2's table | adds a row: an `&r` head or pull argument steps `r` at each step, held for the call. The handler-state row narrows once its check passes (**open**) |
+| decision 2's table | adds a row: an `&r` head or pull argument steps `r` at each step, held for the call. The handler-state row narrows to `Async.until`, `release` and block-parameter calls |
 | decision 3: a description's arguments can't hold `next` | can't hold a block or an instance; a value cursor is data |
 | decision 12 | adds rule 2, read from the inferred row |
 | decision 13 | a recursive `yield from` has one depth limit, pushed or pulled |
@@ -700,15 +707,6 @@ A truncated frame at EOF is `Short(at, need)` with `at` in the stream.
 
 ## Open
 
-- **Closing a named pipeline at the end of its scope isn't built.** The
-  prototype closes temporaries, on `break` and on finishing. The `let`
-  spelling and rule 5 rest on scope-end closing, on failure and cancel
-  too, so it's built in the interpreter before this freezes.
-- **Narrowing decision 2's handler-state row** waits on a soundness
-  check: a FizzBee model of service cycles (A calls B calls A) under
-  decision 10. Until it passes, actors copy readers out and back in.
-- **A crash in lowering,** `for x in job.rest` over a cursor in a record
-  field, exists today and blocks native value cursors.
 - **Chain recognition is by type,** not by spelling as in the prototype,
   and messages must not name hidden locals (`$frame45`).
 

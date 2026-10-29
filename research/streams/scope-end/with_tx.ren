@@ -1,0 +1,63 @@
+// `with` and scope end. (1) the generator holds a transaction across its
+// `yield`s (streams.md, `preview_then_export`): left early (here by a
+// failure, since `return` isn't in the compiler yet) it rolls back; run
+// to the end it commits. (2) a generator named inside a consumer's
+// `with` is closed before the `with` ends. (3) one named outside a `with`
+// and stepped inside it outlives it, and closes after the `with`'s
+// teardown.
+dep Tx =
+  row: fn(i: Int) -> Int
+
+handler transaction(name: Str) for Tx uses Console =
+  let begun = print((name, "BEGIN"))
+  finally(r) =>
+    match r
+      Ok(_) => print((name, "COMMIT"))
+      Err(_) => print((name, "ROLLBACK", r))
+    try r
+  row(i) => i * 100
+
+gen fn orders_in_tx(n: Int) -> Int uses Console =
+  with transaction("tx") in
+    var i = 0
+    while i < n
+      yield Tx.row(i)
+      i += 1
+
+fn declined() ! Declined uses Console =
+  fail Declined
+
+fn preview_then_export(confirm: Bool) ! Declined uses Console =
+  let orders = orders_in_tx(10)
+  for o in orders.take(2)
+    print(("preview", o))
+  if not confirm then try declined()
+  for o in orders
+    print(("export", o))
+  print("exported")
+
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console =
+  print("-- (1) declined: scope left by a failure")
+  print(attempt preview_then_export(false))
+  print("-- (1) confirmed")
+  print(attempt preview_then_export(true))
+  print("-- (2) named inside a consumer's with")
+  with transaction("outer") in
+    let g = src("inside", 10)
+    print(g())
+    print("end of the with's body")
+  print("-- (3) named outside, stepped inside")
+  let h = src("outside", 10)
+  with transaction("outer2") in
+    print(h())
+    print("end of the with's body")
+  print("end of main")

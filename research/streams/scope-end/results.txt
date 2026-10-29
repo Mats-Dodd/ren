@@ -1,0 +1,141 @@
+=== fall
+-- partly consumed, then the scope ends
+("g", "first step")
+0
+1
+after the loop, still in scope
+("g", "finally", Err(Cancelled))
+-- back in main
+-- run to the end inside the scope
+("h", "first step")
+0
+1
+("h", "finally", Ok(()))
+after the loop
+-- back in main
+=== outer_break
+("round", "first step")
+("stepped", Some(0))
+("end of round body", 0)
+("round", "finally", Err(Cancelled))
+("round", "first step")
+("stepped", Some(0))
+("round", "finally", Err(Cancelled))
+after the outer loop
+=== fails
+("g", "first step")
+("stepped", Some(0))
+boom
+("g", "finally", Err(Cancelled))
+("job gave", Err(Bad))
+=== resume
+("drained", "first step")
+("first loop", 0)
+("first loop", 1)
+("second loop", 2)
+("second loop", 3)
+("drained", "finally", Ok(()))
+end of scope: already finished, nothing to close
+--
+("open", "first step")
+("first loop", 0)
+("first loop", 1)
+("second loop", 2)
+("second loop", 3)
+end of scope: still suspended
+("open", "finally", Err(Cancelled))
+=== unstepped
+("stepped before its finally", "first step")
+("b", Some(0))
+("stepped past its finally", "first step")
+("c", Some(0))
+("c", Some(1))
+end of main's scope
+("stepped past its finally", "finally", Err(Cancelled))
+=== nested
+("a", "first step")
+("a", Some(0))
+("b", "first step")
+("b", Some(0))
+("inner", "first step")
+("inner", Some(0))
+end of the if's scope
+("inner", "finally", Err(Cancelled))
+("per round", "first step")
+("per round", 0, Some(0))
+("per round", "finally", Err(Cancelled))
+("per round", "first step")
+("per round", 1, Some(0))
+("per round", "finally", Err(Cancelled))
+end of main's scope
+("b", "finally", Err(Cancelled))
+("a", "finally", Err(Cancelled))
+=== with_tx
+-- (1) declined: scope left by a failure
+("tx", "BEGIN")
+("preview", 0)
+("preview", 100)
+("tx", "ROLLBACK", Err(Cancelled))
+Err(Declined)
+-- (1) confirmed
+("tx", "BEGIN")
+("preview", 0)
+("preview", 100)
+("export", 200)
+("export", 300)
+("export", 400)
+("export", 500)
+("export", 600)
+("export", 700)
+("export", 800)
+("export", 900)
+("tx", "COMMIT")
+exported
+Ok(())
+-- (2) named inside a consumer's with
+("outer", "BEGIN")
+("inside", "first step")
+Some(0)
+end of the with's body
+("inside", "finally", Err(Cancelled))
+("outer", "COMMIT")
+-- (3) named outside, stepped inside
+("outer2", "BEGIN")
+("outside", "first step")
+Some(0)
+end of the with's body
+("outer2", "COMMIT")
+end of main
+("outside", "finally", Err(Cancelled))
+=== gen_fails
+("g", "first step")
+0
+1
+("g", "finally", Err(Bad))
+("job gave", Err(Bad))
+=== temp_fails
+("named", "first step")
+Some(0)
+("temporary", "first step")
+0
+1
+("temporary", "finally", Err(Cancelled))
+("named", "finally", Err(Cancelled))
+Err(Bad)
+=== cancel
+("in the task", "first step")
+("task stepped", Some(0))
+cancelling
+("in the task", "finally", Err(Cancelled))
+("joined", None)
+=== cancel_mid_step
+("slow", "first step")
+("task stepped", Some(0))
+cancelling
+("slow", "finally", Err(Cancelled))
+("joined", None)
+=== panic
+("isolated", "first step")
+("stepped", Some(0))
+("isolated", "finally", Err(Cancelled))
+("isolate gave", Err(Panicked("index 5 is out of bounds for an array of length 2")))

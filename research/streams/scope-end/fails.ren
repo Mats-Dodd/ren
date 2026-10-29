@@ -1,0 +1,23 @@
+// a later statement fails with `try`: the scope is left by the failure,
+// the generator is abandoned (Err(Cancelled)), and the failure goes on
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn boom() ! Bad uses Console =
+  print("boom")
+  fail Bad
+
+fn job() ! Bad uses Console =
+  let g = src("g", 10)
+  print(("stepped", g()))
+  try boom()
+  print("unreached")
+
+fn main() uses Console =
+  print(("job gave", attempt job()))

@@ -1,0 +1,25 @@
+// a task holding a named generator is cancelled while it waits; the
+// generator is closed as the task's scope unwinds, shielded, and sees
+// Err(Cancelled)
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn worker() uses Console, Clock =
+  let g = src("in the task", 10)
+  print(("task stepped", g()))
+  Clock.sleep(Duration.seconds(60))
+  print("unreached: the task was cancelled")
+
+fn main() uses Console, Clock, Async =
+  Async.scope fn(s) =>
+    let t = s.start fn() => worker()
+    Clock.sleep(Duration.seconds(1))
+    print("cancelling")
+    t.cancel()
+    print(("joined", t.join()))

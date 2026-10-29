@@ -1,0 +1,27 @@
+// a generator never stepped: its body never started, so the `finally`
+// it would have reached was never written into force; nothing runs.
+// The same holds for one stepped only up to a `yield` before its
+// `finally`.
+gen fn late(name: Str) -> Int uses Console =
+  print((name, "first step"))
+  yield 0
+  finally(r) =>
+    print((name, "finally", r))
+  yield 1
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console =
+  let a = src("never stepped", 3)
+  let b = late("stepped before its finally")
+  print(("b", b()))
+  let c = late("stepped past its finally")
+  print(("c", c()))
+  print(("c", c()))
+  print("end of main's scope")

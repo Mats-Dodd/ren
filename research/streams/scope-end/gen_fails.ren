@@ -1,0 +1,21 @@
+// the generator itself fails while a named pipeline steps it: its
+// `finally` sees Err(e) at once; scope end then finds it over
+gen fn src(name: Str, n: Int) -> Int ! Bad uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+    try r
+  var i = 0
+  while i < n
+    if i == 2 then fail Bad
+    yield i
+    i += 1
+
+fn job() ! Bad uses Console =
+  let g = src("g", 10)
+  for x in try g
+    print(x)
+  print("unreached")
+
+fn main() uses Console =
+  print(("job gave", attempt job()))

@@ -1,0 +1,21 @@
+// a temporary's scope is its statement: a failure in the loop body over a
+// temporary closes it (before this change it stayed suspended)
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn job() ! Bad uses Console =
+  let named = src("named", 10)
+  print(named())
+  for x in src("temporary", 10)
+    print(x)
+    if x == 1 then fail Bad
+  print("unreached")
+
+fn main() uses Console =
+  print(attempt job())

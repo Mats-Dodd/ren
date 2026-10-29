@@ -1,0 +1,30 @@
+// fall-through: a named pipeline, partly consumed, closed at scope end
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn partial() uses Console =
+  let g = src("g", 10)
+  for x in g
+    print(x)
+    if x == 1 then break
+  print("after the loop, still in scope")
+
+fn finished() uses Console =
+  let g = src("h", 2)
+  for x in g
+    print(x)
+  print("after the loop")
+
+fn main() uses Console =
+  print("-- partly consumed, then the scope ends")
+  partial()
+  print("-- back in main")
+  print("-- run to the end inside the scope")
+  finished()
+  print("-- back in main")

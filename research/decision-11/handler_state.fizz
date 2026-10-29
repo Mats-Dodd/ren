@@ -1,0 +1,228 @@
+---
+# Decision 2's handler-state row under decision 10, current vs narrowed.
+#
+# Three services, installed outermost first: C, B, A (so A may use B and C,
+# B may use C). A is an actor whose state holds a reader `r` (its position
+# `pos`). Task 1 runs A.scan: `for x in &self.r` (or the copy-out dance the
+# current rule forces), with a body that calls B, or `release`s, or
+# `Async.until`s. Task 2 pokes A (steps/seeks the reader, writes state)
+# and/or signals B. B's operation may call C, release itself around C,
+# wait in `Async.until`, or (only when decision 10's static check is turned
+# off) call back into A directly (depth 2) or through C (depth 3).
+#
+# The compile-time check (decision 2 + the chosen row) is `accepted()`;
+# Init picks any accepted program, so the checker covers all of them.
+options:
+  max_actions: 60
+  crash_on_yield: false
+deadlock_detection: true
+liveness: "false"
+---
+
+# ---- knobs (override with --preinit-hook) ---------------------------------
+RULE = "narrowed"        # current | narrowed | probe_no_release | probe_no_until
+DECISION10_STATIC = True # True: back edges into an inner handler are a compile error
+REENTRANT = False        # runtime: may a task re-take an instance it holds?
+NESTED_UNTIL = False     # include B ops that wait in Async.until
+STEPS = 2                # loop iterations in A.scan
+
+A_STYLES = ["inplace", "copy"]          # `for x in &self.r` vs copy out / copy in
+A_BODIES = ["dep", "release", "until"]  # B.work() | release B.work() | Async.until(flag)
+B_KINDS  = ["plain", "callC", "releaseC", "untilB", "backA", "callC_backA"]
+T2_KINDS = ["pokeA", "signalB", "pokeA_signalB"]
+
+# Which calls in an arm count as a write of all of the handler's state.
+atomic func counted(body):
+    if RULE == "current":
+        return True                       # every dependency call, release, until
+    if RULE == "narrowed":
+        return body in ["release", "until"]
+    if RULE == "probe_no_release":
+        return body == "until"
+    if RULE == "probe_no_until":
+        return body == "release"
+    return True
+
+# The static check: what the compiler accepts.
+atomic func accepted(style, body, bkind):
+    if bkind in ["backA", "callC_backA"] and DECISION10_STATIC:
+        return False      # B and C are installed outside A: they can't name A
+    if bkind == "untilB" and not NESTED_UNTIL:
+        return False
+    if style == "inplace":
+        # `for x in &self.r` writes self.r for the whole loop; the body's call
+        # overlaps it iff the row counts that call as a write of all state.
+        c = counted(body)
+        return not c
+    # copy style: the dance the current rule forces. Only paired with a plain
+    # dependency call; copy-out across release/until is decision 10's warning.
+    return body == "dep"
+
+atomic func body_instrs(body):
+    if body == "dep":
+        return [["call", "B.work"]]
+    if body == "release":
+        return [["let", "A"], ["call", "B.work"], ["acq", "A"]]
+    return [["let", "A"], ["wait", "A"], ["acq", "A"]]   # Async.until(A.flag)
+
+atomic func build(style, body, bkind):
+    p = {}
+    scan = [["acq", "A"]]
+    if style == "inplace":
+        scan.append(["loopbeg", ""])
+        for i in range(STEPS):
+            scan.append(["next", ""])
+            bi = body_instrs(body)
+            scan.extend(bi)
+            scan.append(["check", ""])
+        scan.append(["loopend", ""])
+    else:
+        scan.append(["copyout", ""])
+        for i in range(STEPS):
+            scan.append(["nextlocal", ""])
+            bi = body_instrs(body)
+            scan.extend(bi)
+        scan.append(["copyin", ""])
+    scan.extend([["rel", "A"], ["ret", ""]])
+    p["A.scan"] = scan
+    p["A.poke"] = [["acq", "A"], ["poke", ""], ["rel", "A"], ["ret", ""]]
+    p["A.pokesig"] = [["acq", "A"], ["poke", ""], ["call", "B.signal"], ["rel", "A"], ["ret", ""]]
+    p["B.signal"] = [["acq", "B"], ["setflag", "B"], ["rel", "B"], ["ret", ""]]
+    p["C.work"] = [["acq", "C"], ["rel", "C"], ["ret", ""]]
+    p["C.back"] = [["acq", "C"], ["call", "A.poke"], ["rel", "C"], ["ret", ""]]
+    if bkind == "plain":
+        p["B.work"] = [["acq", "B"], ["rel", "B"], ["ret", ""]]
+    elif bkind == "callC":
+        p["B.work"] = [["acq", "B"], ["call", "C.work"], ["rel", "B"], ["ret", ""]]
+    elif bkind == "releaseC":
+        p["B.work"] = [["acq", "B"], ["let", "B"], ["call", "C.work"], ["acq", "B"], ["rel", "B"], ["ret", ""]]
+    elif bkind == "untilB":
+        p["B.work"] = [["acq", "B"], ["let", "B"], ["wait", "B"], ["acq", "B"], ["rel", "B"], ["ret", ""]]
+    elif bkind == "backA":
+        p["B.work"] = [["acq", "B"], ["call", "A.poke"], ["rel", "B"], ["ret", ""]]
+    else:
+        p["B.work"] = [["acq", "B"], ["call", "C.back"], ["rel", "B"], ["ret", ""]]
+    return p
+
+atomic action Init:
+    style = oneof A_STYLES
+    body = oneof A_BODIES
+    bkind = oneof B_KINDS
+    t2 = oneof T2_KINDS
+    ok = accepted(style, body, bkind)
+    require ok
+    # every wait has someone who can satisfy it (otherwise it's just a hang)
+    require body != "until" or t2 in ["pokeA", "pokeA_signalB"]
+    require bkind != "untilB" or t2 in ["signalB", "pokeA_signalB"]
+    t2op = "A.poke"
+    if t2 == "signalB":
+        t2op = "B.signal"
+    elif t2 == "pokeA_signalB":
+        t2op = "A.pokesig"
+    prog = build(style, body, bkind)
+    cfg = [style, body, bkind, t2]
+    # runtime state
+    holder = {"A": -1, "B": -1, "C": -1}   # task holding each instance
+    depth = {"A": 0, "B": 0, "C": 0}       # re-entrant hold count (REENTRANT only)
+    flag = {"A": False, "B": False}
+    pos = 0              # A.r's position, in A's state
+    ghost = 0            # every step and poke ever applied to A.r
+    r_writers = 0        # live loop-long `&self.r` writes
+    view = [0, 0]        # per task: position the loop last left r at
+    local = [0, 0]       # per task: copied-out reader
+    stacks = [[["A.scan", 0]], [[t2op, 0]]]
+    done = [False, False]
+    # violations (ghost flags, so traces name them)
+    two_writers = False
+    stale = False
+    self_wait = False
+    last = ""            # for readable traces: "T<task> <op>: <instr>"
+
+atomic action Step:
+    t = oneof [i for i in range(2) if not done[i]]
+    fr = stacks[t][-1]
+    ins = prog[fr[0]][fr[1]]
+    op = ins[0]
+    arg = ins[1]
+    last = "T" + str(t + 1) + " " + fr[0] + ": " + op + " " + arg
+    if op == "acq":
+        if holder[arg] == t:
+            if REENTRANT:
+                depth[arg] = depth[arg] + 1
+            else:
+                self_wait = True          # waits on itself: never returns
+                return
+        else:
+            require holder[arg] == -1     # fair queue: any waiter may take it
+            holder[arg] = t
+            depth[arg] = 1
+    elif op == "rel" or op == "let":
+        depth[arg] = depth[arg] - 1
+        if depth[arg] == 0:
+            holder[arg] = -1
+    elif op == "wait":
+        require flag[arg]                 # Async.until: instance already let go
+    elif op == "setflag":
+        flag[arg] = True
+    elif op == "loopbeg":
+        if r_writers > 0:
+            two_writers = True
+        r_writers = r_writers + 1
+    elif op == "loopend":
+        r_writers = r_writers - 1
+    elif op == "next":
+        pos = pos + 1
+        ghost = ghost + 1
+        view[t] = pos
+    elif op == "check":
+        if pos != view[t]:
+            stale = True
+    elif op == "copyout":
+        local[t] = pos
+    elif op == "nextlocal":
+        local[t] = local[t] + 1
+        ghost = ghost + 1
+    elif op == "copyin":
+        pos = local[t]
+    elif op == "poke":
+        if r_writers > 0:
+            two_writers = True            # a second writer while the loop holds &self.r
+        pos = pos + 10
+        ghost = ghost + 10
+        flag["A"] = True
+    if op == "call":
+        stacks[t][-1] = [fr[0], fr[1] + 1]
+        stacks[t].append([arg, 0])
+    elif op == "ret":
+        stacks[t].pop()
+        if len(stacks[t]) == 0:
+            done[t] = True
+    else:
+        stacks[t][-1] = [fr[0], fr[1] + 1]
+
+atomic action Finished:
+    require done[0] and done[1]
+    pass
+
+always assertion NoTwoWriters:
+    return not two_writers
+
+always assertion ReaderNeverStale:
+    return not stale
+
+always assertion NoLostUpdate:
+    if done[0] and done[1]:
+        return pos == ghost
+    return True
+
+always assertion NoReentryWait:
+    return not self_wait
+
+# Coverage: the interesting programs are really accepted and run to the end.
+exists assertion InplaceDepRuns:
+    if RULE == "current":
+        return True   # rejected under the current rule, by design
+    return cfg[0] == "inplace" and cfg[1] == "dep" and done[0] and done[1]
+
+exists assertion CopyDepRuns:
+    return cfg[0] == "copy" and done[0] and done[1]

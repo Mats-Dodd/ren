@@ -125,12 +125,15 @@ overlap, any two indices may, and a place overlaps its prefixes.
 | A block passed to an ordinary parameter | each captured place, as the block uses it | the call |
 | A block passed to a concurrent parameter (`Async.map`) | read; a write is an error | the call |
 | A block passed to `s.spawn` | read | the `Async.scope` call that made `s` |
-| Inside a handler arm, any dependency call or block-parameter call | write of all the handler's state | that call |
+| Inside a handler arm, `Async.until`, a `release` call, or a block-parameter call | write of all the handler's state | that call |
 
-Narrowing the handler-state row to `Async.until`, `release` and
-block-parameter calls, so an actor can loop over a reader it keeps, is
-open: it waits on a soundness check of service cycles under decision 10
-([streams.md](streams.md#open)).
+A handler's other dependency calls hold none of its state, so an actor
+can loop over a reader it keeps while each step calls other services.
+That's sound because an operation calls only handlers installed outside
+it (decision 10), so a call can't come back into the instance running
+it: a model of service cycles under decision 10 found no two writers,
+no lost update and no stale read, and found both `until` and `release`
+are needed in the row (research/decision-11/).
 
 Two overlapping accesses in one task, at least one a write, are a compile
 error. Blocks passed to the same call don't conflict with each other,
@@ -506,11 +509,17 @@ happen, with nothing to annotate.
   operations. For the writer that's what's wanted. A handler that wants
   its calls to overlap splits an operation in two, "reserve" and
   "complete".
-- **No deadlock.** An operation can only call handlers installed outside
-  it, so a task takes instances inner to outer, and waits can't form a
-  cycle. That holds with two rules: a block passed to an operation gets
-  dependencies only from its parameter's type, and handlers in one
-  `with` can't use each other in a cycle.
+- **No deadlock waiting for an instance.** An operation can only call
+  handlers installed outside it, so a task takes instances inner to
+  outer, and waits for instances can't form a cycle. That holds with two
+  rules: a block passed to an operation gets dependencies only from its
+  parameter's type, and handlers in one `with` can't use each other in a
+  cycle. **Other waits can still deadlock:** an operation of `A` that
+  calls `B`, where `B` waits in `Async.until` for a task that must go
+  through `A` first, waits forever, since `until` lets go of `B` but not
+  of `A`. `sim` names the instances a parked task holds, so a deadlock
+  shows where it is, and a task taking an instance it already holds
+  panics rather than hangs.
 - **The exclusion is skipped unless the instance is shared.** Spawning a
   task marks the handlers it can reach. A handler with no `var` and no
   `let` of a C or opaque type needs none. The real world handlers queue
@@ -1342,16 +1351,48 @@ and 32-bit references as the default.
      to 64 or 128 bytes; S3, a merge's latency while workers write; S4,
      stripes made on their own worker; K4, an eviction's `finally` not
      stalling other keys in its partition.
-7. **The `just`, natively.** Strings and bytes at Rust's speed (2.6 to
-   2.8× its time today), the inline slice and the uncounted view of a
-   borrowed parameter's slice (item 3's gaps), `Map` natively, and
-   `Table` and `Pool` ([language.md §9](language.md#9-collections-array-table-and-pool))
-   in the interpreter and natively, and formats with `Bytes`' reads at
-   an offset ([formats.md](formats.md), decision 19), since they're
-   built from bytes, slices and sized integers. **Done when** the `just` builds
-   natively and its string kernels are within 2× of Rust's time. `ren
-   review` with its "this is data" hint, and `ren profile`'s
-   suggestions, come after.
+7. **The `just`, natively,** in two parts. The `just` as written runs
+   its recipes at once, and tasks are native only with item 10, so the
+   concurrent `just` built natively is item 10's "Done when", not this
+   item's.
+
+   **7a. Strings and bytes at Rust's speed.** Byte and string code
+   (2.6 to 2.8× Rust's time at the start), the inline slice and the
+   uncounted view of a borrowed parameter's slice (item 3's gaps), and
+   `Map` and `Set` natively; then strings.md's representation (a `Str`
+   or `Bytes` a 16-byte value, `+=` in place, a block UTF-8 validator)
+   and the parts of its API that are code, in the interpreter and
+   natively. **Part one done** (compiler.md, "Bytes stage"): `logs_r`,
+   `json_r`, `pages_r` and bytes within 2× of Rust (1.13× to 1.81×),
+   `Bytes`' reads at an offset and a cursor (layer 3 of
+   [formats.md](formats.md)), `Map` and `Set` natively. **Part two**:
+   briefs/stage-bytes-2.md. **Done when** the slices kernels (`logs`,
+   `json`, `pages` with slices) run within 1.2× of their offsets forms
+   and 2× of Rust's slices; a tokenizer and a sort that keep slices run
+   in about 0.76× of representation A's time; a loop of `+=` runs at
+   the speed of Rust's `push_str`; `Str.from_utf8` checks ASCII at 70
+   GB/s; and strings.md's API runs in both builds, agreeing.
+
+   **7b. Formats, collections and the world, natively, for sequential
+   programs.** Formats with views over `Bytes` for a type
+   ([formats.md](formats.md), decision 19), since they're built from
+   bytes, slices and sized integers; `Table` and `Pool`
+   ([language.md §9](language.md#9-collections-array-table-and-pool));
+   and `Fs`, `Os`, `Proc` and `Console` natively for a program with no
+   tasks, with `Path` as `opaque Bytes` and `Os`'s `ArgNotUtf8` and
+   `EnvNotUtf8` ([strings.md](strings.md#the-boundary)). All of it in
+   the interpreter and natively. **Done when** two programs build
+   natively and agree with `ren run`: a log reader (a new example) that
+   reads a file of records through a format view, groups them in a
+   `Table` and a `Map`, and prints a report, measured in release against
+   Rust and Go twins and within 2× of Rust's time; and the `just` with
+   its recipes run one at a time (an entry beside examples/just's
+   `main.ren` that shares its modules and runs a level with `for`),
+   running examples/just/justfile as `ren run` does; and `Pool`, which
+   neither program needs, with a kernel of its own measured against
+   Rust. `ren review` with
+   its "this is data" hint, and `ren profile`'s suggestions, come
+   after.
 8. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the
    runtime model of [compiler.md](compiler.md#the-runtime-model): the
    shared mark and atomic counts on shared objects, a heap per thread
@@ -1368,7 +1409,10 @@ and 32-bit references as the default.
    notes; the front half run per module in parallel; release built with
    clang -O2 per module in parallel, cached by content. Specialization
    per block and per handler, and most of the memory work, are built
-   (item 2), and dispatch with `--explain-dispatch` (item 3).
+   (item 2), and dispatch with `--explain-dispatch` (item 3). **Done
+   when**, among the rest, the `just` as written, its recipes at once,
+   builds natively and its tests pass against the native build (item
+   7's "Done when", moved here with tasks).
 
 The interpreter runs tasks on OCaml effects throughout, so 10c to 11c
 need no native code.

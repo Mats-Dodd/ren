@@ -93,7 +93,7 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
 - **Wrappers are calls:** `Async.timeout(d) fn() => ...`, `Async.race`,
   and `retry(n, on: Tags)`. `with` installs only handlers.
 - **A producer that needs a task runs in the consumer's scope.**
-  `Async.produce(cap:, f) fn(items) => ...` runs `f` on a task, which
+  `Async.produce(cap: Int = 16, f) fn(items) => ...` runs `f` on a task, which
   sends through a `Send<T>` dependency the call installs, not a channel
   value it holds (decision 5). `cap` is the backpressure. When the body
   ends, by finishing, `break` or a failure, the producer is cancelled
@@ -219,9 +219,11 @@ fn deposit(n: Int) uses Account =
   operations. A handler that wants its calls to overlap splits an
   operation in two, "reserve" and "complete", as `sync.semaphore`'s
   `acquire` and `release` are.
-- **No deadlock.** An operation can only call handlers installed outside
-  it, so a task takes instances inner to outer and waits can't form a
-  cycle. A block passed to an operation gets its dependencies only from
+- **No deadlock waiting for an instance.** An operation can only call
+  handlers installed outside it, so a task takes instances inner to
+  outer and waits for instances can't form a cycle. Waits of other
+  kinds, `Async.until` or a channel inside an operation, can
+  (foundations.md, decision 10). A block passed to an operation gets its dependencies only from
   its parameter's type, so it can't call back into the instance running
   it.
 - **The exclusion is skipped where nothing can race.** An instance no

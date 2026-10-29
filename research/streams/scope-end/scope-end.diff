@@ -1,0 +1,52 @@
+diff --git a/lib/lower/lower.ml b/lib/lower/lower.ml
+index ee9f9e2..9e220a0 100644
+--- a/lib/lower/lower.ml
++++ b/lib/lower/lower.ml
+@@ -1958,11 +1958,28 @@ and plain_call cx ~changed ?callee (e : expr) f args =
+ and block cx stmts last =
+   match stmts with
+   | [] -> expr cx last
+-  | Let { name; value; _ } :: rest ->
++  | Let { name; value; _ } :: rest -> (
+       let value = expr cx value in
+       let v = bind cx name value.ty in
+       let body = block cx rest last in
+-      mk (Let (v, value, body)) body.ty value.loc
++      match value.kind with
++      | Call ({ kind = Intrinsic (Gen_frame, a, ds, dicts); _ }, [], _) ->
++          (* SPIKE (streams rule 5): a generator's frame is a scope. It's
++             closed when the scope of the hidden `var` that holds it ends,
++             by any exit: falling off the end, a `break` out of a loop
++             around it, a failure, a cancel. Closing one that's over, or
++             was never stepped, does nothing. *)
++          let close_ty =
++            Ty.Fun ([ { mode = Inout; ty = value.ty } ], Ty.unit, Ty.closed, Ty.closed)
++          in
++          let close =
++            mk
++              (Call
++                 (mk (Intrinsic (Gen_close, a, ds, dicts)) close_ty value.loc, [ Ref v ], cx.ev))
++              Ty.unit value.loc
++          in
++          mk (Let (v, value, mk (Finally (body, close)) body.ty body.loc)) body.ty value.loc
++      | _ -> mk (Let (v, value, body)) body.ty value.loc)
+   | Let_tuple { pat; value } :: rest ->
+       let value = expr cx value in
+       take_apart cx pat value (fun () -> block cx rest last)
+--- a/lib/eval/eval.ml	2026-10-29 14:37:08
++++ b/lib/eval/eval.ml	2026-10-29 14:37:08
+@@ -1056,7 +1056,13 @@
+           raise Broke
+       | exception Sched.Cancelled ->
+           after ();
+-          raise Sched.Cancelled)
++          raise Sched.Cancelled
++      | exception (Panic _ as p) when Sched.isolatable () ->
++          (* SPIKE (streams rule 5): a contained panic leaves the scope as
++             it leaves a `with` ([ending]): a generator's frame closes.
++             What [after] fails with is thrown away, the panic goes on *)
++          (try after () with Failed _ | Sched.Cancelled -> ());
++          raise p)
+   | Covered { body; result; after } -> (
+       (* an arm's `finally`: [body] is what it covers, as `attempt`
+          keeps it, which a cancel goes through *)

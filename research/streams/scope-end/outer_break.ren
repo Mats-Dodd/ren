@@ -1,0 +1,18 @@
+// `break` out of a loop around the scope: the frame made in this round
+// of the loop body is closed as the `break` leaves it
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console =
+  for round in 0..3
+    let g = src("round", 10)
+    print(("stepped", g()))
+    if round == 1 then break
+    print(("end of round body", round))
+  print("after the outer loop")

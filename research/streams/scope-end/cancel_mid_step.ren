@@ -1,0 +1,24 @@
+// the task is cancelled while the generator itself is running (it sleeps
+// inside a step): the cancel unwinds through the generator's own frame
+// first, so its `finally` runs once, and scope end finds it over
+gen fn slow(name: Str) -> Int uses Console, Clock =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  yield 0
+  Clock.sleep(Duration.seconds(60))
+  yield 1
+
+fn worker() uses Console, Clock =
+  let g = slow("slow")
+  print(("task stepped", g()))
+  print(("task stepped", g()))
+  print("unreached")
+
+fn main() uses Console, Clock, Async =
+  Async.scope fn(s) =>
+    let t = s.start fn() => worker()
+    Clock.sleep(Duration.seconds(1))
+    print("cancelling")
+    t.cancel()
+    print(("joined", t.join()))

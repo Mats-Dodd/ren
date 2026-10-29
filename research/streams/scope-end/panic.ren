@@ -1,0 +1,18 @@
+// a panic contained by `Async.isolate` leaves the generator's scope
+gen fn src(name: Str, n: Int) -> Int uses Console =
+  print((name, "first step"))
+  finally(r) =>
+    print((name, "finally", r))
+  var i = 0
+  while i < n
+    yield i
+    i += 1
+
+fn main() uses Console, Async =
+  let r = attempt Async.isolate fn() =>
+    let g = src("isolated", 10)
+    print(("stepped", g()))
+    let xs = [1, 2]
+    print(xs[5])
+    print("unreached")
+  print(("isolate gave", r))
