@@ -110,6 +110,8 @@ for part in $parts; do
         stat "nested-$k-debug-stats"
         stat "nested-$k-perceus-stats"
       done
+      # the data stage's milestone, `Expr` boxed: the tree and the envs
+      stat interp-perceus-stats
       ;;
 
     memory)
@@ -163,6 +165,12 @@ for part in $parts; do
           -n rust-enum "$bin/dispatch-rust 100 $k enum" \
           -n go "$bin/dispatch-go 100 $k"
       done
+      # the data stage's milestone: dispatch's interp written ADT-first,
+      # against the Rust twin's enum and dyn, and dispatch's descriptions
+      hf interp -n ren-adt "$bin/interp-perceus" \
+        -n rust-enum "$bin/dispatch-rust 100 interp enum" \
+        -n rust-dyn "$bin/dispatch-rust 100 interp dyn" \
+        -n ren-descriptions "$bin/dispatch-interp-perceus"
       ;;
 
     compile)

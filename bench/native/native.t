@@ -45,6 +45,8 @@ change here is a change in what the program computes.
   2997
   == inout
   60809898
+  == interp
+  105
   == nbody
   -0.169075164
   -0.169087605

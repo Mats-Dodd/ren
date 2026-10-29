@@ -9,6 +9,125 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## The data stage: the milestone (compiler.md, "Data stage", "The layout fixes (step 7)")
+
+The milestone: dispatch's `interp` kernel, research/dispatch.md's
+expression tree, written ADT-first (`interp/bench.ren`: `Expr` a sum
+type of eight constructors, the binary ones by name, and `eval` a
+`match`), against its Rust twin, dispatch's `rust/main.rs` run as `100
+interp enum` (`Expr` an enum of `Box`es, `eval` a `match`), and beside
+the descriptions: Rust's `interp dyn` and dispatch's Ren `interp`
+(build.sh's `dispatch-interp`, `dep Node`). The same work in each: one
+tree of depth 17 from seed 1 (about 1,200 nodes), 25,600 evaluations, each
+with a fresh four-element environment; every one prints -326745600, as
+`ren run main.ren` does (16.5 s), and at the small size 105, which
+native.t checks against `ren run small.ren`.
+
+**The machine is the cloud container of "Data stage: layout" below**,
+not the M4 Max of the older sections: an Intel Xeon at 2.10 GHz, 4
+vCPUs under KVM, 15 GiB, Linux 6.18.44, GCC 13.3 (`cc`, which `ren
+build` runs), rustc 1.97.0, go 1.24.7, hyperfine 2.0.0. **These numbers
+are for comparison only; the owner re-measures on the M4 Max.** Runs
+here drift by 15 to 25% from one to the next (each kernel's σ below),
+so the instruction counts, from valgrind's cachegrind, are the steady
+measure; times are one hyperfine run of all six (`-N --warmup 5 --runs
+100`), release builds, in ms:
+
+| build | mean | median | min | instructions | mean / Rust enum | mean / Rust dyn |
+|---|---|---|---|---|---|---|
+| Ren, ADT (`interp-perceus`) | 163.5 ± 20.4 | 164.7 | 97.8 | 886.2 M | **1.13×** | 2.90× |
+| Rust, `interp enum` | 144.5 ± 12.6 | 144.9 | 99.8 | 870.6 M | 1.00× | 2.56× |
+| Rust, `interp dyn` | 56.4 ± 11.9 | 52.4 | 40.4 | 430.2 M | 0.39× | 1.00× |
+| Ren, descriptions (`dispatch-interp-perceus`) | 101.9 ± 22.0 | 94.4 | 69.8 | 985.7 M | 0.70× | **1.81×** |
+| Ren, ADT at 213b4a9 | 140.0 ± 20.6 | 142.6 | 87.4 | 965.0 M | 0.97× | 2.48× |
+| Go, `interp` (an interface) | 87.6 ± 20.5 | 81.2 | 60.8 | | 0.61× | 1.55× |
+
+**The ADT kernel is within 1.13× of its Rust twin** (1.14× by
+medians), on 2% more instructions: both are one function whose `match`
+is a jump table through the node's tag, and both are bound by that one
+indirect jump, which the predictor can't learn across a random tree.
+Each description's `eval`, Ren's and Rust's `dyn`, calls its children
+through their code pointers from the arm it's in, eight call sites the
+predictor tells apart, so both run faster than either `match` on as
+many instructions or more: Ren's descriptions 0.62× the ADT's time on
+11% more, Rust's `dyn` 0.39× its enum's on half. That's what the
+dispatch table above found on the M4 too (Rust's enum 1.52× its `dyn`
+there, 2.56× here), so the ADT kernel is 1.6× slower than the
+descriptions version on this machine, not faster: `Expr` written as a
+sum is the program the docs teach (step 6), and its cost is Rust's for
+the same program.
+
+**The one change, a tag read with no scalar test.** A boxed sum all of
+whose constructors have fields is never a scalar, so its tag is its
+header's: `((int64_t)e->tag)`, not `ren_tag(e)`, which tested the
+pointer's low bit first (Mem's `Obj_tag`; compiler.md, step 7's
+choices, part 4). `eval` loses a test and a branch a node: 965.0 to
+886.2 million instructions (0.92×), 109 to 78 million conditional
+branches. Its time, though, moves with code layout more than with its
+instructions, both ways: with GCC's default layout it's 1.06 to 1.18×
+the time at 213b4a9 in six runs (1.17× in the table's); built from the
+same C with `-Wa,-mbranches-within-32B-boundaries` it's 0.78× (145 ms
+against 186), and with clang 18 at -O2 0.94× (141 ms against 150, in
+two runs), so the default layout's slowdown is where GCC puts the jump
+table's targets, not the change. Two programs of the suite read such a
+tag, and run faster in two hyperfine runs each (`-N --warmup 3 --runs
+20`), the same output:
+
+| program | instructions, 213b4a9 | after | time (ms), 213b4a9 | after | after / before |
+|---|---|---|---|---|---|
+| deriv | 8,029 M | 7,482 M | 1379 ± 54, 1417 ± 88 | 1264 ± 52, 1279 ± 70 | 0.92×, 0.90× |
+| cfold | 789.1 M | 747.1 M | 199 ± 14, 213 ± 16 | 186 ± 17, 193 ± 12 | 0.93×, 0.91× |
+
+No other program or kernel of the suite compiles to different C (each
+`main.ren`, bench/data's and bench/10d's programs, both countings,
+compared as for the layout fixes); of bench/data, interp, shapes,
+variants and variants_reuse do, and of bench/10d, overany and
+review_deps, each only in that read.
+
+**What's left in `eval`'s C,** each measured by editing the generated C
+by hand and counting instructions (none of these is built):
+
+| removed | instructions | against the built 886.2 M |
+|---|---|---|
+| `REN_STACK_CHECK()` at each call | 669.4 M | 0.76× |
+| the switch's default arm, the `match`'s "no arm matched" panic, as `__builtin_unreachable()` | 824.3 M | 0.93× |
+| `env[i]`'s bounds check | 871.5 M | 0.98× |
+| `+` and `-` checked, as wrapping | 1,016.0 M | 1.15× (GCC lays the wrapping version out worse) |
+| all four | 731.9 M | 0.83× |
+
+The stack check, checked arithmetic and the bounds check are the
+language's semantics (decision 15: an overflow, of the stack or of an
+`Int`, panics where it happens), so they stay; the stack check costs
+most because `__builtin_frame_address(0)` makes GCC keep a frame
+pointer, so it's seven instructions a call where the compare alone is
+three. The default arm is unreachable, since a value of a sum
+has one of its tags and the switch has a case for each, but making it
+`__builtin_unreachable()` turns a compiler fault into undefined
+behaviour where it's a panic today, for 7% of the instructions and no
+time this machine can see; not done. The evidence `eval` is passed and
+doesn't use costs nothing (GCC drops it, `ren_bench_eval_1.isra.0`).
+Ren allocates each evaluation's environment, 25,600 of the 26,812
+allocations (`--stats`), where Rust's is on the stack: one allocation
+for about 1,200 nodes evaluated, nothing to see.
+
+**How**, from the repository, `$S` a scratch folder:
+
+    sh bench/native/build.sh $S/bench        # interp-perceus, dispatch-interp-perceus, dispatch-rust, dispatch-go
+    sh bench/native/measure.sh $S/bench $S/res machine stats time
+    python3 -I bench/native/summarize.py $S/res     # the last table: the milestone's ratios
+    # or alone, as above:
+    hyperfine -N --warmup 5 --runs 100 -n ren-adt $S/bench/interp-perceus \
+      -n rust-enum "$S/bench/dispatch-rust 100 interp enum" \
+      -n rust-dyn "$S/bench/dispatch-rust 100 interp dyn" \
+      -n ren-descriptions $S/bench/dispatch-interp-perceus \
+      -n go "$S/bench/dispatch-go 100 interp"
+    valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null $S/bench/interp-perceus   # "I refs"
+    (cd bench/native/interp && ren run small.ren && ren run main.ren)   # 105; -326745600
+    # the change against 213b4a9: build each compiler, then each program with each
+    # (`ren build main.ren --release`), and time them in one run as above; the
+    # layout check builds `ren build main.ren --release --emit-c`'s C with
+    # cc -O2 -ffp-contract=off -Wa,-mbranches-within-32B-boundaries ... -lm -lpthread
+
 ## Data stage: layout (compiler.md, "Data stage", "The layout fixes (step 7)")
 
 The data stage's three layout faults, each measured before its fix and

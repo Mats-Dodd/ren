@@ -655,6 +655,7 @@ let rhs (r : rhs) =
                     (List.fold_left max 0 ts))
           | Product -> bug "the tag of a record or a tuple")
       | _ -> sprintf "ren_tag(%s)" (atom x))
+  | Obj_tag x -> sprintf "((int64_t)%s->tag)" (atom x)
   | Field (x, n, _) | Struct_get (x, n) ->
       failwith (sprintf "bug: emit_c: a field %s.%d outside a Let" (atom x) n)
   | Make_struct _ -> bug "a struct made outside a Let"

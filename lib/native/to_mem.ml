@@ -1234,6 +1234,17 @@ let atom_layout (x : atom) : layout =
   | Fn_ptr _ | Handler_tag _ -> Ptr
   | No_ev -> Ev
 
+(* The tag of [x], a value of the sum type whose constructors are [cs]: a
+   boxed variable's header's when every constructor has fields, so none
+   is a scalar (compiler.md, "Data stage", step 7's choices, part 4); a
+   constant of such a type is only in code that never runs. *)
+let tag_of (cs : Iface.ctor list option) x : rhs =
+  match (x, cs) with
+  | Var { layout = Boxed; _ }, Some cs
+    when List.for_all (fun (c : Iface.ctor) -> c.cfields <> []) cs ->
+      Obj_tag x
+  | _ -> Tag_of x
+
 (* Of a record or a tuple [x], the [n]-th of [size] fields, borrowed. *)
 let field_rhs (x : atom) n size : rhs =
   match atom_layout x with
@@ -3797,11 +3808,11 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
               emit fs (Set (m, x));
               k ()
         in
-        let tagged sh ps =
+        let tagged ?cs sh ps =
           let inner () = test ~known vars (fields sh ps @ rest) k in
           if known = Some (x, sh.tag) then inner ()
           else
-            let t = borrowed fs "$tag" Int (Tag_of x) in
+            let t = borrowed fs "$tag" Int (tag_of cs x) in
             let c =
               borrowed fs "$is" Bool
                 (Compare (Eq, t, Int (Int64.of_int sh.tag)))
@@ -3824,7 +3835,8 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
                its tag isn't tested *)
             let sh = ctor_shape cx (at fs p.ploc) p.pty c in
             test ~known vars (fields sh ps @ rest) k
-        | PCon (_, c, ps) -> tagged (ctor_shape cx (at fs p.ploc) p.pty c) ps
+        | PCon (_, c, ps) ->
+            tagged ?cs:(ctors cx p.pty) (ctor_shape cx (at fs p.ploc) p.pty c) ps
         | PTag (t, ps) ->
             tagged
               (error_shape cx (at fs p.ploc) t
@@ -3916,7 +3928,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
                    | PCon _ | PAs ({ pkind = PCon _; _ }, _) -> true
                    | _ -> false)
                  arms ->
-            let t = borrowed fs "$tag" Int (Tag_of x) in
+            let t = borrowed fs "$tag" Int (tag_of (Some cs) x) in
             let cases =
               List.mapi
                 (fun tag _ ->

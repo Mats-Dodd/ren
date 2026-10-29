@@ -328,6 +328,10 @@ type rhs =
   | Tag_of of atom
       (** the tag of a sum type's value, an [Int]: an [Enum], a [Boxed], or a
           [Struct] that's [Tagged] or [Niche] *)
+  | Obj_tag of atom
+      (** the tag of a [Boxed] sum type's value every constructor of which has
+          fields, an [Int]: always an object, so its header's, with no test for
+          a constructor without fields, a scalar *)
   | Field of atom * int * int
       (** the [n]-th field of a constructor, a record or a tuple of [size]
           fields, by its slot: borrowed, not counted again *)
@@ -813,6 +817,7 @@ let rhs_sexp = function
   | Compare (c, x, y) -> Core.List (a (show_cmp c) :: atoms [ x; y ])
   | Not x -> Core.List (a "not" :: atoms [ x ])
   | Tag_of x -> Core.List (a "tag" :: atoms [ x ])
+  | Obj_tag x -> Core.List (a "obj_tag" :: atoms [ x ])
   | Field (x, n, size) ->
       Core.List
         [

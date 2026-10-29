@@ -6658,7 +6658,17 @@ and records the numbers in bench/native/RESULTS.md, a section "The data
 stage", with the commands that reproduce them and the machine they came
 from. That's foundations.md's "Done when" with the bank, the shop and
 the ledger reading as language.md's end-to-end program (step 2's
-migration, step 3's `let ... else` where it fits).
+migration, step 3's `let ... else` where it fits). **Built** (step 7,
+part 4; its choices are below): on the cloud container, release, one
+hyperfine run, the ADT kernel takes 163.5 ms to Rust's `interp enum`'s
+144.5, **1.13×**, on 886 million instructions to Rust's 871; Rust's
+`interp dyn` 56.4 ms and Ren's descriptions 101.9 ms (1.81× `dyn`), both
+faster than either `match`, whose one jump table through the tag is
+what the time goes on. The section is RESULTS.md's "The data stage: the
+milestone". One overhead was removed: a boxed sum all of whose
+constructors have fields reads its tag from the header with no test for
+a scalar (`Obj_tag`), 0.92× `eval`'s instructions and deriv's and
+cfold's time 0.90× to 0.93×.
 
 ### What each step changes
 
@@ -6748,7 +6758,13 @@ migration, step 3's `let ... else` where it fits).
   sum's struct and its niches; the join, where a constant stands for a
   reference); test_native.ml (the join's two cases); bench/data's
   niche, niche_walks, niche_panic, niche_reuse and niche_join, and
-  optional's last line.
+  optional's last line. Part 4, the milestone: bench/native/interp
+  (bench.ren, main.ren, small.ren), in build.sh (no twins of its own),
+  measure.sh (`interp`, and its `--stats`), summarize.py (the
+  milestone's ratios), native.t and build.t; mem.ml(i)'s `Obj_tag`,
+  to_mem.ml's `tag_of`, emit_c.ml, mem_lint.ml, and the passes that map
+  a Mem rhs (rc, fold, inline, clone, trmc); bench/data's interp in
+  build.t's loops.
 - **Step 8:** the review, its three lenses (the brief's), and what it
   finds; language.md's "What Ren has today" table brought up to date.
 
@@ -6993,7 +7009,8 @@ revisit if a step finds it wrong:
 | 6 | 8c7c65c | descriptions: an operation called on a description only when its handler is stateless, through the pipeline: Infer's `Calls_op` gains the receiver as written and the call a `with` would make, its arguments as written; Lower records each method call (Core.program's `method_calls`, by its `With`'s location, from `Lower.program` and `Lower.made`); a new link-time pass, lib/lower/stateless.ml (`Stateless.check`), run by `Driver.link` after the modules are linked, so `ren run`, `ren test` and `ren build` refuse (not `ren check`): a handler is stateful if its body makes a cell (a `var`) or its instance has a `finally`; a method call on a description made where it's installed, or held by a local never changed and only installed, may be only that handler's; any other may be any kept handler's (refined from the specification's per-dependency rule: "Where the data stage may differ"); the error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method" ("which has a `finally`"), at the operation's name, with its note and the help that writes the `with`; the interpreter and native builds unchanged, each program that still compiles running the same; test_data.ml's s6 tests on (the refusals through `run_error`; the last accept's program had a dropped `Area.area()`, now `let _ =`), and seven more: a stateful handler bound and only installed beside stored stateless calls, one called where it's made, a local that's assigned, one passed, returned, stored and wrapped, a handler of another module kept there, and `ren check` not seeing it; test_descriptions.ml's stateful method call a refusal, its `with` half its own accept test, its `Shape` a `Codec` (numbers kept); test_deps.ml's handler of several called as a method through `id(...)`, now a stateless `fixed_rates`, with the `counting_rates` one a refusal; bench/10d/methods.ren, review_deps.ren and dispatch_mix.ren's calls that may reach a handler with state written as `with`s, their outputs and every site's lowering unchanged; the renames: bench/10d/shapes.ren's `Shape` a `Codec`, dispatch.ren's `Shape` and `Expr` `Codec` and `Pipe`, dispatch_mix's `Area`, `Size` and `Label` `Codec`, `Width` and `Name`, build.t's `--explain-dispatch` listings redone, bench/native/dispatch's `ShapeK` `CodecK` (gen.py and bench.ren; the twins byte for byte as they were, checksums the same, the release C the same but for handlers' names, so RESULTS.md's numbers stand, as it now says); bench/data/shapes in `same`, `release` and `tcc_same`; deps.md's example a library's routes, with the rule, its error and that `ren check` doesn't report it; handlers.md's "Called as a method"; README's handlers section; bench/native/README.md; language.md's "What Ren has today". Choices: below the table | steps 7 and 8 |
 | 7 (part 1) | d86b474 | the before measurements of all three faults, the kernels and bench/native's suite at 8c7c65c (bench/native/RESULTS.md, "Data stage: layout", with the commands and the machine), and the first fix: a small record or tuple in a small value flattened into its slots, the budget counted in slots (to_mem.ml: `small`'s places and `Flat`, `small_of`, `struct_shape`, `flat_var`, `flat_slots`, `within`, a pattern's `flats` and `pending`), so nested.ren allocates 4, not 66,671, and a copy with 100 times its items runs in 17 ms, not 64; three faults of boxed values' counting the tests found, fixed (reuse.ml's sizes known by path, a heap overflow; rc.ml's slot nested once, and a changing variable's views); bench/data's layout, layout_walks, layout_panic and reuse_arms, and the three kernels, in build.t's loops and a release naive one; build.sh's dispatch kernels, which step 6's rename broke, and measure.sh's peak memory on Linux | the second fix (an array of counted structs inline) and the third (byte tags and niches), each measured; rows.ren's and optional.ren's last lines `show` the value, which boxes its type and hides the fix (step 7's choices); the milestone kernel against Rust; `if c then None else p` in debug builds (step 7's choices) |
 | 7 (part 2) | 7c68889 | the second fix: an array of small values that hold objects keeps them inline, counted by the mask of their slots that hold objects, which the array's header keeps in its `objs` byte (1 for counted words, as before), instead of boxing their type program-wide: to_mem.ml's `plain_layout` and `element` no longer demote; ren_rt.h's and ren_rt.c's arrays count by the mask (`REN_ELEM_OBJS` for freeing, copying, the shared mark, splices and joins; `ren_slots_dup` and `ren_slots_drop`; inline reads, writes, field writes and pushes of counted structs, and their hoisted loops' buffer macros); emit_c.ml's `struct_mask` and each operation's C; Mem Lint (arrays of counted structs of at most eight slots, a field written at its slot's layout) and hoist.ml (a field write's struct agrees with a read's); and a fault the suite found: a walk reads an array's elements as words, so a small type that's an array's element anywhere in a walked value is boxed (`no_struct_elements`, for each closed type's descriptor and each built at run time past the specialization budget), which `show` of a record holding an array of uncounted structs crashed on at d86b474 too (build.t's walked_arrays). rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4 (a copy with 100 times the items 187 ms, not 446, 162 MB, not 402); of the suite only slices' C changes in substance, 96 million allocations, not 164 million, 0.88× the time, its `json` kernel 0.78× (RESULTS.md, "Data stage: layout"); rows.ren's last line prints the element's fields; bench/data's rows_objs and rows_panic in build.t's loops and the release naive one, layout_walks' arrays in a walked record, test_native's Mem Lint tests of arrays of counted structs. Choices: below the table | the third fix (byte tags and niches), measured; optional.ren's last line `show`s the value, which boxes its type and hides the fix; the milestone kernel against Rust; borrowed reads of an array's struct, and swap-out of one's objects (step 7's choices, part 2); `if c then None else p` in debug builds (part 1's choices) |
-| 7 (part 3) | this commit | the third fix: a sum with one constructor that has fields, one of them an object after flattening, and any number without has no tag, `Niche { obj_ctor; slot; ctors }` for `Nullable`, its first object's slot holding `ren_box(UINT32_MAX - t)` for each constructor `t` without fields, read by `ren_niche_tag` or one compare; any other sum's tag is a byte (16 or 32 bits past 256 or 65,536 constructors), `Tagged bits`, each constructor's small scalars (`Bool`, `()`, enums, sized types under 64 bits) packed above it in slot 0, the widest first, and the whole word as before where none is (to_mem.ml's `small` and `small_ctor`, mem.ml(i), emit_c.ml's `Tag_of`, ren_rt.h, Mem Lint's sum structs and niches); and the debug builds' Mem Lint fault from step 3, `if c then None else p`: Mem was right, a boxed constructor without fields is a scalar that holds no reference, and Lint's join counted the parameter dropped on the constant's path against the one moved on the other; a path where some of a class hold constants may now hold fewer references than the paths where none do, at most one fewer for each constant (test_native's two cases, bench/data/niche_join). `Option<Item>` is two words, not three: optional.ren allocates 4, not 101,004, once its last line prints `best`'s fields (4 at 7c68889 too with that line; 2% fewer instructions, the copy with 100 times the items 411 to 401 million, and an array of a million options 25.2 MB to 17.6 MB, 309 to 256 million instructions, 0.80× the time); no program or kernel of the suite compiles to different C (RESULTS.md, "Data stage: layout"); variant types of a niche'd sum cost nothing (niche_reuse: nothing allocated in release, each update a reuse in debug); bench/data's niche, niche_walks, niche_panic, niche_reuse and niche_join in build.t's loops and the release naive one. Choices: below the table | the milestone kernel against Rust; a niche'd or tagged struct as a field of another is still boxed, not flattened (an option of an option, an option in a record); borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
+| 7 (part 3) | 213b4a9 | the third fix: a sum with one constructor that has fields, one of them an object after flattening, and any number without has no tag, `Niche { obj_ctor; slot; ctors }` for `Nullable`, its first object's slot holding `ren_box(UINT32_MAX - t)` for each constructor `t` without fields, read by `ren_niche_tag` or one compare; any other sum's tag is a byte (16 or 32 bits past 256 or 65,536 constructors), `Tagged bits`, each constructor's small scalars (`Bool`, `()`, enums, sized types under 64 bits) packed above it in slot 0, the widest first, and the whole word as before where none is (to_mem.ml's `small` and `small_ctor`, mem.ml(i), emit_c.ml's `Tag_of`, ren_rt.h, Mem Lint's sum structs and niches); and the debug builds' Mem Lint fault from step 3, `if c then None else p`: Mem was right, a boxed constructor without fields is a scalar that holds no reference, and Lint's join counted the parameter dropped on the constant's path against the one moved on the other; a path where some of a class hold constants may now hold fewer references than the paths where none do, at most one fewer for each constant (test_native's two cases, bench/data/niche_join). `Option<Item>` is two words, not three: optional.ren allocates 4, not 101,004, once its last line prints `best`'s fields (4 at 7c68889 too with that line; 2% fewer instructions, the copy with 100 times the items 411 to 401 million, and an array of a million options 25.2 MB to 17.6 MB, 309 to 256 million instructions, 0.80× the time); no program or kernel of the suite compiles to different C (RESULTS.md, "Data stage: layout"); variant types of a niche'd sum cost nothing (niche_reuse: nothing allocated in release, each update a reuse in debug); bench/data's niche, niche_walks, niche_panic, niche_reuse and niche_join in build.t's loops and the release naive one. Choices: below the table | the milestone kernel against Rust; a niche'd or tagged struct as a field of another is still boxed, not flattened (an option of an option, an option in a record); borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
+| 7 (part 4) | this commit | the milestone: bench/native/interp, dispatch's `interp` written ADT-first (`Expr` a sum of eight constructors, `eval` a `match`), at dispatch's sizes (25,600 evaluations; 3, which prints 105), printing what dispatch's Rust twin's `interp enum` and `dyn` print (-326745600) and `ren run` does; in build.sh (which builds no twins for it), measure.sh's `time` (the ADT kernel, Rust enum and `dyn`, dispatch's descriptions, one hyperfine run) and `stats`, summarize.py's milestone table, native.t, bench/dune and build.t's loops; bench/data/interp in build.t's four loops and the release naive one. Measured on the cloud container (RESULTS.md, "The data stage: the milestone"): the ADT kernel 1.13× Rust's enum, 2.90× its `dyn`, 1.60× Ren's descriptions, which are 1.81× `dyn`; both `match`es bound by their jump table. One overhead removed: `Obj_tag`, the tag of a boxed sum all of whose constructors have fields read from its header with no scalar test (mem.ml(i), to_mem.ml's `tag_of` at a `match`'s switch and a nested pattern's test; emit_c.ml; Mem Lint, a `Boxed` operand), `eval` 965 to 886 million instructions, its time moving with GCC's layout either way (1.06× to 1.18× by default, 0.78× with branches aligned, clang 0.94×); deriv 0.90× to 0.92× and cfold 0.91× to 0.93× the time, 7% and 5% fewer instructions, the only programs of the suite whose C changes. Choices: below the table | the overheads left in `eval` (step 7's choices, part 4): the stack check, checked `+` and `-` and `env[i]`'s bounds check, the language's; the switch's unreachable default, not made undefined; a niche'd or tagged struct as a field of another still boxed; borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7685,6 +7702,52 @@ and Mem Lint's join), where the sections above are silent:
   code; in release builds niche_reuse's loop of 1000 round trips
   allocates nothing and its C is struct copies; in debug builds, `Plan`
   boxed, each update is a reuse (build.t).
+
+Step 7's choices, part 4 (the milestone's measurement), where the
+sections above are silent:
+
+- **The kernel** is bench/data/interp.ren's, the same `Expr` and
+  `eval`, with dispatch's `run`: `rounds * (n / 256)` evaluations, `n`
+  65,536 at full size and 1,000 at small, so `main.ren` (100 rounds)
+  does 25,600 and `small.ren` 3, the work dispatch's `interp(25_600)` kernel and
+  the Rust twin's `100 interp enum` do. It has no twins of its own:
+  dispatch's are its, so build.sh skips a folder with no `rust/`, and
+  measure.sh runs dispatch's binaries with the kernel's name.
+- **The tag of a boxed sum none of whose constructors is without
+  fields is its header's** (`Obj_tag`, `((int64_t)x->tag)`), where
+  `ren_tag` tested for a scalar first: a constructor without fields is
+  the only scalar a boxed sum's value is (`Scalar_ctor`, from a `Con`
+  with no arguments), so a sum with none is always an object. to_mem.ml's
+  `tag_of` chooses it from the sum's declared constructors (`ctors`,
+  through an opaque type's representation), for a `match`'s switch and a
+  nested pattern's test, and only for a variable: a constant of such a
+  type, `dummy`'s `Scalar_ctor 0`, is only in code that never runs. An
+  error's tag (`fail on`'s `Tag_in`, a `PTag` pattern) keeps `Tag_of`:
+  an error set's tags may have no payload. Mem Lint checks the operand
+  is `Boxed`. Debug builds read it the same way, so the tests check it
+  under the sanitizers. Its time on the milestone kernel moves with how
+  GCC lays out the jump table's targets more than with the 8% fewer
+  instructions (RESULTS.md); deriv and cfold, which compile to different
+  C only in this read, take 0.90× to 0.93× the time, so it stays.
+- **Not removed, and why** (each measured by editing the generated C,
+  RESULTS.md): the stack check at each call (0.76× the instructions
+  without it), checked `+` and `-`, and `env[i]`'s bounds check (0.98×)
+  are decision 15's semantics, a panic where an overflow happens. The
+  switch's default arm, the "no arm of this `match` matched" panic, is
+  unreachable, since a sum's value has one of its tags and the switch
+  has a case for each, and `__builtin_unreachable()` there is 0.93× the
+  instructions; it turns a compiler fault into undefined behaviour where
+  it's a panic now, and it measured no faster here (slower, in one
+  run, as layout moves it), so it's listed, not done. The environment allocated at each evaluation, which Rust
+  keeps on the stack, is one allocation for about 1,200 nodes.
+- **Why the descriptions beat the `match`,** in Ren and in Rust: a
+  description's `eval` calls each child through its code pointer from
+  the arm it's in, so the indirect calls are at eight sites the
+  predictor tells apart, where a `match` is one jump table for every
+  node. The ADT kernel is the program the docs teach (step 6), and it
+  costs what Rust's does for the same program; turning a recursive
+  `match` into per-arm dispatch (threaded code) is a code-generation
+  question past this stage.
 
 ## The runtime model
 

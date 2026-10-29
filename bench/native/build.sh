@@ -58,6 +58,8 @@ for dir in "$here"/*/; do
       build "$dir" "$out/$name-norestrict" --release --no-restrict
       ;;
   esac
+  # `interp` has no twins of its own: dispatch's are its (measure.sh)
+  [ -d "$dir/rust" ] || continue
   rustc -C opt-level=3 -C codegen-units=1 -o "$out/$name-rust" "$dir/rust/main.rs"
   # one file, built outside any module, so no go.mod is needed
   (cd "$dir/go" && go build -o "$out/$name-go" main.go)

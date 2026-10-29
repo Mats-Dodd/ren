@@ -87,6 +87,7 @@ let rhs_atoms (r : rhs) : atom list =
   | Neg (x, _)
   | Not x
   | Tag_of x
+  | Obj_tag x
   | Field (x, _, _)
   | Struct_get (x, _)
   | To_word x
@@ -306,7 +307,8 @@ let set_once (body : block) : block =
 let pure (r : rhs) =
   match r with
   | Atom _ | Field _ | Load _ | Addr _ | To_word _ | Of_word _ | Tag_of _
-  | Compare _ | Not _ | Global _ | Env_get _ | Is_unique _ | Pack _ | Unpack _ ->
+  | Obj_tag _ | Compare _ | Not _ | Global _ | Env_get _ | Is_unique _ | Pack _
+  | Unpack _ ->
       true
   | _ -> false
 
@@ -1374,8 +1376,8 @@ let find_takes fi (body : block) =
     match s with
     | Let (_, r) -> (
         match r with
-        | Atom _ | Arith _ | Neg _ | Compare _ | Not _ | Tag_of _ | Field _
-        | Alloc _ | Alloc_array _ | To_word _ | Of_word _ | Global _
+        | Atom _ | Arith _ | Neg _ | Compare _ | Not _ | Tag_of _ | Obj_tag _
+        | Field _ | Alloc _ | Alloc_array _ | To_word _ | Of_word _ | Global _
         | Is_unique _ ->
             true
         | Load _ -> true

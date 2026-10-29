@@ -242,6 +242,9 @@ let rhs env (r : rhs) : layout =
       | Struct (k, _) when (struct_of env k).skind <> Product -> ()
       | l -> fail env (sprintf "the tag of %s" (show_layout l)));
       Int
+  | Obj_tag x ->
+      operand env "what a header's tag is read from" Boxed x;
+      Int
   | Field (x, n, size) ->
       operand env "what a field is read from" Boxed x;
       if n < 0 || n >= size then
@@ -1405,7 +1408,9 @@ let rc_let env st (v : var) (r : rhs) =
       List.iter (read env st)
         (match r with
         | Arith (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
-        | Neg (x, _) | Not x | Tag_of x | Is_unique x | Hole (x, _) -> [ x ]
+        | Neg (x, _) | Not x | Tag_of x | Obj_tag x | Is_unique x | Hole (x, _)
+          ->
+            [ x ]
         | _ -> []);
       fresh_var env st v ~count:0 B_static
 

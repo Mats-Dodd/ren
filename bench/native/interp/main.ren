@@ -1,0 +1,4 @@
+import bench
+
+// dispatch's `interp` at its size: 100 rounds, 25,600 evaluations
+fn main() uses Console = bench.run(100)
