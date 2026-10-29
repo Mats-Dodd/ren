@@ -308,13 +308,16 @@ let rec assigns_in (i : var) (e : expr) =
 
 (* `while i < n` whose pass ends `i = i + 1`, with no other assignment
    to [i] in it, where [i] is let-bound to 0 or more and only ever
-   counted up by 1, and [n] is never assigned: its count and bound. *)
+   counted up by 1, and [n] is never assigned: its count and bound. No
+   block may step [i] ([unsteady]): a call to one, mid-pass, would count
+   [i] past [n] where no assignment shows it. *)
 let counter fi env (cond : expr) (body : expr) =
   match cond.kind with
   | Prim (Binop Lt, [ { kind = Local i; _ }; { kind = Local n; _ } ])
     when never_assigned fi n
          && Facts.mem i.id env.low
          && Ids.mem i.id fi.stepped
+         && (not (Ids.mem i.id fi.unsteady))
          && assigns_in i body = 1 -> (
       match (last body).kind with
       | Assign (i', step) when i'.id = i.id && is_step i step -> Some (i, n)
@@ -346,10 +349,15 @@ let length_of (e : expr) =
    `n <= a.len()`; `j < n` of a bound [n], or `j < a.len()`, where [j] is
    0 or more, which puts [j] in bounds of those arrays till [j] or they
    change ([forget]); and conjunctions of those, `if c1 then c2 else
-   false`. That's `while j < n && b.at(j) ...`, whose read is in bounds. *)
+   false`. That's `while j < n && b.at(j) ...`, whose read is in bounds.
+   [j] mustn't be one a block changes ([unsteady]): a call to the block
+   changes [j] where [forget] can't see it. And what [c1] teaches is
+   forgotten where [c2] changes it, as `j < b.len() && shrink(&b)`
+   does. *)
 let rec learn_test fi env (test : expr) =
   match test.kind with
-  | Prim (Binop Lt, [ { kind = Local j; _ }; hi ]) when least fi env j <> None -> (
+  | Prim (Binop Lt, [ { kind = Local j; _ }; hi ])
+    when least fi env j <> None && not (Ids.mem j.id fi.unsteady) -> (
       let arrays =
         match (hi.kind, length_of hi) with
         | Local n, _ when never_assigned fi n -> arrays env.bound n
@@ -371,7 +379,7 @@ let rec learn_test fi env (test : expr) =
         bound = Facts.add n.id (Ids.add a.id (arrays env.bound n)) env.bound;
       }
   | If (c1, c2, { kind = Bool false; _ }) ->
-      learn_test fi (learn_test fi env c1) c2
+      learn_test fi (forget (learn_test fi env c1) (changed c2)) c2
   | _ -> env
 
 (* An index into [a] at [j] is in bounds here: [j] is in bounds, or

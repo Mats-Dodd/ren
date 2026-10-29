@@ -1,0 +1,12 @@
+// The second side of an `&&` shrinks the bytes the first side tested:
+// `j < b.len()` doesn't hold after it, so `b.at(j)` is checked and
+// panics.
+
+fn shrink(inout b: Bytes) -> Bool =
+  b = b[0..1]
+  true
+
+fn main() uses Console =
+  var b = "abcdef".bytes()
+  var j = 3
+  if j < b.len() && shrink(&b) then print(b.at(j)) else ()

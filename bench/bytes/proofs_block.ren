@@ -1,0 +1,16 @@
+// A block that changes the count: a call to it, mid-pass, moves `j`
+// where no assignment in the loop shows it, so `b.at(j)` is checked and
+// panics as `ren run` does. (Before step 4's fix, bounds.ml took it as
+// in bounds, and a native build read past the bytes.)
+
+fn main() uses Console =
+  let b = "abcdef".bytes()
+  var j = 0
+  let n = b.len()
+  var t = 0
+  let f = fn() => j = j + 100
+  while j < n
+    f()
+    t += b.at(j)
+    j += 1
+  print(t)

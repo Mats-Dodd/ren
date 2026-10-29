@@ -1,0 +1,13 @@
+// proofs_block_step.ren's loop over an array.
+
+fn main() uses Console =
+  let xs = [1, 2, 3, 4, 5, 6, 7]
+  var j = 0
+  let n = xs.len()
+  var t = 0
+  let f = fn() => j = j + 1
+  while j < n
+    f()
+    t += xs[j]
+    j = j + 1
+  print(t)

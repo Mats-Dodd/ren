@@ -6583,6 +6583,58 @@ same way. All three print the same checksum. RESULTS.md, "Bytes stage,
 step 3", has the numbers: a round, release, Ren **108** Mcyc, Rust 157,
 Go 255 (0.69× Rust); the debug build takes 2.9 s to Go's 0.85.
 
+### Step 4, the review
+
+Adversarial programs found three holes in bounds.ml's proofs, each
+reached by `xs[j]` and by `b.at(j)`: the count's is older than this
+stage (step 14's), the other two came with step 1's tests. Each read past its
+buffer in every native build and stopped the interpreter with an
+internal compiler error ("a byte proved in bounds is out of them"):
+
+- **A block that changes the index.** A test `j < n` taught that `j`
+  was in bounds, and a call to `fn() => j = j + 100` mid-branch moved
+  `j` where no assignment the walk sees did. `learn_test` now learns
+  nothing of a `j` a block assigns or passes with `&` ([unsteady]), as
+  `learn` and the `Le` case already refused an array a block changes.
+- **A block that steps the count.** `counter` took `j` as the loop's
+  count when every assignment to it was `j = j + 1`, one of them in a
+  block called mid-pass, so `j` reached `n` before the pass's last step.
+  `counter` now refuses an [unsteady] count, as `steppable` (fix 2's
+  proof) already did.
+- **The second side of an `&&`.** `j < b.len() && shrink(&b)` learned
+  from the first side and kept it through the second, which shrinks
+  `b`. `learn_test` now forgets what the second side changes before it
+  learns from it: `learn_test fi (forget (learn_test fi env c1)
+  (changed c2)) c2`.
+
+The proofs above are as stated with those conditions: an index learned
+from a test, or a count, is never a local a block changes, and what a
+test's first side teaches holds in its second only for what the second
+doesn't change. bench/bytes/proofs_block, proofs_block_array,
+proofs_block_step, proofs_block_step_array, proofs_shrink,
+proofs_shrink_array and proofs_bump pin each, bytes and arrays, and
+panic as `ren run` does in every build, under the sanitizers and tcc
+(bench/bytes.t). The release C of every bench/native kernel, bench/*.ren
+and every example is the same, byte for byte, before and after the fix,
+so no measurement moved.
+
+The docs: README's status and roadmap row now say what this stage
+built; stdlib.md says what `x.hash()` gives and that a map's own hash
+is a different, seeded one. formats.md's layer 3 names didn't change;
+nothing parses differently, so the grammar is untouched.
+
+What the review leaves, by severity:
+
+- **Medium: frames is 2.06× Rust,** not under 2× (Step 2, as built):
+  the cursor's room check and its copy-on-fail shape, without inline
+  slices, cost the last 3%.
+- **Low: a map's keys and values are words in release builds,** a
+  struct boxed, and a generic type's `key` isn't native (Step 3, as
+  built): refused with an error, never wrong.
+- **Low: bytes' remainder stays `sdiv`** under clang 16 (Step 1).
+- **Low, not this stage's: journal.t's timing tests flake under load,**
+  at the baseline too.
+
 ### Where this stage may differ from foundations.md
 
 - The cursor's `at`, and the formats deferred, above.
@@ -6608,6 +6660,7 @@ Go 255 (0.69× Rust); the debug build takes 2.9 s to Go's 0.85.
 | 2 | "Bytes stage, step 2" | layer 3: reads and writes at an offset, `Bytes.zeros`, `VarUInt`/`VarInt`, `ByteCursor` and `FormatError` in the prelude, in the interpreter and natively; `Str.from_utf8` native; hoist.ml's `&` bug; the prelude's small functions inlined in C; bench/native/frames with Rust and Go twins (Ren 46.1, Rust 22.3, Go 51.4 Mcyc a pass, 2.06×); test_bytes.ml's b2 on | frames' last 3% to 2×; steps 3 and 4; journal tests flake under load (not this step's) |
 | 3 | "Bytes stage, step 3" | `Map` and `Set` natively, debug and release (ren_rt.c's `ren_map`, indexmap's shape), seeded with a wyhash-class hash; `x.hash()` in the checker, the interpreter and natively, unseeded; `key` natively for a type with no parameters; the prelude's `assert`, `Array.sort` and `Str.lower` natively; bench/native/maps with Rust and Go twins (Ren 108, Rust 157, Go 255 Mcyc a round, 0.69×); test_bytes.ml's b3 on | step 4; keys and values unboxed by layout in release builds; a generic type's `key` natively; journal.t's `recipes` timing fails under load, at the baseline too (not this step's) |
 | 3, review fix | "Bytes stage, step 3: refuse a type with its own show and key natively" | a type with a `show` and a `key` of its own is refused natively again, as before step 3 (to_mem.ml keeps `key` in `key_fns` apart from `own_members`, so the `show` isn't lost); bench/bytes/show_key.ren | as step 3 |
+| 4 | "Bytes stage, step 4: the review" | bounds.ml's three holes (an index or count a block changes, the second side of an `&&`), bench/bytes/proofs_block*, proofs_shrink*, proofs_bump; README's status and roadmap row; stdlib.md's `x.hash()` (Step 4, the review) | frames' last 3% to 2×; the low items in Step 4 |
 
 ## The runtime model
 

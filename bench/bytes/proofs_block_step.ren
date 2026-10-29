@@ -1,0 +1,16 @@
+// A block that steps the count by 1, beside the loop's own step: every
+// assignment to `j` is a step, but one of them runs mid-pass, so `j`
+// isn't the loop's count and `b.at(j)` is checked. Over 7 bytes the
+// read at 7 panics.
+
+fn main() uses Console =
+  let b = "abcdefg".bytes()
+  var j = 0
+  let n = b.len()
+  var t = 0
+  let f = fn() => j = j + 1
+  while j < n
+    f()
+    t += b.at(j)
+    j = j + 1
+  print(t)

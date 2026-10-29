@@ -135,6 +135,10 @@ match attempt record(&next)
 
 A `u64` too large for an `Int`, or a `VarUInt` longer than 10 bytes, is `Malformed`. `c.at()`, `c.left()` and `c.rest()` say where it is and what's after it (compiler.md, "Bytes stage", "Layer 3: the API").
 
+### `x.hash()`, and a map's own hash
+
+Every type with a derived or written `hash` ([operators.md](operators.md#equality-hashing-and-show)) has a method `x.hash()` that gives an `Int`, through the type's `key` if it has one, so two values `==` hash the same. It has **no seed**: the same value on every run, in `ren run` and in every native build, so a hash that's printed, stored or journaled replays the same. A `Map` or `Set` doesn't use it: inside, it hashes its keys with a fast hash mixed with a seed drawn when the process starts (fixed under `ren test` and `ren replay`), so keys chosen by an attacker can't force collisions. A map iterates in insertion order, so the seed changes only its speed, never what a program sees (compiler.md, "Bytes stage", "Step 3, as built").
+
 ### `Time` and `Instant`
 
 Go's `time.Time` hides a monotonic reading inside a wall-clock time. The reading is lost when the value is serialized, and subtracting two times can then go silently wrong. Ren uses two types, as Rust does:

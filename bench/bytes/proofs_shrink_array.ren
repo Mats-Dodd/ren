@@ -1,0 +1,10 @@
+// proofs_shrink.ren over an array.
+
+fn shrink(inout xs: Array<Int>) -> Bool =
+  xs = xs[0..1]
+  true
+
+fn main() uses Console =
+  var xs = [1, 2, 3, 4, 5, 6]
+  var j = 3
+  if j < xs.len() && shrink(&xs) then print(xs[j]) else ()

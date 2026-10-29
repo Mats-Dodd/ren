@@ -26,6 +26,18 @@ steps they leave checked:
   bytes/proofs_step.ren: as specified
   bytes/proofs_negative.ren: as specified
 
+Step 4's review: indices a block or the second side of an `&&` changes,
+and arrays that side shrinks, which bounds.ml took as in bounds before:
+
+  $ for f in proofs_block proofs_block_array proofs_block_step proofs_block_step_array proofs_shrink proofs_shrink_array proofs_bump; do spec bytes/$f.ren; done
+  bytes/proofs_block.ren: as specified
+  bytes/proofs_block_array.ren: as specified
+  bytes/proofs_block_step.ren: as specified
+  bytes/proofs_block_step_array.ren: as specified
+  bytes/proofs_shrink.ren: as specified
+  bytes/proofs_shrink_array.ren: as specified
+  bytes/proofs_bump.ren: as specified
+
 Layer 3 landed in step 2. `Map` and `Set` already ran in the
 interpreter; `x.hash()` landed in step 3, and hash_values.expected pins
 its values.
@@ -132,6 +144,49 @@ line of what `ren build` said. Layer 3 landed natively in step 2, `Map`,
   bytes/proofs_negative.ren, release: the same, exit 1, objects live at exit 1
   bytes/proofs_negative.ren, tcc: the same, exit 1, objects live at exit 1
   bytes/proofs_negative.ren, ren run --release: the same
+  $ for f in proofs_block proofs_block_array proofs_block_step proofs_block_step_array proofs_shrink proofs_shrink_array proofs_bump; do native bytes/$f.ren; done
+  bytes/proofs_block.ren, perceus: the same, exit 1, objects live at exit 1
+  bytes/proofs_block.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_block.ren, release: the same, exit 1, objects live at exit 1
+  bytes/proofs_block.ren, tcc: the same, exit 1, objects live at exit 1
+  bytes/proofs_block.ren, ren run --release: the same
+  bytes/proofs_block_array.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/proofs_block_array.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_block_array.ren, release: the same, exit 1, objects live at exit 2
+  bytes/proofs_block_array.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/proofs_block_array.ren, ren run --release: the same
+  bytes/proofs_block_step.ren, perceus: the same, exit 1, objects live at exit 1
+  bytes/proofs_block_step.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_block_step.ren, release: the same, exit 1, objects live at exit 1
+  bytes/proofs_block_step.ren, tcc: the same, exit 1, objects live at exit 1
+  bytes/proofs_block_step.ren, ren run --release: the same
+  bytes/proofs_block_step_array.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/proofs_block_step_array.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_block_step_array.ren, release: the same, exit 1, objects live at exit 2
+  bytes/proofs_block_step_array.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/proofs_block_step_array.ren, ren run --release: the same
+  bytes/proofs_shrink.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/proofs_shrink.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_shrink.ren, release: the same, exit 1, objects live at exit 2
+  bytes/proofs_shrink.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/proofs_shrink.ren, ren run --release: the same
+  bytes/proofs_shrink_array.ren, perceus: the same, exit 1, objects live at exit 3
+  bytes/proofs_shrink_array.ren, naive: the same, exit 1, objects live at exit 3
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_shrink_array.ren, release: the same, exit 1, objects live at exit 3
+  bytes/proofs_shrink_array.ren, tcc: the same, exit 1, objects live at exit 3
+  bytes/proofs_shrink_array.ren, ren run --release: the same
+  bytes/proofs_bump.ren, perceus: the same, exit 1, objects live at exit 1
+  bytes/proofs_bump.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/proofs_bump.ren, release: the same, exit 1, objects live at exit 1
+  bytes/proofs_bump.ren, tcc: the same, exit 1, objects live at exit 1
+  bytes/proofs_bump.ren, ren run --release: the same
   $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor writes_loop writes_alias; do native bytes/$f.ren; done
   bytes/reads.ren, perceus: the same, exit 0, objects live at exit 0
   bytes/reads.ren, naive: the same, exit 0, objects live at exit 0

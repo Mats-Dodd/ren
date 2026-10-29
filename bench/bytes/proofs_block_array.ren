@@ -1,0 +1,13 @@
+// proofs_block.ren's loop over an array: `xs[j]` is checked too.
+
+fn main() uses Console =
+  let xs = [1, 2, 3, 4, 5, 6]
+  var j = 0
+  let n = xs.len()
+  var t = 0
+  let f = fn() => j = j + 100
+  while j < n
+    f()
+    t += xs[j]
+    j += 1
+  print(t)

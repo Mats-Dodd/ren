@@ -1,0 +1,10 @@
+// The second side of an `&&` changes the index the first side tested.
+
+fn bump(inout j: Int) -> Bool =
+  j += 10
+  true
+
+fn main() uses Console =
+  let b = "abcdef".bytes()
+  var j = 3
+  if j < b.len() && bump(&j) then print(b.at(j)) else ()
