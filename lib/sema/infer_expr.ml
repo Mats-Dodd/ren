@@ -1903,7 +1903,11 @@ and desc_method env cx (e : expr) (f : expr) (r : expr) (m : ident) (i : impl)
     (d : dep) args =
   let recv = Option.value (env.source r) ~default:"it" in
   let shown = shown_deps env [ d ] in
-  let call = sprintf "%s.%s(%s)" shown m.name (if args = [] then "" else "...") in
+  (* an operation is called through its dependency's name alone *)
+  let call =
+    sprintf "%s.%s(%s)" (env.names d.dpath) m.name
+      (if args = [] then "" else "...")
+  in
   let refuse diag =
     report env diag;
     unknown_call cx;
@@ -1918,19 +1922,40 @@ and desc_method env cx (e : expr) (f : expr) (r : expr) (m : ident) (i : impl)
        that, as a dependency's call does, for lowering *)
     match lookup env cx ~node:f.node m.loc (Dep_op (d.dpath, m.name)) with
     | TFun (ps, ret, errs, (RExtend (l, _) as uses)) ->
+        (* whether its arguments fix the dependency's type arguments, as
+           they do a call written `Chan.send(x)`'s *)
+        let fixed =
+          List.for_all
+            (fun a ->
+              match repr a with
+              | TVar { contents = Unbound _ } ->
+                  List.exists (fun (q : param) -> mentions a q.ty) ps
+              | _ -> true)
+            l.payload
+        in
         if List.length l.payload = List.length d.dargs then
           List.iter2
             (fun t a -> unify_at env r.loc ~found:a ~expected:t)
             l.payload d.dargs;
         Hashtbl.replace cx.nodes f.node (TFun (ps, ret, errs, uses));
-        (* the call a `with` would make, its arguments as written if
-           each can be shown, for Stateless's help *)
-        let call =
+        (* the `with` that would make the call, for Stateless's help: the
+           operation through the dependency's name, without its type
+           arguments, which is how one's called (compiler.md, "Found by
+           its full type"), its arguments as written if each can be shown;
+           when they don't fix the type arguments, its type is written
+           where its value goes *)
+        let op_call =
           match List.map env.source args with
           | written when List.for_all Option.is_some written ->
-              sprintf "%s.%s(%s)" shown m.name
+              sprintf "%s.%s(%s)" (env.names d.dpath) m.name
                 (String.concat ", " (List.filter_map Fun.id written))
           | _ -> call
+        in
+        let call =
+          if fixed then sprintf "with %s in %s" recv op_call
+          else
+            sprintf "let %s: %s = with %s in %s" m.name
+              (show (printer env) ret) recv op_call
         in
         Hashtbl.replace cx.found f.node
           (Calls_op

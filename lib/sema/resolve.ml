@@ -1477,10 +1477,12 @@ let record_name env sc (t : tyname) =
    the module can name bare is refused, never picked, unless the type is
    that sum, or another sum, which has no fields to build: `type Point = |
    Point { x: Int, y: Int }`. A name with its module in front, `rows.Row {
-   ... }`, is always a record's. *)
+   ... }`, is always a record's. With [update], it's an update's target,
+   which, left out, is the base's type (Infer_expr.infer_update), so the
+   help says that. *)
 type braced = Braced_type of tname | Braced_ctor of Resolved.ctor_ref
 
-let braces_name env sc (t : tyname) =
+let braces_name ?(update = false) env sc (t : tyname) =
   let name = t.tid.name in
   let is_type =
     index_of name 0 sc.tparams <> None || Hashtbl.mem env.types name
@@ -1492,10 +1494,16 @@ let braces_name env sc (t : tyname) =
   | None, Some sum when is_type && not (Hashtbl.mem env.sums name) ->
       report env t.tid.loc
         ~help:
-          (sprintf
-             "write `%s.%s { ... }` for the constructor, or `{ ... }` with the \
-              type left out for the record"
-             sum name)
+          (if update then
+             sprintf
+               "write `%s.%s { ..base }` for the constructor, or `{ ..base }` \
+                with the type left out for the base's own type"
+               sum name
+           else
+             sprintf
+               "write `%s.%s { ... }` for the constructor, or `{ ... }` with \
+                the type left out for the record"
+               sum name)
         (sprintf "`%s` is a record type here, and a constructor of `%s` too"
            name sum);
       Braced_type (record_name env sc t)
@@ -1949,7 +1957,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           Option.map
             (function
               | Into_type t -> (
-                  match braces_name env sc t with
+                  match braces_name ~update:true env sc t with
                   | Braced_ctor c -> Into_ctor c
                   | Braced_type t -> Into_type t)
               | Into_ctor c -> Into_ctor (ctor_ref env sc c))

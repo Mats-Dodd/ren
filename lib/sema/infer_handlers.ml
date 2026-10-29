@@ -145,14 +145,29 @@ and handler_parts core env cx ~node ~loc ~own ~over ~fails state arms ~needs
           "for "
           ^ String.concat ", " (List.map (fun d -> shown_deps env [ d ]) own) )
   in
+  (* the type of what the state ends in, the instance: the handler's,
+     which its node has once it's checked *)
+  let instance = fresh_var env.st in
   List.iter
     (fun (s : stmt) ->
       env.in_state <- in_state;
       match s with
       | Finally f -> finally_ core env cx hcx ~node ~in_state ~fails ~needs f
+      | Let_pattern { else_ = Some e; _ } as s ->
+          (* the `else` leaves (Resolve), so it's of any type: the rest of
+             the state's, which a `match` of the two lowers to, as in a
+             block (Infer_expr.block) *)
+          core.stmt env hcx s;
+          core.check env hcx e instance
       | s -> core.stmt env hcx s)
     state;
   env.in_state <- None;
+  cx.later :=
+    (fun () ->
+      match Hashtbl.find_opt cx.nodes node with
+      | Some t -> ignore (unifies env plain loc ~found:instance ~expected:t)
+      | None -> ())
+    :: !(cx.later);
   List.iter
     (fun (a : handler_arm) ->
       let op =

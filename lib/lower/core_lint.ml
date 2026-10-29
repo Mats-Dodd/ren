@@ -163,12 +163,27 @@ let needs_within (a : Ty.row) (b : Ty.row) =
   List.for_all (fun l -> List.mem l b.labels) a.labels
   && (a.tail = None || b.tail <> None)
 
+(* Whether two types of one form are of one constructor: two variant
+   types of one sum are the same type only if they're of one variant. *)
+let same_ctor (a : Ty.ty) (b : Ty.ty) =
+  match (a, b) with Variant (_, c, _), Variant (_, c', _) -> c = c' | _ -> true
+
+(* Whether two rows have the same labels and tail. Each lists its labels
+   once, sorted, but inference sorts them by its types (Types.sorted_labels)
+   and [Ty.apply] by Ty's, which can differ where a payload is a variant
+   type, `Store<Tree.Node<T>>` and `Store<Tree<T>>`, so the order isn't
+   compared. *)
+let same_row (a : Ty.row) (b : Ty.row) =
+  a.tail = b.tail
+  && List.length a.labels = List.length b.labels
+  && List.for_all (fun l -> List.mem l b.labels) a.labels
+
 (* Are [a] and [b] the same type, once opaque types are revealed where they
    differ? An implementation [a] may need less than [b]. *)
 let rec equal env (a : Ty.ty) (b : Ty.ty) =
   match (a, b) with
-  | Con (p, xs), Con (q, ys)
-    when p = q
+  | Con (p, xs), Con (q, ys) | Variant (p, _, xs), Variant (q, _, ys)
+    when p = q && same_ctor a b
          && List.length xs = List.length ys
          && List.for_all2 (equal env) xs ys ->
       true
@@ -178,7 +193,7 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
         (fun (p : Ty.param) (q : Ty.param) ->
           p.mode = q.mode && equal env p.ty q.ty)
         ps qs
-      && equal env r r' && e = e' && u = u'
+      && equal env r r' && same_row e e' && same_row u u'
   | Impl i, Impl j
     when Ty.dep_paths i.deps = Ty.dep_paths j.deps
          && List.for_all2
@@ -213,8 +228,10 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
   let rec go (s : Ty.ty) (t : Ty.ty) =
     match (s, t) with
     | Var n, _ -> bound tys (equal env) n t
-    | Con (p, a), Con (q, b)
-      when p = q && List.length a = List.length b && List.for_all2 go a b ->
+    | Con (p, a), Con (q, b) | Variant (p, _, a), Variant (q, _, b)
+      when p = q && same_ctor s t
+           && List.length a = List.length b
+           && List.for_all2 go a b ->
         true
     | Fun (ps, r, e, u), Fun (qs, r', e', u')
       when List.length ps = List.length qs ->
@@ -446,6 +463,8 @@ let rec described env sc loc (d : desc) : Ty.ty =
              v.name v.id env.fn);
       Var n
   | Applied (p, ds) -> Con (p, List.map (described env sc loc) ds)
+  | Applied_variant (p, c, ds) ->
+      Variant (p, c, List.map (described env sc loc) ds)
   | Errs e -> Errors (row e)
 
 (* [d] describes [t], which [what] has. *)
@@ -1570,6 +1589,15 @@ and handler_end env (e : expr) =
   | Instance { impls; finally; _ } ->
       List.iter (fun (_, i) -> instances env i) impls;
       Option.iter (instances env) finally
+  | Match (s, arms) when ends_in_instance e ->
+      (* the state's `let PATTERN = value`: the arm that binds it is the
+         rest of the state, and the other, of a `let ... else`, leaves *)
+      instances env s;
+      List.iter
+        (fun (a : arm) ->
+          if ends_in_instance a.body then handler_end env a.body
+          else instances env a.body)
+        arms
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
 
 (* Blocks are second-class (foundations.md): inference checked that a

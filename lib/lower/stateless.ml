@@ -212,7 +212,7 @@ let refusal home (m : method_call) (h : handler) state =
   in
   Diag.make m.mop
     ~notes:[ "a call as a method makes a fresh instance, so " ^ note ]
-    ~help:(Printf.sprintf "install it: `with %s in %s`" m.mrecv m.mcall)
+    ~help:(Printf.sprintf "install it: `%s`" m.mcall)
     (Printf.sprintf
        "`%s` may be a description of `%s`, which %s, so it isn't called as a \
         method"

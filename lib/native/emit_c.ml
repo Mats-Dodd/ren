@@ -995,7 +995,7 @@ let rec stmt o d (s : stmt) =
             (fun i x ->
               line (sprintf "ren_elems(%s)[%d] = %s;" (var v) i (to_val x)))
             elems)
-  | Let (v, Runtime (New_desc how, xs, _)) ->
+  | Let (v, Runtime (New_desc how, xs, _)) -> (
       let args = var v ^ "_args" in
       let n = List.length xs in
       if n > 0 then
@@ -1003,14 +1003,20 @@ let rec stmt o d (s : stmt) =
           (sprintf "ren_obj* %s[%d] = %s;" args n (braces (List.map atom xs)));
       let kind, decl =
         match how with
-        | Of_decl k -> ("REN_D_NAMED", sprintf "&ren_decl_%d" k)
+        | Of_decl k | Of_variant (k, _) -> ("REN_D_NAMED", sprintf "&ren_decl_%d" k)
         | Of_array -> ("REN_D_ARRAY", "NULL")
         | Of_tuple -> ("REN_D_TUPLE", "NULL")
       in
       line
         (sprintf "ren_obj* %s = ren_desc_new(%s, %s, %d, %s);" (var v) kind decl
            n
-           (if n > 0 then args else "NULL"))
+           (if n > 0 then args else "NULL"));
+      (* a variant type's is its sum's, its constructor's tag plus one its
+         [var], which only [ren_desc_same] reads *)
+      match how with
+      | Of_variant (_, c) ->
+          line (sprintf "((ren_desc*)%s)->var = %d;" (var v) (c + 1))
+      | _ -> ())
   | Let (v, Env_new xs) -> (
       match xs with
       | [] -> line (sprintf "void* %s = NULL;" (var v))
@@ -1446,7 +1452,7 @@ let dkind_c (k : dkind) =
   | D_unit -> "REN_D_UNIT"
   | D_str -> "REN_D_STR"
   | D_bytes -> "REN_D_BYTES"
-  | D_named _ -> "REN_D_NAMED"
+  | D_named _ | D_variant _ -> "REN_D_NAMED"
   | D_array -> "REN_D_ARRAY"
   | D_tuple -> "REN_D_TUPLE"
   | D_errors -> "REN_D_ERRORS"
@@ -1538,13 +1544,15 @@ let static_types add (descs : desc list) (decls : decl list) =
            "%sren_desc ren_desc_%d = {{0, REN_TAG_DESC, 0, 0}, %s, %b, \
             %d, %s, %s, %s};\n"
            !linkage i (dkind_c d.dkind) d.dcounted (List.length d.dargs)
-           (* a variable's number, or a sized type's kind *)
+           (* a variable's number, a sized type's kind, or a variant type's
+              constructor's tag plus one *)
            (match d.dkind with
            | D_var n -> string_of_int n
            | D_sized k -> sized_kind k
+           | D_variant (_, c) -> string_of_int (c + 1)
            | _ -> "0")
            (match d.dkind with
-           | D_named k -> sprintf "&ren_decl_%d" k
+           | D_named k | D_variant (k, _) -> sprintf "&ren_decl_%d" k
            | _ -> "NULL")
            args))
     descs

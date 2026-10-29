@@ -1,0 +1,64 @@
+// Data stage, step 8, the review's fixes: a variant type in a
+// dependency's type, an operation's signature and a generic dependency's
+// argument. A dependency at `Order.Placed` is its own, not one at
+// `Order`, so its key keeps the variant (core.ml, [describe]; to_mem.ml,
+// [D_variant]), in a generic function's key built at run time too, and
+// each native build prints what `ren run` does.
+
+type Order =
+  | Placed { id: Int, total: Int }
+  | Draft
+
+type Tree<T> =
+  | Node { left: Tree<T>, item: T, right: Tree<T> }
+  | Leaf
+
+dep Pricing =
+  reprice: fn(p: Order.Placed) -> Int
+
+handler fixed(by: Int) for Pricing =
+  reprice(p) => p.total + by
+
+dep Store<T> =
+  get: fn() -> T
+
+handler giving<T>(v: T) for Store<T> =
+  get() => v
+
+fn total() -> Int uses Store<Order.Placed> =
+  let p: Order.Placed = Store.get()
+  p.total
+
+fn top<T>() -> T uses Store<T> = Store.get()
+
+// the keys at `Tree.Node<T>` and `Tree<T>`, built where `T` is known
+fn both<T>(n: Tree.Node<T>) -> (T, Tree<T>) =
+  let l: Store<Tree<T>> = giving(Leaf)
+  with giving(n) in
+    with l in
+      let m: Tree.Node<T> = top()
+      let t: Tree<T> = top()
+      (m.item, t)
+
+fn main() uses Console =
+  match Placed { id: 1, total: 5 }
+    Placed { .. } as p =>
+      let d: Pricing = fixed(1)
+      print(d.reprice(p))
+      with fixed(2) in
+        print(Pricing.reprice(p))
+      // the inner `Store<Order>` isn't the `Store<Order.Placed>` outside
+      with giving(p) in
+        with giving(Draft) in
+          print(total())
+          let q: Order.Placed = top()
+          print(q.id)
+          let o: Order = top()
+          print(o)
+    Draft => ()
+  match Node { left: Leaf, item: 7, right: Leaf }
+    Node { .. } as n => print(both(n))
+    Leaf => ()
+  match Node { left: Leaf, item: "s", right: Leaf }
+    Node { .. } as n => print(both(n))
+    Leaf => ()

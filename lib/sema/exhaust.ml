@@ -87,13 +87,14 @@ let ctor_of env path name =
       List.find_opt (fun (k : Iface.ctor) -> k.cname = name) cs
   | _ -> None
 
-(* [p] as a space. With [swap], the subpattern whose node is its first is
-   the space it gives instead: how an alternative of an or-pattern is
-   checked on its own (see [alternatives]). *)
-let rec simplify ?swap env (p : pattern) =
-  let simplify = simplify ?swap in
-  match (swap, p.pkind) with
-  | Some (n, s), _ when n = p.pnode -> s
+(* [p] as a space. With [swap], an or-pattern whose node is listed has
+   only the alternatives listed with it: how an alternative of an
+   or-pattern is checked on its own (see [alternatives]). *)
+let rec simplify ?(swap = []) env (p : pattern) =
+  let simplify = simplify ~swap in
+  match (List.assoc_opt p.pnode swap, p.pkind) with
+  | Some [ q ], POr _ -> simplify env q
+  | Some qs, POr _ -> Or (List.map (simplify env) qs)
   | _, POr ps -> Or (List.map (simplify env) ps)
   | _, PAs (q, _) -> simplify env q
   | _ ->
@@ -363,23 +364,34 @@ let rec missing env rows n =
             first :: w)
           (missing env (default rows) (n - 1))
 
-(* The or-patterns in [p], at any depth, each one's node and its
-   alternatives: an or-pattern of `fail` patterns, an arm's whole, isn't
-   one of them (see [alternatives]). *)
-let rec ors (p : pattern) =
+(* The or-patterns in [p], at any depth, each one's node, its
+   alternatives, and the or-patterns it's inside, the outermost first,
+   each with the alternative it's in: an or-pattern of `fail` patterns,
+   an arm's whole, isn't one of them (see [alternatives]). *)
+let rec ors ?(around = []) (p : pattern) =
+  let inner = ors ~around in
   match p.pkind with
-  | POr ps when is_fails p -> List.concat_map ors ps
-  | POr ps -> (p.pnode, ps) :: List.concat_map ors ps
-  | PAs (q, _) -> ors q
-  | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map ors ps
-  | PRecord (_, fs) | PCon_named (_, fs) -> List.concat_map (fun (_, q) -> ors q) fs.fpats
+  | POr ps when is_fails p -> List.concat_map inner ps
+  | POr ps ->
+      (p.pnode, ps, around)
+      :: List.concat
+           (List.mapi
+              (fun k q -> ors ~around:(around @ [ (p.pnode, ps, k) ]) q)
+              ps)
+  | PAs (q, _) -> inner q
+  | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map inner ps
+  | PRecord (_, fs) | PCon_named (_, fs) ->
+      List.concat_map (fun (_, q) -> inner q) fs.fpats
   | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* Each alternative of each or-pattern in an arm's pattern [p], which
    matches something new, is checked to: against [rows], the arms above,
    and the alternatives before it. An alternative is checked as [p] with
    its or-pattern swapped for it, and the ones before it as [p] with the
-   or-pattern swapped for theirs, so the rest of [p] is what it is.
+   or-pattern swapped for theirs, so the rest of [p] is what it is. One
+   inside another or-pattern is checked in the alternative it's in, so
+   the alternatives before it are also each one before that, and none
+   after it is (an alternative after it matches only what it doesn't).
    Alternatives of `fail` patterns are each a row of their own. *)
 and alternatives env ~handles rows (p : pattern) =
   let never (q : pattern) =
@@ -396,18 +408,33 @@ and alternatives env ~handles rows (p : pattern) =
   in
   let each rows (whole : pattern) =
     List.iter
-      (fun (n, (alts : pattern list)) ->
+      (fun (n, (alts : pattern list), around) ->
+        (* each or-pattern it's inside at the alternative it's in *)
+        let inside = List.map (fun (m, ms, k) -> (m, [ List.nth ms k ])) around in
+        (* each one it's inside at the alternatives before that one, the
+           ones outside it at theirs *)
+        let outer_before =
+          List.concat
+            (List.mapi
+               (fun d (m, ms, k) ->
+                 let before = List.filteri (fun j _ -> j < k) ms in
+                 if before = [] then []
+                 else
+                   rows_of
+                     ~swap:((m, before) :: List.filteri (fun j _ -> j < d) inside)
+                     whole)
+               around)
+        in
         List.iteri
           (fun i (q : pattern) ->
             let before = List.filteri (fun j _ -> j < i) alts in
             let earlier =
               if before = [] then []
-              else
-                rows_of ~swap:(n, Or (List.map (simplify env) before)) whole
+              else rows_of ~swap:((n, before) :: inside) whole
             in
-            let these = rows_of ~swap:(n, simplify env q) whole in
-            if not (List.exists (useful env (rows @ earlier)) these) then
-              never q)
+            let these = rows_of ~swap:((n, [ q ]) :: inside) whole in
+            if not (List.exists (useful env (rows @ outer_before @ earlier)) these)
+            then never q)
           alts)
       (ors whole)
   in

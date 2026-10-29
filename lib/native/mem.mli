@@ -303,10 +303,10 @@ type rt =
   | Value_any of bool  (** a descriptor: `zero`, or `one` if [true] *)
   | New_desc of new_desc
       (** a descriptor built of the descriptors given: a named type's, from its
-          declaration, the program's [decls]'s n-th, or an array's or a tuple's
-      *)
+          declaration, the program's [decls]'s n-th, a variant type's, from its
+          sum's and its constructor's tag, or an array's or a tuple's *)
 
-and new_desc = Of_decl of int | Of_array | Of_tuple
+and new_desc = Of_decl of int | Of_variant of int * int | Of_array | Of_tuple
 
 (* What a slice is of: a `Str` and `Bytes` are both the runtime's strings,
    but a `Str`'s slice can't cut a character. *)
@@ -561,6 +561,10 @@ type dkind =
   | D_str
   | D_bytes
   | D_named of int  (** the program's [decls]'s n-th *)
+  | D_variant of int * int
+      (** a variant type: its sum's, the [decls]'s n-th, and its constructor's
+          tag; walked as the sum's, and only another of that variant is the
+          same, so a dependency's key at it is its own *)
   | D_array
   | D_tuple
   | D_errors

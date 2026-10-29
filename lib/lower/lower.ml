@@ -771,15 +771,7 @@ and expr_of cx (e : expr) : C.expr =
       let cond = expr cx cond in
       here (While (cond, expr cx body))
   | Break -> here Break
-  | Todo ->
-      (* the standard library's panic, at the type wanted here, with the
-         `todo`'s place as the call's, which is where the panic is said *)
-      let t = ty () in
-      let a : Ty.args = { tys = [ t ]; rows = [ Ty.closed; Ty.closed ] } in
-      let fty = Ty.apply a (Prelude.scheme Lib_panic).ty in
-      let f = mk (Intrinsic (Lib_panic, a, descs cx a, [])) fty e.loc in
-      let msg = mk (Str "reached a `todo`") Ty.str e.loc in
-      here (Call (f, [ C.Value msg ], cx.ev))
+  | Todo -> todo cx e.loc (ty ())
   | With { items; body } -> with_ cx e items body
   | Handler { deps; state; arms; _ } ->
       (* it runs where it's installed, with the evidence there *)
@@ -1718,6 +1710,16 @@ and value_of cx req (t : Ty.ty) loc =
 
    A method call's receiver is its first argument, passed `inout` when
    [changed], `&s.push(1)`. *)
+(* A `todo` reached where a [t] is wanted: the standard library's panic,
+   at [t], with the `todo`'s place as the call's, which is where the
+   panic is said. *)
+and todo cx loc t =
+  let a : Ty.args = { tys = [ t ]; rows = [ Ty.closed; Ty.closed ] } in
+  let fty = Ty.apply a (Prelude.scheme Lib_panic).ty in
+  let f = mk (Intrinsic (Lib_panic, a, descs cx a, [])) fty loc in
+  let msg = mk (Str "reached a `todo`") Ty.str loc in
+  mk (Call (f, [ C.Value msg ], cx.ev)) t loc
+
 and call cx ?(changed = false) (e : expr) f args =
   (* a call that gives a default by name, or leaves it out: its arguments
      in order, each left out its literal (Infer.Args) *)
@@ -1727,6 +1729,12 @@ and call cx ?(changed = false) (e : expr) f args =
     | _ -> args
   in
   match f.kind with
+  | Todo ->
+      (* `todo(x)`: the callee is evaluated first, and panics, so nothing
+         is called and its arguments are never evaluated, as in `ren run`;
+         a type variable never stands for a block (Core Lint), so it's the
+         panic at the call's type, not a block's *)
+      todo cx f.loc (ty_of cx e.node)
   | Var (Dep_op (dep, op)) ->
       (* never with `&` (mut.ml), so its arguments are values, evaluated in
          order *)

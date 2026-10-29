@@ -40,8 +40,9 @@ type 'l found_ =
       (** at the [d.op] of [d.op(...)]: an operation called as a method of a
           description, which installs it for the call, as [key], implementing
           [from] (foundations.md, decision 3); [recv] is [d] as written and
-          [call] the call as a `with` would make it, `Area.area()`, for the
-          error that refuses one of a handler with state (stateless.ml) *)
+          [call] the `with` that would make the call, as code to paste, `with
+          d in Area.area()`, for the error that refuses one of a handler with
+          state (stateless.ml) *)
   | Inline_op of { dep : Path.t; op : string }
       (** at an inline handler, `handler fn(...) => ...`: the operation of
           [dep] it implements, its only one (foundations.md, decision 3) *)

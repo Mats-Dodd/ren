@@ -392,6 +392,7 @@ let rec type_of env (d : desc) : Ty.ty =
       | VType t -> t
       | _ -> bug ("a descriptor built from `" ^ v.name ^ "`, which isn't one"))
   | Applied (p, ds) -> Con (p, List.map (type_of env) ds)
+  | Applied_variant (p, c, ds) -> Variant (p, c, List.map (type_of env) ds)
   | Errs e -> Errors (row e)
 
 (* The dictionary the hidden dictionary parameter [v] holds. *)

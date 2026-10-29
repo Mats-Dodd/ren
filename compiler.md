@@ -6047,7 +6047,9 @@ type      := tyname ["." UIDENT] ["<" type, ... ">"]  (`Order.Placed`, a
                                                        `Tree.Node<Int>`)
 primary   := ...
            |  "{" ".." expr {"," finit} "}"            (an update: the base's
-                                                       type, or the expected)
+                                                       type; the expected one
+                                                       only when the base's
+                                                       isn't known yet)
            |  tyname "{" [".." expr ","] finit, ... "}"
                                                      (a record, or a by-name
                                                        constructor: Resolve
@@ -6126,7 +6128,9 @@ sum the module can name bare is **refused**, never picked: "`Placed` is
 a record type here, and a constructor of `Order` too", whose help says
 to write `Order.Placed { ... }` for the constructor or `{ ... }` with the
 type left out for the record (found through the expected type or the
-fields, as today). Resolve knows both from the declarations it already
+fields, as today). An update's, `Placed { ..base }`, says `{ ..base }`
+with the type left out is the base's own type, since that's an update's
+target when it's left out (step 8). Resolve knows both from the declarations it already
 reads: its own module's `types` and the interfaces of its imports.
 `Type.Name { ... }` and `m.Type.Name { ... }` are always constructors;
 `m.Name { ... }` always a record.
@@ -6430,9 +6434,12 @@ and fields, so variant types cost nothing, unique or not:
   `Variant (s, c, args)`, its type `Con (s, args)`. It's the identity in
   the interpreter, and natively the same Mem variable, no code: what
   `Placed { ..p }` with nothing else given lowers to.
-- `describe` (core.ml) gives a `Variant` its sum's descriptor, so a
-  generic function shows, compares and hashes it as the sum (walk.ml,
-  shown.ml), and a `Derived` dictionary of a `Variant` is its sum's.
+- `describe` (core.ml) keeps a `Variant`'s constructor, `Known
+  (Variant ...)`, or `Applied_variant (s, c, ds)` for one of a generic
+  sum's with the function's type variables in it, since a dependency's
+  key at `Order.Placed` isn't one at `Order` (step 8); a walk shows,
+  compares and hashes it as the sum (walk.ml, shown.ml, `Ty.as_sum`),
+  and a `Derived` dictionary of a `Variant` is its sum's.
 
 **Core Lint** checks: a `Variant (s, c, args)` names a sum `s` with a
 by-name constructor `c` and as many arguments as `s` has parameters;
@@ -6447,8 +6454,14 @@ and `plain_layout` map it to `Con (s, args)`'s), and a field of one is
 read from the constructor's slot or field, with packing (`record_fields`
 and `record_shape` gain the constructor's fields and places, from the
 sum's shape for that tag: an object's `ren_ctor_info.at`, or a struct's
-slots from `small`). The specializer may key copies of generic code by
-the sum rather than the variant type, since their code is the same.
+slots from `small`). A variant type's descriptor is its sum's,
+`REN_D_NAMED` of the sum's declaration, but for its `var`, its
+constructor's tag plus one (mem.ml's `D_variant` and `Of_variant`),
+which only `ren_desc_same` reads, so an evidence's key tells
+`Order.Placed` from `Order` and every walk is the sum's. The specializer
+keys copies of generic code by the variant type, as its descriptors do
+(step 8; keying by the sum would make the key inside the copy the
+sum's).
 
 ### The errors that teach the model, and `todo` (step 5)
 
@@ -6863,6 +6876,7 @@ error: `..` stands for the fields a pattern in braces leaves out     (parser)
 
 error: `Placed` is a record type here, and a constructor of `Order` too   (Resolve)
   help: write `Order.Placed { ... }` for the constructor, or `{ ... }` with the type left out for the record
+  (an update's: write `Order.Placed { ..base }` for the constructor, or `{ ..base }` with the type left out for the base's own type)
 
 error: `Shape` is a sum type, so a record pattern doesn't match it   (Infer)
   help: name the variant: `Rect { w, .. }`
@@ -7062,9 +7076,10 @@ revisit if a step finds it wrong:
 ### Step 8, as built
 
 Step 8 reviews the stage with three lenses, soundness, the spec, and the
-docs and tooling, as three reviews over 94d4cf7. This commit is the
-spec's and the docs': the examples and the documents. The soundness
-review's compiler fixes follow in their own commit.
+docs and tooling, as three reviews over 94d4cf7. 3545731 is the spec's
+and the docs': the examples and the documents. The soundness review's
+compiler fixes are the commit after it (below, "The soundness review's
+fixes").
 
 **The examples read as language.md's end-to-end program does.** None
 of the bank, the shop and the ledger used `{ ..x }`, a record pattern
@@ -7132,6 +7147,140 @@ may differ from language.md", above: the ADT kernel against the
 descriptions, `Obj_tag`'s time, the walks' boxing, error tags, the
 "named" wording, and `ren check`'s blind spot.
 
+**The soundness review's fixes.** It found no wrong answer, memory
+error or leak, and no program accepted that must be refused; it found
+seven programs the compiler stopped on, or refused, wrongly. Each is
+fixed at its cause, with test_data.ml's s8 tests and, where it's
+native, bench/data's review_keys, review_state, review_state_panic and
+review_todo_panic in build.t's four loops (`same`, `release`,
+`tcc_same`, `release_naive`):
+
+1. **A variant type in a dependency's type** (high). Two causes. Core
+   Lint's `instance_of` and `equal` had no case for two `Variant`s, so
+   an operation whose signature has one, `reprice: fn(p: Order.Placed)
+   -> Int`, called on a description (which a release build makes a
+   `Dep_call`), was "used at a type which isn't its type"; they compare
+   two variant types now as two `Con`s, and of one constructor. And
+   `describe` made a variant type its sum's descriptor, so a
+   dependency's key at `Order.Placed` was the one at `Order`: Core Lint
+   refused `with` of a `Store<Order.Placed>` in release, and worse, the
+   interpreter found the wrong handler, `Draft` from a `Store<Order>`
+   installed inside one at `Order.Placed`, then read a field `Draft`
+   hasn't (a crash, not a wrong answer, but unsound). A descriptor keeps
+   the variant now: `Known (Variant ...)`, or a new `Applied_variant (s,
+   c, ds)` for one with the function's type variables in it, built at
+   run time natively (`New_desc (Of_variant ...)`); the interpreter's
+   `type_of`, Core Lint's `described`, the specializer's closing and
+   `key_label`, and to_mem.ml's `static_desc` and `desc` keep it, and
+   natively it's `REN_D_NAMED` of the sum's declaration with its
+   constructor's tag plus one in `var`, which only `ren_desc_same`, the
+   evidence's lookup, reads. Sound: every walk (walk.ml, shown.ml,
+   journal.ml, ren_rt.c) treats it as the sum, which a value of it is;
+   only the identity of a dependency changes, and two instances of a
+   dependency are told apart by their full type everywhere else
+   ("Found by its full type"); and to_mem.ml's `dict` refuses a
+   variant type's dictionary for an operator of its sum's own, as it
+   does the sum's, rather than letting the walk stand for it. Behind it,
+   two more: Core Lint compared
+   two rows of what a function uses by their order, which Infer sorts by
+   its types' text and `Ty.apply` by Ty's (`Store<Tree.Node<T>>` and
+   `Store<Tree<T>>` come out in either order), so it compares them as
+   sets (`same_row`); and a generic handler with a parameter,
+   `giving<T>(v: T)`, failed every debug Perceus build in Mem Lint
+   ("`$ty0` is used where it isn't defined", at 4eb8fe2 too): its code
+   read the captures from its description before the descriptors that
+   count them, so it reads the descriptors first.
+2. **`let ... else` in a handler's state** (high). Infer_handlers
+   checked the state's statements with `core.stmt`, which binds the
+   pattern and leaves the `else` to `Infer_expr.block`, so the `else`
+   had no type and lowering stopped. The state checks the `else`
+   against what the state ends in, the instance, a variable unified
+   with the handler's type once its node has it (`cx.later`). Behind it:
+   any pattern in a handler's state but a name, `let (a, b) = p` too,
+   lowers to a `Match` around the rest of the state, which Core Lint
+   refused ("a handler's body that doesn't end in an instance") and
+   native code gave the instance's type, though a handler's code gives
+   the `with` body's word. Core Lint's `handler_end` follows a `Match`
+   whose arm ends in the instance (`Core.ends_in_instance`), the other
+   arm, which leaves, checked for no instance; to_mem.ml's
+   `result_layout` gives a `match` or a `Handle` that ends in the
+   instance the word's layout, and an arm that leaves, its result never
+   set, a dummy of it. The other statement lists, a block's (functions,
+   lambdas, `finally`s, tests' bodies) are `Infer_expr.block`'s, and a
+   test handler's state is a handler's: `ren check` and lowering agree
+   on each (the s8 tests).
+3. **`todo` called, `todo(1)`** (high). `todo` is any type, so a call of
+   it type-checks, and `ren run` evaluates the callee first, and panics.
+   Lowering made it `Lib_panic` at a function type, which Core Lint
+   refuses (a type variable never stands for a block) and native
+   lowering couldn't place. A call whose callee is `todo` lowers to the
+   panic at the call's type, at the `todo`, its arguments never
+   evaluated, as `ren run` did; everywhere else a `todo` where a block
+   goes is already refused (it isn't written right there). Accepted,
+   rather than refused, since it's what `todo` means anywhere else: it
+   panics where it's reached.
+4. **An or-pattern inside another's alternative** (medium). Exhaust's
+   `alternatives` checked an inner alternative against the whole
+   pattern with only its own or-pattern swapped, so the enclosing
+   or-pattern's later alternatives counted as before it, and a useful
+   alternative was "never matches". `ors` gives each or-pattern the
+   or-patterns it's inside, each at the alternative it's in, and
+   `simplify`'s `swap` takes several: an inner alternative is checked
+   with each enclosing or-pattern at the alternative it's in, against
+   the arms above, each enclosing one's alternatives before that one,
+   and its own before it. `Some(A(n)) | Some(B(n) | A(n))` still says
+   the inner `A(n)` never matches.
+5. **The stateless help for a generic dependency** (low). It wrote `with
+   c in Chan<Int>.send(1)`, which doesn't parse: an operation is called
+   through its dependency's name alone, its type arguments found from
+   the call. The help writes `with c in Chan.send(1)`; where the
+   arguments don't fix the type arguments, `c.recv()`, it writes the
+   type where the value goes, `let recv: Option<Int> = with c in
+   Chan.recv()`, since nothing else would (a `with` doesn't fix what its
+   body uses). Each pastes and checks (s8). The `with` is still a fresh
+   instance at each call, which is what the refusal's note says.
+6. **The record-or-constructor help on an update** (low). The spec says
+   an update's target, left out, is the base's type, the expected one
+   only when the base's isn't known yet ("Record update (step 1)" and
+   step 1's choices), so `let r: Rect = { ..q }` with `q: Shape.Rect` is
+   a `Shape.Rect`, refused as the mismatch it is. The rule stands; the
+   help on an update, `Rect { ..r, w: 1 }`, says so now: "write
+   `Shape.Rect { ..base }` for the constructor, or `{ ..base }` with the
+   type left out for the base's own type", and the grammar's comment
+   says "the base's type; the expected one only when the base's isn't
+   known yet".
+7. **A handler given a small record** (high in release, at 4eb8fe2
+   too). A release build stored the struct in the description's object,
+   whose fields are words (Mem Lint: "Struct0 stored in an object"); a
+   tuple and an option of an object are the same. What a handler
+   captures is a word: a struct's type is kept boxed instead
+   (`word_only`, the `Demote` a field of an object already takes), so
+   those types are boxed program-wide in such a program, which is sound
+   and costs only that program.
+
+All the review's reproducers, and its batch scripts (le/, m1, m2), run
+again through its harness in every build: each prints what `ren run`
+does, and every OK is still OK.
+
+**Left, with severity:**
+
+- **Medium:** a function whose declared `uses` names a dependency at a
+  type built from its type parameter, `fn f<T>() -> T uses
+  Store<Option<T>>` or `Store<Tree.Node<T>>`, is refused at its callers
+  ("nothing installs `Store<Option<T>>` before `main`", the `T` not
+  instantiated): the scheme's `uses` label isn't instantiated with the
+  call's type arguments. Before the data stage too, not of variant
+  types; `uses Store<T>` works.
+- **Low:** a `with` doesn't fix an open type argument of what its body
+  uses from what it installs, so `with c in Chan.recv()` needs the type
+  written; the spec says so ("Found by its full type"), and the help
+  writes it.
+- **Low:** while a record type and a by-name constructor share a bare
+  name, an update into the record from a variant type of the sum, `Rect
+  { ..q }` with `q: Shape.Rect`, can't be written: `Rect` is refused,
+  and `{ ..q }` is the base's type. Rename one, or write the record's
+  fields.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -7147,7 +7296,8 @@ descriptions, `Obj_tag`'s time, the walks' boxing, error tags, the
 | 7 (part 2) | 7c68889 | the second fix: an array of small values that hold objects keeps them inline, counted by the mask of their slots that hold objects, which the array's header keeps in its `objs` byte (1 for counted words, as before), instead of boxing their type program-wide: to_mem.ml's `plain_layout` and `element` no longer demote; ren_rt.h's and ren_rt.c's arrays count by the mask (`REN_ELEM_OBJS` for freeing, copying, the shared mark, splices and joins; `ren_slots_dup` and `ren_slots_drop`; inline reads, writes, field writes and pushes of counted structs, and their hoisted loops' buffer macros); emit_c.ml's `struct_mask` and each operation's C; Mem Lint (arrays of counted structs of at most eight slots, a field written at its slot's layout) and hoist.ml (a field write's struct agrees with a read's); and a fault the suite found: a walk reads an array's elements as words, so a small type that's an array's element anywhere in a walked value is boxed (`no_struct_elements`, for each closed type's descriptor and each built at run time past the specialization budget), which `show` of a record holding an array of uncounted structs crashed on at d86b474 too (build.t's walked_arrays). rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4 (a copy with 100 times the items 187 ms, not 446, 162 MB, not 402); of the suite only slices' C changes in substance, 96 million allocations, not 164 million, 0.88× the time, its `json` kernel 0.78× (RESULTS.md, "Data stage: layout"); rows.ren's last line prints the element's fields; bench/data's rows_objs and rows_panic in build.t's loops and the release naive one, layout_walks' arrays in a walked record, test_native's Mem Lint tests of arrays of counted structs. Choices: below the table | the third fix (byte tags and niches), measured; optional.ren's last line `show`s the value, which boxes its type and hides the fix; the milestone kernel against Rust; borrowed reads of an array's struct, and swap-out of one's objects (step 7's choices, part 2); `if c then None else p` in debug builds (part 1's choices) |
 | 7 (part 3) | 213b4a9 | the third fix: a sum with one constructor that has fields, one of them an object after flattening, and any number without has no tag, `Niche { obj_ctor; slot; ctors }` for `Nullable`, its first object's slot holding `ren_box(UINT32_MAX - t)` for each constructor `t` without fields, read by `ren_niche_tag` or one compare; any other sum's tag is a byte (16 or 32 bits past 256 or 65,536 constructors), `Tagged bits`, each constructor's small scalars (`Bool`, `()`, enums, sized types under 64 bits) packed above it in slot 0, the widest first, and the whole word as before where none is (to_mem.ml's `small` and `small_ctor`, mem.ml(i), emit_c.ml's `Tag_of`, ren_rt.h, Mem Lint's sum structs and niches); and the debug builds' Mem Lint fault from step 3, `if c then None else p`: Mem was right, a boxed constructor without fields is a scalar that holds no reference, and Lint's join counted the parameter dropped on the constant's path against the one moved on the other; a path where some of a class hold constants may now hold fewer references than the paths where none do, at most one fewer for each constant (test_native's two cases, bench/data/niche_join). `Option<Item>` is two words, not three: optional.ren allocates 4, not 101,004, once its last line prints `best`'s fields (4 at 7c68889 too with that line; 2% fewer instructions, the copy with 100 times the items 411 to 401 million, and an array of a million options 25.2 MB to 17.6 MB, 309 to 256 million instructions, 0.80× the time); no program or kernel of the suite compiles to different C (RESULTS.md, "Data stage: layout"); variant types of a niche'd sum cost nothing (niche_reuse: nothing allocated in release, each update a reuse in debug); bench/data's niche, niche_walks, niche_panic, niche_reuse and niche_join in build.t's loops and the release naive one. Choices: below the table | the milestone kernel against Rust; a niche'd or tagged struct as a field of another is still boxed, not flattened (an option of an option, an option in a record); borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
 | 7 (part 4) | 94d4cf7 | the milestone: bench/native/interp, dispatch's `interp` written ADT-first (`Expr` a sum of eight constructors, `eval` a `match`), at dispatch's sizes (25,600 evaluations; 3, which prints 105), printing what dispatch's Rust twin's `interp enum` and `dyn` print (-326745600) and `ren run` does; in build.sh (which builds no twins for it), measure.sh's `time` (the ADT kernel, Rust enum and `dyn`, dispatch's descriptions, one hyperfine run) and `stats`, summarize.py's milestone table, native.t, bench/dune and build.t's loops; bench/data/interp in build.t's four loops and the release naive one. Measured on the cloud container (RESULTS.md, "The data stage: the milestone"): the ADT kernel 1.13× Rust's enum, 2.90× its `dyn`, 1.60× Ren's descriptions, which are 1.81× `dyn`; both `match`es bound by their jump table. One overhead removed: `Obj_tag`, the tag of a boxed sum all of whose constructors have fields read from its header with no scalar test (mem.ml(i), to_mem.ml's `tag_of` at a `match`'s switch and a nested pattern's test; emit_c.ml; Mem Lint, a `Boxed` operand), `eval` 965 to 886 million instructions, its time moving with GCC's layout either way (1.06× to 1.18× by default, 0.78× with branches aligned, clang 0.94×); deriv 0.90× to 0.92× and cfold 0.91× to 0.93× the time, 7% and 5% fewer instructions, the only programs of the suite whose C changes. Choices: below the table | the overheads left in `eval` (step 7's choices, part 4): the stack check, checked `+` and `-` and `env[i]`'s bounds check, the language's; the switch's unreachable default, not made undefined; a niche'd or tagged struct as a field of another still boxed; borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
-| 8 (examples and docs) | this commit (examples and docs); compiler fixes follow | the review's spec and docs lenses (Step 8, as built): the bank's `transfer` with `let { from, to, amount } = t` and punned `Sent { amount, to }`, `Movement.change` with an or-pattern, a test taking entries apart in a block's parameter; the shop's `Paid { amount, charge }`, `pay` with `let Due(amount) = i.status else fail NothingDue` and `{ ..i, status: Paid { ... } }`, `checkout` by a record pattern, the `Discount` policy ADT in cart.ren, the shop's first tests, its native builds checked against `ren run`; the ledger's `get` with `orelse`; examples.t promoted; the docs review's findings (Zed's grammar `rev`, README's status, roadmap, `if found is`, §2 and the tour's rule, handlers.md, language.md's "What Ren has today", this section's grammar, tests and step 7 text, the Core paragraph, rbtree's `Node`, parser.ml's header, deps.md's example, the bank and Zed READMEs, differential.py over bench/data); the spec review's unrecorded items in "Where the data stage may differ" | the soundness review's compiler fixes; the owner's items (language.md's stale design text, foundations.md's Staging item 5 and decision 14); the open items above: a recursive `match` against descriptions, the walks' boxing, `ren check`'s blind spot |
+| 8 (examples and docs) | 3545731 (examples and docs) | the review's spec and docs lenses (Step 8, as built): the bank's `transfer` with `let { from, to, amount } = t` and punned `Sent { amount, to }`, `Movement.change` with an or-pattern, a test taking entries apart in a block's parameter; the shop's `Paid { amount, charge }`, `pay` with `let Due(amount) = i.status else fail NothingDue` and `{ ..i, status: Paid { ... } }`, `checkout` by a record pattern, the `Discount` policy ADT in cart.ren, the shop's first tests, its native builds checked against `ren run`; the ledger's `get` with `orelse`; examples.t promoted; the docs review's findings (Zed's grammar `rev`, README's status, roadmap, `if found is`, §2 and the tour's rule, handlers.md, language.md's "What Ren has today", this section's grammar, tests and step 7 text, the Core paragraph, rbtree's `Node`, parser.ml's header, deps.md's example, the bank and Zed READMEs, differential.py over bench/data); the spec review's unrecorded items in "Where the data stage may differ" | the soundness review's compiler fixes; the owner's items (language.md's stale design text, foundations.md's Staging item 5 and decision 14); the open items above: a recursive `match` against descriptions, the walks' boxing, `ren check`'s blind spot |
+| 8 (compiler fixes) | this commit | the soundness review's seven findings, fixed at their causes (Step 8, as built, "The soundness review's fixes"): a variant type in a dependency's type (Core Lint's `instance_of` and `equal` at two `Variant`s; descriptors that keep the variant, `Known (Variant ...)` and Core's `Applied_variant`, natively `D_variant` and `Of_variant`, `REN_D_NAMED` with the constructor's tag in `var`, so a dependency's key at `Order.Placed` isn't `Order`'s, which the interpreter got wrong; Core Lint's rows compared as sets; a generic handler's descriptors read before its captures, a debug Perceus Mem Lint failure from before the stage); `let ... else` in a handler's state (its `else` checked against the instance's type; a state's `Match` ending in the instance through Core Lint's `handler_end` and to_mem.ml's `result_layout`); `todo(x)` the panic at the call's type; Exhaust's alternatives inside another or-pattern's checked in the alternative they're in; the stateless help's `with c in Chan.send(1)`, and the type written where the arguments don't fix it; an update's record-or-constructor help, and the grammar's comment, the base's type; a handler given a small record, tuple or option boxed in a release build's description (`word_only`, from before the stage); test_data.ml's s8 tests, fourteen; bench/data's review_keys, review_state, review_state_panic and review_todo_panic in build.t's `same`, `release`, `tcc_same` and `release_naive` loops; the review's reproducers and batch scripts run again, each the same as `ren run` | a generic function whose `uses` names a dependency at a type built from its type parameter, refused at its callers (medium, from before the stage); a `with` doesn't fix its body's open type arguments (low, as specified); an update from a variant type into a record type its constructor's name shadows can't be written (low); the owner's items and the open items above |
 
 Step 1's choices, where the sections above are silent:
 

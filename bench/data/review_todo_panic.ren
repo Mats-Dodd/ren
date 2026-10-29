@@ -1,0 +1,11 @@
+// Data stage, step 8, the review's fixes: `todo` called, `todo(f(1))`,
+// is reached before the call, so it panics there and its arguments are
+// never evaluated, as `ren run` does (lower.ml, [call]).
+
+fn said(n: Int) -> Int uses Console =
+  print("never")
+  n
+
+fn main() uses Console =
+  print("before")
+  print(todo(said(1)) + 1)

@@ -926,13 +926,23 @@ let no_struct_elements cx loc (t : Ty.ty) =
   in
   if cx.release then go t
 
+(* The tag of the sum [p]'s constructor [c], its place among them. *)
+let variant_tag cx (p : Path.t) c =
+  match Hashtbl.find_opt cx.types p with
+  | Some { Iface.body = Sum cs; _ } ->
+      let rec go i = function
+        | [] -> bug ("no constructor " ^ c)
+        | (k : Iface.ctor) :: _ when k.cname = c -> i
+        | _ :: ks -> go (i + 1) ks
+      in
+      go 0 cs
+  | _ -> bug "a variant type of what isn't a sum"
+
 (* The program's descriptor of [t], static data, by its index: a closed
    type's, whose type variables are ones inference left undecided, or,
    with [template], a field's type in a declaration, whose [Var i] is the
    type's [i]-th parameter. *)
 let rec static_desc cx loc ~template (t : Ty.ty) : int =
-  (* a variant type is described as its sum *)
-  let t = Ty.erase_variants t in
   (* what a descriptor describes is a word, or in one *)
   if not template then no_struct_in cx loc t;
   match Hashtbl.find_opt cx.descs (template, t) with
@@ -959,13 +969,16 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         (* a description kept in a record, an array or a generic type's
            value: which handler it is, and what it captured, it keeps *)
         | Impl _ -> (D_handler, [])
-        | Variant _ -> bug "a variant type, erased above"
+        (* a variant type is described as its sum, but for its constructor
+           (mem.ml, [D_variant]) *)
+        | Variant (p, c, args) ->
+            (D_variant (decl_id cx loc p, variant_tag cx p c), List.map arg args)
         | Fun _ | Error -> bug "a descriptor of what has none"
       in
       let counted =
         match kind with
         | D_str | D_bytes | D_array | D_tuple | D_errors | D_handler -> true
-        | D_named k -> (
+        | D_named k | D_variant (k, _) -> (
             match (Hashtbl.find cx.decl_bodies k).dbody with
             | Record_decl _ -> true
             | Sum_decl cs -> List.exists (fun (_, _, ts) -> ts <> []) cs
@@ -1653,10 +1666,20 @@ let rec desc fs env (d : C.desc) : atom =
         else if Ty.is_tuple p then Of_tuple
         else Of_decl (decl_id fs.cx fs.here p)
       in
-      let r = owned fs env "$desc" Desc (Runtime (New_desc how, args, None)) in
-      (* the runtime counts again what it keeps *)
-      List.iter (drop fs env) args;
-      r
+      new_desc fs env how args
+  | Applied_variant (p, c, ds) ->
+      no_struct_elements fs.cx fs.here (Con (p, List.mapi (fun i _ -> Ty.Var i) ds));
+      let args = List.map (desc fs env) ds in
+      new_desc fs env
+        (Of_variant (decl_id fs.cx fs.here p, variant_tag fs.cx p c))
+        args
+
+(* A descriptor built at run time, [how], of [args], owned. *)
+and new_desc fs env how args =
+  let r = owned fs env "$desc" Desc (Runtime (New_desc how, args, None)) in
+  (* the runtime counts again what it keeps *)
+  List.iter (drop fs env) args;
+  r
 
 (* A requirement's dictionary, owned: the descriptor of its type. One of
    a type with that operator of its own, `Instant`'s `sub`, would need its
@@ -1665,7 +1688,8 @@ let rec desc fs env (d : C.desc) : atom =
 let dict fs env (d : C.dict) : atom =
   match d with
   | Dict_param v -> read fs env v
-  | Derived { req; dty = Con (p, _); _ }
+  (* a variant type's operators are its sum's *)
+  | Derived { req; dty = Con (p, _) | Variant (p, _, _); _ }
     when Hashtbl.mem fs.cx.own_ops (p, req) ->
       unsupported fs.here
         (sprintf "a value of `%s`, which has an operator of its own" p.name)
@@ -2030,7 +2054,7 @@ and expr_at fs env (e : C.expr) : atom =
       raise_error fs env err;
       dummy fs env (lay e.ty)
   | Handle { body; value; on_value; error; on_error } ->
-      let r = fresh fs "$handled" (lay e.ty) in
+      let r = fresh fs "$handled" (result_layout fs e) in
       emit fs (Decl r);
       let l = label fs in
       let err = fresh fs error.name Boxed in
@@ -2043,7 +2067,7 @@ and expr_at fs env (e : C.expr) : atom =
       let body =
         block fs (fun () ->
             let x = expr fs inner body in
-            let m = fresh fs value.name (lay value.ty) in
+            let m = fresh fs value.name (result_layout fs body) in
             emit fs (Let (m, Atom x));
             consume inner x;
             own env m;
@@ -2058,6 +2082,12 @@ and expr_at fs env (e : C.expr) : atom =
                 own env err;
                 let y = expr fs (bind env error err) on_error in
                 consume env y;
+                (* in a handler's state, it fails with the error (lower.ml) *)
+                let y =
+                  if atom_layout y <> r.layout && not (C.ends_in_instance on_error)
+                  then dummy fs env r.layout
+                  else y
+                in
                 emit fs (Set (r, y));
                 drop fs env (Var err)))
       in
@@ -3268,6 +3298,9 @@ and install ?(site = true) fs env (e : C.expr) ~ev ~outer ~deps ~handler
 and handler fs env (e : C.expr) ~ev ~captures body =
   let cx = fs.cx in
   let values = List.map (read fs env) captures in
+  (* what it captures is kept in its object's words: a [Struct]'s type,
+     a small record a handler is given, is kept boxed instead *)
+  List.iter (fun x -> word_only cx (atom_layout x)) values;
   let hdeps =
     match e.ty with
     | Impl { deps; _ } -> List.map (fun (d : Ty.dep) -> dep_id cx d.dpath) deps
@@ -3324,6 +3357,17 @@ and handler fs env (e : C.expr) ~ev ~captures body =
   let body_block =
     block code (fun () ->
         let cenv = { vars = Vars.empty; frames = [ frame ] } in
+        (* the descriptors first: a capture of a type variable's type is
+           counted by its descriptor, which Perceus reads where it's
+           bound *)
+        code.words <-
+          (-1, body_desc)
+          :: List.mapi
+               (fun i (k, (d : var)) ->
+                 ( k,
+                   let_var code d.name Desc
+                     (Field (Var self, ncaps + i + 1, size)) ))
+               words;
         let cenv =
           List.fold_left
             (fun cenv (i, ((v : C.var), x)) ->
@@ -3333,14 +3377,6 @@ and handler fs env (e : C.expr) ~ev ~captures body =
             cenv
             (List.mapi (fun i c -> (i, c)) (List.combine captures values))
         in
-        code.words <-
-          (-1, body_desc)
-          :: List.mapi
-               (fun i (k, (d : var)) ->
-                 ( k,
-                   let_var code d.name Desc
-                     (Field (Var self, ncaps + i + 1, size)) ))
-               words;
         let cenv = bind cenv ev outer in
         let r = expr code cenv body in
         consume cenv r;
@@ -3644,6 +3680,12 @@ and global_value fs env (e : C.expr) p =
   own env t;
   Var t
 
+(* The layout of what [e] gives: in a handler's code, one that ends in its
+   instance gives what the `with`'s body does, a word (see [instance]). *)
+and result_layout fs (e : C.expr) =
+  if fs.handler <> None && C.ends_in_instance e then Word (-1)
+  else layout_at fs e.loc e.ty
+
 (* A `match`: each arm's body is a join point, its pattern's variables
    declared before the tests that set them. A subject of a sum type is
    switched on by its tag, each case trying in order only the arms that
@@ -3652,7 +3694,7 @@ and global_value fs env (e : C.expr) p =
    parts are matched against its parts. *)
 and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
   let cx = fs.cx in
-  let r = fresh fs "$match" (layout_at fs e.loc e.ty) in
+  let r = fresh fs "$match" (result_layout fs e) in
   emit fs (Decl r);
   let parts =
     match s.kind with
@@ -3959,6 +4001,14 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
                       List.iter (fun (_, m) -> own env m) vars;
                       let y = expr fs (arm_env vars) a.body in
                       consume env y;
+                      (* in a handler's state, an arm that ends in no
+                         instance leaves (Core.ends_in_instance), so what
+                         it gives is never set *)
+                      let y =
+                        if atom_layout y <> r.layout && not (C.ends_in_instance a.body)
+                        then dummy fs env r.layout
+                        else y
+                      in
                       emit fs (Set (r, y));
                       List.iter (fun (_, m) -> drop fs env (Var m)) vars)) ))
           !joins)

@@ -35,6 +35,9 @@ type desc =
           parameter it was given that in (see [fn_def]) *)
   | Applied of Path.t * desc list
       (** a named type, given its arguments: [Option<T>] *)
+  | Applied_variant of Path.t * string * desc list
+      (** a variant type of a generic sum, given the sum's arguments:
+          [Tree.Node<T>] *)
   | Errs of desc_row  (** an error set as a type argument *)
 
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)
@@ -462,7 +465,9 @@ type fn_def = {
 type method_call = {
   mdep : Path.t;  (** the dependency whose operation it calls *)
   mrecv : string;  (** the receiver, as written, `c` *)
-  mcall : string;  (** the call as the help writes it, `Area.area()` *)
+  mcall : string;
+      (** the `with` that makes the call, as the help writes it, `with c in
+          Area.area()` *)
   mloc : Loc.t;  (** the [With]'s *)
   mop : Loc.t;  (** the operation's name, where the error points *)
 }
@@ -589,6 +594,13 @@ val children : expr -> expr list
    or a call that can fail that no [Handle] in it catches. A lambda's
    body fails only when it's called. *)
 val can_fail : expr -> bool
+
+(* Whether a handler's body, or part of one, ends in its [Instance]: one
+   in its [Let]s', [Seq]s' and [Covered]s' last part, a [Handle]'s body or
+   an arm of a [Match]. The state's `let PATTERN = value` is a [Match]
+   whose arm that binds it is the rest of the state; with an `else`, its
+   other arm leaves, and ends in none (lower.ml, [take_apart]). *)
+val ends_in_instance : expr -> bool
 
 (* Whether evaluating it can stop at a cancel (compiler.md, "Stage 11a",
    "Cancellation"): it makes a call, a dependency's or a function's, or

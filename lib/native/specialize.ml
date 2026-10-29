@@ -279,6 +279,8 @@ and map_desc f (d : C.desc) : C.desc =
   | Known _ -> d
   | Param v -> Param (f v)
   | Applied (p, ds) -> Applied (p, List.map (map_desc f) ds)
+  | Applied_variant (p, c, ds) ->
+      Applied_variant (p, c, List.map (map_desc f) ds)
   | Errs r ->
       Errs
         {
@@ -623,6 +625,7 @@ let key_label (k : C.dkey) : Ty.label =
     match d with
     | Known t -> t
     | Applied (p, ds) -> Con (p, List.map ty ds)
+    | Applied_variant (p, c, ds) -> Variant (p, c, List.map ty ds)
     | Param _ | Errs _ -> Error
   in
   { name = Ty.dep_label k.kpath; payload = List.map ty k.kargs }
@@ -639,16 +642,24 @@ let rec desc env (d : C.desc) : C.desc =
         ->
           Known (List.nth s.tys (-1 - v.id))
       | Param v -> Param (cvar env v)
-      | Applied (p, ds) ->
+      | Applied (p, ds) -> (
           let ds = List.map (desc env) ds in
-          let known =
-            List.filter_map (function C.Known t -> Some t | _ -> None) ds
-          in
-          if List.length known = List.length ds then Known (Con (p, known))
-          else Applied (p, ds)
+          match known ds with
+          | Some ts -> Known (Con (p, ts))
+          | None -> Applied (p, ds))
+      | Applied_variant (p, c, ds) -> (
+          let ds = List.map (desc env) ds in
+          match known ds with
+          | Some ts -> Known (Variant (p, c, ts))
+          | None -> Applied_variant (p, c, ds))
       | Errs r -> (
           let row = errs_of_desc env r in
           match row with Some t -> Known t | None -> Errs r))
+
+(* The types descriptors describe, if each is known. *)
+and known ds =
+  let ts = List.filter_map (function C.Known t -> Some t | _ -> None) ds in
+  if List.length ts = List.length ds then Some ts else None
 
 (* An error set's descriptor, closed, as the type it describes, if all
    it holds is known. *)

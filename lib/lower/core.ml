@@ -71,6 +71,9 @@ type desc =
           parameter it was given that in (see [fn_def]) *)
   | Applied of Path.t * desc list
       (** a named type, given its arguments: [Option<T>] *)
+  | Applied_variant of Path.t * string * desc list
+      (** a variant type of a generic sum, given the sum's arguments:
+          [Tree.Node<T>] *)
   | Errs of desc_row  (** an error set as a type argument *)
 
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)
@@ -502,7 +505,9 @@ type fn_def = {
 type method_call = {
   mdep : Path.t;  (** the dependency whose operation it calls *)
   mrecv : string;  (** the receiver, as written, `c` *)
-  mcall : string;  (** the call as the help writes it, `Area.area()` *)
+  mcall : string;
+      (** the `with` that makes the call, as the help writes it, `with c in
+          Area.area()` *)
   mloc : Loc.t;  (** the [With]'s *)
   mop : Loc.t;  (** the operation's name, where the error points *)
 }
@@ -610,20 +615,21 @@ let rec describe tys (t : Ty.ty) =
       dtail = r.tail;
     }
   in
-  (* a variant type has its sum's descriptor: a generic function shows,
-     compares and hashes one as the sum (compiler.md, "Data stage",
-     "Variant types") *)
-  let t = Ty.as_sum t in
+  (* a variant type keeps its constructor: it's a type of its own, so a
+     dependency's key at `Order.Placed` isn't one at `Order`; a walk
+     shows, compares and hashes one as the sum (walk.ml, shown.ml;
+     compiler.md, "Data stage", "Variant types" and "Step 8, as built") *)
   match t with
   | _ when not (has_param (List.length tys) t) -> Known t
   | Var n -> Param (List.nth tys n)
   | Con (p, args) -> Applied (p, List.map (describe tys) args)
+  | Variant (p, c, args) -> Applied_variant (p, c, List.map (describe tys) args)
   | Fun _ ->
       (* a type variable never stands for a block (Core Lint), so no
          function type with one of them in it is described *)
       invalid_arg "Core.describe: a function type with type variables"
   | Errors e -> Errs (row e)
-  | Variant _ (* made the sum above *) | Impl _ | Error -> Known t
+  | Impl _ | Error -> Known t
 
 (* The key of [d], a dependency of a type written in the type variables
    of a function whose hidden type parameters are [tys]. *)
@@ -685,7 +691,7 @@ let dict_for tys own req (t : Ty.ty) =
 let rec desc_vars = function
   | Known _ -> []
   | Param v -> [ v ]
-  | Applied (_, ds) -> List.concat_map desc_vars ds
+  | Applied (_, ds) | Applied_variant (_, _, ds) -> List.concat_map desc_vars ds
   | Errs e -> desc_row_vars e
 
 and desc_row_vars r =
@@ -777,6 +783,15 @@ let rec can_fail (e : expr) =
   | Handle { on_value; on_error; _ } -> can_fail on_value || can_fail on_error
   | Lambda _ | Handler _ -> false
   | _ -> List.exists can_fail (children e)
+
+let rec ends_in_instance (e : expr) =
+  match e.kind with
+  | Instance _ -> true
+  | Let (_, _, b) | Seq (_, b) | Covered { after = b; _ } | Handle { body = b; _ }
+    ->
+      ends_in_instance b
+  | Match (_, arms) -> List.exists (fun (a : arm) -> ends_in_instance a.body) arms
+  | _ -> false
 
 let rec can_stop (e : expr) =
   match e.kind with
@@ -909,6 +924,9 @@ let rec show_desc = function
   | Applied (p, []) -> Path.full p
   | Applied (p, ds) ->
       Path.full p ^ "<" ^ String.concat ", " (List.map show_desc ds) ^ ">"
+  | Applied_variant (p, c, ds) ->
+      Path.full p ^ "." ^ c ^ "<" ^ String.concat ", " (List.map show_desc ds)
+      ^ ">"
   | Errs _ -> "!"
 
 (* A dependency's key, `Log<Int>`, or one that isn't generic, its path. *)

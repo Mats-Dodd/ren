@@ -1,0 +1,64 @@
+// Data stage, step 8, the review's fixes: patterns in a handler's state,
+// `let ... else` among them, its `else` failing to start or panicking
+// (Infer_handlers; Core Lint and to_mem.ml, the state a `match` that
+// ends in the instance), and a handler given a small record, a tuple or
+// an option, which a release build keeps boxed in its description
+// (to_mem.ml, [handler]), and a generic one given a value, whose
+// descriptor is read before it. Each native build prints what `ren run`
+// does.
+
+dep Area =
+  area: fn() -> Str
+
+type Shape =
+  | Rect { w: Int, h: Int }
+  | Dot
+
+type Pt = { x: Int, y: Int }
+
+handler sized(s: Shape, name: Option<Str>) for Area ! NoName | NotRect uses Console =
+  let Some(n) = name else fail NoName
+  let Rect { w, h } = s else
+    print("not a rect")
+    fail NotRect
+  let (a, b) = (w * h, n.concat("!"))
+  area() => b.concat(show(a))
+
+handler logged(name: Option<Str>) for Area uses Console =
+  let Some(n) = name else todo
+  finally(r) =>
+    print("finally ".concat(n))
+    try r
+  area() => n
+
+handler at(p: Pt, q: (Str, Int)) for Area =
+  let { x, y } = p
+  let (s, n) = q
+  area() => s.concat(show(x + y + n))
+
+dep Store<T> =
+  get: fn() -> T
+
+handler giving<T>(v: T) for Store<T> =
+  get() => v
+
+fn area_of(s: Shape, name: Option<Str>) -> Str uses Console =
+  match attempt with sized(s, name) in Area.area()
+    Ok(a) => a
+    Err(NoName) => "no name"
+    Err(NotRect) => "not rect"
+
+fn main() uses Console =
+  print(area_of(Rect { w: 2, h: 3 }, Some("r")))
+  print(area_of(Dot, Some("d")))
+  print(area_of(Dot, None))
+  with logged(Some("l")) in
+    print(Area.area())
+  let d: Area = at(Pt { x: 1, y: 2 }, ("p", 3))
+  print(d.area())
+  with giving("s") in
+    let s: Str = Store.get()
+    print(s)
+  with giving(Pt { x: 4, y: 5 }) in
+    let p: Pt = Store.get()
+    print(p)

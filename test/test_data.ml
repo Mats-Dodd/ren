@@ -11,6 +11,7 @@
      s4  variant types, `Order.Placed`
      s5  the errors that teach the model, and `todo`
      s6  descriptions: an operation called only on a stateless handler
+     s8  the review's fixes (compiler.md, "Step 8, as built")
 
    Step 7, the layout fixes, changes no output: its programs are
    bench/data's kernels (bench/build.t), and Mem Lint checks them.
@@ -2635,4 +2636,394 @@ test "an abandoned cart is refused" =
 
     3 passed
     [exit 0]
+    |}]
+
+(* ---- s8: the review's fixes (compiler.md, "Data stage", "Step 8, as
+   built") ---- *)
+
+let%expect_test "[s8 accept] a variant type in a dependency's operation, called on a description" =
+  run
+    {|
+type Order =
+  | Placed { id: Int, total: Int }
+  | Draft
+
+dep Pricing =
+  reprice: fn(p: Order.Placed) -> Int
+
+handler fixed() for Pricing =
+  reprice(p) => p.total + 1
+
+fn main() uses Console =
+  match Placed { id: 1, total: 5 }
+    Placed { .. } as p =>
+      let d: Pricing = fixed()
+      print(d.reprice(p))
+      with fixed() in
+        print(Pricing.reprice(p))
+    Draft => ()
+|};
+  [%expect {|
+    6
+    6
+    ()
+    |}]
+
+let%expect_test "[s8 accept] a generic dependency at a variant type" =
+  run
+    {|
+type Order =
+  | Placed { id: Int, total: Int }
+  | Draft
+
+dep Store<T> =
+  get: fn() -> Option<T>
+
+handler empty<T>() for Store<T> =
+  get() => None
+
+handler one(p: Order.Placed) for Store<Order.Placed> =
+  get() => Some(p)
+
+fn main() uses Console =
+  with empty() in
+    let x: Option<Order.Placed> = Store.get()
+    print(x)
+  match Placed { id: 1, total: 5 }
+    Placed { .. } as p =>
+      with one(p) in
+        let y: Option<Order.Placed> = Store.get()
+        print(y)
+    Draft => ()
+|};
+  [%expect {|
+    None
+    Some(Placed { id: 1, total: 5 })
+    ()
+    |}]
+
+let%expect_test "[s8 accept] a dependency at a variant type isn't one at its sum" =
+  (* the key keeps the variant: `Store.get()` at `Order.Placed` is the
+     outer handler's, never the inner `Store<Order>`'s `Draft`, in a
+     generic function's key too *)
+  run
+    {|
+type Order =
+  | Placed { id: Int, total: Int }
+  | Draft
+
+type Tree<T> =
+  | Node { left: Tree<T>, item: T, right: Tree<T> }
+  | Leaf
+
+dep Store<T> =
+  get: fn() -> T
+
+handler giving<T>(v: T) for Store<T> =
+  get() => v
+
+fn total() -> Int uses Store<Order.Placed> =
+  let p: Order.Placed = Store.get()
+  p.total
+
+fn top<T>() -> T uses Store<T> = Store.get()
+
+fn both<T>(n: Tree.Node<T>) -> (T, Tree<T>) =
+  let l: Store<Tree<T>> = giving(Leaf)
+  with giving(n) in
+    with l in
+      let m: Tree.Node<T> = top()
+      let t: Tree<T> = top()
+      (m.item, t)
+
+fn main() uses Console =
+  match Placed { id: 1, total: 5 }
+    Placed { .. } as p =>
+      with giving(p) in
+        with giving(Draft) in
+          print(total())
+          let q: Order.Placed = top()
+          print(q.id)
+          let o: Order = top()
+          print(o)
+    Draft => ()
+  match Node { left: Leaf, item: 7, right: Leaf }
+    Node { .. } as n => print(both(n))
+    Leaf => ()
+|};
+  [%expect {|
+    5
+    1
+    Draft
+    (7, Leaf)
+    ()
+    |}]
+
+let%expect_test "[s8 accept] `let ... else` and other patterns in a handler's state" =
+  run
+    {|
+dep Area =
+  area: fn() -> Str
+
+type Shape =
+  | Rect { w: Int, h: Int }
+  | Dot
+
+handler sized(s: Shape, name: Option<Str>) for Area ! NoName | NotRect uses Console =
+  let Some(n) = name else fail NoName
+  let Rect { w, h } = s else
+    print("not a rect")
+    fail NotRect
+  let (a, b) = (w * h, n.concat("!"))
+  area() => b.concat(show(a))
+
+fn area_of(s: Shape, name: Option<Str>) -> Str uses Console =
+  match attempt with sized(s, name) in Area.area()
+    Ok(a) => a
+    Err(NoName) => "no name"
+    Err(NotRect) => "not rect"
+
+fn main() uses Console =
+  print(area_of(Rect { w: 2, h: 3 }, Some("r")))
+  print(area_of(Dot, Some("d")))
+  print(area_of(Dot, None))
+|};
+  [%expect {|
+    r!6
+    not a rect
+    not rect
+    no name
+    ()
+    |}]
+
+let%expect_test "[s8 reject] a handler's state whose `let ... else` reaches its `todo`" =
+  run_error
+    {|
+dep Area =
+  area: fn() -> Str
+
+handler h(o: Option<Str>) for Area =
+  let Some(n) = o else todo
+  area() => n
+
+fn main() uses Console =
+  with h(Some("t")) in
+    print(Area.area())
+  with h(None) in
+    print(Area.area())
+|};
+  [%expect {|
+    t
+    error: panic: reached a `todo`
+      ┌─ test.ren:5:24
+    5 │   let Some(n) = o else todo
+      │                        ^^^^
+    |}]
+
+let%expect_test "[s8 accept] `let ... else` in a test, and in a test handler's state" =
+  test
+    {|
+pub dep Area =
+  area: fn() -> Str
+
+fn main() = ()
+
+test handler fake(o: Option<Str>) for Area =
+  let Some(n) = o else todo
+  area() => n
+
+test "in a test" =
+  let Some(n) = Some(1) else todo
+  assert n == 1
+
+test "in a test handler's state" =
+  with fake(Some("a")) in
+    assert Area.area() == "a"
+|};
+  [%expect {|
+    test.ren
+      ✓ in a test
+      ✓ in a test handler's state
+
+    2 passed
+    [exit 0]
+    |}]
+
+let%expect_test "[s8 reject] `todo` called panics before the call" =
+  (* the callee is evaluated first, so its arguments never are *)
+  run_error
+    {|
+fn said(n: Int) -> Int uses Console =
+  print("never")
+  n
+
+fn main() uses Console =
+  print("before")
+  print(todo(said(1)) + 1)
+|};
+  [%expect {|
+    before
+    error: panic: reached a `todo`
+      ┌─ test.ren:7:9
+    7 │   print(todo(said(1)) + 1)
+      │         ^^^^
+    |}]
+
+let%expect_test "[s8 accept] an alternative inside another is checked in the alternative it's in" =
+  (* `B(s)` in the first alternative matches `(Some(B(2)), 1)`, which
+     the second alternative, after it, doesn't take from it *)
+  run
+    {|
+type E =
+  | A(Int)
+  | B(Int)
+
+fn f(o: (Option<E>, Int)) -> Int =
+  match o
+    (Some(A(s) | B(s)), 1) | (Some(B(s)), _) => s
+    _ => 0
+
+fn main() uses Console =
+  print(f((Some(B(2)), 1)))
+  print(f((Some(B(3)), 0)))
+  print(f((Some(A(4)), 0)))
+|};
+  [%expect {|
+    2
+    3
+    0
+    ()
+    |}]
+
+let%expect_test "[s8 reject] an alternative inside another that one before it covers" =
+  check_error
+    {|
+type E =
+  | A(Int)
+  | B(Int)
+
+fn g(o: Option<E>) -> Int =
+  match o
+    Some(A(n)) | Some(B(n) | A(n)) => n
+    None => 0
+
+fn main() = ()
+|};
+  [%expect {|
+    error: this alternative never matches
+      ┌─ test.ren:7:30
+    7 │     Some(A(n)) | Some(B(n) | A(n)) => n
+      │                              ^^^^
+      help: the alternatives before it, or the arms above, already match all of it
+    |}]
+
+let%expect_test "[s8 reject] a generic description's `with` is written as its call is" =
+  (* `Chan.send(1)`, the dependency's name alone, and where the arguments
+     don't fix its type, the type written where the value goes *)
+  run_error
+    {|
+import sync.{Chan}
+
+fn main() uses Console, Async =
+  let c: Chan<Int> uses Async = sync.channel(4)
+  c.send(1)
+  print(c.recv())
+|};
+  [%expect {|
+    error: `c` may be a description of `sync.channel`, which keeps state, so it isn't called as a method
+      ┌─ test.ren:5:5
+    5 │   c.send(1)
+      │     ^^^^
+      = a call as a method makes a fresh instance, so its state would start again at each call
+      help: install it: `with c in Chan.send(1)`
+
+    error: `c` may be a description of `sync.channel`, which keeps state, so it isn't called as a method
+      ┌─ test.ren:6:11
+    6 │   print(c.recv())
+      │           ^^^^
+      = a call as a method makes a fresh instance, so its state would start again at each call
+      help: install it: `let recv: Option<Int> = with c in Chan.recv()`
+    |}]
+
+let%expect_test "[s8 accept] the generic description's help, pasted in, checks" =
+  types
+    {|
+import sync.{Chan}
+
+fn main() uses Console, Async =
+  let c: Chan<Int> uses Async = sync.channel(4)
+  with c in Chan.send(1)
+  let recv: Option<Int> = with c in Chan.recv()
+  print(recv)
+|};
+  [%expect {| fn main() uses Async, Console |}]
+
+let%expect_test "[s8 reject] an update's target, a record and a constructor, is refused with an update's help" =
+  (* left out, an update's target is its base's type *)
+  check_error
+    {|
+type Rect = { w: Int, h: Int }
+
+type Shape =
+  | Rect { w: Int, h: Int }
+  | Dot
+
+fn f(r: Rect) -> Rect = Rect { ..r, w: 1 }
+
+fn main() = ()
+|};
+  [%expect {|
+    error: `Rect` is a record type here, and a constructor of `Shape` too
+      ┌─ test.ren:7:25
+    7 │ fn f(r: Rect) -> Rect = Rect { ..r, w: 1 }
+      │                         ^^^^
+      help: write `Shape.Rect { ..base }` for the constructor, or `{ ..base }` with the type left out for the base's own type
+    |}]
+
+let%expect_test "[s8 accept] the update's help, pasted in, checks" =
+  types
+    {|
+type Rect = { w: Int, h: Int }
+
+type Shape =
+  | Rect { w: Int, h: Int }
+  | Dot
+
+fn f(r: Rect) -> Rect = { ..r, w: 1 }
+
+fn g(s: Shape) -> Shape =
+  match s
+    Shape.Rect { .. } as q => Shape.Rect { ..q, w: 1 }
+    Dot => Dot
+
+fn main() = ()
+|};
+  [%expect {|
+    fn f(r: Rect) -> Rect
+    fn g(s: Shape) -> Shape
+    fn main()
+    |}]
+
+let%expect_test "[s8 accept] a handler given a small record, a tuple and an option" =
+  (* natively, a release build keeps their types boxed in its
+     description (bench/data/review_state.ren) *)
+  run
+    {|
+dep Area =
+  area: fn() -> Str
+
+type Pt = { x: Int, y: Int }
+
+handler at(p: Pt, q: (Str, Int), o: Option<Str>) for Area =
+  let { x, y } = p
+  let (s, n) = q
+  area() => s.concat(show(x + y + n)).concat(o orelse "")
+
+fn main() uses Console =
+  let d: Area = at(Pt { x: 1, y: 2 }, ("p", 3), Some("!"))
+  print(d.area())
+|};
+  [%expect {|
+    p6!
+    ()
     |}]
