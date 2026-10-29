@@ -1058,8 +1058,11 @@ let%expect_test "a timeout's cancel, and a failure while cancelled, are recorded
     [
       ( "main.ren",
         {|
+// the margins are wide, since a real timer can wake tens of
+// milliseconds late (macOS coalesces them): a's nap ends in its own
+// poll, well before the timeout's
 fn nap(name: Str, ms: Int) uses Console, Clock, Async =
-  let r = attempt Async.timeout(Duration.ms(20)) fn() =>
+  let r = attempt Async.timeout(Duration.ms(200)) fn() =>
     Clock.sleep(Duration.ms(ms))
   match r
     Ok(_) => print(name.concat(" in time"))
@@ -1070,7 +1073,7 @@ fn fails(ms: Int) ! Broke uses Clock =
   fail Broke
 
 fn main() ! Broke uses Console, Clock, Async =
-  let _ = Async.both(fn() => nap("a", 5), fn() => nap("b", 60))
+  let _ = Async.both(fn() => nap("a", 5), fn() => nap("b", 2000))
   let _ = try Async.both(fn() => try fails(5), fn() => try fails(5))
   print("not reached")
 |} );
@@ -1086,7 +1089,7 @@ fn main() ! Broke uses Console, Clock, Async =
       = from the task main/main:2
     # ren journal 2 · main.ren · deps: Clock Console
     1 main/main:0 Clock.sleep(5) …
-    2 main/main:1 Clock.sleep(60) …
+    2 main/main:1 Clock.sleep(2000) …
     3 poll main/main:0
     4 main/main:0 →
     5 main/main:0 Console.write("a in time")

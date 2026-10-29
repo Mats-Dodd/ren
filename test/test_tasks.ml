@@ -639,9 +639,12 @@ let%expect_test "[s2 accept] a task beside a `with` is cancelled when its body e
   (* decision 7's background work: the ticker is spawned in the `with`'s
      body into the scope outside it, so when the body ends the `with`
      cancels it, then runs its `finally`: three ticks, at 100, 200 and
-     300 ms, then the body ends at 350 *)
+     300 ms, then the body ends at 350. In virtual time, since a real
+     timer can wake tens of milliseconds late (macOS coalesces them) *)
   run
     {|
+import sim
+
 dep Ticks =
   tick: fn()
 
@@ -652,7 +655,12 @@ handler ticks() for Ticks uses Console =
     try r
   tick() => n += 1
 
-fn main() uses Console, Async, Clock =
+fn main() uses Console =
+  with sim.scheduler(1) in
+    with sim.clock() in
+      ticking()
+
+fn ticking() uses Console, Async, Clock =
   Async.scope fn(s) =>
     with ticks() in
       s.spawn fn() =>
