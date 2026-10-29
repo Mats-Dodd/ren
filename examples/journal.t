@@ -329,7 +329,9 @@ A journal is version 2 (compiler.md, "Journal version 2"): each entry
 names the task that made it, a call that its task waited in is two
 lines, its start, which ends `…`, and what it gave, after the poll that
 woke it, and each poll that woke tasks is a line. Here a level of
-recipes runs at once, as the `just`'s will, each sleeping a while first:
+recipes runs at once, as the `just`'s do, each sleeping a while first, a
+tenth of a second apart, so the order they end in is the same each run;
+`Proc.run` waits for its program as `Clock.sleep` waits:
 
   $ cat > recipes.ren <<'END'
   > type Recipe = { line: Str, takes: Int }
@@ -344,9 +346,9 @@ recipes runs at once, as the `just`'s will, each sleeping a while first:
   > fn main() ! ProcError | Failed(line: Str) uses Proc, Console, Clock, Async, Os =
   >   let slow = Os.args().len() > 0
   >   let level = [
-  >     Recipe { line: "true", takes: 60 },
-  >     Recipe { line: if slow then "false" else "exit 0", takes: 10 },
-  >     Recipe { line: "test 1 = 1", takes: 30 }
+  >     Recipe { line: "true", takes: 300 },
+  >     Recipe { line: if slow then "false" else "exit 0", takes: 100 },
+  >     Recipe { line: "test 1 = 1", takes: 200 }
   >   ]
   >   try Async.each(level, max: 8) fn(r) => try run(r)
   >   print("all ran")
@@ -356,25 +358,31 @@ recipes runs at once, as the `just`'s will, each sleeping a while first:
   # ren journal 2 · recipes.ren · deps: Clock Console Os Proc
   1 main Os.args() → []
   2 main/main:0 Console.error("true")
-  3 main/main:0 Clock.sleep(60) …
+  3 main/main:0 Clock.sleep(300) …
   4 main/main:1 Console.error("exit 0")
-  5 main/main:1 Clock.sleep(10) …
+  5 main/main:1 Clock.sleep(100) …
   6 main/main:2 Console.error("test 1 = 1")
-  7 main/main:2 Clock.sleep(30) …
+  7 main/main:2 Clock.sleep(200) …
   8 poll main/main:1
   9 main/main:1 →
-  10 main/main:1 Proc.run("sh", ["-c", "exit 0"]) → Ok(0)
-  11 main/main:1 Console.write("ran exit 0")
-  12 poll main/main:2
-  13 main/main:2 →
-  14 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"]) → Ok(0)
-  15 main/main:2 Console.write("ran test 1 = 1")
-  16 poll main/main:0
-  17 main/main:0 →
-  18 main/main:0 Proc.run("sh", ["-c", "true"]) → Ok(0)
-  19 main/main:0 Console.write("ran true")
-  20 main Console.write("all ran")
-  21 main exit 0
+  10 main/main:1 Proc.run("sh", ["-c", "exit 0"]) …
+  11 poll main/main:1
+  12 main/main:1 → Ok(0)
+  13 main/main:1 Console.write("ran exit 0")
+  14 poll main/main:2
+  15 main/main:2 →
+  16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"]) …
+  17 poll main/main:2
+  18 main/main:2 → Ok(0)
+  19 main/main:2 Console.write("ran test 1 = 1")
+  20 poll main/main:0
+  21 main/main:0 →
+  22 main/main:0 Proc.run("sh", ["-c", "true"]) …
+  23 poll main/main:0
+  24 main/main:0 → Ok(0)
+  25 main/main:0 Console.write("ran true")
+  26 main Console.write("all ran")
+  27 main exit 0
 
 `ren replay` follows the polls, so its tasks run in the recorded order,
 and it prints what the run printed, byte for byte, but its own last
@@ -395,13 +403,15 @@ recording did:
 
   $ ren run --record failed.journal recipes.ren -- slow > run.out 2>&1
   [1]
-  $ sed -n '9,14p' failed.journal
+  $ sed -n '9,16p' failed.journal
   8 poll main/main:1
   9 main/main:1 →
-  10 main/main:1 Proc.run("sh", ["-c", "false"]) → Ok(1)
-  11 main/main:0 cancelled
-  12 main/main:2 cancelled
-  13 main error Failed("false")
+  10 main/main:1 Proc.run("sh", ["-c", "false"]) …
+  11 poll main/main:1
+  12 main/main:1 → Ok(1)
+  13 main/main:0 cancelled
+  14 main/main:2 cancelled
+  15 main error Failed("false")
   $ ren replay failed.journal > replay.out 2>&1
   [1]
   $ diff run.out replay.out
@@ -416,7 +426,7 @@ A replay is strict about the order too: with the first two polls the
 other way round, it wakes the tasks in another order, and stops at the
 first call's end that isn't the recording's next:
 
-  $ perl -pi -e 's/^8 poll main\/main:1/8 poll main\/main:2/; s/^12 poll main\/main:2/12 poll main\/main:1/' level.journal
+  $ perl -pi -e 's/^8 poll main\/main:1/8 poll main\/main:2/; s/^14 poll main\/main:2/14 poll main\/main:1/' level.journal
   $ ren replay level.journal
   true
   exit 0

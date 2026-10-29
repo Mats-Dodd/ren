@@ -54,15 +54,16 @@
  (applies_to tasks)
  (deps
   %{bin:ren}
-  (glob_files 11a/tasks/crawler/*.ren)
-  (glob_files 11a/tasks/just/*.ren)
+  (glob_files %{project_root}/examples/crawler/*.ren)
+  (glob_files %{project_root}/examples/just/*.ren)
+  (glob_files %{project_root}/examples/just/tests/*.journal)
   (glob_files %{project_root}/examples/transfer/*.ren)
   (glob_files %{project_root}/examples/refresh/*.ren)
   (glob_files %{project_root}/examples/server/*.ren)
   (glob_files 11a/tasks/lost_update/*.ren)
   (glob_files 11a/tasks/journal/*.ren)
-  11a/tasks/crawler/expected
-  11a/tasks/just/expected
+  %{project_root}/examples/crawler/expected
+  %{project_root}/examples/just/expected
   %{project_root}/examples/transfer/expected
   %{project_root}/examples/refresh/expected
   %{project_root}/examples/server/expected

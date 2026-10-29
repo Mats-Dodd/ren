@@ -2536,15 +2536,8 @@ test "the cleanup deadline" =
 (* ---- s8: the standard library ---- *)
 
 let%expect_test "[s8 accept] a channel's send waits while it's full" =
-  until "s8"
-    ~want:{|
-1
-2
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sync.{Chan}
 
 fn main() uses Console, Async =
@@ -2559,27 +2552,238 @@ fn main() uses Console, Async =
         match Chan.recv()
           Some(x) => print(x)
           None => going = false
-|});
+|};
   [%expect {|
-    (until s8)
-    error: there's no module `sync`
-      ┌─ test.ren:1:8
-    1 │ import sync.{Chan}
-      │        ^^^^
-      = it would be the file `sync.ren`
-      help: check the module's name, or create its file
+    1
+    2
+    ()
+    |}]
+
+let%expect_test "[s8 accept] a channel's items, from two senders, each once and in order" =
+  (* a channel of 2 between two senders and a receiver: under every
+     schedule, each item is received once, each sender's in the order it
+     sent them, and `None` once it's closed and empty *)
+  test ~seeds:200
+    {|
+import sync.{Chan}
+
+pub dep Nums = Chan<Int>
+
+test "what two senders send is received once each, in each one's order" =
+  with sync.channel(2) as Nums in
+    var got: Array<Int> = []
+    Async.scope fn(s) =>
+      s.spawn fn() =>
+        Async.scope fn(t) =>
+          t.spawn fn() =>
+            for i in 0..5
+              Nums.send(i)
+          t.spawn fn() =>
+            for i in 10..15
+              Nums.send(i)
+        Nums.close()
+      var going = true
+      while going
+        match Nums.recv()
+          Some(x) => &got.push(x)
+          None => going = false
+    assert got.len() == 10
+    assert got.select(fn(x) => x < 10) == [0, 1, 2, 3, 4]
+    assert got.select(fn(x) => x >= 10) == [10, 11, 12, 13, 14]
+|};
+  [%expect {|
+    test.ren
+      ✓ what two senders send is received once each, in each one's order
+
+    1 passed, each under 200 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s8 accept] a send on a closed channel panics" =
+  run_error
+    {|
+import sync.{Chan}
+
+fn main() uses Console, Async =
+  with sync.channel(1) in
+    Chan.close()
+    print(Chan.recv())
+    Chan.send(1)
+|};
+  [%expect {|
+    None
+    error: panic: a send on a closed channel
+      ┌─ test.ren:7:5
+    7 │     Chan.send(1)
+      │     ^^^^^^^^^^^^
+    |}]
+
+let%expect_test "[s8 accept] a semaphore and a limit: at most n calls at once" =
+  (* a call that fails, and one that's cancelled while it runs, gives its
+     permit back, since `limit` gives it back in a `finally` *)
+  test ~seeds:300
+    {|
+import sync
+
+pub dep Work =
+  run: fn(n: Int) -> Int ! Bad(n: Int)
+
+pub dep Gauge =
+  enter: fn()
+  leave: fn()
+  most: fn() -> Int
+
+test handler gauge() for Gauge =
+  var now = 0
+  var top = 0
+  enter() =>
+    now += 1
+    if now > top then top = now
+  leave() => now -= 1
+  most() => top
+
+// each call takes 10 ms, and an odd one fails
+test handler slow() for Work uses Gauge, Clock =
+  run(n) =>
+    Gauge.enter()
+    Clock.sleep(Duration.ms(10))
+    Gauge.leave()
+    if n % 2 == 1 then fail Bad(n)
+    n
+
+test "at most three calls at once, and a failure gives its permit back" =
+  with gauge(), sync.semaphore(3), sync.limit() over slow() in
+    Async.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) fn(n) =>
+      match attempt Work.run(n)
+        _ => ()
+    assert Gauge.most() == 3
+    assert Clock.now() == Time.epoch + Duration.ms(40)
+
+test "a cancelled call gives its permit back" =
+  with gauge(), sync.semaphore(1), sync.limit() over slow() in
+    let r = attempt Async.timeout(Duration.ms(5)) fn() => try Work.run(2)
+    assert r == Err(Timeout)
+    assert try Work.run(4) == 4
+|};
+  [%expect {|
+    test.ren
+      ✓ at most three calls at once, and a failure gives its permit back
+      ✓ a cancelled call gives its permit back
+
+    2 passed, each under 300 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s8 accept] a semaphore of 0 permits panics when one's asked for" =
+  run_error
+    {|
+import sync.{Semaphore}
+
+fn main() uses Async =
+  with sync.semaphore(0) in
+    Semaphore.acquire()
+|};
+  [%expect {|
+    error: panic: a semaphore has at least 1 permit, so it can give one
+      ┌─ test.ren:5:5
+    5 │     Semaphore.acquire()
+      │     ^^^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "[s8 accept] a permit given back that wasn't taken panics" =
+  run_error
+    {|
+import sync.{Semaphore}
+
+fn main() uses Async =
+  with sync.semaphore(1) in
+    Semaphore.release()
+|};
+  [%expect {|
+    error: panic: a semaphore's permit given back that wasn't taken
+      ┌─ test.ren:5:5
+    5 │     Semaphore.release()
+      │     ^^^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "[s8 accept] a batcher fetches one round's keys in one call" =
+  (* the flusher waits for a key, lets every task ask for theirs, and
+     fetches them together; a key asked for again is answered from what
+     was fetched; and one the fetch didn't give is a panic in the task
+     that asked for it *)
+  test ~seeds:300
+    {|
+import sync.{Batcher, Fetch}
+
+pub dep Names = Batcher<Int, Str>
+
+// what each fetch was asked for
+pub dep Asked =
+  saw: fn(keys: Array<Int>)
+  all: fn() -> Array<Array<Int>>
+
+test handler asked() for Asked =
+  var calls: Array<Array<Int>> = []
+  saw(keys) => &calls.push(keys)
+  all() => calls
+
+// the name of each number but 13, which it hasn't
+test handler names() for Fetch<Int, Str> uses Asked =
+  fetch(keys) =>
+    Asked.saw(keys)
+    var m: Map<Int, Str> = Map.empty
+    for k in keys
+      if k != 13 then &m.set(k, "n".concat(show(k)))
+    m
+
+test "what's asked for in one round is fetched in one call" =
+  with asked(), names() in
+    Async.scope fn(s) =>
+      with sync.batcher() as Names in
+        s.spawn fn() =>
+          while true
+            Names.asked()
+            Async.tick()
+            Names.flush()
+        let got = Async.map([3, 1, 2, 1]) fn(k) => Names.get(k)
+        assert got == ["n3", "n1", "n2", "n1"]
+        assert Names.get(2) == "n2"
+    // in the order the tasks asked, which the schedule decides
+    assert Asked.all().len() == 1
+    assert Asked.all()[0].sort() == [1, 2, 3]
+
+test "a key the fetch doesn't give panics" =
+  with asked(), names() in
+    Async.scope fn(s) =>
+      with sync.batcher() as Names in
+        s.spawn fn() =>
+          while true
+            Names.asked()
+            Async.tick()
+            Names.flush()
+        assert Names.get(13) == "n13"
+|};
+  [%expect {|
+    test.ren
+      ✓ what's asked for in one round is fetched in one call
+      ✗ a key the fetch doesn't give panics
+
+    ──── a key the fetch doesn't give panics ── test.ren:49
+       │
+    49 │         assert Names.get(13) == "n13"
+       │                ^^^^^^^^^^^^^
+       │
+       panic: `Fetch.fetch` didn't give a value for a key it was asked for
+
+       seed 7573 · rerun: ren test test.ren --only "a key" --seed 7573
+
+    1 passed, 1 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s8 accept] `keyed` sends each call to an instance by its key" =
-  until "s8"
-    ~want:{|
-2
-1
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sync
 
 dep Counts =
@@ -2598,39 +2802,242 @@ fn main() uses Console, Async =
     Counts.add("a")
     print(Counts.get("a"))
     print(Counts.get("b"))
-|});
+|};
   [%expect {|
-    (until s8)
-    error: there's no module `sync`
-      ┌─ test.ren:1:8
-    1 │ import sync
-      │        ^^^^
-      = it would be the file `sync.ren`
-      help: check the module's name, or create its file
+    2
+    1
+    ()
     |}]
 
 let%expect_test "[s8 reject] `keyed` of what isn't a handler's description" =
-  until "s8"
-    ~says:
-      [
-        "error: `keyed` takes a handler's description, and `16` is an `Int`";
-        "help: describe the handler whose instances it keeps: `keyed(16, \
-         accounts())`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 import sync
 
 fn main() uses Console =
   with sync.keyed(4, 16) in print(1)
-|});
+|};
   [%expect {|
-    (until s8)
-    error: there's no module `sync`
-      ┌─ test.ren:1:8
-    1 │ import sync
-      │        ^^^^
-      = it would be the file `sync.ren`
-      help: check the module's name, or create its file
+    error: `keyed` takes a handler's description, and `16` is an `Int`
+      ┌─ test.ren:4:22
+    4 │   with sync.keyed(4, 16) in print(1)
+      │                      ^^
+      help: describe the handler whose instances it keeps: `keyed(16, accounts())`
+    |}]
+
+let%expect_test "[s8 accept] `keyed`'s instances: two keys overlap, one key takes turns" =
+  (* "a" and "b" go to different instances of 2, by a hash that's the
+     same in every run; each instance keeps its own instance's lock, so
+     two calls on one key wait for each other; and a call with no key
+     goes to each instance in turn, giving the last's *)
+  test ~seeds:100
+    {|
+import sync
+
+pub dep Slow =
+  // takes a second, keeping its instance
+  put: fn(key: Str)
+  // how many puts this instance had, and says so
+  count: fn() -> Int
+
+pub dep Said =
+  say: fn(n: Int)
+  all: fn() -> Array<Int>
+
+test handler said() for Said =
+  var xs: Array<Int> = []
+  say(n) => &xs.push(n)
+  all() => xs
+
+test handler slow() for Slow uses Clock, Said =
+  var n = 0
+  put(k) =>
+    n += 1
+    Clock.sleep(Duration.seconds(1))
+  count() =>
+    Said.say(n)
+    n
+
+test fn puts(keys: Array<Str>) uses Slow, Async =
+  Async.each(keys) fn(k) => Slow.put(k)
+
+test "calls on keys in different instances overlap" =
+  with said(), sync.keyed(2, slow()) in
+    puts(["a", "b"])
+    assert Clock.now() == Time.epoch + Duration.seconds(1)
+
+test "calls on one key take turns" =
+  with said(), sync.keyed(2, slow()) in
+    puts(["a", "a"])
+    assert Clock.now() == Time.epoch + Duration.seconds(2)
+
+test "a call with no key goes to each instance in turn" =
+  with said(), sync.keyed(3, slow()) in
+    puts(["a", "b", "a"])
+    let n = Slow.count()
+    assert Said.all().len() == 3
+    assert n == Said.all()[2]
+    assert Said.all()[0] + Said.all()[1] + Said.all()[2] == 3
+|};
+  [%expect {|
+    test.ren
+      ✓ calls on keys in different instances overlap
+      ✓ calls on one key take turns
+      ✓ a call with no key goes to each instance in turn
+
+    3 passed, each under 100 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s8 accept] `keyed`'s instances each have their own `finally`, the last made's first" =
+  run
+    {|
+import sync
+
+dep Tally =
+  add: fn(key: Int)
+
+handler tally(name: Str) for Tally uses Console =
+  var n = 0
+  finally(r) =>
+    print(name.concat(": ").concat(show(n)))
+    try r
+  add(k) => n += k
+
+fn main() uses Console, Async =
+  with sync.keyed(2, tally("one")) in
+    Tally.add(1)
+    Tally.add(2)
+    Tally.add(3)
+|};
+  [%expect {|
+    one: 2
+    one: 4
+    ()
+    |}]
+
+let%expect_test "[s8 accept] `keyed` of fewer than 1 instance panics" =
+  run_error
+    {|
+import sync
+
+dep D =
+  op: fn()
+
+handler h() for D =
+  op() => ()
+
+fn main() uses Async =
+  with sync.keyed(0, h()) in D.op()
+|};
+  [%expect {|
+    error: panic: `sync.keyed` keeps at least 1 instance, not 0
+       ┌─ test.ren:10:8
+    10 │   with sync.keyed(0, h()) in D.op()
+       │        ^^^^^^^^^^^^^^^^^^
+    |}]
+
+let%expect_test "[s8 accept] `sim.proc()`: programs at once, and those cancelled while they ran" =
+  test ~seeds:300
+    {|
+import sim.{Run, SimProc}
+
+pub fn go(cmd: Str) ! Failed(cmd: Str) | ProcError uses Proc =
+  let code = try Proc.run(cmd, [])
+  if code != 0 then fail Failed(cmd)
+
+test fn takes(cmd: Str, code: Int, s: Int) -> Run =
+  Run { command: Command { cmd: cmd, args: [] }, code: code, takes: Duration.seconds(s) }
+
+test "two programs at once take the longer one's time" =
+  with sim.proc([takes("a", 0, 2), takes("b", 0, 3)]) in
+    try Async.each(["a", "b", "c"]) fn(c) => try go(c)
+    assert TestProc.ran().len() == 3
+    assert SimProc.killed() == []
+  assert Clock.now() == Time.epoch + Duration.seconds(3)
+
+test "one that fails stops the other, which is killed" =
+  with sim.proc([takes("a", 1, 2), takes("b", 0, 10)]) in
+    let r = attempt Async.each(["a", "b"]) fn(c) => try go(c)
+    assert r == Err(Failed("a"))
+    assert TestProc.ran().len() == 2
+    assert SimProc.killed() == [Command { cmd: "b", args: [] }]
+  assert Clock.now() == Time.epoch + Duration.seconds(2)
+|};
+  [%expect {|
+    test.ren
+      ✓ two programs at once take the longer one's time
+      ✓ one that fails stops the other, which is killed
+
+    2 passed, each under 300 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s8 accept] what an arm's `finally` changes of the state, cancelled, is kept" =
+  (* the arm's copies of the state are written back however it ends,
+     cancelled too (lower.ml, [with_cells]) *)
+  run
+    {|
+dep D =
+  go: fn()
+  seen: fn() -> Int
+
+handler h() for D uses Async, Clock =
+  var n = 0
+  go() =>
+    finally(out) =>
+      match out
+        Ok(_) => ()
+        Err(_) => n += 1
+    Clock.sleep(Duration.seconds(5))
+  seen() => n
+
+fn main() uses Console, Async, Clock =
+  with h() in
+    Async.scope fn(s) =>
+      let t = s.start fn() => D.go()
+      Clock.sleep(Duration.seconds(1))
+      t.cancel()
+    print(D.seen())
+|};
+  [%expect {|
+    1
+    ()
+    |}]
+
+let%expect_test "[s8 accept] a waiter cancelled in `Async.until` starts its `finally` from the state as it is" =
+  (* both tasks push to the state; `y`, waiting, is cancelled when `x`
+     fails, and its arm writes back its copies at its end: they're read
+     again after its wait, however it ends, so `x`'s push isn't lost *)
+  test ~seeds:300
+    {|
+pub dep Log =
+  enter: fn(name: Str) ! Failed
+  all: fn() -> Array<Str>
+
+// `x` fails once both have entered; `y` waits for what never comes
+test handler log() for Log uses Async =
+  var names: Array<Str> = []
+  enter(name) =>
+    &names.push(name)
+    if name == "x" then
+      Async.until fn() => names.len() == 2
+      fail Failed
+    Async.until fn() => names.len() > 2
+  all() => names
+
+test "both entered" =
+  with log() in
+    let r = attempt Async.each(["x", "y"]) fn(n) =>
+      Async.yield()
+      try Log.enter(n)
+    assert r == Err(Failed)
+    assert Log.all().len() == 2
+|};
+  [%expect {|
+    test.ren
+      ✓ both entered
+
+    1 passed, each under 300 seeds
+    [exit 0]
     |}]

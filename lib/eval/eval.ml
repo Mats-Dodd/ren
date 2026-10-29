@@ -492,6 +492,9 @@ let share_reach v =
     if not (Hashtbl.mem seen i.inst) then begin
       Hashtbl.replace seen i.inst ();
       Sched.share i.inst ~excl:i.excl;
+      (match i.impl with
+      | VKeys parts -> Array.iter (fun (_, inst, excl) -> Sched.share inst ~excl) parts
+      | _ -> ());
       List.iter installed i.outer
     end
   in
@@ -588,12 +591,9 @@ let rec eval cx env (e : expr) =
        with Journal.Differs differs -> raise (Went_differently { loc = e.loc; differs }));
       let what = Printf.sprintf "a call of `%s.%s`" dep.name op in
       let tys = List.map (type_of env) dargs in
-      match
-        List.find_opt
-          (fun (i : installed) -> i.dep = dep && i.args = tys)
-          (evidence_in env ev what)
-      with
-      | Some { impl = VRecord ops; outer; inst; _ } -> (
+      (* the call, on the instance numbered [inst] whose implementation
+         is [ops] *)
+      let on ops outer inst =
           match List.assoc_opt op ops with
           | Some f -> (
               (* a handler's arm of the program's runs as `handler.op` *)
@@ -649,7 +649,29 @@ let rec eval cx env (e : expr) =
               | Some t when not (next && e.loc.file = Prelude.file) ->
                   ok (traced cx t ~dep:dep.name ~op fty args call)
               | _ -> ok (call ()))
-          | None -> bug (what ^ " on an implementation without it"))
+          | None -> bug (what ^ " on an implementation without it")
+      in
+      match
+        List.find_opt
+          (fun (i : installed) -> i.dep = dep && i.args = tys)
+          (evidence_in env ev what)
+      with
+      | Some { impl = VRecord ops; outer; inst; _ } -> on ops outer inst
+      | Some { impl = VKeys parts; outer; _ } -> (
+          (* `sync.keyed`'s: the instance its first argument's key goes to,
+             by a hash that's the same in every run; or, with no
+             arguments, each in turn, giving the last's *)
+          let part (impl, inst, _) =
+            match impl with
+            | VRecord ops -> on ops outer inst
+            | _ -> bug (what ^ " on an implementation that isn't a record")
+          in
+          match (args, fty) with
+          | a :: _, Fun (p :: _, _, _, _) ->
+              let h = Walk.fixed_hash (walk cx) p.ty a in
+              let n = Int64.of_int (Array.length parts) in
+              part parts.(Int64.to_int (Int64.unsigned_rem h n))
+          | _ -> Array.fold_left (fun _ x -> part x) VUnit parts)
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
   | With { ev; outer; dep; dargs; from; impl; desc; body } ->
@@ -661,20 +683,40 @@ let rec eval cx env (e : expr) =
          description of one dependency has one implementation, which is
          it whichever it was made for: `let q: Jobs = queue()` made a
          `Chan<Job>`'s a `Jobs`'s *)
-      let impl, finally, excl =
-        match impl with
-        | VHandler h -> (
-            let impls, finally, excl = installing e.loc (fun () -> instance cx h outer what) in
-            match (List.assoc_opt from impls, impls) with
-            | Some impl, _ | None, [ (_, impl) ] -> (impl, finally, excl)
-            | None, _ ->
-                bug (what ^ " from a handler that doesn't implement it"))
-        | _ -> bug (what ^ " with something that isn't a handler")
+      let made h =
+        let impls, finally, excl = installing e.loc (fun () -> instance cx h outer what) in
+        match (List.assoc_opt from impls, impls) with
+        | Some impl, _ | None, [ (_, impl) ] -> (impl, finally, excl)
+        | None, _ -> bug (what ^ " from a handler that doesn't implement it")
       in
       let args = List.map (type_of env) dargs in
-      let top = { dep; args; impl; outer; inst = Value.instance (); excl } in
+      let top, finallys =
+        match impl with
+        | VHandler h ->
+            let impl, finally, excl = made h in
+            ({ dep; args; impl; outer; inst = Value.instance (); excl }, [ finally ])
+        | VKeyed (n, VHandler h) ->
+            (* `sync.keyed(n, h)`: [n] instances, each with a number of its
+               own, so its own exclusion *)
+            let parts = List.init n (fun _ -> made h) in
+            let excl = List.exists (fun (_, _, x) -> x) parts in
+            let keys =
+              Array.of_list
+                (List.map (fun (impl, _, x) -> (impl, Value.instance (), x)) parts)
+            in
+            ( {
+                dep;
+                args;
+                impl = VKeys keys;
+                outer;
+                inst = Value.instance ();
+                excl;
+              },
+              List.map (fun (_, f, _) -> f) parts )
+        | _ -> bug (what ^ " with something that isn't a handler")
+      in
       let installed = VEvidence (top :: outer) in
-      ending cx env e.loc finally desc outer [ top ] (fun () ->
+      endings cx env e.loc finallys desc outer [ top ] (fun () ->
           eval cx (Env.add ev.id (ref installed) env) body)
   | Narrowed (_, h) -> eval cx env h
   | Handler { ev; captures; body } ->
@@ -697,37 +739,62 @@ let rec eval cx env (e : expr) =
       let what = "installing a handler" in
       let h = eval cx env handler in
       let outer = evidence_in env outer what in
-      match h with
-      | VHandler h ->
-          (* of what the instance implements, only [deps]: it may have
-             been narrowed to them (Core.Narrowed) *)
-          let impls, finally, excl = installing e.loc (fun () -> instance cx h outer what) in
-          if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
-            bug (what ^ " whose instance doesn't implement its dependencies");
-          (* in the order the instance has them, each at its key, with
-             one number, since they share its state *)
-          let inst = Value.instance () in
-          let installed =
-            List.fold_left
-              (fun acc (p, impl) ->
-                match List.find_opt (fun (_, q) -> q = p) deps with
-                | Some ((k : dkey), _) ->
-                    {
-                      dep = k.kpath;
-                      args = List.map (type_of env) k.kargs;
-                      impl;
-                      outer;
-                      inst;
-                      excl;
-                    }
-                    :: acc
-                | None -> acc)
-              outer impls
-          in
-          let top = List.filter (fun i -> not (List.memq i outer)) installed in
-          ending cx env e.loc finally desc outer top (fun () ->
-              eval cx (Env.add ev.id (ref (VEvidence installed)) env) body)
-      | _ -> bug (what ^ " with something that isn't a handler"))
+      (* of what the instance implements, only [deps]: it may have been
+         narrowed to them (Core.Narrowed) *)
+      let made h =
+        let impls, finally, excl = installing e.loc (fun () -> instance cx h outer what) in
+        if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
+          bug (what ^ " whose instance doesn't implement its dependencies");
+        (impls, finally, excl)
+      in
+      (* each of [deps], in the order the instance has them, at its key,
+         with [impl] its implementation of each: all with one number,
+         since they share its state *)
+      let install impls impl excl =
+        let inst = Value.instance () in
+        List.fold_left
+          (fun acc (p, _) ->
+            match List.find_opt (fun (_, q) -> q = p) deps with
+            | Some ((k : dkey), _) ->
+                {
+                  dep = k.kpath;
+                  args = List.map (type_of env) k.kargs;
+                  impl = impl p;
+                  outer;
+                  inst;
+                  excl;
+                }
+                :: acc
+            | None -> acc)
+          outer impls
+      in
+      let installed, finallys =
+        match h with
+        | VHandler h ->
+            let impls, finally, excl = made h in
+            (install impls (fun p -> List.assoc p impls) excl, [ finally ])
+        | VKeyed (n, VHandler h) ->
+            (* `sync.keyed(n, h)`: [n] instances, each with a number of its
+               own, so its own exclusion, and for each dependency its
+               implementations of it, by instance *)
+            let parts =
+              List.init n (fun _ ->
+                  let impls, finally, excl = made h in
+                  (impls, finally, excl, Value.instance ()))
+            in
+            let impls = match parts with (impls, _, _, _) :: _ -> impls | [] -> [] in
+            let keys p =
+              VKeys
+                (Array.of_list
+                   (List.map (fun (impls, _, excl, i) -> (List.assoc p impls, i, excl)) parts))
+            in
+            let excl = List.exists (fun (_, _, x, _) -> x) parts in
+            (install impls keys excl, List.map (fun (_, f, _, _) -> f) parts)
+        | _ -> bug (what ^ " with something that isn't a handler")
+      in
+      let top = List.filter (fun i -> not (List.memq i outer)) installed in
+      endings cx env e.loc finallys desc outer top (fun () ->
+          eval cx (Env.add ev.id (ref (VEvidence installed)) env) body))
   | Prim (((Equal d | Not_equal d) as op), [ a; b ]) ->
       let x = eval cx env a in
       let y = eval cx env b in
@@ -1043,7 +1110,7 @@ and instance cx (h : handler) outer what =
    on to the isolate (foundations.md, decision 8). When the body ends,
    and before the `finally` runs, the tasks spawned beside the `with` are
    cancelled and waited for (Sched.leave_with). *)
-and ending cx env loc finally desc outer installed body =
+and ending cx env (loc : Loc.t) finally desc outer installed body =
   let frame = Sched.enter_with installed in
   let at = if loc.file = Prelude.file then at_call cx else Some (where loc) in
   let body () =
@@ -1089,6 +1156,19 @@ and ending cx env loc finally desc outer installed body =
                      (VCon { ty = result; name = "Err"; args = [ cancelled_tag ] })))
            with Failed _ | Sched.Cancelled -> ());
           raise p)
+
+(* [ending] with each of [finallys], the `finally`s of instances made in
+   that order, `sync.keyed`'s (compiler.md, "The standard library (step
+   8)"): the last made's runs first, given the body's outcome, and each
+   before it is given what the one after it gave, as a handler's own
+   `finally`s are. *)
+and endings cx env (loc : Loc.t) finallys desc outer installed body =
+  match List.filter_map Fun.id finallys with
+  | [] -> ending cx env loc None desc outer installed body
+  | fs ->
+      List.fold_right
+        (fun f body () -> ending cx env loc (Some f) desc outer installed body)
+        fs body ()
 
 (* Evaluate [es] left to right. (A `let` in [::]'s head fixes the order.) *)
 and eval_all cx env = function
@@ -1273,10 +1353,22 @@ and builtin ?loc cx f args =
          | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
          | Task_each | Task_both | Task_race | Async_yield | Async_tick
          | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-         | Sim_advance | Task_random | Task_drain ) as x),
+         | Sim_advance | Sim_alarm | Task_random | Task_drain ) as x),
         tys,
         dicts ) ->
       tasks ?loc cx x tys dicts args
+  | VBuiltin (Proc_run, _, _) -> (
+      (* the real `Proc.run`: the task waits for its program, and the
+         others run *)
+      match args with
+      | [ VStr cmd; VArray xs ] ->
+          let strs =
+            List.map
+              (function VStr s -> s | _ -> bug "a program's argument that isn't a string")
+              (Array.to_list (Value.items xs))
+          in
+          (Ok (Builtins.run_program ~wait:(Sched.wait_pid ?at:(at_call cx)) cmd strs), args)
+      | _ -> bug "a call of `proc_run` with the wrong values")
   | VBuiltin (Clock_sleep, _, _) -> (
       (* the real `Clock.sleep`: the task waits, and the others run *)
       match args with
@@ -1531,6 +1623,11 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       (Ok VUnit, args)
   | Sim_advance, [ VInt ms ] ->
       Sched.advance ms;
+      (Ok VUnit, args)
+  (* `sim.proc()`'s: the operation it's in is checked again at [ms] *)
+  | Sim_alarm, [ VInt ms ] ->
+      let inst = Option.value (Sched.op_instance cx.site) ~default:(-1) in
+      Sched.alarm inst ms;
       (Ok VUnit, args)
   (* `Net.accept_until` gave `None`: the connections in flight have the
      cleanup deadline *)

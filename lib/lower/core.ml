@@ -744,6 +744,12 @@ let rec can_fail (e : expr) =
   | Lambda _ | Handler _ -> false
   | _ -> List.exists can_fail (children e)
 
+let rec can_stop (e : expr) =
+  match e.kind with
+  | Call _ | Dep_call _ | With _ | With_handler _ -> true
+  | Lambda _ | Handler _ -> false
+  | _ -> List.exists can_stop (children e)
+
 (* ---- printing, as s-expressions, for tests ----
 
    A list that fits on its line is printed on it. One that doesn't starts

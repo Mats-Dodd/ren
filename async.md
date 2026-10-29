@@ -7,9 +7,11 @@ It's stage 11a on the [roadmap](README.md#roadmap), and it builds on
 on blocks from [foundations.md](foundations.md). How the calls reach the
 kernel is in [runtime-io.md](runtime-io.md).
 
-> **Status:** specified, being built (stage 11a). This document follows
+> **Status:** built in the interpreter, `ren run` and `ren test`, with
+> the standard library's `sim` and `sync` (stage 11a, steps 1 to 8); the
+> sequential parts build natively too. This document follows
 > foundations.md, decisions 2 and 7 to 11, which replaced the first
-> version of this design ("What changed", below). What each step builds
+> version of this design ("What changed", below). What each step built
 > is in [compiler.md](compiler.md#stage-11a).
 
 Ren's concurrency is [Effect](https://effect.website/)'s, written in
@@ -223,21 +225,59 @@ checked where the instance is released, by whichever task releases it:
 ```ren
 pub handler channel<T>(cap: Int) for Chan<T> uses Async =
   var items: Array<T> = []
+  var closed = false
   send(x) =>
-    Async.until(fn() => items.len() < cap)
+    Async.until fn() => closed || items.len() < cap
+    if closed then lib_panic("a send on a closed channel")
     &items.push(x)
   recv() =>
-    Async.until(fn() => items.len() > 0)
-    let x = items[0]
-    items = items[1..items.len()]
-    Some(x)
+    Async.until fn() => closed || items.len() > 0
+    if items.len() == 0 then None
+    else
+      let x = items[0]
+      items = items.drop(1)
+      Some(x)
+  close() => closed = true
 ```
 
 `Async.tick()` returns once every task that could run when it was called
 has run until it waits. That's the batching point: a batcher's `get`
 adds its key and waits until it's been fetched, and a task beside it
-calls `Batcher.flush()` after each tick, so every key asked for in one
-round goes in one fetch.
+waits for a key to be asked for, `Batcher.asked()`, then ticks, then
+calls `Batcher.flush()`, so every key asked for in one round goes in
+one fetch.
+
+### What tasks share: `sync`
+
+The standard library's `sync`, found by `import sync`, is written in Ren
+over `Async.until`, but for `keyed`:
+
+| | What it is |
+|---|---|
+| `sync.channel(cap)` for `Chan<T>` | `send` waits while it's full, `recv` while it's empty and open, `None` once it's closed and empty; a send on a closed channel panics |
+| `sync.semaphore(n)` for `Semaphore` | `acquire` waits while no permit is free, `release` gives one back |
+| `sync.limit() over any` | each call takes a permit of the `Semaphore` outside it, is passed on, and gives it back in a `finally`, however it ends |
+| `sync.batcher()` for `Batcher<K, V>` | `get(k)` waits until a `flush` has fetched `k` through the `Fetch<K, V>` outside it, with every key asked for since the last |
+| `sync.keyed(n, h)` | `n` instances of the handler `h` describes, each call sent to one by its first argument's key: calls on keys in different instances overlap |
+
+```ren
+with sync.semaphore(16), sync.limit() over Web in crawl(root, 3)
+
+Async.scope fn(s) =>
+  with sync.batcher() as Users in
+    s.spawn fn() =>
+      while true
+        Users.asked()
+        Async.tick()
+        Users.flush()
+    serve()
+```
+
+`limit` keeps no state, so it takes no lock; the semaphore's `acquire`
+is what waits, in `Async.until`, which lets go of the semaphore
+meanwhile. That's why it's two items: an operation keeps its instance
+across its own `call.forward()`, so a `limit(n)` that counted in its own
+state would let one call through at a time.
 
 ## Cancellation
 
@@ -380,7 +420,11 @@ main.ren
 A test that passes under all of them is counted so: `4 passed, each
 under 1000 seeds`. `sim` is the standard library's module, found by
 `import sim`: `sim.scheduler(seed)` is the runtime, and `sim.clock()`
-the clock in its virtual time, which `ren test` installs for `Clock`.
+the clock in its virtual time, which `ren test` installs for `Clock`;
+`sim.net()` is a network in memory, which it installs for `Net`; and
+`sim.proc(runs)` is programs that take virtual time, each its `Run`'s
+`takes`, two tasks' at once, with `SimProc.killed()` the ones cancelled
+while they ran.
 
 This brings forward the first part of the simulation scheduler from stage
 15. The rest of it (simulated networks and disks that fail, crashes, and
@@ -389,7 +433,12 @@ exploring every interleaving) stays there.
 ## Five programs
 
 Each one tested a different part of the design. The rules above are what
-they needed. Each is in [bench/11a/tasks](bench/11a/tasks) until its step of stage 11a lands it, then in `examples/`, with its tests: the server is [examples/server](examples/server), and [examples/net.t](examples/net.t) runs one on the real `Net` and sends it SIGTERM.
+they needed. Each is in `examples/`, with its tests, which pass under
+`ren test --seeds 1000`: [examples/server](examples/server),
+[examples/crawler](examples/crawler), [examples/just](examples/just),
+[examples/transfer](examples/transfer) and
+[examples/refresh](examples/refresh); [examples/net.t](examples/net.t)
+runs a server on the real `Net` and sends it SIGTERM.
 
 ### A server that shuts down gracefully
 
@@ -476,7 +525,13 @@ test "a failing recipe stops the others" =
 ```
 
 Virtual time lets the test check when the cancellation happened, not just
-that it did.
+that it did. It runs, with its tests, in [examples/just](examples/just):
+`plan.levels` puts each recipe in the level after its dependencies',
+and the real `Proc.run` waits for its program as a task waits, so a
+level's programs run at once. Cancelling one kills its program, SIGTERM
+and then SIGKILL after the cleanup deadline, and waits for it to exit.
+[examples/just.t](examples/just.t) runs it on a real justfile, and
+records and replays a run of recipes at once, byte for byte.
 
 ### A transfer under a timeout
 

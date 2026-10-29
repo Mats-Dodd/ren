@@ -283,6 +283,16 @@ Console`, which the handler then has to use itself. A handler with no
 such state takes no lock, and neither does one no spawned task can
 reach, so a program with no tasks runs as it did.
 
+What an operation's arm changes of its handler's state is kept however
+the arm ends, cancelled too: its `finally` can give back what it took,
+`&cancelled.push(c)`, and a waiter cancelled in `Async.until` starts its
+`finally` from the state as the other operations left it. The standard
+library's `sync` is written this way: a channel, a semaphore, `limit()
+over any`, whose `finally` gives its permit back, and a batcher, each
+over `Async.until` ([async.md](async.md#what-tasks-share-sync)); and
+`sync.keyed(n, h)`, `n` instances of `h`, each with its own lock, a
+call sent to one by its first argument's key.
+
 ### Called as a method
 
 A description called as a method, `d.op(x)`, is `with d in D.op(x)`,

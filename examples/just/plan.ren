@@ -10,6 +10,25 @@ pub fn order(j: Justfile, name: Str) -> Array<Str> ! UnknownRecipe(name: Str) | 
   try visit(j, name, &started, &done)
   done
 
+// The same recipes in levels, to run a level's at once: each recipe is in
+// the level after the last one any of its dependencies is in, so a level
+// depends only on the levels before it. Within a level they're in
+// `order`'s order.
+pub fn levels(j: Justfile, name: Str) -> Array<Array<Str>> ! UnknownRecipe(name: Str) | Cycle(name: Str) =
+  var at: Map<Str, Int> = Map.empty
+  var levels: Array<Array<Str>> = []
+  for n in try order(j, name)
+    // its dependencies are all in `at` already, since `order` put them
+    // first
+    var level = 0
+    for d in (try j.recipe(n)).deps
+      let below = at.get(d).unwrap_or(0) + 1
+      if below > level then level = below
+    &at.set(n, level)
+    if level == levels.len() then &levels.push([])
+    &levels[level].push(n)
+  levels
+
 // Depth first: a recipe goes into `done` after its dependencies. One
 // that's started but not done is being visited further up, so reaching it
 // again is a cycle.
@@ -39,3 +58,12 @@ test "a recipe that isn't there" =
 test "a recipe that depends on itself" =
   let j = try Justfile.parse("a: b\nb: a\n")
   assert attempt order(j, "a") == Err(Cycle("a"))
+
+test "levels: each recipe after the level of what it depends on" =
+  let j = try Justfile.parse("all: left right\nleft: base\nright: base\nbase:\n")
+  assert try levels(j, "all") == [["base"], ["left", "right"], ["all"]]
+  assert try levels(j, "left") == [["base"], ["left"]]
+
+test "levels: a recipe deeper on one side waits for it" =
+  let j = try Justfile.parse("all: a c\na: b\nb:\nc:\n")
+  assert try levels(j, "all") == [["b", "c"], ["a"], ["all"]]

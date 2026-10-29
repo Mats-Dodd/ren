@@ -1,10 +1,11 @@
 (* The standard library's modules (compiler.md, "Stage 11a", "Two
    standard-library modules"): built into the compiler, as the prelude
-   is, each a source in Ren, and found by `import sim`, never from a
-   file. Each is checked once, against the whole prelude, the intrinsics
-   only the runtime calls among it, since what it is made of is the
-   runtime's: `sim.scheduler(seed)` sets the scheduler's policy, and
-   `sim.clock()` reads its virtual time. Every program has them linked
+   is, each a source in Ren, and found by `import sim` or `import sync`,
+   never from a file. Each is checked once, against the whole prelude,
+   the intrinsics only the runtime calls among it, since what it is made
+   of is the runtime's: `sim.scheduler(seed)` sets the scheduler's
+   policy, `sim.clock()` reads its virtual time, and `sync.keyed` is
+   built in. Every program has them linked
    in, since `ren test` installs `sim`'s around each test whether the
    program imports it or not (driver.ml).
 
@@ -14,8 +15,7 @@
    compiles it only if the program reaches it. (Named [Std_lib], since
    [Stdlib] is OCaml's own.) *)
 
-(* The modules' names, which a program's own module can't have: `sync`
-   is reserved for stage 11a's step 8, which writes it. *)
+(* The modules' names, which a program's own module can't have. *)
 let homes = [ "sim"; "sync" ]
 
 let is_home h = List.mem h homes
@@ -191,9 +191,196 @@ fn closed_end(ends: Map<Int, NetEnd>, n: Int) -> NetEnd =
   match ends.get(n)
     Some(e) => NetEnd { inbox: e.inbox, peer: e.peer, open: false }
     None => NetEnd { inbox: [], peer: 0, open: false }
+
+// A program `sim.proc()` runs: the command, what it exits with, and how
+// long it takes to.
+pub type Run = { command: Command, code: Int, takes: Duration }
+
+// What a test asks of its programs, besides `TestProc.ran()`.
+pub dep SimProc =
+  // the commands cancelled while they ran, the first first: a real
+  // `Proc.run` kills those
+  killed: fn() -> Array<Command>
+
+// programs that take time, for a test: each `Proc.run` of a command one
+// of `runs` names takes its `takes` of the scheduler's time and exits
+// with its `code`, and any other exits with 0 at once, as `test_proc`'s
+// does. A program's time passes without it keeping the instance, so two
+// tasks' programs run at once
+pub fn proc(runs: Array<Run>) -> (Proc & TestProc & SimProc uses Async) = sim_proc(runs)
+
+handler sim_proc(runs: Array<Run>) for Proc, TestProc, SimProc uses Async =
+  var commands: Array<Command> = []
+  var cancelled: Array<Command> = []
+  run(cmd, args) =>
+    let c = Command { cmd: cmd, args: args }
+    &commands.push(c)
+    // what it exits with, and how long it takes to, in milliseconds
+    var code = 0
+    var takes = 0
+    for r in runs
+      if r.command == c then
+        code = r.code
+        takes = r.takes.in_ms()
+    // the time it's done at: the instance is released then, which checks
+    // the condition below again
+    let done = sim_time() + takes
+    // what it gives once cancelled is thrown away: the cancel goes on
+    finally(out) =>
+      match out
+        Ok(code) => code
+        Err(_) =>
+          &cancelled.push(c)
+          0
+    if takes > 0 then
+      sim_alarm(done)
+      Async.until fn() => sim_time() >= done
+    code
+  ran() => commands
+  killed() => cancelled
+|}
+
+(* `sync`: what tasks share, written once (compiler.md, "The standard
+   library (step 8)"): a channel, a semaphore, a limit over any
+   dependency, and a batcher, each waiting in `Async.until`, so each
+   uses `Async`; and `keyed`, which is built in. *)
+let sync =
+  {|
+// What tasks share. Each handler here waits in `Async.until`, which lets
+// go of its instance while it waits, so another task's operation can
+// change what it waits for.
+
+// ---- channels ----
+
+// a queue of `T`s from some tasks to others, holding at most its
+// capacity: what's sent first is received first
+pub dep Chan<T> =
+  // puts `x` at the end, waiting while the channel is full. A send on a
+  // closed channel panics
+  send: fn(x: T)
+  // the first thing sent, waiting while there's none and the channel is
+  // open: `None` once it's closed and empty
+  recv: fn() -> Option<T>
+  // says nothing more will be sent: what was sent can still be received
+  close: fn()
+
+// a channel holding at most `cap`, 1 or more
+pub handler channel<T>(cap: Int) for Chan<T> uses Async =
+  var items: Array<T> = []
+  var closed = false
+  send(x) =>
+    if cap < 1 then lib_panic("a channel's capacity is at least 1, so it has room for a send")
+    Async.until fn() => closed || items.len() < cap
+    if closed then lib_panic("a send on a closed channel")
+    &items.push(x)
+  recv() =>
+    Async.until fn() => closed || items.len() > 0
+    if items.len() == 0 then None
+    else
+      let x = items[0]
+      items = items.drop(1)
+      Some(x)
+  close() => closed = true
+
+// ---- semaphores and limits ----
+
+// permits, each held by one caller at a time: `acquire` and `release`
+// are the two halves of holding one, which is how a handler's calls can
+// overlap while its operations don't
+pub dep Semaphore =
+  // takes a permit, waiting while there's none
+  acquire: fn()
+  // gives back a permit taken: one more than was taken panics
+  release: fn()
+
+// `n` permits, 1 or more
+pub handler semaphore(n: Int) for Semaphore uses Async =
+  var free = n
+  acquire() =>
+    if n < 1 then lib_panic("a semaphore has at least 1 permit, so it can give one")
+    Async.until fn() => free > 0
+    free -= 1
+  release() =>
+    if free >= n then lib_panic("a semaphore's permit given back that wasn't taken")
+    free += 1
+
+// over any dependency: each call takes a permit from the `Semaphore`
+// installed outside it, is passed on, and gives the permit back however
+// it ends, cancelled too. So `with sync.semaphore(16), sync.limit() over
+// Web in` makes at most 16 calls of `Web` at once. It keeps no state, so
+// its calls overlap; the semaphore's `acquire` is what waits
+pub handler limit() over any uses Semaphore =
+  call =>
+    Semaphore.acquire()
+    finally(r) =>
+      Semaphore.release()
+      try r
+    try call.forward()
+
+// ---- batching ----
+
+// what a batcher fetches with: the values of many keys in one call
+pub dep Fetch<K, V> =
+  // the values of `keys`, each it has
+  fetch: fn(keys: Array<K>) -> Map<K, V>
+
+// keys asked for one at a time, by many tasks, and fetched together
+pub dep Batcher<K, V> =
+  // the value of `k`, once a `flush` has fetched it
+  get: fn(k: K) -> V
+  // returns once a key has been asked for that no `flush` has fetched
+  // yet, so a flusher waits here rather than going round for nothing
+  asked: fn()
+  // fetches every key asked for since the last flush, in one call
+  flush: fn()
+
+// a batcher over the `Fetch` installed outside it. Each value fetched is
+// kept, so a key asked for again is answered at once. Its flushes are
+// a task's, spawned beside the `with`, which waits for a key to be asked
+// for, lets every task that can run ask for theirs, and fetches them:
+//
+//   s.spawn fn() =>
+//     while true
+//       Batcher.asked()
+//       Async.tick()
+//       Batcher.flush()
+pub handler batcher<K has hash, V>() for Batcher<K, V> uses Fetch<K, V>, Async =
+  // the keys asked for and not fetched yet, the first first
+  var wanted: Array<K> = []
+  // the values fetched, and the keys a fetch was asked for and didn't
+  // give, by their key
+  var got: Map<K, V> = Map.empty
+  var missing: Set<K> = Set.empty
+  get(k) =>
+    if not got.includes(k) && not missing.includes(k) && not wanted.any(fn(w) => w == k) then
+      &wanted.push(k)
+    Async.until fn() => got.includes(k) || missing.includes(k)
+    got.get(k) orelse lib_panic("`Fetch.fetch` didn't give a value for a key it was asked for")
+  asked() => Async.until fn() => wanted.len() > 0
+  flush() =>
+    if wanted.len() > 0 then
+      let keys = wanted
+      let found = Fetch.fetch(keys)
+      for k in keys
+        match found.get(k)
+          Some(v) => &got.set(k, v)
+          None => &missing.add(k)
+      wanted = []
+
+// ---- keyed instances ----
+
+// `n` instances of the handler `h` describes, 1 or more, made in order
+// when it's installed: each call of an operation goes to one of them by
+// its first argument's key, its type's `key` if it has one, so the same
+// key always goes to the same instance, and calls on keys in different
+// instances overlap; an operation with no parameters goes to each in
+// turn, and gives what the last gave. Each instance is one as any other,
+// with its own state and its own `finally`, the last made's run first.
+// It's built in, since a handler can't keep instances of another
+pub fn keyed<T>(n: Int, h: T) -> T = sync_keyed(n, h)
 |}
 
 (* Each module's source, by its name; a name of [homes] without one
    isn't written yet. *)
-let sources = [ ("sim", sim) ]
+let sources = [ ("sim", sim); ("sync", sync) ]
 let source h = List.assoc_opt h sources

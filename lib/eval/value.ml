@@ -88,6 +88,14 @@ type t =
           never sees one *)
   | VSched of sched
       (** a scope or a task's handle, which the scheduler made (sched.ml) *)
+  | VKeyed of int * t
+      (** `sync.keyed(n, h)`: a description of [n] instances of the handler
+          [h] describes, made when it's installed *)
+  | VKeys of (t * int * bool) array
+      (** [VKeyed]'s instances, installed: each one's implementation of the
+          dependency, its number and whether it's exclusive, as an
+          [installed]'s, which an operation's call picks one of by its first
+          argument (eval.ml, [Dep_call]) *)
 
 (* What the scheduler gives a program to hold, `Scope` and `Task<T>`'s
    values. It's an extensible type, one whose constructors are declared
@@ -225,5 +233,7 @@ let rec show = function
   | VCell _ -> "<cell>"
   | VEvidence _ -> "<evidence>"
   | VSched _ -> "<task>"
+  | VKeyed _ -> "<handler>"
+  | VKeys _ -> "<instance>"
   | VType _ -> "<type>"
   | VDict _ -> "<dict>"

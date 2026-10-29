@@ -1430,8 +1430,15 @@ and until_released cx (c : C.expr) =
               Ty.unit loc)
           cells
       in
+      (* read again however it ends: a waiter that's cancelled has the
+         instance back first, and the arm's `finally` and what it writes
+         back at its end start from what other operations changed *)
+      let call = { c with kind = Call (f, [ Value cond ], ev) } in
       seq_all loc
-        (written @ [ { c with kind = Call (f, [ Value cond ], ev) } ] @ read_again)
+        (written
+        @ [ (match read_again with
+            | [] -> call
+            | rs -> mk (Finally (call, seq_all loc rs)) call.ty loc) ])
   | _ -> c
 
 (* [lam], a lambda of a handler, an arm or its `finally`s, made to keep
@@ -1461,7 +1468,9 @@ and with_cells cx cells (lam : C.expr) =
       let body =
         match writes with
         | [] -> body
-        | ws when C.can_fail body ->
+        (* written back however it ends: failing, or cancelled, which
+           a `finally` in the arm may have changed the state for *)
+        | ws when C.can_fail body || C.can_stop body ->
             mk (Finally (body, seq_all loc ws)) body.ty loc
         | ws ->
             let r = temp cx "result" body.ty in

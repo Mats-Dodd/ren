@@ -4,7 +4,7 @@
 
 This doc covers how Ren code reaches the operating system: the shape of an I/O call, who owns a buffer while the kernel uses it, how cancellation finishes, how calls are batched, and how all of it sits under narrow dependencies like `Fs` and `Net`. What the standard library builds on top is in [stdlib.md](stdlib.md).
 
-> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Net` are dependencies today (stages 7, 8 and 11a, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly; `Net`'s sockets are non-blocking, and each wait is the scheduler's, on `Unix.select`. `Str`, `Bytes` and `Path` exist (stage 8), with `Str.from_utf8` the one fallible way from bytes to a string. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
+> **Status:** design. The interpreter does no I/O through this model yet. `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Net` are dependencies today (stages 7, 8 and 11a, [deps.md](deps.md)), whose real implementations call OCaml's standard library and `Unix` directly; `Net`'s sockets are non-blocking, and each wait is the scheduler's, on `Unix.select`; `Proc.run` waits for its program as the scheduler's wait too, looking with `waitpid` and `WNOHANG` at a timer, and a cancel kills the program, SIGTERM and then SIGKILL after the cleanup deadline, and waits for it to exit. `Str`, `Bytes` and `Path` exist (stage 8), with `Str.from_utf8` the one fallible way from bytes to a string. Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
 
 ---
 

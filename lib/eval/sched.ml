@@ -728,6 +728,84 @@ let wait_io ?at ?signal ~out fd what =
       s.ios <- s.ios @ [ { fd; out; iot = t; ioid = t.wait; iowake = wake } ];
       Option.iter (fun n -> s.sigwaits <- s.sigwaits @ [ (n, t, wake) ]) signal)
 
+(* ---- programs ----
+
+   The real `Proc.run` waits for its program as a task waits for a timer
+   (compiler.md, "The standard library (step 8)"): a timer looks at
+   whether it has exited, without waiting for it, `waitpid` with
+   `WNOHANG`, a millisecond after it started, then at twice the gap each
+   time, up to 20 ms, so a poll that sees it ends the wait, which a
+   journal writes as its poll line. Under `sim`, whose time doesn't wait
+   for the system's, those timers come one after another until it has
+   exited; a test uses `sim.proc()`, which takes no real time. *)
+
+(* How [pid] ended, if it has. *)
+let exited pid =
+  match Unix.waitpid [ Unix.WNOHANG ] pid with
+  | 0, _ -> None
+  | _, status -> Some status
+  | exception Unix.Unix_error (Unix.EINTR, _, _) -> None
+
+(* Wait, as the task running, cancellably if [cancellable], for [pid] to
+   exit, and give how it did; [late], at each look that finds it still
+   running, can kill it. A poll that ends the wait is a journal's poll
+   line if [journaled]. *)
+let wait_exit ?at ~cancellable ?(late = fun () -> ()) ?(journaled = true) pid what =
+  let s = sched () in
+  let t = s.current in
+  let ended = ref None in
+  wait ~cancellable ?at what (fun wake ->
+      let id = t.wait in
+      let rec look gap =
+        add_timer s ~at:(now () +. gap) ~wakes:t
+          ~live:(fun () -> t.wait = id)
+          (fun () ->
+            match exited pid with
+            | Some status ->
+                ended := Some status;
+                wake () && journaled
+            | None ->
+                late ();
+                look (Float.min 0.02 (gap *. 2.));
+                false)
+      in
+      look 0.001);
+  match !ended with Some status -> status | None -> bug "a program's wait woken before it exited"
+
+(* Wait for the program [pid] the task running started to exit, and give
+   how it did. Cancelling the task kills it: SIGTERM, then, if it's still
+   running at the cleanup deadline, SIGKILL; and the task waits for it to
+   exit before it goes on being cancelled, so nothing it started is left
+   running (async.md, "Cancellation"). That last wait isn't a journal's:
+   a replay runs no program, so its cancelled call ends where the
+   recording's `cancelled` line is, and has nothing to wait for. Without
+   a scheduler, the thread waits. *)
+let wait_pid ?at pid =
+  let rec blocking () =
+    match Unix.waitpid [] pid with
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> blocking ()
+    | _, status -> status
+  in
+  match !running with
+  | None -> blocking ()
+  | Some _ -> (
+      match wait_exit ?at ~cancellable:true pid "waits for its program" with
+      | status -> status
+      | exception Cancelled ->
+          (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
+          let by = now () +. cleanup in
+          let killed = ref false in
+          let late () =
+            if (not !killed) && now () >= by then begin
+              killed := true;
+              try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ()
+            end
+          in
+          ignore
+            (wait_exit ?at ~cancellable:false ~late ~journaled:false pid
+               "waits for its program, killed, to exit");
+          raise Cancelled)
+
 (* An `accept_until` waits for the signal numbered [n]: one that comes is
    for it from now on, kept until one asks ([stopped]), and caught if it
    can be. *)
@@ -1385,6 +1463,29 @@ let op_instance label =
       match List.find_opt (fun (_, l) -> l = label) t.holding with
       | Some (i, _) -> Some i
       | None -> Option.map fst (List.nth_opt t.holding 0))
+
+(* At the scheduler's time [ms], in milliseconds, the instance numbered
+   [inst] is released, as if an operation of it had just ended, unless a
+   task is in it, whose leaving releases it anyway: so a task waiting in
+   `Async.until` on it for a condition that reads the time is checked
+   again then (`sim_alarm`, which `sim.proc()`'s programs wait with, so
+   that one doesn't keep the instance while it takes its time). The timer
+   says it woke the task that set it if that's who [released] woke. *)
+let alarm inst ms =
+  match !running with
+  | None -> ()
+  | Some s ->
+      let t = s.current in
+      add_timer s
+        ~at:(Int64.to_float ms /. 1000.)
+        ~wakes:t
+        ~live:(fun () -> true)
+        (fun () ->
+          let was = t.wait in
+          (match Hashtbl.find_opt s.locks inst with
+          | Some { holder = Some _; _ } -> ()
+          | _ -> released inst);
+          was <> 0 && t.wait <> was)
 
 (* Wait, as the task running, in `Async.until` on the instance numbered
    [inst], until it's released with [holds] holding. If the instance is

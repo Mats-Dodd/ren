@@ -1152,10 +1152,10 @@ let scheme (x : Intrinsic.t) =
   | Float_sqrt -> fn [ read float ] float
   (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
   | Str_lower -> fn [ read str ] str
-  (* fn<T>(what: Str) -> T: a panic, saying [what] isn't built yet; what
-     stage 11a's members of `Async`, `Scope` and `Task` call until the
-     step that builds each (compiler.md, "Stage 11a", "The surface") *)
-  | Unbuilt -> fn [ read str ] (Var 0)
+  (* fn<T>(what: Str) -> T: a panic, saying [what]: how the standard
+     library's handlers refuse what they can't go on from, a send on a
+     closed channel (std_lib.ml) *)
+  | Lib_panic -> fn [ read str ] (Var 0)
   (* the scheduler's (sched.ml), what `Async.scope`, `Scope` and `Task`'s
      members are written over (compiler.md, "Stage 11a", "Structured
      tasks"). fn<T>(max: Int, body: fn(Scope) -> T) -> T: [body], with a
@@ -1250,6 +1250,16 @@ let scheme (x : Intrinsic.t) =
   (* fn(ms: Int): waits until the scheduler's time has moved on by
      [ms]; and moves it on by [ms] at once, waking what it passes *)
   | Sim_sleep | Sim_advance -> fn [ read int ] unit
+  (* fn(at: Int): at the scheduler's time [at], in milliseconds, the
+     instance whose operation the task is in is released, as if an
+     operation of it had ended, so an `Async.until` whose condition reads
+     the time is checked again then: how `sim.proc()`'s programs take
+     time without keeping the instance meanwhile *)
+  | Sim_alarm -> fn [ read int ] unit
+  (* fn<T>(n: Int, h: T) -> T: `sync.keyed`'s description of [n]
+     instances of the handler [h] describes, which the checker makes sure
+     it is (excl.ml) *)
+  | Sync_keyed -> fn [ read int; read (Var 0) ] (Var 0)
   (* fn(seed: Int, below: Int) -> Option<Int>: in a spawned task, a
      number from 0 below [below] from the task's own stream of the test
      `Random` seeded with [seed]; [None] in a root task, which draws from
@@ -1289,11 +1299,11 @@ let reaches (x : Intrinsic.t) =
   | Net_close -> Some ("Net", "close")
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
-  | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
+  | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
   | Task_until | Task_timeout | Task_isolate | Task_map | Task_each | Task_both
   | Task_race | Async_yield | Async_tick | Runtime_single | Runtime_sim
-  | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Task_random
+  | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
@@ -1326,12 +1336,12 @@ let caller (x : Intrinsic.t) =
       Journal
   | None, (Map_empty | Set_empty) -> Value
   | ( None,
-      ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
+      ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
       | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
       | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
       | Task_each | Task_both | Task_race | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-      | Sim_advance | Task_drain ) ) ->
+      | Sim_advance | Sim_alarm | Sync_keyed | Task_drain ) ) ->
       Internal
   | None, _ -> Any
 
@@ -1373,7 +1383,7 @@ let fns : Intrinsic.t list =
     Unsafe_cast;
     Float_lanes;
     Float_sum;
-    Unbuilt;
+    Lib_panic;
     Scope_run;
     Task_spawn;
     Task_start;
@@ -1395,6 +1405,8 @@ let fns : Intrinsic.t list =
     Sim_time;
     Sim_sleep;
     Sim_advance;
+    Sim_alarm;
+    Sync_keyed;
     Task_random;
     Task_drain;
   ]

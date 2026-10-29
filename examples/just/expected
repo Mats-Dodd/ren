@@ -1,0 +1,29 @@
+justfile.ren
+  ✓ a recipe has a name, dependencies and lines
+  ✓ dependencies between tabs, and a comment after them
+  ✓ two recipes with one name
+  ✓ a line that isn't a recipe or one of its lines
+
+main.ren
+  ✓ no args runs the first recipe, after what it depends on
+  ✓ each line is shown on stderr as it runs
+  ✓ the recipe named in the args
+  ✓ a recipe two others depend on runs once
+  ✓ the first line to fail stops everything
+  ✓ a level's recipes run at once
+  ✓ a failing recipe stops the others, whose programs are killed
+  ✓ a recipe that isn't there
+  ✓ a justfile with no recipes
+  ✓ no justfile
+  ✓ a recorded run of build replays
+
+plan.ren
+  ✓ dependencies come first, in the order they're written
+  ✓ a dependency shared by two runs once
+  ✓ a recipe that isn't there
+  ✓ a recipe that depends on itself
+  ✓ levels: each recipe after the level of what it depends on
+  ✓ levels: a recipe deeper on one side waits for it
+
+21 passed
+exit 0

@@ -3967,8 +3967,8 @@ tests are meant to fail.
 | folder | what | lands in |
 |---|---|---|
 | `server` | the server that shuts down gracefully, with `sim.net` | 7; landed |
-| `crawler` | the crawler, its `Seen` set and `limit` over its `Web` | 8 |
-| `just` | `run_all`, independent recipes at once, a failure killing the rest | 8 (then folded into examples/just) |
+| `crawler` | the crawler, its `Seen` set and `limit` over its `Web` | 8; landed |
+| `just` | `run_all`, independent recipes at once, a failure killing the rest | 8; folded into examples/just |
 | `transfer` | a transfer under a timeout, commit in `finally` | 5 (needs virtual time: see "Step 3, as built"); landed |
 | `refresh` | prices refreshed by a task beside the `with` | 8; landed in 5, since it needed only virtual time |
 | `lost_update` | the milestone: a lost update between two operations, found by `--seeds` and replayed by `--seed`; and the README's `cached`, which can't race any more | 8; holds since 5 |
@@ -3994,7 +3994,7 @@ to `same`, `release` and `tcc_same`:
 | `trywith` | `try with`, a transaction's setup and commit failing; it runs already, since `try` already takes a `with`, so step 1 refuses a plain one and adds it to the native loops | 1 |
 | `alone` | `Async.until` that holds, `yield` and `tick`, with no other task | 3 |
 | `alone_panic` | `Async.until` that doesn't hold, with no other task: the deadlock panic | 3 |
-| `limit` | `sync.semaphore` and `sync.limit()` over a dependency, with one task | 8 |
+| `limit` | `sync.semaphore` and `sync.limit()` over a dependency, with one task; and `limit_panic`, the standard library's panic | 8 |
 | `spawns` | a program that spawns: `ren run` runs it in `single`'s order; `ren build` refuses it (its own line in build.t) | 2 |
 
 **Existing tests that change,** each by the step named:
@@ -4192,12 +4192,13 @@ runtime intrinsics, which other modules can't (Prelude's `caller`).
     sync.semaphore(16), sync.limit() over Web in` makes at most 16
     calls to `Web` at once ("Where 11a may differ", below, says why
     it's two items);
-  - `dep Batcher<K, V>` with `get: fn(k: K) -> V` and `flush: fn()`;
+  - `dep Batcher<K, V>` with `get: fn(k: K) -> V`, `asked: fn()` (step
+    8 added it: "Step 8, as built") and `flush: fn()`;
     `handler batcher<K has hash, V>() for Batcher<K, V> uses Fetch<K,
     V>`, over `dep Fetch<K, V> = fetch: fn(keys: Array<K>) -> Map<K,
     V>`: `get` adds its key and waits until a `flush` has fetched it,
-    and a task spawned beside the `with` calls `Batcher.flush()` after
-    each `Async.tick()`;
+    and a task spawned beside the `with` waits in `Batcher.asked()`,
+    then calls `Batcher.flush()` after an `Async.tick()`;
   - `keyed<T>(n: Int, h: T) -> T`, `n` instances of the handler `h`
     describes, each operation sent to one by its first argument's key
     (its `key` member, or the value itself), one with no parameters to
@@ -4907,6 +4908,26 @@ revisit if a step finds it wrong:
 - **A replay sees a cancel that time made only where its journal says**
   (step 6), at the task's first point after its entry before; time moves
   on to when that cancel was due, so a timeout reaching it is `Timeout`.
+- **`Batcher` has a third operation, `asked`** (step 8), which waits
+  until a key has been asked for that no flush has fetched. A flusher
+  that only ticked and flushed would never wait while nothing is asked,
+  so under `sim`, whose time moves only when no task can run, it would
+  keep time from ever moving; and `flush` can't wait for a key and then
+  tick, since it would tick holding the instance the `get`s need.
+- **The standard library's handlers panic where they can't go on**
+  (step 8): a send on a closed channel, a channel of capacity 0 or a
+  semaphore of 0 permits asked for one, a permit given back that wasn't
+  taken, a key `Fetch.fetch` didn't give, `keyed` of fewer than 1. Each
+  is said at the program's call, natively too (`lib_panic`).
+- **`keyed`'s key goes to an instance by a hash with no seed** (step 8),
+  `Walk.fixed_hash`, the same in every run, since which instance has a
+  key can be seen (an operation with no parameters gives the last
+  instance's result). `keyed` isn't native: to_mem refuses it as any
+  intrinsic it doesn't know, which the brief allows ("if cheap").
+- **Cancelling the real `Proc.run` kills its program, not what it
+  started** (step 8): `sh -c "sleep 5; true"` leaves its `sleep`
+  running, since OCaml's `Unix` can't put a child in a process group of
+  its own; a recipe that `exec`s its program is killed whole.
 
 ### Step 1, as built
 
@@ -5529,6 +5550,94 @@ What step 7 settled where "`Net`" above is silent, or differs from it:
   which keeps those paths tested; test_tasks.ml's `type Conn` is `Session`
   (the prelude has a `Conn`).
 
+### Step 8, as built
+
+What step 8 settled where "The standard library (step 8)" above is
+silent, or differs from it:
+
+- **`sync`** is std_lib.ml's second module, in Ren: `channel(cap)`,
+  `semaphore(n)`, `limit() over any`, `batcher()` and `keyed(n, h)`, as
+  The surface has them, each handler `uses Async` and waits in
+  `Async.until`. `Batcher` has `asked` too ("Where 11a may differ"); a
+  batcher keeps what it fetched, so a key asked for again is answered at
+  once, and a key the fetch didn't give is a panic in each task that
+  asked for it. `limit()`'s arm takes a permit, then covers the rest of
+  the arm with a `finally` that gives it back, so a call that fails, or
+  is cancelled, gives it back too. A state passed to a dependency call
+  while borrowed is still refused, as before 11a ("`wanted` is read
+  across a dependency call"), so `flush` passes a copy; that error's
+  note, "other tasks can run this handler at a dependency call", is stale
+  since step 4, which step 9 should reword.
+- **The standard library's panic** is the intrinsic `lib_panic(msg)`, the
+  one that was `unbuilt`, which nothing called after step 3: a panic
+  with its message, never a wait. Natively it's a panic with the message
+  written in the call, at the site `ren_here` holds; a dependency call
+  from the program's code now sets that site (to_mem.ml, `set_here_dep`),
+  so a panic in a standard-library handler is said at the program's call,
+  as `ren run` says it (bench/11a/limit_panic).
+- **`keyed`** is `pub fn keyed<T>(n: Int, h: T) -> T = sync_keyed(n, h)`:
+  Infer refuses a call whose `h` isn't a description, with the specified
+  error, and makes the call of no type, so its `with` says nothing more
+  (infer_expr.ml, `keyed_described`). The interpreter's value is
+  `VKeyed (n, h)`; a `With` or `With_handler` of one makes `n` instances
+  of `h`, in order, and installs one implementation, `VKeys`, each
+  instance's implementation with its own number and exclusivity, so each
+  has its own lock, and sharing one shares them all (`share_reach`). A
+  `Dep_call` on one picks an instance by `Walk.fixed_hash` of its first
+  argument, through its type, so its type's `key`; an operation with no
+  parameters runs on each in turn and gives the last's result. Their
+  `finally`s run the last made's first (`endings`), each given what the
+  one after it gave. `n` below 1 is a panic.
+- **`sim.proc(runs)`** is std_lib.ml's `sim_proc` in `sim`, with `Run`
+  and `SimProc` as The surface has them. Its `run` has state, so it's
+  exclusive once a task can reach it, and its program's time has to pass
+  without it keeping the instance: it waits in `Async.until fn() =>
+  sim_time() >= done`, which lets go of it, after `sim_alarm(done)`, a new
+  intrinsic that releases the instance at that time (`Sched.alarm`), so
+  the condition is checked then. The arm's `finally` notes a cancelled
+  run in `killed`.
+- **The real `Proc.run` waits as a task** (sched.ml, `wait_pid`): the
+  program is started as before, and a timer looks at whether it has
+  exited, `waitpid` with `WNOHANG`, a millisecond after, then at twice
+  the gap, up to 20 ms, so the journal's poll line is the look that saw
+  it. A cancel sends SIGTERM, then SIGKILL if it's still running at the
+  cleanup deadline, and the task waits for it to exit, a wait no journal
+  writes, since a replay runs no program and its cancelled call ends at
+  the recording's `cancelled` line. Under `sim` those looks don't wait
+  for the system's time; a test runs programs on `sim.proc()`.
+- **Two bugs that lost a handler's state, fixed** (lower.ml): an arm's
+  copies of its state were written back to their cells only if the arm
+  ended or failed, not if it was cancelled, so what its `finally`
+  changed was lost; they're written back in a `Finally` now whenever the
+  arm can stop (`Core.can_stop`). And an arm that waits in `Async.until`
+  read its copies again only if the wait ended, so a waiter cancelled
+  there wrote back what it had before it waited, over other operations'
+  changes; it reads them again however the wait ends (`until_released`).
+  Both have tests in test_tasks.ml's s8 section.
+- **The `just`** is examples/just, with bench/11a/tasks/just's tests
+  folded in: `plan.levels` puts each recipe in the level after the last
+  its dependencies are in, and `run_all` runs each level with
+  `Async.each(max: 8)`. Its tests that said the order of a level's
+  recipes now say what holds under every schedule: the level before
+  first, the level after last, the level's own in either order. The
+  justfile's `test` sleeps half a second first, so examples/just.t's
+  output is in one order; and `ci`, `broken` beside `slow`, shows a
+  failure killing the recipe beside it. tests/build.journal is recorded
+  again. just.t records and replays a run of recipes at once, and one
+  where one is killed, byte for byte but for the last line. examples/
+  journal.t's recipes sleep a tenth of a second apart, since `Proc.run`
+  now waits, and so takes time the order could depend on.
+- **A test bug that made THE CHECKS flaky, fixed:** examples/just.t's
+  `cp -r just t2` copied dune's sandbox's links, so `ren test --keep`
+  appended its test to `_build`'s own copy of main.ren, and the next run
+  saw "two tests named `replays bug.journal`" until `rm -rf _build`. It's
+  `cp -rL` now.
+- **Landed:** `crawler` is examples/crawler; `just` is folded into
+  examples/just, with an `expected`; both are `as specified` in
+  bench/tasks.t and pass under `--seeds 1000`. bench/11a/limit is as
+  specified, and with limit_panic in the `same`, `release` and
+  `tcc_same` loops. No `until` is left in test_tasks.ml.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5541,6 +5650,22 @@ What step 7 settled where "`Net`" above is silent, or differs from it:
 | 5 | 1e6bbf0 | the runtime as a handler: the scheduler's policy, `single` or `sim`, set by `Async.single()` and `sim.scheduler(seed)` for their `with`'s body, a panic if other tasks run; `sim`'s seeded tape (splitmix64) at every wait and at each call of a shared, exclusive instance, its virtual time from 0, and `tick` under it; the standard library (lib/core/std_lib.ml) and its `sim` module, `scheduler` and `clock()`, linked into every program, `import sim`, and a program's own `sim` refused; a test on `sim.scheduler(seed)` and `sim.clock()`; `Random` per task; `ren test --seeds N` and `--sim`; `transfer` and `refresh` landed in examples/, and the milestone holds; test_tasks.ml's s5 tests on, and more | steps 6 to 9 |
 | 6 | ed2c9a8 | journal version 2: a task column, a call that waits in two lines, poll lines, cancel lines, second failures as comments (journal.ml, the scheduler's `journal` hooks); `ren replay` following the polls, strict about each entry's task and order, byte for byte for a concurrent run (examples/journal.t); a journal as a test keyed by task, with a schedule prefix, then the tape; version 1 refused with a help; examples/just/tests/build.journal re-recorded; bench/11a/tasks/journal as specified | steps 7 to 9 |
 | 7 | f5900d4 | `Net` in the prelude, its real implementation (lib/eval/net.ml) on non-blocking sockets and `Unix.select` in the scheduler's poll; SIGTERM caught by `ren run`, for `accept_until` or cancelling `main` (exit 143), a second ending it at once; the cleanup deadline after `accept_until` gives `None`; `sim.net()` and `sim.SimNet` in Ren, a test's default `Net`; `Net` recorded and replayed, a journal ending `exit 143`; examples/server landed, examples/net.t on the real `Net`; test_tasks.ml's s7 tests | steps 8 and 9 |
+| 8 | this commit | `sync` in Ren: `channel`, `semaphore`, `limit() over any`, `batcher` (with `asked`); `keyed(n, h)` built in, each instance its own lock, a key's instance by a hash with no seed; `lib_panic`, natively too, said at the program's call; `sim.proc()` and `SimProc`, its programs' time passing without the instance (`sim_alarm`); the real `Proc.run` waiting as a task, a cancel killing its program; an arm's state kept when it's cancelled, and read again after `Async.until` however it ends; examples/crawler landed, the `just` folded into examples/just, recorded and replayed at once; bench/11a/limit and limit_panic native; test_tasks.ml's s8 tests on, and more; no `until` left | step 9 |
+
+Notes for step 9 on: what to review first, besides the brief's three
+lenses. The stale note "other tasks can run this handler at a dependency
+call" (excl.ml, `across`) is still said for a state borrowed across a
+dependency call: whether that error is still needed, now that only a
+block parameter can reach the instance again, is a soundness question
+for the native build, not just wording. `keyed` isn't native. A
+cancelled `Proc.run` kills only its own process. The real `Proc.run`'s
+looks spin under `sim`. The kill wait isn't journaled, so a replay's
+cancelled task goes on at once where the recording's waited: if another
+task ran meanwhile and the cancelled one makes calls in its `finally`,
+the replay could go differently (it says so, strictly). `Chan.close()`
+with no argument can't tell its `T` unless a call beside it does
+(inference's, not `sync`'s): test_tasks.ml uses an alias, `dep Nums =
+Chan<Int>`.
 
 Notes for step 8 on: the real `Proc.run`'s wait for its process can be a
 `Sched.wait_io` on a pipe a `SIGCHLD` handler writes to, as signals are

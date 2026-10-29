@@ -1,6 +1,0 @@
-main.ren
-  ✓ a level's recipes run at once
-  ✓ a failing recipe stops the others
-
-2 passed
-exit 0

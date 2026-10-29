@@ -17,22 +17,25 @@ too.
   >    fi
   >    rm -f spec.out)
   > }
-  $ for d in crawler just; do spec 11a/tasks/$d; done
-  11a/tasks/crawler: not yet
-  11a/tasks/just: not yet
-  $ for d in transfer refresh server; do spec ../examples/$d; done
+  $ for d in transfer refresh server crawler just; do spec ../examples/$d; done
   ../examples/transfer: as specified
   ../examples/refresh: as specified
   ../examples/server: as specified
+  ../examples/crawler: as specified
+  ../examples/just: as specified
 
 Each that has landed passes under a thousand seeds too, its tests' own
 and the next 999 (step 5 landed `transfer` and `refresh`, which need
-only `sim`'s virtual time; step 7, `server`, on `sim.net()`):
+only `sim`'s virtual time; step 7, `server`, on `sim.net()`; step 8,
+`crawler`, on `sync`, and the `just`'s recipes at once, folded into
+examples/just, on `sim.proc()`):
 
-  $ for d in transfer refresh server; do (cd ../examples/$d && ren test --seeds 1000 | tail -n 1); done
+  $ for d in transfer refresh server crawler just; do (cd ../examples/$d && ren test --seeds 1000 | tail -n 1); done
   4 passed, each under 1000 seeds
   4 passed, each under 1000 seeds
   4 passed, each under 1000 seeds
+  3 passed, each under 1000 seeds
+  21 passed, each under 1000 seeds
 
 The milestone (README, "Roadmap", 11a): in 11a/tasks/lost_update, `ren test
 --sim --seeds 200` finds a seed under which one of two deposits is

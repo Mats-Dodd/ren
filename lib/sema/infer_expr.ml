@@ -2162,7 +2162,7 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
               List.iter (fun (a : expr) -> Hashtbl.remove op_args a.node) args)
           (fun () -> check_args env cx ~name ?callee ~written ps args);
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
-        made env ret)
+        if keyed_described env cx ?callee args then made env ret else TError)
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          block, whose errors are the call's. Its type isn't written, so it
@@ -2309,6 +2309,24 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
                  names)))
       (List.rev !given_tags);
     made env ret
+
+(* Whether a call of [callee] with [args] is all right as far as
+   `sync.keyed` goes: it's generic in what it keeps instances of, which
+   has to be a handler's description, since it's built in (compiler.md,
+   "The standard library (step 8)"). One that isn't is said, and the call
+   is then of no type, so its `with` says nothing more. *)
+and keyed_described env cx ?callee args =
+  match (callee, args) with
+  | Some c, [ _; (h : expr) ] when c = Path.make "sync" "keyed" -> (
+      match Option.map repr (Hashtbl.find_opt cx.nodes h.node) with
+      | Some (TImpl _ | TVar _ | TError) | None -> true
+      | Some t ->
+          report env
+            (keyed_not_described h.loc
+               ~arg:(Option.value (env.source h) ~default:"this")
+               (show (printer env) t));
+          false)
+  | _ -> true
 
 (* Whether [t] is the prelude's `Tags`. *)
 and is_tags t =

@@ -97,7 +97,11 @@ hour finishes in milliseconds. Its `Net` is `sim.net()`, connections in
 memory: `import sim.{SimNet}`, and `SimNet.connect(addr)` is a client's
 end of a connection to what the program listens at, and
 `SimNet.signal(Signal.term)` stops its `accept_until`s, as SIGTERM would
-(examples/server). The same seed runs the same way every time:
+(examples/server). A test whose programs take time installs
+`sim.proc(runs)`: each `Run { command, code, takes }` exits with its
+`code` after its `takes` of virtual time, two tasks' programs at once,
+and `SimProc.killed()` is the commands cancelled while they ran
+(examples/just). The same seed runs the same way every time:
 
 ```
 $ ren test --seeds 200

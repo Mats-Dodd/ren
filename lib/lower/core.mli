@@ -561,6 +561,11 @@ val children : expr -> expr list
    body fails only when it's called. *)
 val can_fail : expr -> bool
 
+(* Whether evaluating it can stop at a cancel (compiler.md, "Stage 11a",
+   "Cancellation"): it makes a call, a dependency's or a function's, or
+   installs something, which can reach a dependency call or a wait. *)
+val can_stop : expr -> bool
+
 (* ---- printing, as s-expressions, for tests ---- *)
 
 type sexp = Atom of string | List of sexp list

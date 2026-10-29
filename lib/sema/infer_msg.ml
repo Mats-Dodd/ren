@@ -1012,6 +1012,14 @@ let wrong_arity loc name n given =
        (plural n) given)
 
 (* [shown] is the type of what's called *)
+(* `sync.keyed(16, 16)`: what it keeps instances of, [arg], of the type
+   [shown], isn't a handler's description. *)
+let keyed_not_described loc ~arg shown =
+  Diag.make loc
+    ~help:"describe the handler whose instances it keeps: `keyed(16, accounts())`"
+    (sprintf "`keyed` takes a handler's description, and `%s` is %s" arg
+       (article shown))
+
 let not_a_function loc name shown =
   Diag.make loc
     (sprintf "%s is %s, not a function" (callee name) (article shown))

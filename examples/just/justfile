@@ -1,6 +1,7 @@
 # What `ren run main.ren` runs, from the folder this is in.
 
-# the first recipe, so the one that runs with no args
+# the first recipe, so the one that runs with no args: `build` and
+# `test` both need only `base`, so they run at once
 all: build test
   echo all done
 
@@ -8,7 +9,9 @@ build: base
   echo building
   echo built
 
+# waits a moment first, so `build` has printed by the time it does
 test: base
+  sleep 0.5
   echo testing
 
 base:
@@ -18,4 +21,11 @@ base:
 broken: base
   echo trying
   exit 3
+  echo never
+
+# `broken` fails while `slow` runs, which is killed then
+ci: broken slow
+
+slow: base
+  exec sleep 5
   echo never

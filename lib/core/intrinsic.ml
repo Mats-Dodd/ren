@@ -44,7 +44,7 @@ type t =
   | Unsafe_cast
   | Float_lanes
   | Float_sum
-  | Unbuilt
+  | Lib_panic
   | Scope_run
   | Task_spawn
   | Task_start
@@ -66,6 +66,8 @@ type t =
   | Sim_time
   | Sim_sleep
   | Sim_advance
+  | Sim_alarm
+  | Sync_keyed
   | Task_random
   | Task_drain
   | Map_empty
@@ -165,7 +167,7 @@ let path x =
   | Unsafe_cast -> fn "unsafe_cast"
   | Float_lanes -> fn "float_lanes"
   | Float_sum -> fn "float_sum"
-  | Unbuilt -> fn "unbuilt"
+  | Lib_panic -> fn "lib_panic"
   | Scope_run -> fn "scope_run"
   | Task_spawn -> fn "task_spawn"
   | Task_start -> fn "task_start"
@@ -187,6 +189,8 @@ let path x =
   | Sim_time -> fn "sim_time"
   | Sim_sleep -> fn "sim_sleep"
   | Sim_advance -> fn "sim_advance"
+  | Sim_alarm -> fn "sim_alarm"
+  | Sync_keyed -> fn "sync_keyed"
   | Task_random -> fn "task_random"
   | Task_drain -> fn "task_drain"
   | Map_empty -> fn "map_empty"
@@ -253,12 +257,11 @@ let member_name x = Path.short (path x)
 
 (* Whether it can wait for another task: a scheduling point, which only
    code that uses `Async` reaches (compiler.md, "Stage 11a", "The two
-   holes"). [Unbuilt] stands for the scheduler's intrinsics that later
-   steps of stage 11a build. `task_cancel` returns at once, but asks the
+   holes"). `task_cancel` returns at once, but asks the
    scheduler, as the rest do. The world's waits, `Clock.sleep`, `Net`'s
    and `Proc.run`, aren't these: only the runtime installs the world. *)
 let waits = function
-  | Unbuilt | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
+  | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Async_yield | Async_tick | Sim_sleep ->
       true

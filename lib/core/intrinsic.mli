@@ -36,7 +36,7 @@ type t =
   | Unsafe_cast
   | Float_lanes
   | Float_sum
-  | Unbuilt
+  | Lib_panic
   | Scope_run
   | Task_spawn
   | Task_start
@@ -58,6 +58,8 @@ type t =
   | Sim_time
   | Sim_sleep
   | Sim_advance
+  | Sim_alarm
+  | Sync_keyed
   | Task_random
   | Task_drain
   | Map_empty

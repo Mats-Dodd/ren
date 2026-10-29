@@ -974,6 +974,14 @@ let set_here fs (callee : C.fn_def) (loc : Loc.t) =
     in
     emit fs (Do (Runtime (Here_set, [], Some (new_site fs.cx ~notes loc))))
 
+(* Before a dependency call from the program's code at [loc], whose
+   implementation may be the prelude's or the standard library's, a
+   `sync.semaphore`'s: a panic in it is said to be there, as `ren run`
+   says it (eval.ml, [Dep_call]). *)
+let set_here_dep fs (loc : Loc.t) =
+  if not fs.prelude then
+    emit fs (Do (Runtime (Here_set, [], Some (new_site fs.cx loc))))
+
 (* After the prelude's code at [fs] called a block, the program's code
    that may have set [ren_here] again: where it was when [fs] started. *)
 let put_here fs =
@@ -1565,6 +1573,7 @@ and expr_at fs env (e : C.expr) : atom =
           (Op_block (ev, dep_id cx dep, ds, op_index fs e.loc dep op))
       in
       List.iter (drop fs env) ds;
+      set_here_dep fs e.loc;
       call_block fs env ~result:(lay e.ty) ~fails:(C.fails fty) b ev xs
   | With { dep; impl = { kind = Global_value (real, _); _ }; _ }
     when real = Path.member dep "real"
@@ -2580,6 +2589,14 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
       List.iter (drop fs env) (values ());
       emit fs (Panic (here_site fs, "every task is waiting, and nothing can wake one"));
       Unit
+  (* the standard library's panic, whose message is always written in
+     its source *)
+  | Lib_panic, _, _ -> (
+      match args with
+      | [ Value { kind = C.Str msg; _ } ] ->
+          emit fs (Panic (here_site fs, msg));
+          dummy fs env (lay e.ty)
+      | _ -> unsupported_at fs e.loc "`lib_panic` of a message not written there")
   (* the real `Console`'s operations *)
   | Console_write, _, _ -> runtime Console_write
   | Console_error, _, _ -> runtime Console_error

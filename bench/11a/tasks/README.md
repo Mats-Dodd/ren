@@ -8,16 +8,19 @@ has landed ([compiler.md](../../../compiler.md#stage-11a), "The tests").
 [bench/tasks.t](../../tasks.t) runs each and says whether it's as specified
 yet.
 
+All of them have landed now but the two that stay here, `lost_update`
+and `journal`:
+
 ```
-cd bench/11a/tasks/crawler && ren test             # under one schedule
-cd bench/11a/tasks/crawler && ren test --seeds 1000
+cd examples/crawler && ren test             # under one schedule
+cd examples/crawler && ren test --seeds 1000
 ```
 
 | Folder | What's in it | Lands in |
 |---|---|---|
 | `server` | a server that serves each connection in a task, and on SIGTERM stops accepting and gives what's in flight the cleanup deadline; tests on `sim.net()` | step 7, landed: [examples/server](../../../examples/server) |
-| `crawler` | a crawler: each page's links crawled at once, every url claimed once through a handler, and at most 16 requests at a time, with `sync.semaphore` and `sync.limit` | step 8 |
-| `just` | `run_all`, a plan's levels one after another and each level's recipes at once, the first failure killing the rest; tests on `sim.proc` | step 8, then folded into [examples/just](../../../examples/just) |
+| `crawler` | a crawler: each page's links crawled at once, every url claimed once through a handler, and at most 16 requests at a time, with `sync.semaphore` and `sync.limit` | step 8, landed: [examples/crawler](../../../examples/crawler) |
+| `just` | `run_all`, a plan's levels one after another and each level's recipes at once, the first failure killing the rest; tests on `sim.proc` | step 8, landed: folded into [examples/just](../../../examples/just), whose `main` runs a justfile's levels so |
 | `transfer` | a transfer under `Async.timeout`, inside a transaction installed with `try with`, whose commit in its `finally` overruns the timeout and is still reported | step 5, landed: [examples/transfer](../../../examples/transfer) |
 | `refresh` | prices refreshed by a task spawned beside the `with`, which cancels it when its body ends | step 5, landed (it needed only virtual time): [examples/refresh](../../../examples/refresh) |
 | `lost_update` | the milestone: two deposits, each a read and then a write, one of them lost under some seeds, which `ren test --sim --seeds 200` finds and `--seed` replays; the same with one operation, which can't lose one; and the README's `cached`, which can't race any more | holds since step 5 (bench/tasks.t's `milestone`); it stays here, since its first test fails on purpose |

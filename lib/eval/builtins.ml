@@ -115,7 +115,7 @@ let proc_outcome name args =
    this program has written so far goes out first. A program the system
    won't start, or one killed by a signal, is said so, for `Proc` to fail
    with. *)
-let run_program path cmd args =
+let start_program path cmd args =
   flush stdout;
   flush stderr;
   match
@@ -124,17 +124,24 @@ let run_program path cmd args =
       Unix.stdin Unix.stdout Unix.stderr
   with
   | exception Unix.Unix_error (e, _, _) ->
-      proc_outcome "ProcNotStarted" [ VStr (Unix.error_message e) ]
-  | pid ->
-      let rec wait () =
-        match Unix.waitpid [] pid with
-        | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait ()
-        | _, Unix.WEXITED code ->
-            proc_outcome "ProcExited" [ VInt (Int64.of_int code) ]
-        | _, (Unix.WSIGNALED _ | Unix.WSTOPPED _) ->
-            proc_outcome "ProcKilled" []
-      in
-      wait ()
+      Error (proc_outcome "ProcNotStarted" [ VStr (Unix.error_message e) ])
+  | pid -> Ok pid
+
+(* What became of a program that ended so. *)
+let exit_outcome = function
+  | Unix.WEXITED code -> proc_outcome "ProcExited" [ VInt (Int64.of_int code) ]
+  | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> proc_outcome "ProcKilled" []
+
+(* The real `Proc.run`: [cmd], found, started and waited for, by [wait],
+   which the interpreter's scheduler does (Sched.wait_pid), so other
+   tasks run meanwhile. *)
+let run_program ~wait cmd args =
+  match find_program cmd with
+  | None -> proc_outcome "ProcMissing" []
+  | Some path -> (
+      match start_program path cmd args with
+      | Error outcome -> outcome
+      | Ok pid -> exit_outcome (wait pid))
 
 (* `Some(args)` or `None` *)
 let option name args = VCon { ty = Path.prelude "Option"; name; args }
@@ -356,10 +363,11 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Async_yield | Async_tick
   | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-  | Sim_advance | Task_random | Task_drain
-  (* and the real `Net`'s, which wait too (net.ml) *)
+  | Sim_advance | Sim_alarm | Task_random | Task_drain
+  (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,
+     [run_program]) *)
   | Net_listen | Net_accept | Net_accept_until | Net_read | Net_write
-  | Net_close ->
+  | Net_close | Proc_run ->
       fun _ ->
         failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
   (* the real `Clock.now` and `Clock.instant` *)
@@ -416,18 +424,6 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
               raise (Panic (Printf.sprintf "argument %d isn't UTF-8" (i + 1)))
           in
           array_of_list (List.mapi str !args))
-  (* the real `Proc.run` *)
-  | Proc_run ->
-      pure (function
-        | [ VStr cmd; VArray xs ] -> (
-            let strs =
-              Array.to_list
-                (Array.map (function VStr s -> s | _ -> bug x) (items xs))
-            in
-            match find_program cmd with
-            | Some path -> run_program path cmd strs
-            | None -> proc_outcome "ProcMissing" [])
-        | _ -> bug x)
   | Array_len -> pure (function [ VArray xs ] -> int xs.len | _ -> bug x)
   (* the one that changes a parameter: its receiver, `inout` *)
   | Array_push -> (
@@ -453,7 +449,17 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Unsafe_cast -> pure (function [ v ] -> v | _ -> bug x)
   (* `sum`'s own: whether its `T` is `Float`, and its lanes if it is *)
   | Float_lanes -> pure (fun _ -> VBool (tys = [ Ty.float ]))
-  | Unbuilt -> (
+  | Sync_keyed ->
+      pure (function
+        | [ VInt n; h ] ->
+            if n < 1L then
+              raise
+                (Panic
+                   (Printf.sprintf
+                      "`sync.keyed` keeps at least 1 instance, not %Ld" n));
+            VKeyed (Int64.to_int n, h)
+        | _ -> bug x)
+  | Lib_panic -> (
       function
       | [ VStr what ] -> raise (Panic what)
       | _ -> bug x)

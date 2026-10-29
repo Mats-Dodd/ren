@@ -1,10 +1,16 @@
 # ren journal 2 · ../main.ren · deps: Console Fs Os Proc
-1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, from the folder this is in.\n\n# the first recipe, so the one that runs with no args\nall: build test\n  echo all done\n\nbuild: base\n  echo building\n  echo built\n\ntest: base\n  echo testing\n\nbase:\n  echo base\n\n# exits with 3 halfway through, so its last line never runs\nbroken: base\n  echo trying\n  exit 3\n  echo never\n")
+1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, from the folder this is in.\n\n# the first recipe, so the one that runs with no args: `build` and\n# `test` both need only `base`, so they run at once\nall: build test\n  echo all done\n\nbuild: base\n  echo building\n  echo built\n\n# waits a moment first, so `build` has printed by the time it does\ntest: base\n  sleep 0.5\n  echo testing\n\nbase:\n  echo base\n\n# exits with 3 halfway through, so its last line never runs\nbroken: base\n  echo trying\n  exit 3\n  echo never\n\n# `broken` fails while `slow` runs, which is killed then\nci: broken slow\n\nslow: base\n  exec sleep 5\n  echo never\n")
 2 main Os.args() → ["build"]
-3 main Console.error("echo base")
-4 main Proc.run("sh", ["-c", "echo base"]) → Ok(0)
-5 main Console.error("echo building")
-6 main Proc.run("sh", ["-c", "echo building"]) → Ok(0)
-7 main Console.error("echo built")
-8 main Proc.run("sh", ["-c", "echo built"]) → Ok(0)
-9 main exit 0
+3 main/run_all:0 Console.error("echo base")
+4 main/run_all:0 Proc.run("sh", ["-c", "echo base"]) …
+5 poll main/run_all:0
+6 main/run_all:0 → Ok(0)
+7 main/run_all:1 Console.error("echo building")
+8 main/run_all:1 Proc.run("sh", ["-c", "echo building"]) …
+9 poll main/run_all:1
+10 main/run_all:1 → Ok(0)
+11 main/run_all:1 Console.error("echo built")
+12 main/run_all:1 Proc.run("sh", ["-c", "echo built"]) …
+13 poll main/run_all:1
+14 main/run_all:1 → Ok(0)
+15 main exit 0

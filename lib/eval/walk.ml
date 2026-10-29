@@ -156,12 +156,12 @@ let keyed cx (t : Ty.ty) v =
    be chosen ahead of time to collide, as they could with a fixed hash
    (operators.md, "`Map` and `Set`"). Nothing a program sees depends on
    it: a table keeps its keys in the order they were set (table.ml). *)
-let seed = Random.State.bits64 (Random.State.make_self_init ())
+let seed = ref (Random.State.bits64 (Random.State.make_self_init ()))
 
 (* Two hashes made one, so each part's place counts: FNV-1a's step, with
    the seed. The multiplication's carries make where two parts' hashes
    collide differ from seed to seed. *)
-let mix h x = Int64.mul (Int64.logxor (Int64.logxor h x) seed) 0x100000001b3L
+let mix h x = Int64.mul (Int64.logxor (Int64.logxor h x) !seed) 0x100000001b3L
 
 let hash_string s =
   String.fold_left
@@ -203,7 +203,7 @@ let rec hash_shape v =
         (fun h (k, v) -> Int64.add h (mix (hash_shape k) (hash_shape v)))
         12L (Table.to_list t)
   | VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _ | VType _
-  | VDict _ | VCell _ | VEvidence _ | VSched _ ->
+  | VDict _ | VCell _ | VEvidence _ | VSched _ | VKeyed _ | VKeys _ ->
       failwith "bug: a hash of something with no `==`"
 
 (* [v]'s hash, as a value of type [t]: the same for two values [equal]
@@ -244,6 +244,16 @@ let rec hash cx (t : Ty.ty) v =
             13L (Table.to_list members)
       | (Hidden _ | Shape), _ -> hash_shape v)
 
+(* [v]'s hash as [hash] gives it, but with no seed, so the same in every
+   run: what has to be, which of `sync.keyed`'s instances a key goes to
+   (compiler.md, "The standard library (step 8)"), since what each instance
+   holds can be seen. Nothing hashes meanwhile but [hash]'s own walk, and a
+   key's function, which can't wait. *)
+let fixed_hash cx t v =
+  let s = !seed in
+  seed := 0L;
+  Fun.protect ~finally:(fun () -> seed := s) (fun () -> hash cx t v)
+
 (* ---- `==` ---- *)
 
 (* [a] and [b] compared by their shape alone, where nothing says what
@@ -275,7 +285,7 @@ let rec by_shape a b =
            xs ys
   | (VInt _ | VFloat _ | VBool _ | VStr _ | VBytes _ | VUnit), _ ->
       same_leaf a b
-  | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
+  | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _ | VKeyed _ | VKeys _), _ ->
       failwith "bug: a comparison of functions"
   | (VCon _ | VTag _ | VRecord _ | VArray _ | VTuple _ | VTable _), _ -> false
   | (VType _ | VDict _ | VCell _ | VEvidence _ | VSched _), _ ->

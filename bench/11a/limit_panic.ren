@@ -1,0 +1,17 @@
+// A semaphore given back a permit it didn't give (compiler.md, "Stage
+// 11a", "Native"): the standard library's panic, natively as under `ren
+// run`, at the program's call.
+
+import sync.{Semaphore}
+
+dep Work =
+  run: fn(n: Int) -> Int
+
+handler double() for Work =
+  run(n) => n * 2
+
+fn main() uses Console, Async =
+  with sync.semaphore(1), sync.limit() over double() in
+    print(Work.run(1))
+    Semaphore.release()
+    print(Work.run(2))

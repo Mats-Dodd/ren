@@ -7,18 +7,29 @@
 
 import justfile.{Justfile, Recipe}
 import plan
+import sim.{Run, SimProc}
 
 // `pub`, with its whole contract, since the tests below call it, and a
 // test sees what an importer sees
-pub fn main() ! FsError | InvalidUtf8 | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console =
+pub fn main() ! FsError | InvalidUtf8 | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console, Async =
   let j = try Justfile.parse(try Fs.read_str(Path.of("justfile")))
   let args = Os.args()
   let name =
     if args.len() > 0 then args[0]
     else if j.recipes().len() > 0 then j.recipes()[0].name
     else fail NoRecipes
-  for n in try plan.order(j, name)
-    try run(try j.recipe(n))
+  try run_all(j, try plan.levels(j, name))
+
+// Each level's recipes at once, eight at most, one level after another:
+// a level depends only on the levels before it. The first recipe to fail
+// stops the others, whose programs are killed, and its error is
+// `run_all`'s.
+fn run_all(j: Justfile, levels: Array<Array<Str>>) ! RecipeFailed(name: Str, code: Int) | ProcError | UnknownRecipe(name: Str) uses Proc, Console, Async =
+  for level in levels
+    var recipes: Array<Recipe> = []
+    for n in level
+      &recipes.push(try j.recipe(n))
+    try Async.each(recipes, max: 8) fn(r) => try run(r)
 
 // Each line of `r` in a shell, until one exits with anything but 0. As
 // just does, each line is shown on stderr before it runs.
@@ -44,10 +55,15 @@ test "no args runs the first recipe, after what it depends on" =
     try main()
   assert TestProc.ran() == [sh("fmt a.c"), sh("cc a.c"), sh("cc b.c")]
 
+// `left` and `right` are one level, run at once, so in either order
 test "each line is shown on stderr as it runs" =
   with mem_fs(files(diamond())) in
     try main()
-  assert TestConsole.errors() == ["echo base", "echo left", "echo right", "echo all"]
+  let errors = TestConsole.errors()
+  assert errors.len() == 4
+  assert errors[0] == "echo base"
+  assert errors[1..3].sort() == ["echo left", "echo right"]
+  assert errors[3] == "echo all"
   assert TestConsole.output() == []
 
 test "the recipe named in the args" =
@@ -58,14 +74,43 @@ test "the recipe named in the args" =
 test "a recipe two others depend on runs once" =
   with mem_fs(files(diamond())) in
     try main()
-  assert TestProc.ran() == [sh("echo base"), sh("echo left"), sh("echo right"), sh("echo all")]
+  let ran = TestProc.ran()
+  assert ran.len() == 4
+  assert ran[0] == sh("echo base")
+  assert ran[1..3].map(fn(c) => c.args[1]).sort() == ["echo left", "echo right"]
+  assert ran[3] == sh("echo all")
 
+// `right` is beside `left`, so it may have run before `left` failed; the
+// level after it never runs
 test "the first line to fail stops everything" =
   let fails = Exit { command: sh("echo left"), code: 3 }
   with mem_fs(files(diamond())), test_proc([fails]) in
     assert attempt main() == Err(RecipeFailed("left", 3))
-    assert TestProc.ran() == [sh("echo base"), sh("echo left")]
-    assert TestConsole.errors() == ["echo base", "echo left"]
+    let ran = TestProc.ran()
+    assert ran[0] == sh("echo base")
+    assert ran.includes(sh("echo left"))
+    assert not ran.includes(sh("echo all"))
+    assert not TestConsole.errors().includes("echo all")
+
+// On `sim.proc`, a recipe's line takes the time its `Run` says, in
+// virtual time, and one cancelled while it runs is killed.
+
+test fn takes(line: Str, code: Int, seconds: Int) -> Run =
+  Run { command: sh(line), code: code, takes: Duration.seconds(seconds) }
+
+test "a level's recipes run at once" =
+  with mem_fs(files(diamond())), sim.proc([takes("echo left", 0, 2), takes("echo right", 0, 3)]) in
+    try main()
+    assert TestProc.ran().len() == 4
+    assert SimProc.killed() == []
+  assert Clock.now() == Time.epoch + Duration.seconds(3)
+
+test "a failing recipe stops the others, whose programs are killed" =
+  with mem_fs(files(diamond())), sim.proc([takes("echo left", 3, 2), takes("echo right", 0, 10)]) in
+    assert attempt main() == Err(RecipeFailed("left", 3))
+    assert SimProc.killed() == [sh("echo right")]
+    assert not TestProc.ran().includes(sh("echo all"))
+  assert Clock.now() == Time.epoch + Duration.seconds(2)
 
 test "a recipe that isn't there" =
   with mem_fs(files(diamond())), test_os(["deploy"]) in
