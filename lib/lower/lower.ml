@@ -2025,7 +2025,7 @@ and range_loop cx (e : expr) (pat : pattern) lo hi body =
    its length can't change. A cursor's is a loop of its own
    ([cursor_loop]). *)
 and for_loop cx (e : expr) index (pat : pattern) (iter : expr) body =
-  match (node cx iter.node).found with
+  match (node cx e.node).found with
   | Some (Method_of next) -> (
       match zipped cx iter with
       | Some arrays -> zip_loop cx e pat arrays body
@@ -2201,9 +2201,10 @@ and array_loop cx (e : expr) idx (pat : pattern) (iter : expr) body =
 
 (* `for x in &c` over a cursor (Infer_expr.cursor), whose method [next]
    is called each time round, with `&` of the place, until it gives
-   `None`: a [While] that [Break]s then. `c` keeps its place after the
-   loop, a `break` included. `for x in c` goes over a copy, in a
-   temporary. *)
+   `None`: a [While] that [Break]s then. Inference recorded the method's
+   use at the `for`'s node, [e] (Infer_expr.cursor). `c` keeps its place
+   after the loop, a `break` included. `for x in c` goes over a copy, in
+   a temporary. *)
 and cursor_loop cx (e : expr) (pat : pattern) (iter : expr) next body =
   let loc = e.loc in
   let cursor = ty_of cx iter.node in
@@ -2212,11 +2213,11 @@ and cursor_loop cx (e : expr) (pat : pattern) (iter : expr) next body =
   let fty : Ty.ty =
     Fun ([ { mode = Inout; ty = cursor } ], opt, Ty.closed, Ty.closed)
   in
-  let a = targs_of cx iter.node in
+  let a = targs_of cx e.node in
   let callee : C.kind =
     match Prelude.find next with
-    | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx iter.node)
-    | None -> Global (next, a, descs cx a, dicts_of cx iter.node)
+    | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx e.node)
+    | None -> Global (next, a, descs cx a, dicts_of cx e.node)
   in
   let call (v : C.var) =
     mk (Call (mk callee fty iter.loc, [ Ref v ], cx.ev)) opt iter.loc

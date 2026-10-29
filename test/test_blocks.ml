@@ -1715,6 +1715,38 @@ fn main() uses Console =
     ()
     |}]
 
+(* A cursor kept in a field: the method's use is recorded at the `for`,
+   not at `job.rest`, whose node has its field already. Lowering crashed
+   on `for x in job.rest` when the one overwrote the other. *)
+let job_cursor =
+  each_cursor
+  ^ {|
+type Job = { name: Str, rest: Each }
+
+fn main() uses Console =
+  let job = Job { name: "a", rest: Each { xs: [1, 2, 3], i: 1 } }
+  for x in job.rest
+    print(x)
+  var j = job
+  for x in &j.rest
+    print(x)
+  print(j.rest.i)
+  print(job.rest.i)
+|}
+
+let%expect_test "[s6 accept] for over a cursor in a field" =
+  (* target: prints `2`, `3`, `2`, `3`, then `3` and `1` *)
+  run job_cursor;
+  [%expect {|
+    2
+    3
+    2
+    3
+    3
+    1
+    ()
+    |}]
+
 let%expect_test "[s6 accept] row 37: a block advances a cursor it captures" =
   (* the cursor owns its array, so advancing it touches no other place.
      target: prints `Some(1)` then `Some(2)` *)

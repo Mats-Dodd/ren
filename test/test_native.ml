@@ -984,3 +984,26 @@ fn main() uses Console =
       │        ^^^^^^^^^^^^^^^^ `ren build` can't compile this yet
       help: run it with `ren run test.ren`
     |}]
+
+let%expect_test "a `for` over a cursor kept in a field compiles" =
+  (* lowering crashed on `for x in job.rest` (test_blocks.ml, "for over
+     a cursor in a field"), so `ren build` did too *)
+  mem ~only:[]
+    {|
+type Each = { xs: Array<Int>, i: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.i < self.xs.len() then
+      self.i += 1
+      Some(self.xs[self.i - 1])
+    else None
+type Job = { name: Str, rest: Each }
+
+fn main() uses Console =
+  let job = Job { name: "a", rest: Each { xs: [1, 2, 3], i: 1 } }
+  for x in job.rest
+    print(x)
+  var j = job
+  for x in &j.rest
+    print(x)
+|};
+  [%expect {| Mem Lint: ok |}]

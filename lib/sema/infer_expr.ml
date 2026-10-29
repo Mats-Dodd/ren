@@ -790,7 +790,7 @@ and synth env cx (e : expr) : ty =
             | TCon (p, [ x ]), _ when p = set_path -> x
             | TCon (p, _), _
               when p <> Path.prelude "Array" && op_of env ta "next" <> None ->
-                cursor env cx iter ta
+                cursor env cx ~at:e.node iter ta
             | _ -> (
                 let elem = fresh_var env.st in
                 let ok =
@@ -813,8 +813,8 @@ and synth env cx (e : expr) : ty =
         (fun (i : pattern) ->
           bind_pattern env cx int i;
           match over with
-          | Each iter
-            when match Hashtbl.find_opt cx.found iter.node with
+          | Each _
+            when match Hashtbl.find_opt cx.found e.node with
                  | Some (Method_of _) -> true
                  | _ -> false ->
               report env
@@ -824,8 +824,8 @@ and synth env cx (e : expr) : ty =
           | _ -> ())
         index;
       (match over with
-      | Each ({ kind = Ref _; _ } as iter)
-        when match Hashtbl.find_opt cx.found iter.node with
+      | Each { kind = Ref _; _ }
+        when match Hashtbl.find_opt cx.found e.node with
              | Some (Method_of _) -> true
              | _ -> false ->
           (* over a cursor, `for x in &c` changes `c`, not `x` *)
@@ -965,15 +965,17 @@ and synth env cx (e : expr) : ty =
    12), [iter], of type [tc]: a value whose type has a method
    `next(inout self) -> Option<T>`, found as an operator is, by method on
    its type, which can't fail or use a dependency. Its elements are [T]s.
-   The method's use is recorded at [iter], whose type is the cursor's, so
-   lowering can call it each time round (lower.ml, [for_loop]). *)
-and cursor env cx (iter : expr) tc =
+   The method's use is recorded at [at], the `for`'s own node, so
+   lowering can call it each time round (lower.ml, [for_loop]): not at
+   [iter], whose node has what was found of it already, a field's
+   [Field_of] in `for x in job.rest`. *)
+and cursor env cx ~at (iter : expr) tc =
   let td, o = Option.get (op_of env tc "next") in
   let path = op_path td o in
   if path.home = env.home && not (Hashtbl.mem env.globals path) then
     raise (Unchecked { caller = cx.self; callee = path });
-  let tm = lookup env cx ~node:iter.node iter.loc (Global path) in
-  Hashtbl.replace cx.found iter.node (Method_of path);
+  let tm = lookup env cx ~node:at iter.loc (Global path) in
+  Hashtbl.replace cx.found at (Method_of path);
   let elem = fresh_var env.st in
   let shaped =
     o.okind = Method
