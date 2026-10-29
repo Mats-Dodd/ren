@@ -346,7 +346,7 @@ let instance env x =
         let rec vars t =
           match repr t with
           | TVar { contents = Unbound (id, _) } -> [ id ]
-          | TCon (_, args) -> List.concat_map vars args
+          | TCon (_, args) | TVariant (_, _, args) -> List.concat_map vars args
           | _ -> []
         in
         let given =

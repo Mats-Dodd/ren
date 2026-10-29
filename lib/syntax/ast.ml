@@ -61,6 +61,10 @@ type 't ty =
   | TyTuple of 't ty list * Loc.t
       (** [(Str, Int)]: a tuple's type, of two or three (operators.md, "Tuples")
       *)
+  | TyVariant of 't * ident * 't ty list
+      (** [Order.Placed], a variant type: the sum, the variant's name and the
+          sum's type arguments, written after the variant, [Tree.Node<Int>]
+          (compiler.md, "Data stage", "Variant types") *)
 
 (* What a function can fail with, written after `!` (errors.md):
 
@@ -951,6 +955,11 @@ let rec show_ty : ty -> string = function
       | rest -> "(" ^ String.concat " " (names :: rest) ^ ")")
   | TyErrors es -> show_errors es
   | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show_ty ts) ^ ")"
+  | TyVariant (name, c, []) -> show_tyname name ^ "." ^ c.name
+  | TyVariant (name, c, args) ->
+      show_tyname name ^ "." ^ c.name ^ "<"
+      ^ String.concat ", " (List.map show_ty args)
+      ^ ">"
 
 (* `Clock & TestClock` *)
 and show_joined deps = String.concat " & " (List.map show_dep deps)

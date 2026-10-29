@@ -229,6 +229,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   match t with
   | Var i -> ( match List.nth_opt args i with Some a -> a | None -> t)
   | Con (p, ts) -> Con (p, List.map (subst args) ts)
+  | Variant (p, c, ts) -> Variant (p, c, List.map (subst args) ts)
   | _ -> t
 
 (* What a type is called in a message: `Map<Str, Int>`. *)
@@ -261,7 +262,9 @@ let recursive cx (p : Path.t) =
   | Some r -> r
   | None ->
       let rec paths acc (t : Ty.ty) =
-        match t with Con (q, ts) -> List.fold_left paths (q :: acc) ts | _ -> acc
+        match t with
+        | Con (q, ts) | Variant (q, _, ts) -> List.fold_left paths (q :: acc) ts
+        | _ -> acc
       in
       let fields (fs : Iface.field list) =
         List.fold_left (fun acc (f : Iface.field) -> paths acc f.fty) [] fs
@@ -388,6 +391,9 @@ let packed_struct cx (t : Ty.ty) tys =
   | _ -> None
 
 let rec layout cx loc (t : Ty.ty) : layout =
+  (* a variant type's value is its sum's, kept as the sum is (compiler.md,
+     "Data stage", "Variant types") *)
+  let t = Ty.erase_variants t in
   match t with
   | Con (p, args) when cx.release && not (Hashtbl.mem cx.boxed t) -> (
       match small cx loc p args with
@@ -503,6 +509,7 @@ and struct_id cx (t : Ty.ty) st =
       n
 
 and plain_layout cx loc (t : Ty.ty) : layout =
+  let t = Ty.erase_variants t in
   match t with
   | _ when t = C.type_ty || t = C.dict_ty -> Desc
   | _ when t = C.evidence_ty -> Ev
@@ -539,6 +546,7 @@ and plain_layout cx loc (t : Ty.ty) : layout =
   | Fun _ -> Block
   (* a handler's description *)
   | Impl _ -> Boxed
+  | Variant _ -> bug "a variant type, erased above"
   | Error -> bug "a type with an error"
 
 (* [f] with [n] of the type variables words. *)
@@ -569,7 +577,7 @@ let word_only cx (l : layout) =
 
 (* The declaration of the named type [t], and its arguments. *)
 let rec decl cx loc (t : Ty.ty) =
-  match t with
+  match Ty.as_sum t with
   | Con (p, args) -> (
       match Hashtbl.find_opt cx.types p with
       (* an opaque type is its representation, where it can be seen *)
@@ -604,6 +612,7 @@ let placed cx loc d t tag tys layouts =
 (* The constructor [c] of the sum type [t]: of a small value, its fields'
    slots in the struct ([small]). *)
 let ctor_shape cx loc (t : Ty.ty) c =
+  let t = Ty.erase_variants t in
   let small_of (t : Ty.ty) =
     match (t, layout cx loc t) with
     | Con (p, args), Struct _ -> small cx loc p args
@@ -651,6 +660,8 @@ let ctor_shape cx loc (t : Ty.ty) c =
 
 (* A sum type's constructors, by tag. *)
 let rec ctors cx (t : Ty.ty) =
+  (* a variant type's value is always its own constructor: no switch on
+     its tag *)
   match t with
   | Con (p, args) -> (
       match Hashtbl.find_opt cx.types p with
@@ -659,8 +670,14 @@ let rec ctors cx (t : Ty.ty) =
       | _ -> None)
   | _ -> None
 
-(* A record's fields, in the order they're declared, with their types. *)
+(* A record's fields, in the order they're declared, with their types; a
+   variant type's are its constructor's. *)
 let record_fields cx loc (t : Ty.ty) =
+  match (t, decl cx loc t) with
+  | Variant (_, c, _), ({ body = Sum cs; _ }, args) ->
+      let k = List.find (fun (k : Iface.ctor) -> k.cname = c) cs in
+      List.map (fun (f : Iface.field) -> (f.fname, subst args f.fty)) k.cfields
+  | _ ->
   match decl cx loc t with
   | { body = Record fs; _ }, args ->
       List.map (fun (f : Iface.field) -> (f.fname, subst args f.fty)) fs
@@ -668,7 +685,12 @@ let record_fields cx loc (t : Ty.ty) =
       unsupported loc (sprintf "a field of the opaque type `%s`" (ty_name t))
   | _ -> bug "fields of a type that isn't a record"
 
-let record_shape cx loc t =
+let record_shape cx loc (t : Ty.ty) =
+  match t with
+  | Variant (_, c, _) ->
+      (* a field at a known constructor: its place in the sum's value *)
+      ctor_shape cx loc t c
+  | _ ->
   let tys = List.map snd (record_fields cx loc t) in
   placed cx loc (fst (decl cx loc t)) t 0 tys (List.map (slot cx loc) tys)
 
@@ -685,6 +707,7 @@ let error_shape cx loc name (payload : Ty.ty list) =
    it needs to look for (nan.ml). A type variable or a type the program
    doesn't declare may. *)
 let floaty cx (t : Ty.ty) =
+  let t = Ty.erase_variants t in
   let seen = Hashtbl.create 8 in
   let rec go (t : Ty.ty) =
     match t with
@@ -720,6 +743,8 @@ let floaty cx (t : Ty.ty) =
    with [template], a field's type in a declaration, whose [Var i] is the
    type's [i]-th parameter. *)
 let rec static_desc cx loc ~template (t : Ty.ty) : int =
+  (* a variant type is described as its sum *)
+  let t = Ty.erase_variants t in
   (* what a descriptor describes is a word, or in one *)
   if not template then no_struct_in cx loc t;
   match Hashtbl.find_opt cx.descs (template, t) with
@@ -745,6 +770,7 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
         (* a description kept in a record, an array or a generic type's
            value: which handler it is, and what it captured, it keeps *)
         | Impl _ -> (D_handler, [])
+        | Variant _ -> bug "a variant type, erased above"
         | Fun _ | Error -> bug "a descriptor of what has none"
       in
       let counted =
@@ -770,7 +796,7 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
 (* A [Struct]'s type in [t], kept boxed instead: what has a descriptor
    is a word, or in one. *)
 and no_struct_in cx loc (t : Ty.ty) =
-  match t with
+  match Ty.erase_variants t with
   | Con (p, args) ->
       if
         cx.release
@@ -1403,7 +1429,7 @@ let rec pure (e : C.expr) =
   match e.kind with
   | Int _ | Float _ | Bool _ | Unit | Local _ -> true
   | Prim (_, args) -> List.for_all pure args
-  | Field (r, _, _) -> pure r
+  | Field (r, _, _) | Of_variant r -> pure r
   | Update (r, _, v) -> pure r && pure v
   | _ -> false
 
@@ -1435,7 +1461,7 @@ let rec calm (e : C.expr) =
   | Int _ | Float _ | Bool _ | Unit | Str _ | Local _ -> true
   | Prim ((Neg | Not | Binop _ | Length | Get_index _), args) ->
       List.for_all calm args
-  | Field (r, _, _) -> calm r
+  | Field (r, _, _) | Of_variant r -> calm r
   | _ -> false
 
 let is_index (e : C.expr) = match e.kind with Local _ | Int _ -> true | _ -> false
@@ -1635,25 +1661,10 @@ and expr_at fs env (e : C.expr) : atom =
         (sprintf "`%s` used as a value, not called" (Intrinsic.name x))
   | Prim (p, args) -> prim fs env e p args
   | Con (_, c, args) when is_struct (lay e.ty) ->
-      (* a small value: its tag and its fields in their slots, a scalar in
-         each slot it has no field in *)
-      let l = lay e.ty in
-      let st = match l with Struct (n, _) -> struct_of cx n | _ -> bug "a struct" in
-      let sh = ctor_shape cx (at fs e.loc) e.ty c in
       let xs = List.map (expr fs env) args in
-      let slots = Array.of_list (List.map (dummy fs env) st.sfields) in
-      (match st.skind with
-      | Tagged -> slots.(0) <- Int (Int64.of_int sh.tag)
-      | Nullable (none, _) when sh.tag = none -> slots.(0) <- Scalar_ctor (-1)
-      | _ -> ());
-      List.iter2
-        (fun ((place : place), _) x ->
-          match place with
-          | Slot k -> slots.(k) <- x
-          | Bits _ -> bug "a struct's field packed")
-        sh.places xs;
+      let r = small_ctor fs env (lay e.ty) (ctor_shape cx (at fs e.loc) e.ty c) xs in
       List.iter (consume env) xs;
-      owned fs env "$struct" l (Make_struct (Array.to_list slots))
+      r
   | Con (_, c, args) -> (
       let sh = ctor_shape cx (at fs e.loc) e.ty c in
       match args with
@@ -1708,14 +1719,21 @@ and expr_at fs env (e : C.expr) : atom =
           fields sh.places
       in
       let r =
-        match atom_layout x with
-        | Struct _ as l ->
+        match (atom_layout x, r.ty) with
+        | (Struct _ as l), Variant _ ->
+            (* a small value of a variant type: its constructor's again,
+               its tag and the slots it has no field in made anew *)
+            small_ctor fs env l sh parts
+        | (Struct _ as l), _ ->
             owned fs env "$struct" l (Make_struct (packed_words fs sh parts))
         | _ -> alloc_taking fs env sh parts
       in
       consume env y;
       drop fs env x;
       r
+  | Of_variant r ->
+      (* a variant type's value is its sum's: the same variable *)
+      expr fs env r
   | Array xs ->
       let l = element cx (lay (C.elem_ty e.ty)) in
       let xs = List.map (expr fs env) xs in
@@ -1833,6 +1851,26 @@ and break_out fs env =
 (* The words of an object, or a small value, of shape [sh] whose fields
    are [fields], in the order they're declared: each a field, or the
    small scalars packed in it. *)
+(* A small value of layout [l], a struct, made by the constructor of shape
+   [sh] of its fields [xs]: its tag and its fields in their slots, a scalar
+   in each slot it has no field in. *)
+and small_ctor fs env (l : layout) (sh : shape) xs =
+  let st =
+    match l with Struct (n, _) -> struct_of fs.cx n | _ -> bug "a struct"
+  in
+  let slots = Array.of_list (List.map (dummy fs env) st.sfields) in
+  (match st.skind with
+  | Tagged -> slots.(0) <- Int (Int64.of_int sh.tag)
+  | Nullable (none, _) when sh.tag = none -> slots.(0) <- Scalar_ctor (-1)
+  | _ -> ());
+  List.iter2
+    (fun ((place : place), _) x ->
+      match place with
+      | Slot k -> slots.(k) <- x
+      | Bits _ -> bug "a struct's field packed")
+    sh.places xs;
+  owned fs env "$struct" l (Make_struct (Array.to_list slots))
+
 and packed_words fs (sh : shape) fields =
   let words = Array.make sh.words [] in
   List.iter2
@@ -3452,6 +3490,12 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
         | PInt n -> check (Compare (Eq, x, Int n))
         | PBool true -> emit fs (If (x, block fs rest_then, []))
         | PBool false -> emit fs (If (x, [], block fs rest_then))
+        | PCon (_, c, ps) when (match p.pty with Variant _ -> true | _ -> false)
+          ->
+            (* a value of a variant type is always its own constructor:
+               its tag isn't tested *)
+            let sh = ctor_shape cx (at fs p.ploc) p.pty c in
+            test ~known vars (fields sh ps @ rest) k
         | PCon (_, c, ps) -> tagged (ctor_shape cx (at fs p.ploc) p.pty c) ps
         | PTag (t, ps) ->
             tagged

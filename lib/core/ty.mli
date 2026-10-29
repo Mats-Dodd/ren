@@ -10,6 +10,11 @@ type block_mode = Ast.block_mode = Ordinary | Concurrent | Spawned
 
 type ty =
   | Con of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
+  | Variant of Path.t * string * ty list
+      (** a variant type, [Order.Placed]: one by-name constructor of the sum at
+          the path, at the sum's type arguments, [Tree.Node<Int>] (compiler.md,
+          "Data stage", "Variant types"). A record of exactly that
+          constructor's fields; its value is the sum's own *)
   | Fun of param list * ty * row * row  (** params, result, errors, uses *)
   | Var of int
       (** a type variable. In a scheme, a generic one, numbered by first
@@ -93,6 +98,15 @@ val option : ty -> ty
 val tuple_path : int -> Path.t
 val tuple : ty list -> ty
 val is_tuple : Path.t -> bool
+
+(* A variant type's sum, [Order] for [Order.Placed], whose value it is
+   (its representation, its descriptor, its derived operations); any other
+   type is itself. *)
+val as_sum : ty -> ty
+
+(* [t] with every variant type in it, however deep, made its sum: what a
+   value of it is made of, which a layout or a descriptor needs. *)
+val erase_variants : ty -> ty
 
 (* The dependency a handler `over any` lists until it's installed over
    one, and whether a dependency is it. *)

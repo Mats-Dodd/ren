@@ -321,9 +321,17 @@ and kind =
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
-  | Field of expr * Path.t * string  (** [r.f], and the record type of [r] *)
+  | Field of expr * Path.t * string
+      (** [r.f], and the record type of [r]; or the sum type, when [r] is a
+          value of one of its variant types, [Order.Placed], a field read at a
+          known constructor *)
   | Update of expr * string * expr
-      (** the record with one field replaced: a new record *)
+      (** the record with one field replaced: a new record; or a new value of
+          [r]'s variant type *)
+  | Of_variant of expr
+      (** a value of a variant type, [Order.Placed], as its sum, [Order]: the
+          same value, so no code (compiler.md, "Data stage", "Variant types").
+          What [Placed { ..p }] with nothing else given is *)
   | Array of expr list
   | Tuple of expr list  (** [(k, v)]: two parts, or three *)
   | Tag of string * expr list * desc list

@@ -279,7 +279,7 @@ Tested against the compiler on 2026-10-28:
 | `let Some(n) = o else ...` | rejected with a good error and help to use `match`; `o orelse 0` works. Since step 3: works, its `else` leaving with `fail` or `break`; a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too |
 | Methods on a sum type | work |
 | A field every variant has, `s.id` | "`.id` needs a record, but this is a `Shape`" |
-| Narrowing in an arm | none; a variant isn't a type |
+| Narrowing in an arm | none; a variant isn't a type. Since step 4: a variant with named fields is a type, `Order.Placed`, which a pattern's `as` binds, `Placed { .. } as p`; a record of its fields, read, matched and updated, that goes anywhere a value does, `Placed { ..p }` the sum again; `==`, order, `hash` and `show` the sum's |
 | Exhaustiveness | very good: lists the missing patterns, says guarded arms don't count, flags unreachable arms |
 | One constructor name in two types | resolved by the expected type, else "write `A.Open`" |
 | Records | nominal: same-shaped records don't mix |

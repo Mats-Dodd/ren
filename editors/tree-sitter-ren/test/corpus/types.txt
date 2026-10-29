@@ -806,3 +806,102 @@ fn k() -> over Sql = h()
     (call_expression
       (identifier)
       (arguments))))
+
+================================================================================
+Variant types
+================================================================================
+
+type Box = { p: Order.Placed }
+
+fn ship(p: Order.Placed, t: Str) -> Order.Shipped = ship(p, t)
+
+fn left<T>(n: Tree.Node<T>) -> Option<Tree.Node<T>> = None
+
+fn far(p: shop.Order.Placed) -> Array<shop.Order.Placed> = [p]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (record_type
+      (field_declaration
+        (identifier)
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier)))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier)))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (variant_type
+      (type_name
+        (type_identifier))
+      (type_identifier))
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier))))
+  (function_definition
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (named_type
+      (type_name
+        (type_identifier))
+      (type_arguments
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (constructor_expression
+      (constructor_ref
+        (type_identifier))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (variant_type
+          (type_name
+            (identifier)
+            (type_identifier))
+          (type_identifier))))
+    (named_type
+      (type_name
+        (type_identifier))
+      (type_arguments
+        (variant_type
+          (type_name
+            (identifier)
+            (type_identifier))
+          (type_identifier))))
+    (array_expression
+      (identifier))))

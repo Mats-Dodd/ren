@@ -346,3 +346,11 @@ fn seats(p: Plan, o: Option<Int>) -> Int ! Missing =
 //         ^ operator
 //                   ^ keyword
     Free => 1
+
+// a variant type is a type, its variant's name too; a bare `Placed { ... }`
+// is read as a record, as the compiler's parser reads it
+fn ship(p: Order.Placed) -> Order = Order.Placed { ..p }
+//         ^ type
+//               ^ type
+//                          ^ type
+//                                        ^ constructor

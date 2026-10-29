@@ -31,6 +31,10 @@ type mode = Ast.mode = Read | Inout
 
 type ty =
   | TCon of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
+  | TVariant of Path.t * string * ty list
+      (** a variant type, [Order.Placed] (ty.ml, [Variant]): the sum's path,
+          the by-name constructor and the sum's type arguments. It unifies
+          only with itself, never with its sum *)
   | TFun of param list * ty * row * row  (** params, result, errors, uses *)
   | TVar of tvar ref
   | TErrors of row
@@ -247,6 +251,10 @@ let rec same_ty a b =
   | TError, TError -> true
   | TCon (p, xs), TCon (q, ys) ->
       p = q && List.length xs = List.length ys && List.for_all2 same_ty xs ys
+  | TVariant (p, c, xs), TVariant (q, d, ys) ->
+      p = q && c = d
+      && List.length xs = List.length ys
+      && List.for_all2 same_ty xs ys
   | TFun (ps, r, e, u), TFun (qs, r', e', u') ->
       List.length ps = List.length qs
       && List.for_all2 (fun p q -> p.mode = q.mode && same_ty p.ty q.ty) ps qs
@@ -330,6 +338,10 @@ let sorted_labels r =
       match repr t with
       | TCon (p, args) ->
           Path.full p ^ "<" ^ String.concat "," (List.map go args) ^ ">"
+      | TVariant (p, c, args) ->
+          Path.full p ^ "." ^ c ^ "<"
+          ^ String.concat "," (List.map go args)
+          ^ ">"
       | TVar { contents = Unbound (id, _) } -> "'" ^ string_of_int id
       | TSkol (id, _) -> "!" ^ string_of_int id
       | _ -> "?"
@@ -393,7 +405,7 @@ let rec close_free_needs t =
         | _ -> ()
       in
       go i.needs
-  | TCon (_, args) -> List.iter close_free_needs args
+  | TCon (_, args) | TVariant (_, _, args) -> List.iter close_free_needs args
   | TErrors e -> row_args e
   | TFun (ps, r, e, u) ->
       List.iter (fun p -> close_free_needs p.ty) ps;
@@ -413,7 +425,7 @@ let close_result_needs t =
         List.iter (fun d -> List.iter ty d.dargs) i.deps;
         row i.needs;
         row i.fails
-    | TCon (_, args) -> List.iter ty args
+    | TCon (_, args) | TVariant (_, _, args) -> List.iter ty args
     | TErrors e -> row e
     | TFun (ps, r, e, u) ->
         List.iter (fun p -> ty p.ty) ps;
@@ -538,6 +550,7 @@ let generalize st ~skolems ?(row_skolems = []) t =
               Hashtbl.replace st.skolem_vars id v;
               v)
     | TCon (n, args) -> TCon (n, List.map go args)
+    | TVariant (n, c, args) -> TVariant (n, c, List.map go args)
     | TErrors e -> TErrors (row e)
     | TImpl i ->
         let deps =
@@ -598,7 +611,7 @@ let generics t =
     | TVar { contents = Unbound (id, l) } as v when l = generic_level ->
         see seen_tys id v
     | TVar _ | TSkol _ | TError -> ()
-    | TCon (_, args) -> List.iter walk args
+    | TCon (_, args) | TVariant (_, _, args) -> List.iter walk args
     | TErrors e -> walk_row e
     | TImpl i ->
         List.iter (fun d -> List.iter walk d.dargs) i.deps;
@@ -645,6 +658,7 @@ let instantiate st t =
             v)
     | (TVar _ | TSkol _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
+    | TVariant (n, c, args) -> TVariant (n, c, List.map go args)
     | TErrors e -> TErrors (row e)
     | TImpl i ->
         (* `let`s fix the order: OCaml evaluates a record's fields in no
@@ -701,6 +715,7 @@ let replace (s : subst) t =
     | TSkol (id, _) as t -> Option.value (List.assoc_opt id s.tys) ~default:t
     | (TVar _ | TError) as t -> t
     | TCon (n, args) -> TCon (n, List.map go args)
+    | TVariant (n, c, args) -> TVariant (n, c, List.map go args)
     | TErrors e -> TErrors (row e)
     | TImpl i ->
         (* `let`s fix the order: OCaml evaluates a record's fields in no
@@ -794,6 +809,7 @@ let rec canon_ty c ~all t : Ty.ty =
       | None -> Error)
   | TVar _ | TError -> Error
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
+  | TVariant (p, k, args) -> Variant (p, k, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
   | TImpl i ->
       let deps =
@@ -883,6 +899,7 @@ let rec of_ty ~vars ~tails (t : Ty.ty) =
   let go = of_ty ~vars ~tails in
   match t with
   | Con (p, args) -> TCon (p, List.map go args)
+  | Variant (p, c, args) -> TVariant (p, c, List.map go args)
   | Errors e -> TErrors (of_row ~vars ~tails ~dep:false e)
   | Impl i ->
       let deps =
@@ -953,6 +970,9 @@ let matching st s t =
     | TVar { contents = Unbound (id, l) }, t when l = generic_level ->
         if not (Hashtbl.mem tys id) then Hashtbl.add tys id t
     | TCon (p, a), TCon (q, b) when p = q && List.length a = List.length b ->
+        List.iter2 go a b
+    | TVariant (p, c, a), TVariant (q, d, b)
+      when p = q && c = d && List.length a = List.length b ->
         List.iter2 go a b
     | TFun (ps, r, e, u), TFun (qs, r', e', u')
       when List.length ps = List.length qs ->
@@ -1127,7 +1147,7 @@ let rec row_vars t =
   in
   match repr t with
   | TVar _ | TSkol _ | TError -> []
-  | TCon (_, args) -> List.concat_map row_vars args
+  | TCon (_, args) | TVariant (_, _, args) -> List.concat_map row_vars args
   | TErrors e -> row e
   | TImpl i ->
       List.concat_map (fun d -> List.concat_map row_vars d.dargs) i.deps
@@ -1140,7 +1160,7 @@ let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
   | TVar _ | TError | TErrors _ | TImpl _ -> []
-  | TCon (_, args) -> List.concat_map skolems args
+  | TCon (_, args) | TVariant (_, _, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
 (* Whether [v], a variable still unbound, is in [t]: a call says which of
@@ -1152,7 +1172,7 @@ let mentions v t =
         match repr t with
         | TVar { contents = Unbound (i, _) } -> i = id
         | TVar _ | TSkol _ | TError -> false
-        | TCon (_, args) -> List.exists go args
+        | TCon (_, args) | TVariant (_, _, args) -> List.exists go args
         | TErrors e -> row e
         | TImpl i ->
             List.exists (fun d -> List.exists go d.dargs) i.deps

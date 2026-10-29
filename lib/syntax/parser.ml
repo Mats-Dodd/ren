@@ -446,12 +446,33 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
   | _ ->
       let start = loc p in
       let name = parse_tyname p in
+      (* a variant type, `Order.Placed`, its sum's arguments after it,
+         `Tree.Node<Int>` (compiler.md, "Data stage", "Variant types") *)
+      let variant =
+        match (peek p, peek2 p) with
+        | DOT, IDENT c when is_upper c ->
+            advance p;
+            Some (upper_ident p "a variant's name")
+        | _ -> None
+      in
       let args =
         if peek p = LT then (
           advance p;
           sep_list p ~close:GT (parse_ty ~arg:true))
         else []
       in
+      (match (variant, peek p, peek2 p) with
+      | None, DOT, IDENT c when is_upper c && args <> [] ->
+          Diag.error (loc p)
+            ~help:
+              (Printf.sprintf "write `%s.%s<%s>`" (show_tyname name) c
+                 (String.concat ", " (List.map show_ty args)))
+            "a variant type's arguments are its sum's, written after the \
+             variant"
+      | _ -> ());
+      match variant with
+      | Some c -> TyVariant (name, c, args)
+      | None ->
       if peek p = AMP then
         (* several dependencies, an implementation of each sharing one
            state: `Clock & TestClock`, and what it needs, `uses Os` *)

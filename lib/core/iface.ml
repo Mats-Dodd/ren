@@ -297,6 +297,11 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
   match t with
   | TyName ({ tref = Param i; _ }, _) -> Var i
   | TyName ({ tref = Named path; _ }, args) -> Con (path, List.map go args)
+  | TyVariant ({ tref = Named path; _ }, c, args) ->
+      Variant (path, c.name, List.map go args)
+  | TyVariant ({ tref = Param _; _ }, _, _) ->
+      (* Resolve refuses a type parameter's variant *)
+      Error
   | TyImpl { impl_deps; impl_over; impl_errors; impl_uses; _ } ->
       let deps = deps_of ~sets impl_deps in
       Ty.impl ~over:impl_over

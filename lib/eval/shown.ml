@@ -28,6 +28,8 @@ type own = Itself of string | Inside | Declared
 let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
   let value = value ~own types in
   let list xs = String.concat ", " xs in
+  (* a variant type is shown as its sum, its `show` too *)
+  let t = Ty.as_sum t in
   let how = match t with Con (p, args) -> own p args v | _ -> Declared in
   match (how, Walk.view types t v) with
   | Itself s, _ -> s
@@ -144,7 +146,7 @@ let sides ~own ~equal types (t : Ty.ty) (a : Value.t) (b : Value.t) =
       in
       (* a value its type's own `show` shows is kept whole *)
       let own_shown =
-        match t with
+        match Ty.as_sum t with
         | Con (p, args) -> (
             match own p args x with
             | Itself _ -> true

@@ -1,0 +1,115 @@
+// Data stage, step 4, adversarial: variant types escaping their arm,
+// stored in arrays, records, tuples and options, returned through
+// generic functions, and round-tripped to the sum and back through a
+// `match`. A value of a variant type is its sum's, so each native build
+// prints what `ren run` does, and Mem Lint and the sanitizers see only
+// the sum's values.
+
+type Item = { name: Str, price: Int }
+
+type Order =
+  | Draft { lines: Array<Item> }
+  | Placed { id: Int, lines: Array<Item>, total: Int }
+  | Shipped { id: Int, tracking: Str }
+  | Cancelled
+
+type Pair<T> = { left: T, right: T }
+
+type Tree<T> =
+  | Leaf
+  | Node { left: Tree<T>, value: T, right: Tree<T> }
+
+fn first<T>(xs: Array<T>) -> Option<T> =
+  if xs.len() == 0 then None else Some(xs[0])
+
+fn twice<T>(x: T) -> Pair<T> = Pair { left: x, right: x }
+
+fn keep<T>(x: T, n: Int) -> Array<T> =
+  var out: Array<T> = []
+  for _ in 0..n
+    &out.push(x)
+  out
+
+fn placed(o: Order) -> Option<Order.Placed> =
+  match o
+    Placed { .. } as p => Some(p)
+    _ => None
+
+fn place(d: Order.Draft, id: Int) -> Order =
+  var total = 0
+  for { price, .. } in d.lines
+    total += price
+  Placed { ..d, id, total }
+
+// to the sum and back, as many times as asked: the same value each time
+fn round(p: Order.Placed, n: Int) -> Order.Placed =
+  if n == 0 then p
+  else
+    match Placed { ..p }
+      Placed { .. } as q => round(q, n - 1)
+      _ => p
+
+fn renamed(p: Order.Placed, name: Str) -> Order.Placed =
+  var q = p
+  q.lines = q.lines.map(fn(i) => { ..i, name })
+  q.total = q.total + 1
+  q
+
+fn depth<T>(t: Tree<T>) -> Int =
+  match t
+    Leaf => 0
+    Node { .. } as n => 1 + max(depth(n.left), depth(n.right))
+
+fn max(a: Int, b: Int) -> Int = if a > b then a else b
+
+fn main() uses Console =
+  let items = [Item { name: "pen", price: 2 }, Item { name: "ink", price: 5 }]
+  let orders = [
+    Draft { lines: items },
+    Placed { id: 1, lines: items, total: 7 },
+    Shipped { id: 2, tracking: "t-2" },
+    Cancelled,
+    Placed { id: 3, lines: [], total: 0 },
+  ]
+  // kept in an array, through a generic function
+  var ps: Array<Order.Placed> = []
+  for o in orders
+    match placed(o)
+      Some(p) => &ps.push(p)
+      None => ()
+  print(ps.len())
+  print(first(ps))
+  // a record and a tuple of them
+  let pair = twice(ps[0])
+  print(pair.left == pair.right)
+  let t = (ps[1], Placed { ..ps[0] })
+  print(t)
+  // many references to one, then each changed apart
+  var many = keep(ps[0], 3)
+  many[1] = renamed(many[1], "nib")
+  print(many[0])
+  print(many[1])
+  // pairs of a key and a variant type, searched
+  var by_id: Array<(Int, Order.Placed)> = []
+  for p in ps
+    &by_id.push((p.id, p))
+  for (id, p) in by_id
+    if id == 3 then print(Placed { ..p })
+  // placed from drafts, through a variant type made by `as`
+  for o in orders
+    match o
+      Draft { .. } as d => print(place(d, 9))
+      _ => ()
+  // round trips: the sum and back, a hundred times
+  let r = round(ps[0], 100)
+  print(r == ps[0])
+  print(Placed { ..r } == orders[1])
+  // a generic sum's variant type
+  let tree = Node { left: Node { left: Leaf, value: "a", right: Leaf }, value: "b", right: Leaf }
+  print(depth(tree))
+  match tree
+    Node { .. } as n =>
+      let { value, .. } = n
+      print(value)
+      print({ ..n, value: "c" })
+    Leaf => ()

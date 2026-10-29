@@ -309,6 +309,7 @@ let map f (e : expr) =
   | Assign (v, a) -> Assign (v, f a)
   | Assert a -> Assert (f a)
   | Field (a, p, n) -> Field (f a, p, n)
+  | Of_variant a -> Of_variant (f a)
   | Narrowed (ds, a) -> Narrowed (ds, f a)
   | Fail a -> Fail (f a)
   | Lambda l -> Lambda { l with body = f l.body }

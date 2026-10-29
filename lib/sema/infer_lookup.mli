@@ -19,6 +19,10 @@ val through_type :
 (* The declaration of a type already known to be a named type. *)
 val known_decl : env -> Types.ty -> Iface.type_decl option
 
+(* The sum at the path and its constructor of the name, which a variant
+   type, [Order.Placed], is one of (Resolve made sure there's one). *)
+val variant_ctor : env -> Path.t -> string -> Iface.type_decl * Iface.ctor
+
 (* The constructor written, where a value of type [expected] is wanted.
    Each problem is reported. *)
 val find_ctor :

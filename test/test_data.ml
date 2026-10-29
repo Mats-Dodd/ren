@@ -1199,18 +1199,9 @@ type Order =
 |}
 
 let%expect_test "[s4 accept] `as` on a by-name pattern binds its variant type" =
-  until "s4"
-    ~want:
-      {|
-fn place(d: Order.Draft, id: Int) -> Order
-fn ship(p: Order.Placed, tracking: Str) -> Order
-fn step(o: Order) -> Order
-fn main()
-|}
-    (fun () ->
-      types
-        (order_sum
-       ^ {|
+  types
+    (order_sum
+   ^ {|
 fn place(d: Order.Draft, id: Int) -> Order =
   Placed { ..d, id, total: d.lines.sum() }
 
@@ -1223,34 +1214,18 @@ fn step(o: Order) -> Order =
     Shipped { .. } => o
 
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:6:18
-    6 │ fn place(d: Order.Draft, id: Int) -> Order =
-      │                  ^
-
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:9:17
-    9 │ fn ship(p: Order.Placed, tracking: Str) -> Order = Shipped { id: p.id, tracking }
-      │                 ^
+    fn place(d: Order.Draft, id: Int) -> Order
+    fn ship(p: Order.Placed, tracking: Str) -> Order
+    fn step(o: Order) -> Order
+    fn main()
     |}]
 
 let%expect_test "[s4 accept] a variant type is a record: fields, patterns and update" =
-  until "s4"
-    ~want:
-      {|
-7
-[1, 2]
-Placed { id: 7, lines: [1, 2], total: 30 }
-Placed { id: 7, lines: [1, 2], total: 99 }
-()
-|}
-    (fun () ->
-      run
-        (order_sum
-       ^ {|
+  run
+    (order_sum
+   ^ {|
 fn main() uses Console =
   match Placed { id: 7, lines: [1, 2], total: 3 }
     Placed { .. } as p =>
@@ -1263,68 +1238,33 @@ fn main() uses Console =
       r.total = 99
       print(r)
     _ => ()
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: `.id` needs a record, but this is an `Order`
-      ┌─ test.ren:9:15
-    9 │       print(p.id)
-      │               ^^
-
-    error: `Order` is a sum type, so a record pattern doesn't match it
-       ┌─ test.ren:10:11
-    10 │       let { lines, .. } = p
-       │           ^^^^^^^^^^^^^
-       help: name the variant: `Draft { lines, .. }`
-
-    error: `..p` takes the rest from a record, but `p` is an `Order`
-       ┌─ test.ren:12:19
-    12 │       let q = { ..p, total: 30 }
-       │                   ^
-       help: write every field, without `..`
+    7
+    [1, 2]
+    Placed { id: 7, lines: [1, 2], total: 30 }
+    Placed { id: 7, lines: [1, 2], total: 99 }
+    ()
     |}]
 
 let%expect_test "[s4 accept] back to the sum with `Placed { ..p }`" =
-  until "s4"
-    ~want:
-      {|
-fn back(p: Order.Placed) -> Order
-fn bumped(p: Order.Placed) -> Order
-fn main()
-|}
-    (fun () ->
-      types
-        (order_sum
-       ^ {|
+  types
+    (order_sum
+   ^ {|
 fn back(p: Order.Placed) -> Order = Placed { ..p }
 fn bumped(p: Order.Placed) -> Order = Placed { ..p, total: p.total + 1 }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:6:17
-    6 │ fn back(p: Order.Placed) -> Order = Placed { ..p }
-      │                 ^
-
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:7:19
-    7 │ fn bumped(p: Order.Placed) -> Order = Placed { ..p, total: p.total + 1 }
-      │                   ^
+    fn back(p: Order.Placed) -> Order
+    fn bumped(p: Order.Placed) -> Order
+    fn main()
     |}]
 
 let%expect_test "[s4 accept] a variant type goes anywhere: returned, stored, passed" =
-  until "s4"
-    ~want:{|
-2
-Some(Placed { id: 1, lines: [], total: 4 })
-Box { p: Placed { id: 2, lines: [], total: 5 } }
-()
-|}
-    (fun () ->
-      run
-        (order_sum
-       ^ {|
+  run
+    (order_sum
+   ^ {|
 type Box = { p: Order.Placed }
 
 fn placed(o: Order) -> Option<Order.Placed> =
@@ -1341,40 +1281,20 @@ fn main() uses Console =
   print(ps.len())
   print(placed(Placed { ..ps[0] }))
   print(Box { p: ps[1] })
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: expected `,` or `}`, found `.`
-      ┌─ test.ren:6:22
-    6 │ type Box = { p: Order.Placed }
-      │                      ^
-
-    error: expected `,` or `>`, found `.`
-      ┌─ test.ren:8:36
-    8 │ fn placed(o: Order) -> Option<Order.Placed> =
-      │                                    ^
-
-    error: expected `,` or `>`, found `.`
-       ┌─ test.ren:14:22
-    14 │   var ps: Array<Order.Placed> = []
-       │                      ^
+    2
+    Some(Placed { id: 1, lines: [], total: 4 })
+    Box { p: Placed { id: 2, lines: [], total: 5 } }
+    ()
     |}]
 
 let%expect_test "[s4 accept] a variant type's `==`, order, `hash` and `show` are its sum's" =
   (* `Order`'s `key` is its id, so two placed orders of one id are equal
      as `Order.Placed` too (language.md §2, "Derived operations are
      borrowed") *)
-  until "s4"
-    ~want:{|
-true
-true
-1
-Placed { id: 1, total: 2 }
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Order =
   | Draft
   | Placed { id: Int, total: Int }
@@ -1396,213 +1316,143 @@ fn main() uses Console =
   print(a <= b)
   print(Set.of([a, b]).len())
   print(a)
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected `=`, found `.`
-       ┌─ test.ren:10:29
-    10 │ fn placed(o: Order) -> Order.Placed =
-       │                             ^
+    true
+    true
+    1
+    Placed { id: 1, total: 2 }
+    ()
     |}]
 
 let%expect_test "[s4 accept] a generic sum's variant type" =
-  until "s4"
-    ~want:
-      {|
-fn left<T>(n: Tree.Node<T>) -> Tree<T>
-fn main()
-|}
-    (fun () ->
-      types
-        {|
+  types
+    {|
 type Tree<T> =
   | Leaf
   | Node { left: Tree<T>, value: T, right: Tree<T> }
 
 fn left<T>(n: Tree.Node<T>) -> Tree<T> = n.left
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:5:19
-    5 │ fn left<T>(n: Tree.Node<T>) -> Tree<T> = n.left
-      │                   ^
+    fn left<T>(n: Tree.Node<T>) -> Tree<T>
+    fn main()
     |}]
 
 let%expect_test "[s4 accept] an or-pattern of several variants binds the sum" =
-  until "s4"
-    ~want:{|
-fn id(o: Order) -> Int
-fn main()
-|}
-    (fun () ->
-      types
-        (order_sum
-       ^ {|
+  types
+    (order_sum
+   ^ {|
 fn id(o: Order) -> Int =
   match o
-    Placed { .. } | Shipped { .. } as s => same(s)
+    Placed { .. } | Shipped { .. } as s => if s == o then 1 else 0
     Draft { .. } => 0
 
-fn same(o: Order) -> Int = 1
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s4)
     fn id(o: Order) -> Int
-    fn same(o: Order) -> Int
     fn main()
     |}]
 
 let%expect_test "[s4 reject] a constructor builds the sum, not its variant type" =
-  until "s4"
-    ~says:
-      [
-        "error: expected `Order.Placed`, found `Order`";
-        "= a constructor always builds the sum; a variant type is bound by a \
-         pattern's `as`";
-        "help: `Order.Placed` is one variant of `Order`: match it and bind \
-         that with `as`, `Placed { .. } as p`";
-      ]
-    (fun () ->
-      check_error
-        (order_sum
-       ^ {|
+  check_error
+    (order_sum
+   ^ {|
 fn make() -> Order.Placed = Placed { id: 1, lines: [], total: 0 }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: expected `=`, found `.`
-      ┌─ test.ren:6:19
+    error: expected `Order.Placed`, found `Order`
+      ┌─ test.ren:6:29
     6 │ fn make() -> Order.Placed = Placed { id: 1, lines: [], total: 0 }
-      │                   ^
+      │                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = `make` is declared to return `Order.Placed`
+      = a constructor always builds the sum; a variant type is bound by a pattern's `as`
+      help: `Order.Placed` is one variant of `Order`: match it and bind that with `as`, `Placed { .. } as p`
     |}]
 
 let%expect_test "[s4 reject] a variant type isn't its sum" =
-  until "s4"
-    ~says:
-      [
-        "error: expected `Order`, found `Order.Placed`";
-        "help: make it the sum: `Placed { ..p }`";
-      ]
-    (fun () ->
-      check_error
-        (order_sum
-       ^ {|
+  check_error
+    (order_sum
+   ^ {|
 fn total(o: Order) -> Int = 0
 fn f(p: Order.Placed) -> Int = total(p)
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:7:14
+    error: expected `Order`, found `Order.Placed`
+      ┌─ test.ren:7:38
     7 │ fn f(p: Order.Placed) -> Int = total(p)
-      │              ^
+      │                                      ^
+      help: make it the sum: `Placed { ..p }`
     |}]
 
 let%expect_test "[s4 reject] a positional variant has no type of its own" =
-  until "s4"
-    ~says:
-      [
-        "error: `Discount.Flat` isn't a type: only a variant with named fields \
-         has one";
-        "help: take its field out where it's matched, `Flat(off) => ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Discount =
   | NoDiscount
   | Flat(off: Int)
 
 fn f(d: Discount.Flat) -> Int = 0
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:5:17
+    error: `Discount.Flat` isn't a type: only a variant with named fields has one
+      ┌─ test.ren:5:18
     5 │ fn f(d: Discount.Flat) -> Int = 0
-      │                 ^
+      │                  ^^^^
+      help: take its field out where it's matched, `Flat(off) => ...`
     |}]
 
 let%expect_test "[s4 reject] a variant type names a variant its sum has" =
-  until "s4"
-    ~says:
-      [ "error: `Order` has no variant `Placd`"; "help: did you mean `Placed`?" ]
-    (fun () ->
-      check_error (order_sum ^ {|
+  check_error (order_sum ^ {|
 fn f(p: Order.Placd) -> Int = 0
-fn main() = ()
-|}));
-  [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:6:14
-    6 │ fn f(p: Order.Placd) -> Int = 0
-      │              ^
-    |}]
-
-let%expect_test "[s4 reject] only a sum type has variants" =
-  until "s4"
-    ~says:
-      [
-        "error: `User` isn't a sum type, so it has no variants";
-        "help: a variant type is one of a sum's, like `Order.Placed`";
-      ]
-    (fun () ->
-      check_error
-        {|
-type User = { id: Int }
-fn f(u: User.Admin) -> Int = 0
 fn main() = ()
 |});
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `.`
-      ┌─ test.ren:2:13
+    error: `Order` has no variant `Placd`
+      ┌─ test.ren:6:15
+    6 │ fn f(p: Order.Placd) -> Int = 0
+      │               ^^^^^
+      help: did you mean `Placed`?
+    |}]
+
+let%expect_test "[s4 reject] only a sum type has variants" =
+  check_error
+    {|
+type User = { id: Int }
+fn f(u: User.Admin) -> Int = 0
+fn main() = ()
+|};
+  [%expect {|
+    error: `User` isn't a sum type, so it has no variants
+      ┌─ test.ren:2:9
     2 │ fn f(u: User.Admin) -> Int = 0
-      │             ^
+      │         ^^^^
+      help: a variant type is one of a sum's, like `Order.Placed`
     |}]
 
 let%expect_test "[s4 reject] `..` doesn't take the rest from a sum" =
-  until "s4"
-    ~says:
-      [
-        "error: `..o` takes the rest from a record, but `o` is an `Order`, a \
-         sum type";
-        "help: match it, and take the rest from the variant: `Placed { .. } as \
-         p => Placed { ..p, ... }`";
-      ]
-    (fun () ->
-      check_error
-        (order_sum
-       ^ {|
+  check_error
+    (order_sum
+   ^ {|
 fn f(o: Order) -> Order = Placed { ..o, total: 0 }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: `..o` takes the rest from a record, but `o` is an `Order`
+    error: `..o` takes the rest from a record, but `o` is an `Order`, a sum type
       ┌─ test.ren:6:38
     6 │ fn f(o: Order) -> Order = Placed { ..o, total: 0 }
       │                                      ^
-      help: write every field, without `..`
+      help: match it, and take the rest from the variant: `Placed { .. } as p => Placed { ..p, ... }`
     |}]
 
 let%expect_test "[s4 reject] a variant type has no methods of its own" =
-  until "s4"
-    ~says:
-      [
-        "error: `Order.Placed` has no methods of its own";
-        "help: call it on the sum: `Placed { ..p }.size()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Order =
   | Draft
   | Placed { id: Int, total: Int }
@@ -1614,10 +1464,135 @@ fn f(o: Order) -> Int =
     Placed { .. } as p => p.size()
     Draft => 0
 fn main() = ()
+|};
+  [%expect {|
+    error: `Order.Placed` has no methods of its own
+      ┌─ test.ren:9:29
+    9 │     Placed { .. } as p => p.size()
+      │                             ^^^^
+      help: call it on the sum: `Placed { ..p }.size()`
+    |}]
+
+let%expect_test "[s4 accept] a variant type in another module's signature" =
+  (* a public function of `shop/order` takes and gives variant types of its
+     sum, which the importer writes after the module's alias *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import shop/order
+
+fn total(p: order.Order.Placed) -> Int = p.total
+
+fn main() uses Console =
+  for d in order.drafts([order.Order.Draft { lines: [1, 2] }, order.Order.Shipped { id: 3, tracking: "x" }])
+    let p = order.place(d, 7)
+    print(total(p))
+    print(order.ship(p, "t"))
+|} );
+      ( "shop/order.ren",
+        {|
+pub type Order =
+  | Draft { lines: Array<Int> }
+  | Placed { id: Int, lines: Array<Int>, total: Int }
+  | Shipped { id: Int, tracking: Str }
+
+pub fn place(d: Order.Draft, id: Int) -> Order.Placed =
+  match Placed { ..d, id, total: d.lines.sum() }
+    Placed { .. } as p => p
+    _ => place(d, id)
+
+pub fn ship(p: Order.Placed, tracking: Str) -> Order = Shipped { id: p.id, tracking }
+
+pub fn drafts(os: Array<Order>) -> Array<Order.Draft> =
+  var ds: Array<Order.Draft> = []
+  for o in os
+    match o
+      Draft { .. } as d => &ds.push(d)
+      _ => ()
+  ds
+|} );
+    ];
+  [%expect {|
+    3
+    Shipped { id: 7, tracking: "t" }
+    ()
+    |}]
+
+let%expect_test "[s4 accept] to the sum and back, and a variant type's own patterns" =
+  (* `Placed { ..p }` and a `match` with `as` give back the same value, as
+     many times as it's done; a pattern of a variant type's own
+     constructor, or of its fields, always matches *)
+  run
+    (order_sum
+   ^ {|
+fn round(p: Order.Placed, n: Int) -> Order.Placed =
+  if n == 0 then p
+  else
+    match Placed { ..p }
+      Placed { .. } as q => round(q, n - 1)
+      _ => p
+
+fn id(p: Order.Placed) -> Int =
+  match p
+    Placed { id, .. } => id
+
+fn total(p: Order.Placed) -> Int =
+  let Placed { total, .. } = p
+  total
+
+fn main() uses Console =
+  match Placed { id: 4, lines: [1], total: 2 }
+    Placed { .. } as p =>
+      let q = round(p, 50)
+      print(q == p)
+      print(id(q) + total(q))
+      var ps = [q, { ..q, id: 5 }]
+      ps[0] = { ..ps[1], total: 9 }
+      print(ps)
+    _ => ()
 |});
   [%expect {|
-    (until s4)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    true
+    6
+    [Placed { id: 5, lines: [1], total: 9 }, Placed { id: 5, lines: [1], total: 2 }]
+    ()
+    |}]
+
+let%expect_test "[s4 reject] a variant type is always its own variant" =
+  check_error
+    (order_sum
+   ^ {|
+fn f(p: Order.Placed) -> Int =
+  match p
+    Placed { id, .. } => id
+    Shipped { id, .. } => id
+fn main() = ()
+|});
+  [%expect {|
+    error: an `Order.Placed` is never a `Shipped`, so this pattern never matches
+      ┌─ test.ren:9:5
+    9 │     Shipped { id, .. } => id
+      │     ^^^^^^^^^^^^^^^^^^
+      help: a value of a variant type is always that variant: match it as `Placed { .. }`, or match the sum it came from
+    |}]
+
+let%expect_test "[s4 reject] a variant type's arguments are written after it" =
+  check_error
+    {|
+type Tree<T> =
+  | Leaf
+  | Node { left: Tree<T>, value: T, right: Tree<T> }
+
+fn f(n: Tree<Int>.Node) -> Int = n.value
+fn main() = ()
+|};
+  [%expect {|
+    error: a variant type's arguments are its sum's, written after the variant
+      ┌─ test.ren:5:18
+    5 │ fn f(n: Tree<Int>.Node) -> Int = n.value
+      │                  ^
+      help: write `Tree.Node<Int>`
     |}]
 
 (* ---- s5: the errors that teach the model, and `todo` ---- *)

@@ -54,6 +54,14 @@ let known_decl env t =
       Hashtbl.find_opt env.types p
   | _ -> None
 
+(* The sum and constructor a variant type [Order.Placed] is one of:
+   Resolve made sure there's one, by name. *)
+let variant_ctor env p c =
+  let td = Hashtbl.find env.types p in
+  match td.body with
+  | Sum cs -> (td, List.find (fun (k : Iface.ctor) -> k.cname = c) cs)
+  | _ -> invalid_arg "Infer_lookup.variant_ctor: not a sum"
+
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
@@ -64,6 +72,14 @@ let ctor_in (c : ident) (td : Iface.type_decl) =
    else; that's how two types that share a constructor's name are told
    apart when nothing else says which. *)
 let find_ctor env (c : ctor_ref) ~expected =
+  (* a variant type's constructors are its sum's: one is found through it
+     as through the sum, and a construction, which builds the sum, is then
+     a mismatch the caller reports *)
+  let expected =
+    match repr expected with
+    | TVariant (p, _, args) -> TCon (p, args)
+    | t -> t
+  in
   match c.qual with
   | Some { tref = Named p; tloc } -> (
       let td = Hashtbl.find env.types p in
@@ -349,6 +365,19 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
                   report env (op_of_value ~names:env.names ?recv:(env.source r) f p ops);
                   TError
               | _ -> needs_record t))
+      | TVariant (p, c, args) -> (
+          (* a variant type is a record of its constructor's fields: a
+             field read at a known constructor (compiler.md, "Data
+             stage", "Variant types"), recorded as the sum's *)
+          let td, k = variant_ctor env p c in
+          match List.find_opt (fun (d : Iface.field) -> d.fname = f.name) k.cfields with
+          | Some fd -> found td fd args
+          | None ->
+              report env
+                (no_such_field ~names:env.names f p
+                   ~owner:(type_name env p ^ "." ^ c)
+                   k.cfields);
+              TError)
       | TVar _ -> (
           let what =
             match r.kind with

@@ -74,6 +74,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | Con (t, c, es) -> Con (t, c, List.map go es)
     | Record (t, fs) -> Record (t, List.map (fun (f, e) -> (f, go e)) fs)
     | Field (r, t, f) -> Field (go r, t, f)
+    | Of_variant r -> Of_variant (go r)
     | Update (r, f, e) -> Update (go r, f, go e)
     | Array es -> Array (List.map go es)
     | Tuple es -> Tuple (List.map go es)
@@ -110,7 +111,7 @@ and pattern (p : Core.pattern) : Core.pattern =
 let rec has_fn (t : Ty.ty) =
   match t with
   | Fun _ -> true
-  | Con (_, ts) -> List.exists has_fn ts
+  | Con (_, ts) | Variant (_, _, ts) -> List.exists has_fn ts
   | Errors r ->
       List.exists (fun (l : Ty.label) -> List.exists has_fn l.payload) r.labels
   | Var _ | Impl _ | Error -> false

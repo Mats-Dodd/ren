@@ -97,7 +97,8 @@ let rec labels_named name t =
   match repr t with
   | TFun (ps, r, e, _) ->
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
-  | TCon (_, args) -> List.concat_map (labels_named name) args
+  | TCon (_, args) | TVariant (_, _, args) ->
+      List.concat_map (labels_named name) args
   | TErrors e -> row e
   | TImpl i -> row i.fails
   | TVar _ | TSkol _ | TError -> []
@@ -470,6 +471,22 @@ let update_not_record loc ~base shown =
        (String.sub base 2 (String.length base - 2))
        (article shown))
 
+(* `{ ..o }`, where [o] is of the sum type [shown]: the rest is taken from
+   a variant's type, which matching it binds with `as` ([variant], one of
+   its by-name variants). *)
+let update_from_sum loc ~base shown ~variant =
+  let v = Option.value variant ~default:"Placed" in
+  Diag.make loc
+    ~help:
+      (sprintf
+         "match it, and take the rest from the variant: `%s { .. } as p => %s \
+          { ..p, ... }`"
+         v v)
+    (sprintf
+       "`%s` takes the rest from a record, but `%s` is %s, a sum type" base
+       (String.sub base 2 (String.length base - 2))
+       (article shown))
+
 (* The field [f] of the target [target], which [base] doesn't have and
    the update doesn't give. *)
 let update_needs loc ~target ~base f =
@@ -740,6 +757,13 @@ type behind =
       (** an implementation of [deps], of type [all], where one of [dep], which
           isn't among them, is wanted; or, if not [here], one of [dep] where
           that one, given first, is *)
+  | Variant_wanted of { variant : string; sum : string; ctor : string }
+      (** a value of the sum [sum] where its variant type [variant] is wanted,
+          which only a pattern's `as` binds (compiler.md, "Data stage",
+          "Variant types") *)
+  | Sum_wanted of { ctor : string }
+      (** a value of a variant type, of the constructor [ctor], where its sum is
+          wanted: no implicit conversion *)
 
 let behind_note = function
   | Needs_more { extra; slot } ->
@@ -836,6 +860,13 @@ let behind_note = function
               "write it where it's made or passed, `let x: %s = ...` or `fn \
                f(x: %s)`"
               part part )
+  | Variant_wanted { variant; sum; ctor } ->
+      ( [],
+        sprintf
+          "`%s` is one variant of `%s`: match it and bind that with `as`, `%s \
+           { .. } as p`"
+          variant sum ctor )
+  | Sum_wanted { ctor } -> ([], sprintf "make it the sum: `%s { ..p }`" ctor)
   | Other_handler { all; deps; dep; here } ->
       ( [
           sprintf "%s is an implementation of %s, not of `%s`" (article all)
@@ -869,6 +900,37 @@ let mismatch loc ?msg ~notes ?help ~labels ?type_params ~found ~expected ~f ~x
       (more, help) behind
   in
   Diag.make loc ?help ~notes:(notes @ more) ~labels msg
+
+(* A pattern of the constructor [c], [sum] as it's written, matched
+   against a value of another of its sum's variant types, [shown], which is
+   always that one. *)
+let other_variant loc shown c ~own =
+  Diag.make loc
+    ~help:
+      (sprintf
+         "a value of a variant type is always that variant: match it as `%s { \
+          .. }`, or match the sum it came from"
+         own)
+    (sprintf "%s is never a `%s`, so this pattern never matches"
+       (article shown) c)
+
+(* `p.size()`, where [p] is of the variant type [shown] and `size` is its
+   sum's method: a variant type has no methods of its own. *)
+let variant_no_methods loc ~shown ~ctor ~recv ~name =
+  Diag.make loc
+    ~help:(sprintf "call it on the sum: `%s { ..%s }.%s()`" ctor recv name)
+    (sprintf "`%s` has no methods of its own" shown)
+
+(* What a constructor builds, where its sum's variant type is wanted. *)
+let builds_the_sum =
+  "a constructor always builds the sum; a variant type is bound by a \
+   pattern's `as`"
+
+(* The help for a value of a variant type, written [value], where its sum
+   is wanted: the conversion, written out. *)
+let make_the_sum ~ctor ~value =
+  let value = if String.contains value ' ' then "(" ^ value ^ ")" else value in
+  sprintf "make it the sum: `%s { ..%s }`" ctor value
 
 (* A type that would have to contain itself, `a = Array<a>`. *)
 let contains_itself loc ~found ~expected =

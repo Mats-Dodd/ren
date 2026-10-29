@@ -122,6 +122,8 @@
 
 (type_name name: (type_identifier) @type)
 (constructor_ref name: (type_identifier) @constructor)
+; a variant type, `Order.Placed`, is a type: its variant's name too
+(variant_type variant: (type_identifier) @type)
 
 ; ---- errors ----
 

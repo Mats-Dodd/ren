@@ -101,6 +101,7 @@ let rec subst_ty s (t : Ty.ty) : Ty.ty =
   | Var n -> s.var n
   | Error -> Error
   | Con (p, args) -> Con (p, List.map (subst_ty s) args)
+  | Variant (p, c, args) -> Variant (p, c, List.map (subst_ty s) args)
   | Errors r -> Errors (subst_row s r)
   | Impl i -> (
       let needs = subst_row s i.needs and fails = subst_row s i.fails in
@@ -1275,7 +1276,8 @@ and handler cx (e : expr) deps state arms =
 and opaque_state cx loc kind =
   let rec opaque (t : Ty.ty) =
     match t with
-    | Con (p, args) -> List.mem p cx.opaque || List.exists opaque args
+    | Con (p, args) | Variant (p, _, args) ->
+        List.mem p cx.opaque || List.exists opaque args
     | Fun (ps, r, _, _) -> List.exists (fun (q : Ty.param) -> opaque q.ty) ps || opaque r
     | Var _ | Errors _ | Impl _ | Error -> false
   in
@@ -2337,13 +2339,23 @@ and pattern cx (p : pattern) : C.pattern =
     | PFail_any -> PWild
     | PFail_in _ -> bug "`fail on` other than as a whole arm's pattern"
     | POr ps -> POr (List.map (pattern cx) ps)
-    | PAs (q, b) -> PAs (pattern cx q, bind cx b pty)
+    | PAs (q, b) ->
+        (* of a by-name constructor's pattern, its variant type, as
+           inference has it: the same value, the subject itself *)
+        let whole : Ty.ty =
+          match (q.pkind, (node cx q.pnode).found, pty) with
+          | PCon_named _, Some (Ctor_of (path, c)), Con (s, args)
+            when s = path && ctor_named cx path c ->
+              Variant (path, c, args)
+          | _ -> pty
+        in
+        PAs (pattern cx q, bind cx b whole)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
     | PCon_named (_, fs) -> (
         (* the positional constructor, a pattern for every field, in
            declaration order, `_` for one left out *)
         match ((node cx p.pnode).found, pty) with
-        | Some (Ctor_of (path, c)), Con (_, args) ->
+        | Some (Ctor_of (path, c)), (Con (_, args) | Variant (_, _, args)) ->
             let field (d : Iface.field) =
               match
                 List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
@@ -2361,21 +2373,20 @@ and pattern cx (p : pattern) : C.pattern =
     | PRecord (_, fs) -> (
         (* a pattern for every field, in declaration order, `_` for one
            left out *)
+        let field path (d : Iface.field) : C.pattern =
+          match
+            List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+          with
+          | Some (_, q) -> pattern cx q
+          | None ->
+              { pkind = PWild; pty = field_ty cx pty path d.fname; ploc = p.ploc }
+        in
         match pty with
-        | Con (path, _) ->
-            let field (d : Iface.field) =
-              match
-                List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
-              with
-              | Some (_, q) -> pattern cx q
-              | None ->
-                  {
-                    pkind = PWild;
-                    pty = field_ty cx pty path d.fname;
-                    ploc = p.ploc;
-                  }
-            in
-            PRecord (path, List.map field (record_decl cx path))
+        | Variant (path, c, _) ->
+            (* a variant type is a record of its constructor's fields: its
+               constructor's pattern, which always matches *)
+            PCon (path, c, List.map (field path) (ctor_decl cx path c))
+        | Con (path, _) -> PRecord (path, List.map (field path) (record_decl cx path))
         | _ -> bug "a record pattern whose type isn't a record")
   in
   { pkind; pty; ploc = p.ploc }
@@ -2390,6 +2401,13 @@ and ctor_decl cx path c =
       | None -> bug "a constructor its type doesn't have")
   | _ -> bug "a constructor of something that isn't a sum type"
 
+(* Whether the constructor [c] of the sum type [path] is by name. *)
+and ctor_named cx path c =
+  match cx.types path with
+  | Some { body = Sum cs; _ } ->
+      List.exists (fun (k : Iface.ctor) -> k.cname = c && k.cnamed) cs
+  | _ -> false
+
 (* The fields of the record type [path], as it's declared. *)
 and record_decl cx path =
   match cx.types path with
@@ -2399,6 +2417,13 @@ and record_decl cx path =
 (* The type of the field [f] of [t], a value of the record type [path]. *)
 and field_ty cx (t : Ty.ty) path f =
   match t with
+  | Variant (_, c, args) -> (
+      (* a variant type's fields are its constructor's *)
+      match
+        List.find_opt (fun (d : Iface.field) -> d.fname = f) (ctor_decl cx path c)
+      with
+      | Some d -> Ty.apply { tys = args; rows = [] } d.fty
+      | None -> bug "a field its constructor doesn't have")
   | Con (_, args) -> (
       match
         List.find_opt (fun (d : Iface.field) -> d.fname = f) (record_decl cx path)
@@ -2427,7 +2452,7 @@ and update cx (e : expr) base fields =
   in
   let bpath =
     match b.ty with
-    | Con (p, _) -> p
+    | Con (p, _) | Variant (p, _, _) -> p
     | _ -> bug "an update of something that isn't a record"
   in
   let field (d : Iface.field) =
@@ -2441,12 +2466,23 @@ and update cx (e : expr) base fields =
             loc )
   in
   let bound = (bv, b) :: List.map (fun (_, v, value) -> (v, value)) given in
-  match ((node cx e.node).found, t) with
-  | Some (Ctor_of (path, c)), _ ->
+  match ((node cx e.node).found, t, b.ty) with
+  | Some (Ctor_of (path, c)), _, Variant (s, c', _)
+    when fields = [] && s = path && c = c' ->
+      (* `Placed { ..p }`, of a `p` of its own variant type: the same
+         value, as the sum, no code (compiler.md, "Data stage", "Variant
+         types") *)
+      mk (Of_variant b) t loc
+  | Some (Ctor_of (path, c)), _, _ ->
       (* `Placed { ..draft, id }`: the sum, built by the constructor *)
       lets bound
         (mk (Con (path, c, List.map snd (List.map field (ctor_decl cx path c)))) t loc)
-  | _, Con (path, _) ->
+  | _, Variant (path, c, _), _ ->
+      (* `{ ..p, total: x }`: a value of [p]'s variant type, built by its
+         constructor *)
+      lets bound
+        (mk (Con (path, c, List.map snd (List.map field (ctor_decl cx path c)))) t loc)
+  | _, Con (path, _), _ ->
       lets bound
         (mk (Record (path, List.map field (record_decl cx path))) t loc)
   | _ -> bug "an update whose type isn't a record"
@@ -2550,7 +2586,7 @@ and free (e : C.expr) =
         bind ev;
         List.iter use captures
     | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
-    | Field (r, _, _) -> go r
+    | Field (r, _, _) | Of_variant r -> go r
   and pat (p : C.pattern) =
     match p.pkind with
     | PVar v -> bind v

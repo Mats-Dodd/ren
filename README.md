@@ -127,6 +127,23 @@ fn seats(p: Plan) -> Int ! NotPro =
   seats
 ```
 
+A variant with named fields is a type too, `Order.Placed`, a record of exactly its fields, so a function can accept only one state. Only a pattern's `as` gives one, and it goes anywhere a value does. A constructor always builds the sum, and `Placed { ..p }` makes one the sum again, which costs nothing, since it's the same value. There's no subtyping and no conversion you don't write, and `==`, ordering, `hash` and `show` are the sum's:
+
+```ren
+type Order =
+  | Draft { lines: Array<Line> }
+  | Placed { id: OrderId, lines: Array<Line>, total: Money }
+  | Shipped { id: OrderId, tracking: Tracking }
+
+fn ship(p: Order.Placed, t: Tracking) -> Order =   // only a placed order ships
+  Shipped { id: p.id, tracking: t }
+
+fn step(o: Order, t: Tracking) -> Order =
+  match o
+    Placed { .. } as p => ship(p, t)               // `p` is an `Order.Placed`
+    _ => o
+```
+
 Ren has no null. Optional values are written `T?`.
 
 ### 2. `let` and `var`: value semantics

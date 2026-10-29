@@ -177,6 +177,9 @@ type env = {
           with the sum's name: which a bare `Name { ... }` can also mean (see
           [braces_name]) *)
   sums : (string, unit) Hashtbl.t;  (** the sum types in scope bare, by name *)
+  own_sums : (string, Iface.ctor list) Hashtbl.t;
+      (** the module's own sum types, by name, with their constructors, which
+          a variant type is one of ([variant_type]) *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -423,7 +426,7 @@ let tyname_loc (t : tyname) =
 
 (* Where a type is written: where it starts, for a named one. *)
 let written_loc : Parsed.ty -> Loc.t = function
-  | TyName (t, _) -> tyname_loc t
+  | TyName (t, _) | TyVariant (t, _, _) -> tyname_loc t
   | TyFn (_, _, _, _, l)
   | TyImpl { impl_loc = l; _ }
   | TyInout (_, l)
@@ -491,6 +494,85 @@ let declared_type env ~params ~what (t : tyname) =
         (sprintf "`%s` is a type parameter, so %s" t.tid.name what);
       None
   | None -> None
+
+(* The constructors of the sum type at [p], the module's own or an
+   imported one's; [None] if it isn't a sum, or its representation is
+   hidden here. *)
+let sum_ctors env (p : Path.t) : Iface.ctor list option =
+  if p.home = env.home then Hashtbl.find_opt env.own_sums p.name
+  else
+    match
+      List.find_map
+        (fun (i : Iface.t) ->
+          if i.home = p.home then Iface.find_type i p.name else None)
+        (env.ifaces @ List.map (fun (_, (_, i)) -> i) (Env.bindings env.modules))
+    with
+    | Some { body = Sum cs; _ } -> Some cs
+    | _ -> None
+
+(* The variant type [t].[c] names, `Order.Placed` (compiler.md, "Data
+   stage", "Variant types"): [t] a sum type, [c] one of its constructors,
+   with named fields. Whether it does; what's wrong is reported. *)
+let variant_type env (t : tyname) (found : tref) (c : ident) =
+  let shown = show_tyname t in
+  match found with
+  | Param _ ->
+      report env (tyname_loc t)
+        ~help:"a variant type is one of a sum's, like `Order.Placed`"
+        (sprintf "`%s` isn't a sum type, so it has no variants" shown);
+      false
+  | Named p -> (
+      match sum_ctors env p with
+      | None ->
+          report env (tyname_loc t)
+            ~help:"a variant type is one of a sum's, like `Order.Placed`"
+            (sprintf "`%s` isn't a sum type, so it has no variants" shown);
+          false
+      | Some cs -> (
+          match List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs with
+          | Some k when k.cnamed -> true
+          | Some k ->
+              let arg =
+                match k.cfields with
+                | { fname = ""; _ } :: _ | [] -> "x"
+                | f :: _ -> f.fname
+              in
+              report env c.loc
+                ~help:
+                  (if k.cfields = [] then
+                     sprintf "match it where it's matched, `%s => ...`" c.name
+                   else
+                     sprintf "take its field out where it's matched, `%s(%s) => ...`"
+                       c.name arg)
+                (sprintf
+                   "`%s.%s` isn't a type: only a variant with named fields has \
+                    one"
+                   shown c.name);
+              false
+          | None ->
+              let named =
+                List.filter_map
+                  (fun (k : Iface.ctor) -> if k.cnamed then Some k.cname else None)
+                  cs
+              in
+              let help =
+                match Infer_msg.nearest c.name (List.map (fun (k : Iface.ctor) -> k.cname) cs) with
+                | Some n -> Some (sprintf "did you mean `%s`?" n)
+                | None when named = [] ->
+                    Some
+                      (sprintf
+                         "none of `%s`'s variants has named fields, so it has \
+                          no variant types"
+                         shown)
+                | None ->
+                    Some
+                      (sprintf "its variants with named fields: %s"
+                         (String.concat ", "
+                            (List.map (fun n -> "`" ^ n ^ "`") named)))
+              in
+              report env c.loc ?help
+                (sprintf "`%s` has no variant `%s`" shown c.name);
+              false))
 
 (* The named row [n], written as a row of kind [kind]. *)
 let row_name env ~rows kind (n : ident) =
@@ -574,6 +656,19 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) ?(tags = false)
       TyFn (ps, ret, errs, Option.map (uses_of env ~params ~rows) u, l)
   | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
   | TyTuple (ts, l) -> TyTuple (List.map (ty env ~params ~rows) ts, l)
+  | TyVariant (t, c, args) -> (
+      (* the sum's name, as a [TyName]'s, then the variant: a variant type
+         has its sum's type arguments *)
+      let named tref = { tref; tloc = tyname_loc t } in
+      match find_named env ~params t with
+      | None -> TyName (named (Named (Path.make env.home t.tid.name)), [])
+      | Some (tref, n) ->
+          let given = List.length args in
+          if variant_type env t tref c && n <> given then
+            report env (tyname_loc t)
+              (sprintf "`%s` takes %d type argument%s but was given %d"
+                 (show_tyname t) n (plural n) given);
+          TyVariant (named tref, c, List.map (ty env ~params ~rows ~arg:true) args))
   | TyImpl { impl_deps = ts; impl_over; impl_errors; impl_uses; impl_loc = l }
     -> (
       let u = Option.map (uses_of env ~params ~rows) impl_uses in
@@ -2594,7 +2689,7 @@ let rec mentions name (t : Parsed.ty) =
   in
   let in_uses (u : Parsed.uses) = List.exists (dep_mentions name) u.deps in
   match t with
-  | TyName (n, args) ->
+  | TyName (n, args) | TyVariant (n, _, args) ->
       (n.tmod = None && n.tid.name = name) || List.exists (mentions name) args
   | TyFn (ps, ret, es, u, _) ->
       List.exists (mentions name) ps
@@ -3310,9 +3405,12 @@ let type_def env (td : Parsed.type_def) :
 (* Every type named in [t], with where it's named, left to right. *)
 let rec named_in (t : Resolved.ty) =
   match t with
-  | TyName ({ tref = Named p; tloc }, args) ->
+  | TyName ({ tref = Named p; tloc }, args)
+  | TyVariant ({ tref = Named p; tloc }, _, args) ->
       (p, tloc) :: List.concat_map named_in args
-  | TyName ({ tref = Param _; _ }, args) -> List.concat_map named_in args
+  | TyName ({ tref = Param _; _ }, args)
+  | TyVariant ({ tref = Param _; _ }, _, args) ->
+      List.concat_map named_in args
   | TyFn (ps, ret, errs, u, _) ->
       List.concat_map named_in ps
       @ Option.fold ~none:[] ~some:named_in ret
@@ -3408,7 +3506,7 @@ let no_private_errors env ~private_ ~set ~tag (es : Resolved.errors) =
 
 (* Where a written type is, for an error. *)
 let written_at : Resolved.ty -> Loc.t = function
-  | TyName ({ tloc; _ }, _) -> tloc
+  | TyName ({ tloc; _ }, _) | TyVariant ({ tloc; _ }, _, _) -> tloc
   | TyFn (_, _, _, _, l)
   | TyImpl { impl_loc = l; _ }
   | TyInout (_, l)
@@ -3425,6 +3523,10 @@ let rec written_handle (t : Resolved.ty) =
     | TyName ({ tref = Named p; _ }, args) ->
         p.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
     | TyName ({ tref = Param _; _ }, _) -> "T"
+    | TyVariant ({ tref = Named p; _ }, c, []) -> p.name ^ "." ^ c.name
+    | TyVariant ({ tref = Named p; _ }, c, args) ->
+        p.name ^ "." ^ c.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
+    | TyVariant ({ tref = Param _; _ }, c, _) -> "T." ^ c.name
     | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show ts) ^ ")"
     | TyFn _ -> "fn(...)"
     | TyImpl _ | TyErrors _ -> "..."
@@ -3460,7 +3562,8 @@ let no_kept_blocks env (items : Resolved.program) =
   (* the types in [t], which may itself be a block *)
   and inner (t : Resolved.ty) =
     match t with
-    | TyName (_, args) -> List.iter (data In_type_arg) args
+    | TyName (_, args) | TyVariant (_, _, args) ->
+        List.iter (data In_type_arg) args
     | TyTuple (ts, _) -> List.iter (data In_tuple) ts
     | TyFn (ps, ret, es, _, _) ->
         List.iter inner ps;
@@ -3482,7 +3585,8 @@ let no_kept_blocks env (items : Resolved.program) =
   let rec has_block (t : Resolved.ty) =
     match t with
     | TyFn _ -> true
-    | TyName (_, ts) | TyTuple (ts, _) -> List.exists has_block ts
+    | TyName (_, ts) | TyVariant (_, _, ts) | TyTuple (ts, _) ->
+        List.exists has_block ts
     | TyInout (t, _) -> has_block t
     | TyImpl _ | TyErrors _ -> false
   in
@@ -3800,6 +3904,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       own_aliases = Hashtbl.create 8;
       named_ctors = Hashtbl.create 8;
       sums = Hashtbl.create 8;
+      own_sums = Hashtbl.create 8;
       modules =
         List.fold_left
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
@@ -3972,6 +4077,23 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
             (function
               | Type ({ type_body = Ctors cs; _ } as td : Parsed.type_def)
                 when td.type_name.name = p.name ->
+                  Hashtbl.replace env.own_sums p.name
+                    (List.map
+                       (fun (c : Parsed.ctor) : Iface.ctor ->
+                         {
+                           cname = c.ctor_name.name;
+                           cnamed = c.ctor_named;
+                           cloc = c.ctor_name.loc;
+                           cfields =
+                             List.map
+                               (fun (f : Parsed.field) : Iface.field ->
+                                 {
+                                   fname = f.field_name.name;
+                                   fty = Ty.Error;
+                                 })
+                               c.ctor_fields;
+                         })
+                       cs);
                   Some
                     (List.filter_map
                        (fun (c : Parsed.ctor) ->

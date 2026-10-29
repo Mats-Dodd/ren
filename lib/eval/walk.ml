@@ -37,6 +37,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   match t with
   | Var i -> ( match List.nth_opt args i with Some a -> a | None -> t)
   | Con (p, ts) -> Con (p, List.map (subst args) ts)
+  | Variant (p, c, ts) -> Variant (p, c, List.map (subst args) ts)
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
@@ -84,6 +85,9 @@ type view =
 
 (* What [v], of type [t], is made of. *)
 let view (types : types) (t : Ty.ty) (v : Value.t) =
+  (* a variant type's value is its sum's, and so is how it's shown,
+     compared and hashed (compiler.md, "Data stage", "Variant types") *)
+  let t = Ty.as_sum t in
   let body =
     match t with
     | Con (p, _) ->
@@ -158,7 +162,8 @@ type cx = {
 
 (* [v]'s key, if its type has one. *)
 let keyed cx (t : Ty.ty) v =
-  match t with Con (p, args) -> cx.key p args v | _ -> None
+  (* a variant type's key is its sum's, borrowed *)
+  match Ty.as_sum t with Con (p, args) -> cx.key p args v | _ -> None
 
 (* ---- `hash` ---- *)
 

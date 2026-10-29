@@ -48,7 +48,9 @@ type env = {
    value pattern, `_` too, is [value] of it, so `_` never matches an
    error; `fail _` is [fail] of anything. A tuple of [n] parts is the one
    constructor of [Tuple n], with [n] fields, and a record the one
-   constructor of [Record], with its declared fields, by name. *)
+   constructor of [Record], with its declared fields, by name. A value of
+   a variant type, `Order.Placed`, is always its constructor, the one of
+   [Of_variant] (compiler.md, "Data stage", "Variant types"). *)
 type head = { name : string; owner : owner }
 
 and owner =
@@ -58,6 +60,7 @@ and owner =
   | Outcome
   | Tuple of int
   | Record of Path.t * string list
+  | Of_variant of Path.t * string
 
 type space = Any | Ctor of head * space list | Or of space list
 
@@ -114,7 +117,8 @@ let rec simplify ?swap env (p : pattern) =
   | PCon_named (c, fs) -> (
       (* a by-name constructor is its positional one, every declared field
          in order, one the pattern leaves out an [Any] *)
-      match (Infer.Nodes.find p.pnode env.nodes).found with
+      let node = Infer.Nodes.find p.pnode env.nodes in
+      match node.found with
       | Some (Ctor_of (path, name)) -> (
           match ctor_of env path name with
           | Some k ->
@@ -125,7 +129,12 @@ let rec simplify ?swap env (p : pattern) =
                 | Some (_, q) -> simplify env q
                 | None -> Any
               in
-              Ctor ({ name = c.name.name; owner = Of_type path }, List.map field k.cfields)
+              let owner =
+                match node.ty with
+                | Variant _ -> Of_variant (path, name)
+                | _ -> Of_type path
+              in
+              Ctor ({ name = c.name.name; owner }, List.map field k.cfields)
           | None -> Any)
       | _ -> Any (* inference reported it *))
   | PTuple ps ->
@@ -135,6 +144,20 @@ let rec simplify ?swap env (p : pattern) =
       (* every declared field, in order, one the pattern leaves out an
          [Any] *)
       match (Infer.Nodes.find p.pnode env.nodes).ty with
+      | Variant (path, name, _) -> (
+          (* a variant type is a record of its constructor's fields, and
+             always that constructor *)
+          match ctor_of env path name with
+          | Some k ->
+              let field (d : Iface.field) =
+                match
+                  List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+                with
+                | Some (_, q) -> simplify env q
+                | None -> Any
+              in
+              Ctor ({ name; owner = Of_variant (path, name) }, List.map field k.cfields)
+          | None -> Any)
       | Con (path, _) -> (
           match Hashtbl.find env.types path with
           | { body = Record decl; _ } ->
@@ -197,7 +220,7 @@ let rec show_space env = function
       "(" ^ String.concat ", " (List.map (show_space env) args) ^ ")"
   | Ctor ({ owner = Record (_, names); _ }, args) ->
       show_named env "{ " names args ~all:false
-  | Ctor ({ name; owner = Of_type p }, args)
+  | Ctor ({ name; owner = Of_type p | Of_variant (p, _) }, args)
     when match ctor_of env p name with Some k -> k.cnamed | None -> false ->
       let k = Option.get (ctor_of env p name) in
       show_named env (name ^ " { ")
@@ -242,6 +265,10 @@ let siblings env c =
   | Outcome -> Some [ (value, 1); (failed, 1) ]
   | Tuple n -> Some [ (c, n) ]
   | Record (_, names) -> Some [ (c, List.length names) ]
+  | Of_variant (p, name) ->
+      Option.map
+        (fun (k : Iface.ctor) -> [ (c, List.length k.cfields) ])
+        (ctor_of env p name)
   | No_list -> None
 
 (* The rows with an or-pattern first made a row for each alternative,
@@ -407,6 +434,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
                 { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
              t)
     | Con (p, _) -> Some (env.names p)
+    | Variant (p, c, _) -> Some (env.names p ^ "." ^ c)
     | Var _ | Fun _ | Errors _ | Impl _ | Error -> None
   in
   (* With `fail` arms, each row is an outcome (see [owner]), and the error

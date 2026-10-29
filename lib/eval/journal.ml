@@ -324,6 +324,8 @@ let rec read (types : Walk.types) (t : Ty.ty) r : Value.t =
   skip_spaces r;
   if accept r "<redacted>" then raise Redacted;
   let prim name = t = Ty.Con (Path.prelude name, []) in
+  (* a variant type's value is its sum's *)
+  let t = Ty.as_sum t in
   match t with
   | _ when prim "Int" -> (
       match

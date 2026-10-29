@@ -362,9 +362,17 @@ and kind =
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
-  | Field of expr * Path.t * string  (** [r.f], and the record type of [r] *)
+  | Field of expr * Path.t * string
+      (** [r.f], and the record type of [r]; or the sum type, when [r] is a
+          value of one of its variant types, [Order.Placed], a field read at a
+          known constructor *)
   | Update of expr * string * expr
-      (** the record with one field replaced: a new record *)
+      (** the record with one field replaced: a new record; or a new value of
+          [r]'s variant type *)
+  | Of_variant of expr
+      (** a value of a variant type, [Order.Placed], as its sum, [Order]: the
+          same value, so no code (compiler.md, "Data stage", "Variant types").
+          What [Placed { ..p }] with nothing else given is *)
   | Array of expr list
   | Tuple of expr list  (** [(k, v)]: two parts, or three *)
   | Tag of string * expr list * desc list
@@ -564,7 +572,7 @@ let rec has_param n (t : Ty.ty) =
   in
   match t with
   | Var m -> m < n
-  | Con (_, args) -> List.exists (has_param n) args
+  | Con (_, args) | Variant (_, _, args) -> List.exists (has_param n) args
   | Fun (ps, r, e, u) ->
       List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
       || has_param n r || row e || row u
@@ -588,6 +596,10 @@ let rec describe tys (t : Ty.ty) =
       dtail = r.tail;
     }
   in
+  (* a variant type has its sum's descriptor: a generic function shows,
+     compares and hashes one as the sum (compiler.md, "Data stage",
+     "Variant types") *)
+  let t = Ty.as_sum t in
   match t with
   | _ when not (has_param (List.length tys) t) -> Known t
   | Var n -> Param (List.nth tys n)
@@ -597,7 +609,7 @@ let rec describe tys (t : Ty.ty) =
          function type with one of them in it is described *)
       invalid_arg "Core.describe: a function type with type variables"
   | Errors e -> Errs (row e)
-  | Impl _ | Error -> Known t
+  | Variant _ (* made the sum above *) | Impl _ | Error -> Known t
 
 (* The key of [d], a dependency of a type written in the type variables
    of a function whose hidden type parameters are [tys]. *)
@@ -616,7 +628,7 @@ let params_in n (t : Ty.ty) =
     match t with
     | Var m when m < n -> m :: acc
     | Var _ | Error -> acc
-    | Con (_, args) -> List.fold_left go acc args
+    | Con (_, args) | Variant (_, _, args) -> List.fold_left go acc args
     | Fun (ps, r, e, u) ->
         row
           (row
@@ -721,6 +733,7 @@ let children (e : expr) =
   | Assign (_, a)
   | Assert a
   | Field (a, _, _)
+  | Of_variant a
   | Narrowed (_, a)
   | Fail a
   | Lambda { body = a; _ }
@@ -1036,6 +1049,7 @@ let rec sexp_with t e =
         (atom "record"
         :: List.map (fun (f, v) -> List [ Atom (f ^ ":"); sexp v ]) fields)
   | Field (r, _, f) -> List [ atom "."; sexp r; atom f ]
+  | Of_variant r -> List [ atom "of_variant"; sexp r ]
   | Update (r, f, v) -> List [ atom "update"; sexp r; Atom (f ^ ":"); sexp v ]
   | Array xs -> List (atom "array" :: List.map sexp xs)
   | Tuple xs -> List (atom "tuple" :: List.map sexp xs)

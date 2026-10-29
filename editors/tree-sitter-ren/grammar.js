@@ -532,6 +532,7 @@ module.exports = grammar({
     _return_type: ($) =>
       choice(
         $.named_type,
+        $.variant_type,
         $.function_type,
         $.parenthesized_type,
         $.tuple_type,
@@ -587,6 +588,17 @@ module.exports = grammar({
         optional(field('arguments', $.type_arguments)),
       ),
 
+    // Order.Placed, a variant type: one of a sum's variants with named
+    // fields, its sum's arguments after it, Tree.Node<Int>, m.Order.Placed
+    // with the sum's module first
+    variant_type: ($) =>
+      seq(
+        field('sum', $.type_name),
+        '.',
+        field('variant', $.type_identifier),
+        optional(field('arguments', $.type_arguments)),
+      ),
+
     // in a type argument, a `uses` list ends at a comma unless a named row
     // follows it: `Pair<fn() uses Clock, Int>` has two arguments, and
     // several dependencies are written in parentheses
@@ -595,6 +607,7 @@ module.exports = grammar({
     _type_argument: ($) =>
       choice(
         $.named_type,
+        $.variant_type,
         $.parenthesized_type,
         $.tuple_type,
         $.error_set,
@@ -608,6 +621,7 @@ module.exports = grammar({
     _argument_return_type: ($) =>
       choice(
         $.named_type,
+        $.variant_type,
         alias($._argument_function_type, $.function_type),
         $.parenthesized_type,
         $.tuple_type,

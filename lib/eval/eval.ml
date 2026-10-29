@@ -571,6 +571,20 @@ let failed_too cx path err =
   (* a journal being recorded keeps it as a comment *)
   Sched.note line
 
+(* The place of the field [f] among the fields of the constructor [c] of
+   the sum type [p]. *)
+let ctor_field cx p c f =
+  match Hashtbl.find_opt cx.types p with
+  | Some { Iface.body = Sum cs; _ } -> (
+      let k = List.find (fun (k : Iface.ctor) -> k.cname = c) cs in
+      let rec find i = function
+        | [] -> bug "a field its constructor doesn't have"
+        | (d : Iface.field) :: _ when d.fname = f -> i
+        | _ :: rest -> find (i + 1) rest
+      in
+      find 0 k.cfields)
+  | _ -> bug "a field of a constructor of what isn't a sum"
+
 let rec eval cx env (e : expr) =
   match e.kind with
   | Int n -> VInt n
@@ -939,9 +953,13 @@ let rec eval cx env (e : expr) =
       let values = eval_all cx env (List.map snd fields) in
       let fields = List.combine (List.map fst fields) values in
       VRecord (List.sort (fun (a, _) (b, _) -> String.compare a b) fields)
-  | Field (r, _, f) -> (
+  | Field (r, p, f) -> (
       match eval cx env r with
       | VRecord fields -> List.assoc f fields
+      | VCon c ->
+          (* a value of a variant type is its sum's: the field at its place
+             among its constructor's *)
+          List.nth c.args (ctor_field cx p c.name f)
       | _ -> bug "a field of a non-record")
   | Update (r, f, v) -> (
       let r = eval cx env r in
@@ -950,7 +968,11 @@ let rec eval cx env (e : expr) =
       | VRecord fields ->
           VRecord
             (List.map (fun (g, w) -> if g = f then (g, v) else (g, w)) fields)
+      | VCon c ->
+          let i = ctor_field cx c.ty c.name f in
+          VCon { c with args = List.mapi (fun j w -> if j = i then v else w) c.args }
       | _ -> bug "an update of a non-record")
+  | Of_variant r -> eval cx env r
   | Array xs -> array_of_list (eval_all cx env xs)
   | Tuple xs -> VTuple (eval_all cx env xs)
   | Match (subject, arms) ->

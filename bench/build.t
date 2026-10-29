@@ -51,7 +51,7 @@ checked, and `loops_short` in the checked one of a loop bounds.ml made
 twice. `review_shrink` panics indexing an array a call
 shrank under its loop's count, which bounds.ml leaves checked.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs data/variants data/variants_small data/variants_escape data/variants_reuse; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -150,6 +150,14 @@ shrank under its loop's count, which bounds.ml leaves checked.
   data/orpat.ren, naive: the same, exit 0, objects live at exit 0
   data/orpat_strs.ren, perceus: the same, exit 0, objects live at exit 0
   data/orpat_strs.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, naive: the same, exit 0, objects live at exit 0
 
 Every native benchmark, at its small size:
 
@@ -300,7 +308,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs data/variants data/variants_small data/variants_escape data/variants_reuse; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -350,6 +358,10 @@ prints what `ren run` prints, and ends with no object alive; so does
   data/byname.ren, release: the same, exit 0, objects live at exit 0
   data/orpat.ren, release: the same, exit 0, objects live at exit 0
   data/orpat_strs.ren, release: the same, exit 0, objects live at exit 0
+  data/variants.ren, release: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, release: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, release: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, release: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -1358,7 +1370,7 @@ same objects alive at the end as clang's build above.
   >    fi)
   >   done
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs; do tcc_same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs data/variants data/variants_small data/variants_escape data/variants_reuse; do tcc_same $f.ren; done
   fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
   deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1515,6 +1527,14 @@ same objects alive at the end as clang's build above.
   data/orpat.ren, naive, tcc: the same, exit 0, objects live at exit 0
   data/orpat_strs.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   data/orpat_strs.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, naive, tcc: the same, exit 0, objects live at exit 0
   $ for f in native/*/small.ren ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do tcc_same $f; done
   native/binary-trees/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/binary-trees/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
@@ -1703,7 +1723,7 @@ them to the loops.
   data/update.ren: as specified
   data/byname.ren: as specified
   data/orpat.ren: as specified
-  data/variants.ren: not yet
+  data/variants.ren: as specified
   data/todo_panic.ren: not yet
   data/shapes.ren: as specified
   data/nested.ren: as specified
@@ -1720,3 +1740,17 @@ of the program's, and each update is a reuse.
   $ (cd data && ren build --release --stats update.ren -o ./update.bin 2>/dev/null && ./update.bin 2>&1 >/dev/null | grep -o 'allocations [0-9]*\|reuses [0-9]*')
   allocations 16
   reuses 1002
+
+A variant type costs nothing when its value is unique (compiler.md,
+"Data stage", "Variant types"): its value is its sum's, so `as` binds
+the subject itself and `Placed { ..p }` is no code, and an update of
+one, `{ ..p, total }`, is built over it in place. The loop of
+`variants_reuse` does both 1000 times and allocates nothing: what's
+allocated is the rest of the program's, the same in both builds, and
+each update is a reuse.
+
+  $ (cd data && for m in debug release; do ren build --$m --stats variants_reuse.ren -o ./reuse.bin 2>/dev/null && ./reuse.bin 2>&1 >/dev/null | grep -o 'allocations [0-9]*\|reuses [0-9]*'; done)
+  allocations 4
+  reuses 1000
+  allocations 4
+  reuses 1000

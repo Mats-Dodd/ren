@@ -6921,7 +6921,8 @@ revisit if a step finds it wrong:
 | 0 | f313084 | this section: the grammar, the AST, each step's rules, passes and files, every error with its help, the layout faults and their fixes, the choices where the design is silent; the inventory of by-name sites (324, counted by a scratchpad script); test/test_data.ml, every test of a feature behind `until "sN"`, the guards written plainly; bench/data/ (update, byname, orpat, variants, todo_panic, shapes, and step 7's nested, rows, optional and interp) and its section of bench/build.t, step 7's three kernels already as specified | steps 1 to 8; nothing of the language is built yet |
 | 1 | cff7c15 | record update, `{ ..o, f: v }` and `T { ..o, f: v }`, and record patterns, `{ f: p, g, .. }` and `T { .. }`, in a `match`, a `let`, a `for` and a block's parameter, through the parser, Resolve, Infer (`infer_update`, `record_pattern`), Exhaust (a record is one constructor), Core (`PRecord`) and Core Lint, the interpreter, and Mem IR in both builds; the fourteen refusals; tree-sitter's `record_expression` with a `spread`, `record_pattern`, `field_pattern` and `rest_pattern`, its corpus (records.txt) and Zed's highlights; test_data.ml's s1 tests on, and bench/data/update in build.t's `same`, `release` and `tcc_same`, with its reuse shown (`--stats`: the loop of 1000 updates allocates nothing, each a reuse); the README and language.md's "What Ren has today". Choices: below the table | steps 2 to 8 |
 | 2 | e180921 | the language change, by-name variants, through the whole pipeline: the parser (`parse_ctor_decl`'s braces and one positional field, labelled or not; `Shape.Rect { ... }` and `Shape.Rect { .. }`; `..` refused in parentheses), Resolve (`braces_name`, the record-or-constructor refusal; a by-name constructor refused where a binding pattern must always match), Infer (`infer_con_named`, `con_pattern`, `ctor_shape` down to arity, the by-name and by-position refusals with their fix-its, an update into a by-name constructor), Exhaust (`Rect { .. }`), lowering (to `Con` and `PCon`, so Core, Core Lint, the interpreter and Mem IR are unchanged), `show` in the interpreter, its `assert` diff, the journal, and natively (`ren_ctor_info.fields`); tree-sitter's `variant`, `constructor_expression` and `constructor_pattern` with fields, the corpus (variants.txt, and types.txt's declaration moved), Zed's highlights; test_data.ml's s2 tests on, bench/data/byname in `same`, `release` and `tcc_same` (and `shapes` and `interp` now as specified) ; and the migration, every site of the inventory moved to the new forms, 318 of its 324: bench/ 100 (packed, review_lists, review_values, sized, trmc, trmc_panic, values), bench/native 103 (binary-trees, blocks, cfold, deriv, nested, nqueens, rbtree; their Rust and Go twins and checksums unchanged), bench/build.t's heredocs 12, examples/ 17 (bank 7, `Sent { amount: t.amount, to: t.to }`; shop 3, vm 4, infer.ren and plans.ren 3), test/ 81 (test_native 38, test_eval 12, test_blocks 10, test_deps 10 with 6 printed, test_resolve 4 with 1 printed, test_infer 3, test_modules 2, test_ops 1, test_syntax 1), the corpus 2 (types.txt, expressions.txt), the docs 3 (README.md's `Pro(5)`, errors.md's `Sent` and `Received`) and their prose (README.md, bench/native/README.md, the Native slice's trmc paragraph); the outputs promoted, each diff only `show`'s braces, the step's error texts and the bank's line numbers. Left as they are, 6: formats.md's `Query(sql: CStr)`, a format's `case`; test_infer.ml's `Pro(seat: 5)` and `Pt(x: 1, 2)` and their printed copies, now tests of the errors that replace theirs; test_modules.ml's printed `Full(row: Row)`, a declaration of one field. Choices: below the table | steps 3 to 8 |
-| 3 | this commit | or-patterns anywhere a pattern goes, nested, `as`, and `let PATTERN = e else LEAVE`, through the whole pipeline: the parser (`parse_pattern`'s alternatives, `as` and grouping; `let` and `for` taking any pattern and a block's parameter one that starts with `(`, `{` or a capital; the `let ... else` statement; `if let` refused with its help; `as` after `fail` patterns refused), Resolve (one message for a name only some alternatives bind, `fail` ones too; `leaves`; the `else` resolved before the pattern binds), Infer (`bind_pattern`'s `POr`, through `alternatives`, which `bind_fail` shares, with the new message; `PAs`; the `else` checked against the rest of the block's type), Exhaust (`Or` spaces, each alternative checked useful, the patterns of a `let`, a `for` and a block's parameter checked to always match, and a `let ... else`'s to not), lowering (`let ... else` a `Match` of two arms, `PAs`), Core's `PAs` and Core Lint, the interpreter, and Mem IR in both builds (`PAs` the subject itself; an or-pattern that binds names gives each alternative its own variables and its own join, which Perceus needs, and a pattern's variable found by id); tree-sitter's `or_pattern` for any patterns, `as_pattern`, `parenthesized_pattern`, `let_else`, patterns in a `let`, a `for` and a block's parameter, the corpus (patterns.txt) and the highlight markers, Zed's highlights; test_data.ml's s3 tests on, the end-to-end program among them; bench/data/orpat as specified and in `same`, `release` and `tcc_same`, with bench/data/orpat_strs beside it (or-patterns binding counted values); the bank's `worth_retrying` in two arms with or-patterns; README's tour, language.md's "What Ren has today". The parser's `binding_pattern`, `irrefutable` and `might_not_match` are gone, and so is Resolve's refusal of a by-name constructor in a binding position: Exhaust decides. Choices: below the table | steps 4 to 8 |
+| 3 | b885fcd | or-patterns anywhere a pattern goes, nested, `as`, and `let PATTERN = e else LEAVE`, through the whole pipeline: the parser (`parse_pattern`'s alternatives, `as` and grouping; `let` and `for` taking any pattern and a block's parameter one that starts with `(`, `{` or a capital; the `let ... else` statement; `if let` refused with its help; `as` after `fail` patterns refused), Resolve (one message for a name only some alternatives bind, `fail` ones too; `leaves`; the `else` resolved before the pattern binds), Infer (`bind_pattern`'s `POr`, through `alternatives`, which `bind_fail` shares, with the new message; `PAs`; the `else` checked against the rest of the block's type), Exhaust (`Or` spaces, each alternative checked useful, the patterns of a `let`, a `for` and a block's parameter checked to always match, and a `let ... else`'s to not), lowering (`let ... else` a `Match` of two arms, `PAs`), Core's `PAs` and Core Lint, the interpreter, and Mem IR in both builds (`PAs` the subject itself; an or-pattern that binds names gives each alternative its own variables and its own join, which Perceus needs, and a pattern's variable found by id); tree-sitter's `or_pattern` for any patterns, `as_pattern`, `parenthesized_pattern`, `let_else`, patterns in a `let`, a `for` and a block's parameter, the corpus (patterns.txt) and the highlight markers, Zed's highlights; test_data.ml's s3 tests on, the end-to-end program among them; bench/data/orpat as specified and in `same`, `release` and `tcc_same`, with bench/data/orpat_strs beside it (or-patterns binding counted values); the bank's `worth_retrying` in two arms with or-patterns; README's tour, language.md's "What Ren has today". The parser's `binding_pattern`, `irrefutable` and `might_not_match` are gone, and so is Resolve's refusal of a by-name constructor in a binding position: Exhaust decides. Choices: below the table | steps 4 to 8 |
+| 4 | this commit | variant types, `Order.Placed`, through the whole pipeline: the parser (`parse_ty`'s `TyVariant`, `Tree.Node<Int>`, and `Tree<Int>.Node` refused with its help), Resolve (the sum's name, and the three refusals: not a sum, no such variant with "did you mean", a variant not by name; and a variant type of a private sum in a public signature), Types and Ty (`TVariant` and `Variant`, unifying only with themselves, printed `Order.Placed`, every walk of a type), Infer (`as` on a by-name constructor's pattern binds its variant type; field reads, record patterns, `{ ..p, total: x }` an `Order.Placed`, `var p` and `p.total = x`; `Placed { ..p }` the sum; a pattern of a variant type's own constructor that always matches, and of another one refused; the two mismatch helps and the constructor's note; `..` from a sum, and the method refusal), Infer_reqs (`==`, `hash` and order borrowed, through the sum's `key`), Exhaust (a variant type's one constructor), the interfaces (a variant type in a `pub` signature, written `order.Order.Placed` by an importer), Core (`Of_variant`, `Con`, `PCon`, `Field` and `Update` at a `Variant`, `PAs` binding one; `describe` the sum's) and Core Lint, the interpreter (a variant type's value is its sum's; its walks, `show`, `==`, `hash`, `key` and the journal, the sum's), and Mem IR in both builds (the sum's layout, struct and descriptor; a field read at its constructor's slot; no tag test; `Of_variant` no code; an update of a small one keeps its tag); release specialization; tree-sitter's `variant_type`, its corpus (types.txt) and highlight markers, Zed's highlights; test_data.ml's s4 tests on, and four more (another module's signature, round trips and a variant type's own patterns, another variant's pattern refused, the arguments' place); bench/data/variants as specified and in `same`, `release` and `tcc_same`, with variants_small (variant types of sums kept as structs), variants_escape (stored, passed through generic functions, round-tripped) and variants_reuse beside it, whose loop of 1000 updates and conversions allocates nothing (`--stats`, both builds: 4 allocations, 1000 reuses); README's tour, language.md's "What Ren has today", operators.md's "Equality, hashing and `show`". Choices: below the table | steps 5 to 8 |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7114,6 +7115,91 @@ Step 3's choices, where the sections above are silent:
   natively, "`$if` holds 0 and 1 references on different paths", at
   e180921 too; the `Free` is a word that holds nothing. Step 7's layout
   work (`Nullable`, niches) is where it belongs.
+
+Step 4's choices, where the sections above are silent:
+
+- **A written variant type is checked by Resolve,** not Infer_written:
+  that `Order` is a sum, `Placed` its constructor, and by name, with the
+  spec's three errors, and the sum's number of type arguments. Resolve
+  already reads every sum in scope, its own module's and its imports'
+  interfaces, and a type declaration's field, `type Box = { p:
+  Order.Placed }`, goes to its interface (Iface.of_written) without
+  passing through Infer_written; Resolve's errors stop the module before
+  inference, so every later pass sees only variant types that exist. A
+  variant type of a private sum in a public signature is the private
+  type error any type is.
+- `Tree<Int>.Node` is a parse error, "a variant type's arguments are its
+  sum's, written after the variant", help "write `Tree.Node<Int>`". The
+  positional refusal's help names its field, `Flat(off) => ...`, `x` for
+  a field with no name, and a variant with no fields, `Free => ...`; "has
+  no variant" lists the variants with named fields when nothing is near,
+  or says the sum has none.
+- **No `Field_of_variant`:** a field read of a variant type records
+  `Field_of` the sum, and Lower makes the `Field (r, s, f)` the Core
+  section gives, which Core Lint, the interpreter and to_mem tell apart
+  by `r`'s type.
+- `as` binds a variant type only of a pattern that's a by-name
+  constructor's, `Placed { .. } as p` or `(Placed { .. }) as p`; of
+  another `as`, `(Placed { .. } as q) as p`, or of an or-pattern, it binds
+  what's matched.
+- A pattern matched against a value of a variant type: its own
+  constructor's always matches, its fields at the variant type's
+  arguments (Exhaust's [Of_variant], one constructor); a record pattern
+  is its fields', and may leave fields out in a binding position, as a
+  record's may, and lowers to its constructor's `PCon`, so Core has no
+  `PRecord` at a `Variant`; another constructor's is refused, "an
+  `Order.Placed` is never a `Shipped`, so this pattern never matches",
+  help "a value of a variant type is always that variant: match it as
+  `Placed { .. }`, or match the sum it came from".
+- An update with no target whose base is a variant type is that variant
+  type, a `Con` of its constructor at the `Variant`; `Placed { ..p }` of
+  a `p` of its own variant type, with nothing given, is `Of_variant`;
+  with fields given, `Placed { ..p, total }`, it's a `Con` at the sum,
+  which reuse builds over a dead `p`. `..` from a sum names the target's
+  variant in its help, or the first by-name one with the fields given.
+- The note "a constructor always builds the sum" is added to a mismatch
+  where a constructor, a by-name construction or an update into a
+  constructor is found and its sum's variant type expected; the help is
+  any mismatch's of the sum where its variant type is wanted, at the top
+  or inside the same type, `Array<Order>` and `Array<Order.Placed>`. The
+  help the other way writes the value checked, `Placed { ..p }`, in
+  parentheses if it has a space (`check`), and `p` where no value is at
+  hand.
+- The method refusal fires where the sum has a method of the name and
+  the variant no field of it; otherwise it's the field error, "`Order.Placed`
+  has no field named `x`".
+- **Natively, a variant type is erased to its sum** wherever a layout or
+  a descriptor is asked for (`Ty.erase_variants`): one layout, one
+  struct and one descriptor for both, so a value moves between them with
+  no code. A field read and an update find the constructor's places
+  through `record_fields` and `record_shape`, which `ctor_shape` answers
+  for a `Variant`; an update of a small value of a variant type, a
+  struct, is made as its constructor's is, its tag and the slots it has
+  no field in made again (`small_ctor`, which `Con` shares); a `match`
+  on a value of a variant type has no switch on its tag, and its
+  `PCon` no test.
+- Release specialization keys copies by the types as they are, so a
+  generic function used at `Order.Placed` and at `Order` is two copies of
+  one code: keying them by the sum would give a copy's Core the sum's
+  type where its caller passes the variant's, which Core Lint refuses.
+- Core Lint takes a descriptor to describe a type up to its variant
+  types, which are described as their sums (`describe`).
+- A variant type's value is its sum's in the interpreter too: `show`,
+  `==`, `hash`, order, a `key` and the journal look through `Ty.as_sum`,
+  so `Order`'s `key` and `show` are a placed order's. Natively, a sum
+  with a `key` is refused as before, and so its variant types are.
+- test_data.ml's "an or-pattern of several variants binds the sum" had
+  a typo: its program defined `same`, which `ren types` prints and its
+  target didn't. It now writes `if s == o then 1 else 0`, which checks
+  only if `s` is the `Order` `o` is; the target is unchanged.
+- The bank, the shop and the ledger don't use variant types: none has a
+  function that takes one state of a sum it gets from a `match`. Their
+  by-name sums (the bank's `Movement`) are built by their callers, and a
+  constructor builds the sum, so `debit(..., what: Movement.Sent)` would
+  make each caller match the `Sent` it just built.
+- Tree-sitter: `variant_type`, the sum's `type_name`, then `.` and the
+  variant, then the arguments; Zed highlights the variant as a type. A
+  bare `Placed { ..p }` stays a `record_expression`, as step 2 chose.
 
 ## The runtime model
 
