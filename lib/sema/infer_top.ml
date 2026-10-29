@@ -577,25 +577,24 @@ let check_main env r ~fns ~schemes ~withheld (f : fn_def) ty cx =
    a dependency, the built-in a dependency controls if that's a real one,
    and the built-ins it gets the test one of. *)
 let test_world ~real =
-  (* the built-in dependency the prelude's [c] controls: `Clock` for
-     `TestClock` *)
-  let control c =
+  (* the built-in dependency [c] controls: `Clock` for `TestClock`,
+     `Net` for `sim.SimNet` *)
+  let control (c : Path.t) =
     List.find_map
       (fun (d, c') -> if c' = Some c then Some d else None)
       Test_items.defaults
   in
   let installs (p : Path.t) =
-    p.home = Path.prelude_home
-    && (List.mem_assoc p.name Test_items.defaults
-       ||
-       match control p.name with
-       | Some d -> not (List.mem d real)
-       | None -> false)
+    (p.home = Path.prelude_home && List.mem_assoc p.name Test_items.defaults)
+    ||
+    match control p with
+    | Some d -> not (List.mem d real)
+    | None -> false
   in
   (* the built-in [p] controls, if the test gets the real one *)
   let real_of (p : Path.t) =
-    match control p.name with
-    | Some d when p.home = Path.prelude_home && List.mem d real -> Some d
+    match control p with
+    | Some d when List.mem d real -> Some d
     | _ -> None
   in
   (* the built-ins it gets the test implementation of *)

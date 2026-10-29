@@ -340,6 +340,7 @@ error: `with` installs only handlers
 | `Fs` | `read(p) -> Bytes ! FsError`, `write(p, b) ! FsError`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
 | `Os` | `args() -> Array<Str>` | what follows `--` in `ren run file.ren -- args` | `test_os([])`: no args | none |
 | `Proc` | `run(cmd, args) -> Int ! ProcError` | a process, with this one's stdin, stdout and stderr | `test_proc([])`: runs nothing, exits with 0 | `TestProc.ran() -> Array<Command>` |
+| `Net` | `listen(addr) -> Listener`, `accept(l) -> Conn`, `accept_until(l, stop) -> Option<Conn>`, `read(c, max) -> Bytes`, `write(c, b)`, `close(c)`, each but `close` `! NetError` | TCP, each wait the scheduler's; SIGTERM ends a waiting `accept_until` | `sim.net()`: connections in memory, in virtual time | `sim.SimNet`: `connect(addr) -> Conn`, `signal(s)` |
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.
   `show` shows a value through its type, as it's written: a record after
@@ -388,8 +389,11 @@ error: `with` installs only handlers
   for an hour finishes at once. A runtime is a handler like any other,
   `with sim.scheduler(7) in ...`, installed where no other task runs.
   `sim` is the standard library's module, found by `import sim`, never
-  from a file. `Net` comes with it in stage 11a ([async.md](async.md),
-  [runtime-io.md](runtime-io.md)).
+  from a file. `Net` is a thin layer over TCP, `listen`, `accept`,
+  `accept_until`, `read`, `write` and `close`, with no DNS, HTTP or TLS;
+  a test gets `sim.net()`, connections in memory, whose `sim.SimNet`
+  connects as a client would and sends the program a signal
+  ([async.md](async.md), [runtime-io.md](runtime-io.md)).
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
@@ -407,7 +411,7 @@ error: nothing installs `Users` before `main`
   ┌─ main.ren:1:16
   │
 1 │ fn main() uses Users, Console =
-  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Async`
+  │                ^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
   │
   = help: install one inside `main`: `with mem_users([]) in ...`
 ```
@@ -917,7 +921,8 @@ error: `with` can't tell what `c` installs
 
 - A handler that goes over some dependencies and implements others
   whole.
-- `Async` and `Net` (stage 11a, [async.md](async.md)).
+- The rest of the network: DNS, HTTP, TLS, a client's `connect`, and a
+  `sim.net()` that fails (after stage 11a, [async.md](async.md)).
 - Naming a stack of `with` items as a value, and hiding a dependency from
   the body it's installed around, as Effect's `Layer.provide` does.
 - Sharing one instance across a suite, for an expensive real dependency.

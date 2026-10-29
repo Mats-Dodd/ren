@@ -25,6 +25,12 @@ type t =
   | Fs_exists
   | Os_args
   | Proc_run
+  | Net_listen
+  | Net_accept
+  | Net_accept_until
+  | Net_read
+  | Net_write
+  | Net_close
   | Journal_kept
   | Journal_gave
   | Journal_answer
@@ -61,6 +67,7 @@ type t =
   | Sim_sleep
   | Sim_advance
   | Task_random
+  | Task_drain
   | Map_empty
   | Map_of
   | Map_get
@@ -139,6 +146,12 @@ let path x =
   | Fs_exists -> fn "fs_exists"
   | Os_args -> fn "os_args"
   | Proc_run -> fn "proc_run"
+  | Net_listen -> fn "net_listen"
+  | Net_accept -> fn "net_accept"
+  | Net_accept_until -> fn "net_accept_until"
+  | Net_read -> fn "net_read"
+  | Net_write -> fn "net_write"
+  | Net_close -> fn "net_close"
   | Journal_kept -> fn "journal_kept"
   | Journal_gave -> fn "journal_gave"
   | Journal_answer -> fn "journal_answer"
@@ -175,6 +188,7 @@ let path x =
   | Sim_sleep -> fn "sim_sleep"
   | Sim_advance -> fn "sim_advance"
   | Task_random -> fn "task_random"
+  | Task_drain -> fn "task_drain"
   | Map_empty -> fn "map_empty"
   | Map_of -> member "Map" "of"
   | Map_get -> member "Map" "get"
@@ -241,8 +255,8 @@ let member_name x = Path.short (path x)
    code that uses `Async` reaches (compiler.md, "Stage 11a", "The two
    holes"). [Unbuilt] stands for the scheduler's intrinsics that later
    steps of stage 11a build. `task_cancel` returns at once, but asks the
-   scheduler, as the rest do. The world's waits, `Clock.sleep` and `Proc.run`,
-   aren't these: only the runtime installs the world. *)
+   scheduler, as the rest do. The world's waits, `Clock.sleep`, `Net`'s
+   and `Proc.run`, aren't these: only the runtime installs the world. *)
 let waits = function
   | Unbuilt | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map

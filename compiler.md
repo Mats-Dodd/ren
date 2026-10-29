@@ -3966,7 +3966,7 @@ tests are meant to fail.
 
 | folder | what | lands in |
 |---|---|---|
-| `server` | the server that shuts down gracefully, with `sim.net` | 7 |
+| `server` | the server that shuts down gracefully, with `sim.net` | 7; landed |
 | `crawler` | the crawler, its `Seen` set and `limit` over its `Web` | 8 |
 | `just` | `run_all`, independent recipes at once, a failure killing the rest | 8 (then folded into examples/just) |
 | `transfer` | a transfer under a timeout, commit in `finally` | 5 (needs virtual time: see "Step 3, as built"); landed |
@@ -4895,6 +4895,15 @@ revisit if a step finds it wrong:
 - **A test's root task is `main` to its journal** (step 6): `test/...`
   paths are written `main/...`, so a test that calls `main()` names its
   tasks as the recorded run did.
+- **A signal that comes stays come** (step 7): once SIGTERM has come for
+  an `accept_until`, every one waiting for it, and every later one, gives
+  `None`; one that comes before any `accept_until` has waited for it, in
+  a program that has none yet, cancels `main`. `sim.net()`'s `signal` is
+  only ever for `accept_until`: it never cancels `main`.
+- **`sim.net()` is `Net & SimNet uses Async`** (step 7), as `sim.clock()`
+  is: it waits in `Async.until`. `SimNet` is `sim`'s, so a test that
+  connects writes `import sim.{SimNet}`; `ren test` installs `sim.net()`
+  around every test, with `SimNet`, unless the test `uses Net`.
 - **A replay sees a cancel that time made only where its journal says**
   (step 6), at the task's first point after its entry before; time moves
   on to when that cancel was due, so a timeout reaching it is `Timeout`.
@@ -5440,6 +5449,86 @@ differs from it:
   can replay as the earlier. Low; recording the time on poll and cancel
   lines would close both.
 
+### Step 7, as built
+
+What step 7 settled where "`Net`" above is silent, or differs from it:
+
+- **The prelude** declares `Addr`, `Listener`, `Conn`, `Signal` (`term`
+  15, `interrupt` 2), `NetError` and `dep Net` as The surface has them,
+  with `real_net()` over six intrinsics of the world (`net_listen`,
+  `net_accept`, `net_accept_until`, `net_read`, `net_write`,
+  `net_close`), each giving the private `NetOutcome<T>` that
+  `net_checked` makes a value or a `NetError`, as `Fs`'s are. `Net` is one
+  of `Prelude.world_deps` now, so `$start` installs it, a journal records
+  it, `replaying` answers it, `replay(file)`'s type lists it, and the
+  lists of built-ins in messages name it; `Prelude.dependencies` keeps
+  only `Alloc` and `Unsafe`.
+- **The real `Net`** is lib/eval/net.ml: non-blocking sockets, numbered
+  by the runtime from 1, never twice, so a closed one's calls are
+  `Closed`. A host is written as numbers (no DNS: `NetFailed`, saying
+  so); `listen` sets `SO_REUSEADDR`, so a server can start again at once,
+  and an address something listens at is still `InUse`; SIGPIPE is
+  ignored, so a write to a closed connection is `Closed`. Each wait is
+  `Sched.wait_io`, on its descriptor. `read`'s `max` below 1 is
+  `NetFailed`, in both `Net`s, since no bytes read as the other side
+  having closed.
+- **The scheduler's poll** (sched.ml, `poll`): when no task can run and
+  a timer, a descriptor or a signal is pending, it waits in `Unix.select`
+  for the first of them (under `sim`, not at all if a timer's pending:
+  time moves to it), and wakes, in one poll line, the tasks whose timers
+  are due, by deadline, then those whose descriptors are ready, by
+  descriptor, then those a signal is for. `Unix.select` limits a program
+  to about a thousand descriptors; low, for 11a.
+- **Signals.** `ren run` (and `--record`) catch SIGTERM
+  (`Sched.catch_signals`), and an `accept_until` catches the signal it
+  waits for, SIGTERM or SIGINT; another number is never caught, so it
+  never comes. OCaml's handler only notes it and writes a byte to a pipe
+  `poll` waits on too; a second of the same ends the process at once,
+  with 128 and its number. A signal is seen at a poll, never while a
+  task runs, so a journal's poll says when: a program that never waits
+  sees it only at its next wait, or is ended by a second. A signal that
+  nothing has waited for in an `accept_until` cancels the root; a run
+  whose root ends cancelled so raises `Sched.Signalled`, which `ren run`
+  exits with silently, 143, after the `finally`s ran, and a journal ends
+  `n main exit 143` (`Journal.Stopped`). Replaying, a cancel of the root
+  the journal has and nothing explains is the signal's (`signal_replayed`).
+- **The cleanup deadline after `None`** is `task_drain()`, an intrinsic
+  `real_net`, `replaying` and `sim.net()` call when `accept_until` gives
+  `None`: each scope whose body the task is running (`task.scopes`, kept
+  by `Async.scope`, `map`, `each`, `both` and `race`) gets the deadline,
+  now plus 5 s, and so does each of its tasks, and each spawned into it
+  later (`task.drained`). It's a cancel each sees at its deadline, as a
+  timeout's is (`cancel_due`), so a replay sees it where the journal says;
+  one in a `finally` then has its own cleanup deadline after it, as for
+  any cancel (test_tasks.ml, "a `finally` running at the cleanup deadline
+  has one of its own": cut at 11 s, for a signal at 1 s).
+- **`sim.net()`** is std_lib.ml's `sim_net()`, in Ren: maps of listeners,
+  connections waiting to be accepted, and ends (each its bytes not read,
+  its peer, whether it's open), the signals sent, and the addresses whose
+  listener has closed. `connect` waits until something listens at the
+  address or its listener has closed (`Refused`); `accept_until`, once its
+  signal has been sent, closes its listener, closes the connections it
+  hasn't accepted, and starts the deadline. Its numbers are `Int`s it
+  casts to `Listener` and `Conn` (`unsafe_cast`, sound since each is an
+  opaque `Int`, and the interpreter's value of one is its `Int`).
+- **Tests by default** get `sim.net()` for `Net` and `sim.SimNet`
+  (`Test_items.defaults`' controls are paths now, for `SimNet`).
+- **Native:** the real `Net` is "isn't in the native slice yet", as any
+  intrinsic to_mem doesn't know.
+- **Landed:** `server` is examples/server, `as specified` in bench/tasks.t
+  and under `--seeds 1000`. Test fixes in it: `Err(e) =>
+  Console.error(... show(e))` showed an error, which isn't a value
+  (`Err(_)` now); its test helpers are `test fn`, since a test sees only
+  what's public; and the last test's `try Async.scope` covered nothing.
+  examples/net.t runs a server on the real `Net` with a Python client:
+  SIGTERM while a request is in flight, which still gets its answer, then
+  `Refused`; a sleeping program cancelled by SIGTERM, exiting 143 after its
+  `finally`; and a server's run recorded and replayed.
+- Test changes the spec listed: test_blocks.ml's `dep Net`s are `dep Web`;
+  test_deps.ml's two "nothing can implement `Net` yet" tests name `Alloc`,
+  which keeps those paths tested; test_tasks.ml's `type Conn` is `Session`
+  (the prelude has a `Conn`).
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5451,6 +5540,15 @@ differs from it:
 | 4 | 1d05a68 | operations that don't interleave: Core's `Instance` says whether its handler is `exclusive` (a `var`, or a resource of an opaque type of the program's); spawns, `map`, `each`, `both` and `race` share what their block can reach; a shared, exclusive instance's callers queue, first in first out, a waiter whose condition holds first; `Async.until` lets go of it and has it back, before its `finally` too; a call back into the instance a task holds is a panic; Infer's no-deadlock rule for a block passed to an operation; release builds know no handler in a program that starts tasks; test_tasks.ml's s4 tests on, and more | `transfer` (step 5); steps 5 to 9 |
 | 5 | 1e6bbf0 | the runtime as a handler: the scheduler's policy, `single` or `sim`, set by `Async.single()` and `sim.scheduler(seed)` for their `with`'s body, a panic if other tasks run; `sim`'s seeded tape (splitmix64) at every wait and at each call of a shared, exclusive instance, its virtual time from 0, and `tick` under it; the standard library (lib/core/std_lib.ml) and its `sim` module, `scheduler` and `clock()`, linked into every program, `import sim`, and a program's own `sim` refused; a test on `sim.scheduler(seed)` and `sim.clock()`; `Random` per task; `ren test --seeds N` and `--sim`; `transfer` and `refresh` landed in examples/, and the milestone holds; test_tasks.ml's s5 tests on, and more | steps 6 to 9 |
 | 6 | ed2c9a8 | journal version 2: a task column, a call that waits in two lines, poll lines, cancel lines, second failures as comments (journal.ml, the scheduler's `journal` hooks); `ren replay` following the polls, strict about each entry's task and order, byte for byte for a concurrent run (examples/journal.t); a journal as a test keyed by task, with a schedule prefix, then the tape; version 1 refused with a help; examples/just/tests/build.journal re-recorded; bench/11a/tasks/journal as specified | steps 7 to 9 |
+| 7 | this commit | `Net` in the prelude, its real implementation (lib/eval/net.ml) on non-blocking sockets and `Unix.select` in the scheduler's poll; SIGTERM caught by `ren run`, for `accept_until` or cancelling `main` (exit 143), a second ending it at once; the cleanup deadline after `accept_until` gives `None`; `sim.net()` and `sim.SimNet` in Ren, a test's default `Net`; `Net` recorded and replayed, a journal ending `exit 143`; examples/server landed, examples/net.t on the real `Net`; test_tasks.ml's s7 tests | steps 8 and 9 |
+
+Notes for step 8 on: the real `Proc.run`'s wait for its process can be a
+`Sched.wait_io` on a pipe a `SIGCHLD` handler writes to, as signals are
+(`Sched.catch`), or a timer polling `waitpid` with `WNOHANG`; either way
+`poll` reports the wake, which is the journal's poll line. `sync`'s
+handlers wait in `Async.until`, as `sim.net()`'s do, and use `Async` in
+their type. The crawler's `limit` is its own; `server` and `sim.net()`
+need nothing more.
 
 Notes for step 7 on: a journal's polls are `Sched.fire_due`'s wakes,
 given to the journal's `polled`; I/O that `Unix.select` completes has to

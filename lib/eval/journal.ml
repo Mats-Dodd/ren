@@ -82,6 +82,9 @@ let same a b = a.dep = b.dep && a.op = b.op && a.args = b.args
    folder, its line and its column: `main.ren:3:9`. *)
 type ending =
   | Exited
+  | Stopped of int
+      (** cancelled by the signal numbered so, which nothing stopped for:
+          it exits with 128 and the number, `exit 143` *)
   | Errored of string
       (** with this error, nothing having handled it, as the journal writes it
           ([write]) *)
@@ -91,6 +94,7 @@ type ending =
    ...`. *)
 let ending_said = function
   | Exited -> "the end, `exit 0`"
+  | Stopped n -> sprintf "the end, `exit %d`, stopped by a signal" (128 + n)
   | Errored e -> sprintf "the end, failing with `%s`" e
   | Panicked { at; msg } -> sprintf "panic at %s: %s" at msg
 
@@ -98,6 +102,7 @@ let ending_said = function
    didn't. *)
 let ended_instead = function
   | Exited -> "this program ended instead, with `exit 0`"
+  | Stopped n -> sprintf "this program ended instead, with `exit %d`, stopped by a signal" (128 + n)
   | Errored e -> sprintf "this program ended instead, failing with `%s`" e
   | Panicked { at; msg } ->
       sprintf "this program ended instead, in a panic at %s: %s" at msg
@@ -133,6 +138,7 @@ let quote s =
    break the line. *)
 let ending_text = function
   | Exited -> "exit 0"
+  | Stopped n -> sprintf "exit %d" (128 + n)
   | Errored e -> "error " ^ e
   | Panicked { at; msg } -> sprintf "panic %s %s" at (quote msg)
 
@@ -550,6 +556,8 @@ let parse_entry ~file line text =
       | "cancelled" when after = "" -> Cancel (task, line)
       | "→" -> Gave (task, (if after = "" then None else Some after), line)
       | "exit" when after = "0" -> End (Exited, line)
+      | "exit" when (match int_of_string_opt after with Some n -> n > 128 && n < 256 | None -> false) ->
+          End (Stopped (int_of_string after - 128), line)
       | "error" when after <> "" -> End (Errored after, line)
       | "panic" -> (
           match String.index_opt after ' ' with
@@ -1143,7 +1151,7 @@ let past_the_end j instead =
 let failing j =
   match j.ending with
   | Some ((Errored _ | Panicked _), _) -> true
-  | Some (Exited, _) | None -> false
+  | Some ((Exited | Stopped _), _) | None -> false
 
 (* The call the entry numbered [i] is. *)
 let call_at j i =

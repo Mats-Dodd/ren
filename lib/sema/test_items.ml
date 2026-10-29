@@ -77,15 +77,18 @@ type t = {
 (* The built-in dependencies a test gets the test implementation of, each
    with the dependency that controls it, if one does: a test reads back
    what it wrote through `Fs` itself, and installs `test_os(args)` for
-   other args. *)
+   other args. `Net`'s is the standard library's `sim.SimNet`, the others
+   the prelude's. *)
 let defaults =
+  let prelude n = Some (Path.prelude n) in
   [
-    ("Clock", Some "TestClock");
-    ("Random", Some "TestRandom");
-    ("Console", Some "TestConsole");
+    ("Clock", prelude "TestClock");
+    ("Random", prelude "TestRandom");
+    ("Console", prelude "TestConsole");
     ("Fs", None);
     ("Os", None);
-    ("Proc", Some "TestProc");
+    ("Proc", prelude "TestProc");
+    ("Net", Some (Path.make "sim" "SimNet"));
     ("Async", None);
   ]
 

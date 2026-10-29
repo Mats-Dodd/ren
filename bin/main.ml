@@ -188,7 +188,12 @@ let fail ~known e =
   | Some msg ->
       prerr_string msg;
       exit 1
-  | None -> raise e
+  | None -> (
+      match e with
+      (* `main` was cancelled by a signal nothing stopped for, after its
+         `finally`s ran: it exits as a program the signal killed would *)
+      | Sched.Signalled n -> exit (128 + n)
+      | e -> raise e)
 
 (* Whether the file [path] declares `main`: a program starts there. One
    that can't be read or parsed doesn't, here; it's reported if it's
@@ -680,13 +685,16 @@ let replay args =
       print_trace trace;
       replayed "";
       if v <> VUnit then print_endline (Value.show v)
-  | exception ((Eval.Panic _ | Eval.Assert_failed _ | Eval.Uncaught _) as e)
+  | exception
+      ((Eval.Panic _ | Eval.Assert_failed _ | Eval.Uncaught _ | Sched.Signalled _)
+       as e)
     when Journal.replayed_all journal && journal.ending <> None ->
       (* it ended as the recording did *)
       print_trace trace;
       replayed
         (match journal.ending with
         | Some (Panicked _, _) -> ", to the panic it ended in"
+        | Some (Stopped _, _) -> ", to the signal that stopped it"
         | _ -> ", to the error it ended in");
       fail ~known e
   | exception e ->

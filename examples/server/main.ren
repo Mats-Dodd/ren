@@ -38,7 +38,7 @@ pub fn serve(addr: Addr) ! NetError uses Net, Clock, Console, Async =
           s.spawn fn() =>
             match attempt handle(conn)
               Ok(_) => ()
-              Err(e) => Console.error("request failed: ".concat(show(e)))
+              Err(_) => Console.error("request failed")
         None => open = false
 
 pub fn main() ! NetError uses Net, Clock, Console, Async =
@@ -46,16 +46,16 @@ pub fn main() ! NetError uses Net, Clock, Console, Async =
 
 // ---- tests, on `sim.net()`: connections in memory, in virtual time ----
 
-fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
+test fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
 
 // the server, in a task: one that fails says so
-fn run_server() uses Net, Clock, Console, Async =
+test fn run_server() uses Net, Clock, Console, Async =
   match attempt serve(here())
     Ok(_) => ()
-    Err(e) => Console.error("serve failed: ".concat(show(e)))
+    Err(_) => Console.error("serve failed")
 
 // connects, and sends `req`
-fn send(req: Str) -> Conn ! NetError uses Net, SimNet =
+test fn send(req: Str) -> Conn ! NetError uses Net, SimNet =
   let c = try SimNet.connect(here())
   try Net.write(c, req.bytes())
   c
@@ -93,7 +93,7 @@ test "a request still running at the deadline is cut off" =
 
 test "after the signal, nothing new is accepted" =
   with sim.net() in
-    try Async.scope fn(s) =>
+    Async.scope fn(s) =>
       let server = s.start fn() => run_server()
       SimNet.signal(Signal.term)
       assert server.join() == Some(())

@@ -13,10 +13,12 @@
          `each` and `both`
      s4  operations that don't interleave
      s5  `single` and `sim` as handlers, and virtual time
+     s7  `sim.net()`, the network a test gets
      s8  the standard library, `sync`
 
-   Steps 6 and 7, the journal and `Net`, are specified by the programs in
-   bench/11a/tasks (bench/tasks.t), and the milestone too.
+   Step 6, the journal, is specified by test_journal.ml and the programs
+   in bench/11a/tasks (bench/tasks.t), and the milestone too; step 7's
+   server is examples/server, and the real `Net` is examples/net.t's.
 
    A test still to land runs through [until] (helpers.ml), which holds
    what the step makes of it: [want], the whole output of a program that
@@ -1897,14 +1899,14 @@ let%expect_test "[s4 accept] a handler that keeps a resource takes a lock" =
      resource, which they keep from each other's tasks *)
   run
     {|
-type Conn = opaque Int
+type Session = opaque Int
 
-fn connect() -> Conn = 1
+fn connect() -> Session = 1
 
 dep Db =
   query: fn(who: Str)
 
-handler db(c: Conn) for Db uses Clock, Console =
+handler db(c: Session) for Db uses Clock, Console =
   query(who) =>
     print(who)
     print(c)
@@ -1919,10 +1921,10 @@ fn main() uses Console, Async, Clock =
 |};
   [%expect {|
     a
-    Conn(1)
+    Session(1)
     done
     b
-    Conn(1)
+    Session(1)
     done
     ()
     |}]
@@ -2379,6 +2381,155 @@ test "under another" =
       ✓ under another
 
     2 passed
+    [exit 0]
+    |}]
+
+(* ---- s7: `sim.net()` ---- *)
+
+let%expect_test "[s7 accept] a test's network: a connection's bytes, both ways" =
+  (* the client connects before anything listens, and waits; what's
+     written is read once, up to `max` at a time; and once the other side
+     has closed, a read gives nothing *)
+  test ~seeds:200
+    {|
+import sim.{SimNet}
+
+test fn here() -> Addr = Addr { host: "127.0.0.1", port: 80 }
+
+test "there and back" =
+  try Async.scope fn(s) =>
+    s.spawn fn() =>
+      match attempt SimNet.connect(here())
+        Ok(c) =>
+          match attempt Net.write(c, "ping".bytes())
+            _ => ()
+          match attempt Net.read(c, 10)
+            Ok(b) => assert b == "pong".bytes()
+            Err(_) => assert false
+          Net.close(c)
+        Err(_) => assert false
+    let l = try Net.listen(here())
+    let c = try Net.accept(l)
+    assert try Net.read(c, 2) == "pi".bytes()
+    assert try Net.read(c, 10) == "ng".bytes()
+    try Net.write(c, "pong".bytes())
+    assert try Net.read(c, 10) == "".bytes()
+    Net.close(c)
+|};
+  [%expect {|
+    test.ren
+      ✓ there and back
+
+    1 passed, each under 200 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s7 accept] how `sim.net()` fails" =
+  test
+    {|
+import sim.{SimNet}
+
+test fn here() -> Addr = Addr { host: "127.0.0.1", port: 80 }
+
+test "a second listener at one address" =
+  let _ = try Net.listen(here())
+  assert attempt Net.listen(here()) == Err(InUse(here()))
+
+test "a closed connection" =
+  try Async.scope fn(s) =>
+    s.spawn fn() =>
+      match attempt SimNet.connect(here())
+        Ok(c) => Net.close(c)
+        Err(_) => ()
+    let l = try Net.listen(here())
+    let c = try Net.accept(l)
+    assert try Net.read(c, 10) == "".bytes()
+    assert attempt Net.write(c, "late".bytes()) == Err(Closed)
+    Net.close(c)
+    assert attempt Net.read(c, 10) == Err(Closed)
+
+test "a read of nothing" =
+  try Async.scope fn(s) =>
+    s.spawn fn() =>
+      match attempt SimNet.connect(here())
+        Ok(c) => Net.close(c)
+        Err(_) => ()
+    let l = try Net.listen(here())
+    let c = try Net.accept(l)
+    assert attempt Net.read(c, 0) == Err(NetFailed("a read takes at least 1 byte, or it couldn't tell that from the end"))
+
+test "a signal sent before `accept_until` waits is kept for it" =
+  let l = try Net.listen(here())
+  SimNet.signal(Signal.term)
+  assert try Net.accept_until(l, Signal.term) == None
+  assert try Net.accept_until(l, Signal.term) == None
+  assert attempt SimNet.connect(here()) == Err(Refused(here()))
+  assert attempt Net.accept(l) == Err(Closed)
+
+test "another signal stops nothing" =
+  let l = try Net.listen(here())
+  SimNet.signal(Signal.interrupt)
+  match Async.timeout(Duration.seconds(1)) fn() => attempt Net.accept_until(l, Signal.term)
+    _ => assert false
+    fail Timeout => assert Clock.now() == Time.epoch + Duration.seconds(1)
+|};
+  [%expect {|
+    test.ren
+      ✓ a second listener at one address
+      ✓ a closed connection
+      ✓ a read of nothing
+      ✓ a signal sent before `accept_until` waits is kept for it
+      ✓ another signal stops nothing
+
+    5 passed
+    [exit 0]
+    |}]
+
+let%expect_test "[s7 accept] a `finally` running at the cleanup deadline has one of its own" =
+  (* the signal at 1 s: the connection is cancelled at 6 s, in its sleep,
+     and its `with`'s `finally`, shielded, is cut off 5 s later, at 11 s *)
+  test ~seeds:100
+    {|
+import sim.{SimNet}
+
+test fn here() -> Addr = Addr { host: "127.0.0.1", port: 80 }
+
+pub dep Tidy =
+  nothing: fn()
+
+pub handler tidy() for Tidy uses Clock =
+  finally(r) =>
+    Clock.sleep(Duration.minutes(1))
+    try r
+  nothing() => ()
+
+test fn serve() ! NetError uses Net, Clock, Async =
+  let l = try Net.listen(here())
+  Async.scope fn(s) =>
+    var open = true
+    while open
+      match attempt Net.accept_until(l, Signal.term)
+        Ok(Some(_)) =>
+          s.spawn fn() =>
+            with tidy() in
+              Clock.sleep(Duration.minutes(1))
+        _ => open = false
+
+test "the cleanup deadline" =
+  try Async.scope fn(s) =>
+    s.spawn fn() =>
+      match attempt serve()
+        _ => ()
+    let _ = try SimNet.connect(here())
+    Clock.sleep(Duration.seconds(1))
+    SimNet.signal(Signal.term)
+  assert Clock.now() == Time.epoch + Duration.seconds(11)
+|};
+  [%expect {|
+    test.ren
+      ✓ the cleanup deadline
+
+    1 passed, each under 100 seeds
     [exit 0]
     |}]
 

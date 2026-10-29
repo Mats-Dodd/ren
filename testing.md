@@ -93,8 +93,11 @@ the order of two tasks can be seen, a wait or a call of an operation
 another task can reach, the next task is drawn from a tape of numbers
 from the test's seed. Its `Clock` is `sim.clock()`, in virtual time,
 which moves only when every task waits, so a test that sleeps for an
-hour finishes in milliseconds. The same seed runs the same way every
-time:
+hour finishes in milliseconds. Its `Net` is `sim.net()`, connections in
+memory: `import sim.{SimNet}`, and `SimNet.connect(addr)` is a client's
+end of a connection to what the program listens at, and
+`SimNet.signal(Signal.term)` stops its `accept_until`s, as SIGTERM would
+(examples/server). The same seed runs the same way every time:
 
 ```
 $ ren test --seeds 200

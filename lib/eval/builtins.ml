@@ -356,7 +356,10 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Async_yield | Async_tick
   | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-  | Sim_advance | Task_random ->
+  | Sim_advance | Task_random | Task_drain
+  (* and the real `Net`'s, which wait too (net.ml) *)
+  | Net_listen | Net_accept | Net_accept_until | Net_read | Net_write
+  | Net_close ->
       fun _ ->
         failwith ("bug: `" ^ Intrinsic.name x ^ "` is run by the interpreter")
   (* the real `Clock.now` and `Clock.instant` *)

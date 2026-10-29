@@ -562,6 +562,82 @@ pub dep Proc =
 handler real_proc() for Proc =
   run(cmd, args) => try proc_checked(proc_run(cmd, args), cmd)
 
+// ---- the network (compiler.md, "Stage 11a", "`Net`") ----
+//
+// A thin layer over TCP: no HTTP, no names looked up, no TLS. The real
+// one waits in the scheduler, so other tasks run meanwhile, and a test
+// gets `sim.net()`, connections in memory (std_lib.ml).
+
+// where a program listens: a host written as numbers, `127.0.0.1`, and
+// a port
+pub type Addr = { host: Str, port: Int }
+
+// a socket listening, and a connection, as the runtime numbers them
+pub type Listener = opaque Int
+pub type Conn = opaque Int
+
+// a signal the program is sent
+pub type Signal = opaque Int
+  // SIGTERM: asked to stop
+  pub let term: Signal = 15
+  // SIGINT: control-C
+  pub let interrupt: Signal = 2
+
+// every way the network can fail: nothing listens at the address, or
+// something does already, the connection is closed, or something else
+// went wrong, which the system gives its reason for
+pub type NetError = ! Refused(addr: Addr) | InUse(addr: Addr) | Closed | NetFailed(reason: Str)
+
+pub dep Net =
+  // listens at `addr`
+  listen: fn(addr: Addr) -> Listener ! NetError
+  // waits for a connection
+  accept: fn(l: Listener) -> Conn ! NetError
+  // a connection, or `None` once `stop` has been sent to this program;
+  // after `None` the listener is closed, and the tasks of the caller's
+  // scopes, the connections in flight, have the cleanup deadline to end
+  accept_until: fn(l: Listener, stop: Signal) -> Option<Conn> ! NetError
+  // up to `max` bytes, as soon as there are some; none once the other
+  // side has closed
+  read: fn(c: Conn, max: Int) -> Bytes ! NetError
+  // waits until all of `b` is written
+  write: fn(c: Conn, b: Bytes) ! NetError
+  close: fn(c: Conn)
+
+  let real: Net = real_net()
+
+// what the system said to a call of the network, which `net_checked`
+// turns into its value or its error
+type NetOutcome<T> =
+  | NetDone(value: T)
+  | NetRefused
+  | NetInUse
+  | NetClosed
+  | NetOther(reason: Str)
+
+// [addr] is what the call was for; a connection's calls are for none,
+// and are never refused or in use
+fn net_checked<T>(o: NetOutcome<T>, addr: Addr) -> T ! NetError =
+  match o
+    NetDone(v) => v
+    NetRefused => fail Refused(addr)
+    NetInUse => fail InUse(addr)
+    NetClosed => fail Closed
+    NetOther(reason) => fail NetFailed(reason)
+
+fn nowhere() -> Addr = Addr { host: "", port: 0 }
+
+handler real_net() for Net =
+  listen(addr) => try net_checked(net_listen(addr.host, addr.port), addr)
+  accept(l) => try net_checked(net_accept(l), nowhere())
+  accept_until(l, stop) =>
+    let c = try net_checked(net_accept_until(l, stop), nowhere())
+    if not c.is_some() then task_drain()
+    c
+  read(c, max) => try net_checked(net_read(c, max), nowhere())
+  write(c, b) => try net_checked(net_write(c, b), nowhere())
+  close(c) => net_close(c)
+
 // ---- tasks (async.md; foundations.md, decisions 7 and 9) ----
 //
 // The runtime is a handler of `Async`, installed around `main` as the
@@ -777,7 +853,7 @@ handler recorder(j: Journal) over any =
 // In place of every built-in dependency: each operation gives back what
 // the recording says it gave. When the `with` that installed it ends, a
 // test's outputs are compared with the recording's.
-handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
+handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc, Net =
   finally(r) =>
     journal_outputs(j)
     try r
@@ -787,7 +863,7 @@ handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
   int(below) => journal_answer(j, "Random.int", below)
   Console.write(line) => journal_answer(j, "Console.write", line)
   error(line) => journal_answer(j, "Console.error", line)
-  read(p) =>
+  Fs.read(p) =>
     let r: Result<Bytes, ! FsError> = journal_answer(j, "Fs.read", p)
     try r
   Fs.write(p, b) =>
@@ -798,6 +874,26 @@ handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
   run(cmd, args) =>
     let r: Result<Int, ! ProcError> = journal_answer(j, "Proc.run", (cmd, args))
     try r
+  listen(addr) =>
+    let r: Result<Listener, ! NetError> = journal_answer(j, "Net.listen", addr)
+    try r
+  accept(l) =>
+    let r: Result<Conn, ! NetError> = journal_answer(j, "Net.accept", l)
+    try r
+  accept_until(l, stop) =>
+    let r: Result<Option<Conn>, ! NetError> = journal_answer(j, "Net.accept_until", (l, stop))
+    let c = try r
+    // the recording's connections in flight had the cleanup deadline
+    // from here, as the real `Net`'s do
+    if not c.is_some() then task_drain()
+    c
+  Net.read(c, max) =>
+    let r: Result<Bytes, ! NetError> = journal_answer(j, "Net.read", (c, max))
+    try r
+  Net.write(c, b) =>
+    let r: Result<Unit, ! NetError> = journal_answer(j, "Net.write", (c, b))
+    try r
+  close(c) => journal_answer(j, "Net.close", c)
 
 // A recorded run, `ren run --record tests/run.journal main.ren`, as each
 // built-in dependency it holds calls for, for a test (testing.md, "The
@@ -805,9 +901,9 @@ handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc =
 // order for each dependency, and what it writes is compared with it when
 // the `with` ends, a difference failing the test with a diff. `file` is
 // found from the folder of the file the test is in. Its type lists all
-// six; the checker narrows it to those the journal's header names
+// seven; the checker narrows it to those the journal's header names
 // (infer_handlers.ml, `replayed`), so the others stay the test's.
-pub test fn replay(file: Str) -> Clock & Console & Fs & Os & Proc & Random =
+pub test fn replay(file: Str) -> Clock & Console & Fs & Net & Os & Proc & Random =
   replaying(journal_load(file))
 |}
 
@@ -823,6 +919,7 @@ let bytes = Ty.Con (Path.prelude "Bytes", [])
 let map k v = Ty.Con (Path.prelude "Map", [ k; v ])
 let set t = Ty.Con (Path.prelude "Set", [ t ])
 let journal = Ty.Con (Path.prelude "Journal", [])
+let net_outcome t = Ty.Con (Path.prelude "NetOutcome", [ t ])
 
 (* Each built-in function's type scheme, by its id. Each parameter's mode
    ([inout] or not) is part of the type. A built-in type's method has its
@@ -876,6 +973,20 @@ let scheme (x : Intrinsic.t) =
   (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
   | Proc_run ->
       fn [ read str; read (array str) ] (Con (Path.prelude "ProcOutcome", []))
+  (* The real `Net`'s, each giving a [NetOutcome] of what it gives, a
+     listener and a connection as their numbers. fn(host: Str, port: Int)
+     -> NetOutcome<Int> *)
+  | Net_listen -> fn [ read str; read int ] (net_outcome int)
+  (* fn(l: Int) -> NetOutcome<Int> *)
+  | Net_accept -> fn [ read int ] (net_outcome int)
+  (* fn(l: Int, stop: Int) -> NetOutcome<Option<Int>> *)
+  | Net_accept_until -> fn [ read int; read int ] (net_outcome (option int))
+  (* fn(c: Int, max: Int) -> NetOutcome<Bytes> *)
+  | Net_read -> fn [ read int; read int ] (net_outcome bytes)
+  (* fn(c: Int, b: Bytes) -> NetOutcome<Unit> *)
+  | Net_write -> fn [ read int; read bytes ] (net_outcome unit)
+  (* fn(c: Int) *)
+  | Net_close -> fn [ read int ] unit
   (* The journal's (handlers.md, "The journal"; journal.ml): each is given
      the call it's for, `Fs.read`, its arguments, [A], one value, a
      tuple of several or `()` for none, and what it gives back, [R]: the
@@ -1144,6 +1255,11 @@ let scheme (x : Intrinsic.t) =
      `Random` seeded with [seed]; [None] in a root task, which draws from
      the instance's own (compiler.md, "The tape") *)
   | Task_random -> fn [ read int; read int ] (option int)
+  (* fn(): the task running has stopped accepting connections, once
+     `accept_until` gave `None`: the tasks of the scopes whose bodies it's
+     running have the cleanup deadline from now (compiler.md, "Stage 11a",
+     "`Net`") *)
+  | Task_drain -> fn [] unit
 
 (* The operation of a built-in dependency that [x] is how the real one
    does, if it reaches the world: `fs_read` is `Fs.read`'s. Each is called
@@ -1165,6 +1281,12 @@ let reaches (x : Intrinsic.t) =
   | Fs_exists -> Some ("Fs", "exists")
   | Os_args -> Some ("Os", "args")
   | Proc_run -> Some ("Proc", "run")
+  | Net_listen -> Some ("Net", "listen")
+  | Net_accept -> Some ("Net", "accept")
+  | Net_accept_until -> Some ("Net", "accept_until")
+  | Net_read -> Some ("Net", "read")
+  | Net_write -> Some ("Net", "write")
+  | Net_close -> Some ("Net", "close")
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Unbuilt
@@ -1172,7 +1294,7 @@ let reaches (x : Intrinsic.t) =
   | Task_until | Task_timeout | Task_isolate | Task_map | Task_each | Task_both
   | Task_race | Async_yield | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Task_random
-  | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
+  | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
@@ -1209,7 +1331,7 @@ let caller (x : Intrinsic.t) =
       | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
       | Task_each | Task_both | Task_race | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-      | Sim_advance ) ) ->
+      | Sim_advance | Task_drain ) ) ->
       Internal
   | None, _ -> Any
 
@@ -1233,6 +1355,12 @@ let fns : Intrinsic.t list =
     Fs_exists;
     Os_args;
     Proc_run;
+    Net_listen;
+    Net_accept;
+    Net_accept_until;
+    Net_read;
+    Net_write;
+    Net_close;
     Journal_kept;
     Journal_gave;
     Journal_answer;
@@ -1268,6 +1396,7 @@ let fns : Intrinsic.t list =
     Sim_sleep;
     Sim_advance;
     Task_random;
+    Task_drain;
   ]
 
 (* ---- built-in types ----
@@ -1385,7 +1514,7 @@ let types =
    The dependencies the runtime installs around `main`, if it uses them:
    each is declared in [source], with its real implementation, `real`
    (deps.md, "`main`"). *)
-let world_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc" ]
+let world_deps = [ "Clock"; "Random"; "Console"; "Fs"; "Os"; "Proc"; "Net" ]
 
 (* `Async`, the runtime itself, isn't the world: the journal records
    none of its calls, but the order they made, in its task column, its
@@ -1394,7 +1523,7 @@ let runtime_deps = world_deps @ [ "Async" ]
 
 (* The dependencies a `uses` can name that aren't declared anywhere yet:
    their stages give them operations. *)
-let dependencies = [ "Net"; "Alloc"; "Unsafe" ]
+let dependencies = [ "Alloc"; "Unsafe" ]
 
 (* Every built-in function, by its path. The map is made once, when the
    compiler starts, and never changes. *)

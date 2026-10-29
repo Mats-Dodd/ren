@@ -637,30 +637,30 @@ fn main() uses Console =
 
 let%expect_test "[s4 accept] a helper that installs what its block's type lists"
     =
-  (* `body`'s type lists `Net`, so `with_fake_net` provides it: the
-     handler reaches the block's `Net` calls, and `main` uses only
-     `Console`. `with_fake_net`'s type is as written *)
+  (* `body`'s type lists `Web`, so `with_fake_web` provides it: the
+     handler reaches the block's `Web` calls, and `main` uses only
+     `Console`. `with_fake_web`'s type is as written *)
   let src =
     {|
-dep Net =
+dep Web =
   get: fn(url: Str) -> Str
 
-handler fake_net() for Net =
+handler fake_web() for Web =
   get(url) => "fake ".concat(url)
 
-fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
+fn with_fake_web(body: fn() uses Web) = with fake_web() in try body()
 
 fn main() uses Console =
-  with_fake_net(fn() => print(Net.get("a")))
+  with_fake_web(fn() => print(Web.get("a")))
 |}
   in
   types src;
   [%expect
     {|
-    dep Net
+    dep Web
       get: fn(Str) -> Str
-    handler fake_net() for Net
-    fn with_fake_net(body: fn() uses Net)
+    handler fake_web() for Web
+    fn with_fake_web(body: fn() uses Web)
     fn main() uses Console
     |}];
   run src;
@@ -794,41 +794,41 @@ fn main() uses Console = each([1, 2], fn(x) => print(x))
 
 let%expect_test
     "[s4 accept] an operation passed as a value, given its dependency" =
-  (* `f`'s type lists `Net`, so the block `Net.get` makes is given
-     `ask`'s, and `main` uses no `Net` *)
+  (* `f`'s type lists `Web`, so the block `Web.get` makes is given
+     `ask`'s, and `main` uses no `Web` *)
   run
     {|
-dep Net =
+dep Web =
   get: fn(url: Str) -> Str
 
-handler fake_net() for Net =
+handler fake_web() for Web =
   get(url) => "fake ".concat(url)
 
-fn ask(f: fn(Str) -> Str uses Net) -> Str = with fake_net() in try f("a")
+fn ask(f: fn(Str) -> Str uses Web) -> Str = with fake_web() in try f("a")
 
-fn main() uses Console = print(ask(Net.get))
+fn main() uses Console = print(ask(Web.get))
 |};
   [%expect {|
     fake a
     ()
     |}]
 
-let%expect_test "[s4 accept] a let of a block whose written type lists Net" =
+let%expect_test "[s4 accept] a let of a block whose written type lists Web" =
   (* the type written on the `let` is where the block is written, so it's
-     given `Net` by whoever it's passed to *)
+     given `Web` by whoever it's passed to *)
   run
     {|
-dep Net =
+dep Web =
   get: fn(url: Str) -> Str
 
-handler fake_net() for Net =
+handler fake_web() for Web =
   get(url) => "fake ".concat(url)
 
-fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
+fn with_fake_web(body: fn() uses Web) = with fake_web() in try body()
 
 fn main() uses Console =
-  let b: fn() uses Net = fn() => print(Net.get("let"))
-  with_fake_net(b)
+  let b: fn() uses Web = fn() => print(Web.get("let"))
+  with_fake_web(b)
 |};
   [%expect {|
     fake let
@@ -838,37 +838,37 @@ fn main() uses Console =
 let%expect_test
     "[s4 reject] a block whose type lists less than its callee gives" =
   (* `b`'s and `body`'s types list nothing, so what they use is found where
-     they're written: neither can take `Net` from `with_fake_net` *)
+     they're written: neither can take `Web` from `with_fake_web` *)
   types
     {|
-dep Net =
+dep Web =
   get: fn(url: Str) -> Str
 
-handler fake_net() for Net =
+handler fake_web() for Web =
   get(url) => "fake ".concat(url)
 
-fn with_fake_net(body: fn() uses Net) = with fake_net() in try body()
-fn pass_on(body: fn()) = try with_fake_net(body)
+fn with_fake_web(body: fn() uses Web) = with fake_web() in try body()
+fn pass_on(body: fn()) = try with_fake_web(body)
 
 fn main() uses Console =
   let b = fn() => print(1)
-  with_fake_net(b)
+  with_fake_web(b)
 |};
   [%expect
     {|
-    error: expected `fn() uses Net`, found `fn()`
+    error: expected `fn() uses Web`, found `fn()`
       ┌─ test.ren:8:44
-    8 │ fn pass_on(body: fn()) = try with_fake_net(body)
+    8 │ fn pass_on(body: fn()) = try with_fake_web(body)
       │                                            ^^^^
       = a block is given only the dependencies its type lists, and this one's lists fewer than its callee gives
-      help: list them in `body`'s type: `body: fn() uses Net`
+      help: list them in `body`'s type: `body: fn() uses Web`
 
-    error: expected `fn() uses Net`, found `fn()`
+    error: expected `fn() uses Web`, found `fn()`
        ┌─ test.ren:12:17
-    12 │   with_fake_net(b)
+    12 │   with_fake_web(b)
        │                 ^
        = a block is given only the dependencies its type lists, and this one's lists fewer than its callee gives
-       help: write its type where it's written: `let b: fn() uses Net = fn ...`
+       help: write its type where it's written: `let b: fn() uses Web = fn ...`
     |}]
 
 (* ---- s5: a block captures by reference, and one rule keeps that

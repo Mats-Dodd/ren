@@ -9,13 +9,13 @@ has landed ([compiler.md](../../../compiler.md#stage-11a), "The tests").
 yet.
 
 ```
-cd bench/11a/tasks/server && ren test             # under one schedule
-cd bench/11a/tasks/server && ren test --seeds 1000
+cd bench/11a/tasks/crawler && ren test             # under one schedule
+cd bench/11a/tasks/crawler && ren test --seeds 1000
 ```
 
 | Folder | What's in it | Lands in |
 |---|---|---|
-| `server` | a server that serves each connection in a task, and on SIGTERM stops accepting and gives what's in flight the cleanup deadline; tests on `sim.net()` | step 7 |
+| `server` | a server that serves each connection in a task, and on SIGTERM stops accepting and gives what's in flight the cleanup deadline; tests on `sim.net()` | step 7, landed: [examples/server](../../../examples/server) |
 | `crawler` | a crawler: each page's links crawled at once, every url claimed once through a handler, and at most 16 requests at a time, with `sync.semaphore` and `sync.limit` | step 8 |
 | `just` | `run_all`, a plan's levels one after another and each level's recipes at once, the first failure killing the rest; tests on `sim.proc` | step 8, then folded into [examples/just](../../../examples/just) |
 | `transfer` | a transfer under `Async.timeout`, inside a transaction installed with `try with`, whose commit in its `finally` overruns the timeout and is still reported | step 5, landed: [examples/transfer](../../../examples/transfer) |

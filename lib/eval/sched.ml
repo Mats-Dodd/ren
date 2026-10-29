@@ -43,6 +43,11 @@
    only a `finally` sees it, which eval.ml runs and then goes on with it. *)
 exception Cancelled
 
+(* The root ended cancelled, by the signal numbered so, which nothing
+   stopped for: `ren run` exits with 128 and it (compiler.md, "Stage 11a",
+   "`Net`"). *)
+exception Signalled of int
+
 (* The cleanup deadline: how long a cancelled task's `finally`s may run
    before their own waits and calls are cancelled too, in seconds. *)
 let cleanup = 5.
@@ -101,6 +106,11 @@ type task = {
           its way out: one installed outside an isolate keeps it from being
           isolated ([isolatable]) *)
   mutable shield : int;
+  mutable drained : float option;
+      (** when it sees a cancel, if a task whose scope it's in has stopped
+          accepting connections ([drain]): the cleanup deadline from then *)
+  mutable scopes : scope list;
+      (** the scopes whose bodies it's running, the innermost first *)
   mutable result : Value.t option;
   mutable joiners : (unit -> bool) list;  (** what to wake when it ends *)
   ordinals : (string, int) Hashtbl.t;
@@ -131,6 +141,9 @@ and scope = {
   mutable room : (unit -> bool) list;
   mutable empty : (unit -> bool) list;
   mutable keyed : (Ty.ty * Value.t * task) list;
+  mutable drain : float option;
+      (** the cleanup deadline its tasks have, once its owner has stopped
+          accepting connections ([drain]) *)
 }
 
 (* A `with` whose body a task is running, numbered by the task's count
@@ -175,6 +188,10 @@ type timer = {
    which it's in again once it has it back, if the instance is locked
    ([lock]). *)
 type waiter = { wt : task; id : int; holds : unit -> bool; wdepth : int }
+
+(* A task waiting until the descriptor [fd] can be read, or written if
+   [out], in its wait [ioid]; what wakes it. *)
+type io = { fd : Unix.file_descr; out : bool; iot : task; ioid : int; iowake : unit -> bool }
 
 (* An exclusive instance a spawned task can reach, whose operations don't
    interleave (compiler.md, "Operations that don't interleave"): the task
@@ -256,6 +273,16 @@ type t = {
           ([share]), each with its lock, by its number *)
   mutable journal : journal option;
       (** the journal being recorded or replayed, if one is ([watch]) *)
+  mutable ios : io list;  (** the tasks waiting for I/O, the first first *)
+  mutable sigwaits : (int * task * (unit -> bool)) list;
+      (** the tasks waiting in `Net.accept_until` for each signal, by its
+          number, the first first *)
+  mutable awaited : int list;
+      (** the signals an `accept_until` has waited for: one of them that
+          comes is for it, and doesn't stop the program *)
+  mutable came : int list;  (** those of them that have come *)
+  mutable signalled : int option;
+      (** the signal that cancelled the root, which nothing stopped for *)
 }
 
 (* The scheduler running, if one is: a run is one program, or one test,
@@ -325,11 +352,26 @@ let cancel_due t =
     else if t.shield = 0 then Some t.asked_at
     else Some t.cleanup_by
   in
+  let asked =
+    match (asked, t.drained) with
+    | _, None -> asked
+    | None, Some by -> Some (if t.shield = 0 then by else by +. cleanup)
+    | Some a, Some by -> Some (Float.min a (if t.shield = 0 then by else by +. cleanup))
+  in
   List.fold_left
     (fun due d ->
       let at = if t.shield <= d.dshield then d.due else d.due +. cleanup in
       match due with Some x -> Some (Float.min x at) | None -> Some at)
     asked t.deadlines
+
+(* The root [t], replaying, is cancelled where the recording's was by a
+   signal nothing stopped for: SIGTERM, the one the runtime catches for
+   that. *)
+let signal_replayed s t =
+  t.asked <- true;
+  t.asked_at <- now ();
+  t.cleanup_by <- t.asked_at +. cleanup;
+  s.signalled <- Some 15
 
 (* Whether [t] sees a cancel now. Following a recording, one that time
    makes is seen only where the recording says, and the time moves on to
@@ -342,6 +384,11 @@ let sees_cancel t =
       match cancel_due t with
       | Some at when j.cancel_here t ->
           jump s at;
+          true
+      | None when t.root && j.cancel_here t ->
+          (* a cancel of the root nothing here explains: a signal's, which
+             the replay isn't sent *)
+          signal_replayed s t;
           true
       | _ -> false)
   | _ -> ( match cancel_due t with Some at -> now () >= at | None -> false)
@@ -567,6 +614,8 @@ let task ~path ~root scope =
     isolates = [];
     through = [];
     shield = 0;
+    drained = None;
+    scopes = [];
     result = None;
     joiners = [];
     ordinals = Hashtbl.create 4;
@@ -592,16 +641,202 @@ let came_from err path =
 
 let origin err = List.find_map (fun (e, p) -> if e == err then Some p else None) !origins
 
-(* Fire each timer that's due now, in the order they're due. A journal
-   being recorded is told the tasks they woke, in that order: a poll. *)
-let fire_due s =
+(* Fire each timer that's due now, in the order they're due: the tasks
+   they woke, in that order. *)
+let fire_timers s =
   let at = now () in
   let due, later = List.partition (fun tm -> tm.at <= at) s.timers in
   s.timers <- later;
-  let woke = List.filter (fun tm -> tm.live () && tm.fire ()) due in
+  List.filter_map
+    (fun tm -> if tm.live () && tm.fire () then Some tm.wakes else None)
+    due
+
+(* A journal being recorded is told the tasks a poll woke, in the order
+   it woke them. *)
+let polled s woke =
   match (woke, s.journal) with
-  | _ :: _, Some j -> j.polled (List.map (fun tm -> tm.wakes) woke)
+  | _ :: _, Some j -> j.polled woke
   | _ -> ()
+
+(* Fire each timer that's due now, a poll. *)
+let fire_due s = polled s (fire_timers s)
+
+(* ---- I/O and signals ----
+
+   When no task can run, the scheduler waits, in [poll], for whichever
+   comes first of the earliest timer, a descriptor a task waits for being
+   ready ([wait_io]), and a signal the runtime catches ([catch_signals]):
+   the real `Net` waits so. A signal is only noted when it comes, by
+   OCaml's handler, which writes a byte to a pipe [poll] waits on too, so
+   that one that comes just before [poll] waits still ends its wait; [poll]
+   is where it's seen, so a journal's polls say when, as they say when a
+   timer fired. *)
+
+(* The signals that have come and haven't been seen yet, the first first;
+   and how many of each have come. Signals are the process's, not a
+   scheduler's. *)
+let caught : int list ref = ref []
+let counts : (int, int) Hashtbl.t = Hashtbl.create 2
+
+(* The pipe the handler writes to, once signals are caught. *)
+let pipe : (Unix.file_descr * Unix.file_descr) option ref = ref None
+
+(* OCaml's number for the signal the system numbers [n], if the runtime
+   can catch it: SIGTERM and SIGINT. *)
+let ocaml_signal = function 15 -> Some Sys.sigterm | 2 -> Some Sys.sigint | _ -> None
+
+(* Catch the signal numbered [n] from now on, if it can be: the first
+   that comes is noted, for [poll]; a second ends the program at once,
+   since a program asked twice to stop has had its chance to do it
+   gracefully (compiler.md, "`Net`"). *)
+let catch n =
+  match (ocaml_signal n, !pipe) with
+  | Some sg, Some (_, w) when not (Hashtbl.mem counts n) ->
+      Hashtbl.replace counts n 0;
+      Sys.set_signal sg
+        (Sys.Signal_handle
+           (fun _ ->
+             let k = Hashtbl.find counts n + 1 in
+             Hashtbl.replace counts n k;
+             if k >= 2 then begin
+               flush_all ();
+               Unix._exit (128 + n)
+             end;
+             caught := !caught @ [ n ];
+             try ignore (Unix.single_write_substring w "!" 0 1)
+             with Unix.Unix_error _ -> ()))
+  | _ -> ()
+
+(* `ren run`'s runtime catches SIGTERM: one that nothing waits for in
+   `Net.accept_until` cancels `main`, so a plain program shuts down
+   gracefully too, its `finally`s run. *)
+let catch_signals () =
+  if !pipe = None then begin
+    let r, w = Unix.pipe ~cloexec:true () in
+    Unix.set_nonblock r;
+    Unix.set_nonblock w;
+    pipe := Some (r, w)
+  end;
+  catch 15
+
+(* Wait, as the task running, until [fd] can be read, or written if
+   [out], or, with [signal], until that signal has come. *)
+let wait_io ?at ?signal ~out fd what =
+  let s = sched () in
+  let t = s.current in
+  wait ?at what (fun wake ->
+      s.ios <- s.ios @ [ { fd; out; iot = t; ioid = t.wait; iowake = wake } ];
+      Option.iter (fun n -> s.sigwaits <- s.sigwaits @ [ (n, t, wake) ]) signal)
+
+(* An `accept_until` waits for the signal numbered [n]: one that comes is
+   for it from now on, kept until one asks ([stopped]), and caught if it
+   can be. *)
+let awaits n =
+  let s = sched () in
+  if not (List.mem n s.awaited) then s.awaited <- n :: s.awaited;
+  catch n
+
+(* Whether the signal numbered [n] has come, for an `accept_until`: once
+   it has, every one waiting for it gives `None`. *)
+let stopped n = List.mem n (sched ()).came
+
+(* The signals that have come are seen: each is for the `accept_until`s
+   waiting for it, which are woken, if one has ever waited for it, and
+   otherwise it cancels the root, which the program ends with. What it
+   woke. *)
+let deliver s =
+  let came = !caught in
+  caught := [];
+  List.concat_map
+    (fun n ->
+      if List.mem n s.awaited then begin
+        if not (List.mem n s.came) then s.came <- n :: s.came;
+        let mine, rest = List.partition (fun (m, _, _) -> m = n) s.sigwaits in
+        s.sigwaits <- rest;
+        List.filter_map (fun (_, t, wake) -> if wake () then Some t else None) mine
+      end
+      else
+        let r = s.root_task in
+        s.signalled <- Some n;
+        let was = r.wait in
+        cancel r;
+        if was <> 0 && r.wait = 0 then [ r ] else [])
+    came
+
+(* No task can run, and something is pending: wait for the earliest
+   timer, I/O or a signal, and wake what they were for, a poll: the tasks
+   whose timers are due, in the order of their deadlines, then those whose
+   descriptors are ready, in the order of the descriptors, then those a
+   signal is for. Under `sim`, time doesn't wait: if nothing's ready now,
+   it moves straight to the earliest timer. *)
+let poll s =
+  let first = match s.timers with tm :: _ -> Some tm.at | [] -> None in
+  let timeout =
+    match (s.policy, first) with
+    | _ when !caught <> [] -> 0.
+    | Single, Some at -> Float.max 0. (at -. now ())
+    | Sim _, Some _ -> 0.
+    | _, None -> -1.
+  in
+  let reads = List.filter_map (fun io -> if io.out then None else Some io.fd) s.ios
+  and writes = List.filter_map (fun io -> if io.out then Some io.fd else None) s.ios in
+  let pipe_r = Option.map fst !pipe in
+  let ready_r, ready_w =
+    if reads = [] && writes = [] && pipe_r = None && timeout = 0. then ([], [])
+    else
+      match Unix.select (Option.to_list pipe_r @ reads) writes [] timeout with
+      | r, w, _ -> (r, w)
+      | exception Unix.Unix_error (EINTR, _, _) -> ([], [])
+  in
+  (match pipe_r with
+  | Some r when List.mem r ready_r -> (
+      let b = Bytes.create 64 in
+      try
+        while Unix.read r b 0 64 > 0 do
+          ()
+        done
+      with Unix.Unix_error _ -> ())
+  | _ -> ());
+  (match (s.policy, first) with
+  | Sim v, Some at
+    when !caught = []
+         && not (List.exists (fun io -> List.mem io.fd ready_r || List.mem io.fd ready_w) s.ios) ->
+      v.clock <- Float.max v.clock at
+  | _ -> ());
+  let timers = fire_timers s in
+  let ready =
+    List.stable_sort
+      (fun a b -> compare a.fd b.fd)
+      (List.filter
+         (fun io -> List.mem io.fd (if io.out then ready_w else ready_r))
+         s.ios)
+  in
+  let ios = List.filter_map (fun io -> if io.iowake () then Some io.iot else None) ready in
+  let signals = deliver s in
+  polled s (timers @ ios @ signals)
+
+(* The task running has stopped accepting connections: `Net.accept_until`
+   gave `None`. The tasks of the scopes whose bodies it's running, the
+   connections in flight, and those spawned into them from now on, have
+   the cleanup deadline from now: past it they see a cancel, unless
+   they're in a `finally` then, which has a cleanup deadline of its own
+   after it (compiler.md, "After `accept_until` returns `None`"). *)
+let drain () =
+  match !running with
+  | None -> ()
+  | Some s ->
+      let by = now () +. cleanup in
+      List.iter
+        (fun sc ->
+          if sc.drain = None then sc.drain <- Some by;
+          List.iter
+            (fun u ->
+              if u.drained = None then begin
+                u.drained <- Some by;
+                interrupt_when s u
+              end)
+            sc.running)
+        s.current.scopes
 
 (* Following a recording, no task can run: its next poll ends the waits
    it says, in its order ([journal]), and gives [true]; or it has none
@@ -617,6 +852,9 @@ let replay_poll s (j : journal) =
               match cancel_due t with
               | Some at when t.cancellable ->
                   jump s at;
+                  ignore (wake s t t.wait Interrupt)
+              | None when t.root && t.cancellable ->
+                  signal_replayed s t;
                   ignore (wake s t t.wait Interrupt)
               | _ -> j.astray p)
           | Some t -> ignore (wake s t t.wait Resume)
@@ -648,6 +886,11 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
       waiters = Hashtbl.create 8;
       locks = Hashtbl.create 8;
       journal = None;
+      ios = [];
+      sigwaits = [];
+      awaited = [];
+      came = [];
+      signalled = None;
     }
   in
   let rec loop () =
@@ -659,21 +902,18 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
       | None when following s && replay_poll s (Option.get s.journal) -> loop ()
       | None -> (
           s.timers <- List.filter (fun tm -> tm.live ()) s.timers;
+          s.ios <- List.filter (fun io -> io.iot.wait = io.ioid) s.ios;
+          s.sigwaits <- List.filter (fun (_, u, _) -> u.wait <> 0) s.sigwaits;
           (* following a recording that has no poll next, it ends as it
-             did: no timer fired then *)
-          match if following s then [] else s.timers with
-          | first :: _ ->
-              (match s.policy with
-              | Sim v ->
-                  (* virtual time moves only now, straight to the timer *)
-                  v.clock <- Float.max v.clock first.at
-              | Single -> (
-                  let dt = first.at -. now () in
-                  if dt > 0. then
-                    try Unix.sleepf dt with Unix.Unix_error (EINTR, _, _) -> ()));
-              fire_due s;
+             did: no timer fired then, and no I/O was ready *)
+          match
+            if following s then false
+            else s.timers <> [] || s.ios <> [] || !caught <> []
+          with
+          | true ->
+              poll s;
               loop ()
-          | [] ->
+          | false ->
               (* every task waits, and nothing can wake one: the root
                  too, or it would have ended *)
               let waits =
@@ -690,7 +930,10 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
   match loop () with
   | () -> (
       running := before;
-      match t.result with Some v -> v | None -> raise Cancelled)
+      match (t.result, s.signalled) with
+      | Some v, _ -> v
+      | None, Some n -> raise (Signalled n)
+      | None, None -> raise Cancelled)
   | exception e ->
       running := before;
       raise e
@@ -718,15 +961,23 @@ let note line =
    at once. *)
 let scope ~max =
   let t = (sched ()).current in
-  {
-    max;
-    owner = t;
-    began = t.withs;
-    running = [];
-    room = [];
-    empty = [];
-    keyed = [];
-  }
+  let sc =
+    {
+      max;
+      owner = t;
+      began = t.withs;
+      running = [];
+      room = [];
+      empty = [];
+      keyed = [];
+      drain = None;
+    }
+  in
+  t.scopes <- sc :: t.scopes;
+  sc
+
+(* The body of [sc] has ended, and so have its tasks. *)
+let closed sc = sc.owner.scopes <- List.filter (fun x -> x != sc) sc.owner.scopes
 
 (* Wait until [sc]'s tasks have all ended: cancellable, as the end of a
    scope's body is, or not, as cancelling them is. *)
@@ -778,6 +1029,7 @@ let spawn ?key ?at sc ~label ~evidence thunk =
   sc.running <- sc.running @ [ t ];
   s.alive <- t :: s.alive;
   Option.iter (fun (ty, k) -> sc.keyed <- (ty, k, t) :: sc.keyed) key;
+  t.drained <- sc.drain;
   Option.iter (fun f -> f.bg <- t :: f.bg) (beside sc evidence);
   Queue.push (t, Start thunk) s.queue;
   t
@@ -1210,7 +1462,10 @@ let timeout ms (f : unit -> 'a) : ('a, unit) result =
           leave ();
           (* the task's own cancel, if it sees it, goes on; otherwise it
              was the deadline's *)
-          let asked = t.asked && (t.shield = 0 || now () >= t.cleanup_by) in
+          let asked =
+            (t.asked && (t.shield = 0 || now () >= t.cleanup_by))
+            || match t.drained with Some by -> now () >= by | None -> false
+          in
           if (not asked) && now () >= d.due then Error () else raise Cancelled
       | exception e ->
           leave ();

@@ -383,7 +383,9 @@ written above the line that failed runs first, given that error.
 ## The journal
 
 The journal is the record of the calls a program makes to the world: the
-real `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, and later `Net`.
+real `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc` and `Net`. A `Net`
+call its task waits in, an `accept` or a `read`, is written in two lines,
+and the poll that ended the wait between them.
 
 ### Recording and replaying
 

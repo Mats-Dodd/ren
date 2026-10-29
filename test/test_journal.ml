@@ -521,6 +521,12 @@ let%expect_test "each intrinsic that reaches the world is an operation's" =
     fs_exists      Fs.exists, only in Fs.real
     os_args        Os.args, only in Os.real
     proc_run       Proc.run, only in Proc.real
+    net_listen     Net.listen, only in Net.real
+    net_accept     Net.accept, only in Net.real
+    net_accept_until Net.accept_until, only in Net.real
+    net_read       Net.read, only in Net.real
+    net_write      Net.write, only in Net.real
+    net_close      Net.close, only in Net.real
     |}]
 
 let%expect_test "Core Lint refuses the world reached from anywhere else" =

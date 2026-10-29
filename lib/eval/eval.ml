@@ -1273,7 +1273,7 @@ and builtin ?loc cx f args =
          | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
          | Task_each | Task_both | Task_race | Async_yield | Async_tick
          | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-         | Sim_advance | Task_random ) as x),
+         | Sim_advance | Task_random | Task_drain ) as x),
         tys,
         dicts ) ->
       tasks ?loc cx x tys dicts args
@@ -1284,6 +1284,12 @@ and builtin ?loc cx f args =
           Sched.sleep ?at:(at_call cx) ms;
           (Ok VUnit, args)
       | _ -> bug "a call of `clock_sleep` with the wrong values")
+  | VBuiltin
+      ( (( Net_listen | Net_accept | Net_accept_until | Net_read | Net_write
+         | Net_close ) as x),
+        _,
+        _ ) ->
+      (Ok (net cx x args), args)
   | VBuiltin (x, tys, dicts) -> (
       let dicts =
         List.map (function VDict d -> d | _ -> bug "a dictionary") dicts
@@ -1296,6 +1302,19 @@ and builtin ?loc cx f args =
       | exception Nan.Seen v -> raise (Builtins.Panic (Nan.observed Nan.hashed v))
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
+
+(* The real `Net`'s intrinsics (net.ml), each a wait of the task, as
+   the real `Clock.sleep` is. *)
+and net cx (x : Intrinsic.t) args =
+  let at = at_call cx in
+  match (x, args) with
+  | Net_listen, [ VStr host; VInt port ] -> Net.listen host port
+  | Net_accept, [ VInt l ] -> Net.accept ?at l
+  | Net_accept_until, [ VInt l; VInt stop ] -> Net.accept_until ?at l stop
+  | Net_read, [ VInt c; VInt max ] -> Net.read ?at c max
+  | Net_write, [ VInt c; VBytes b ] -> Net.write ?at c b
+  | Net_close, [ VInt c ] -> Net.close c
+  | _ -> bug ("a call of `" ^ Intrinsic.name x ^ "` with the wrong values")
 
 (* ---- tasks (sched.ml) ----
 
@@ -1367,14 +1386,16 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         calls;
       Sched.wait_empty ?at ~what sc
     in
-    (match run () with
-    | () -> ()
-    | exception Sched.Cancelled ->
-        Sched.cancel_all ?at sc;
-        raise Sched.Cancelled
-    | exception (Panic _ as p) when Sched.isolatable () ->
-        Sched.cancel_all ?at sc;
-        raise p);
+    (* the scope's body is over once its tasks are, however it ends *)
+    Fun.protect ~finally:(fun () -> Sched.closed sc) (fun () ->
+        match run () with
+        | () -> ()
+        | exception Sched.Cancelled ->
+            Sched.cancel_all ?at sc;
+            raise Sched.Cancelled
+        | exception (Panic _ as p) when Sched.isolatable () ->
+            Sched.cancel_all ?at sc;
+            raise p);
     match !first with
     | Some err -> Error err
     | None -> Ok (Array.to_list results)
@@ -1400,14 +1421,15 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
                | Error _ -> bug "a branch of `race` that failed");
                VUnit)))
       calls;
-    (match Sched.wait_empty ?at ~what:"waits for `Async.race`'s tasks" sc with
-    | () -> ()
-    | exception Sched.Cancelled ->
-        Sched.cancel_all ?at sc;
-        raise Sched.Cancelled
-    | exception (Panic _ as p) when Sched.isolatable () ->
-        Sched.cancel_all ?at sc;
-        raise p);
+    Fun.protect ~finally:(fun () -> Sched.closed sc) (fun () ->
+        match Sched.wait_empty ?at ~what:"waits for `Async.race`'s tasks" sc with
+        | () -> ()
+        | exception Sched.Cancelled ->
+            Sched.cancel_all ?at sc;
+            raise Sched.Cancelled
+        | exception (Panic _ as p) when Sched.isolatable () ->
+            Sched.cancel_all ?at sc;
+            raise p);
     match !winner with
     | Some v -> v
     | None -> bug "a race that no branch won"
@@ -1427,20 +1449,24 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         Sched.cancel_all ?at sc;
         raise Sched.Cancelled
       in
-      let result =
-        match fst (call_at cx loc body [ VSched (Sched.Scope sc) ] (VEvidence [])) with
-        | r -> r
-        | exception Sched.Cancelled -> stop ()
-        | exception (Panic _ as p) when Sched.isolatable () ->
-            (* a panic an `Async.isolate` around makes a value: the
-               scope's tasks are cancelled, and waited for, first *)
-            Sched.cancel_all ?at sc;
-            raise p
+      let run () =
+        let result =
+          match fst (call_at cx loc body [ VSched (Sched.Scope sc) ] (VEvidence [])) with
+          | r -> r
+          | exception Sched.Cancelled -> stop ()
+          | exception (Panic _ as p) when Sched.isolatable () ->
+              (* a panic an `Async.isolate` around makes a value: the
+                 scope's tasks are cancelled, and waited for, first *)
+              Sched.cancel_all ?at sc;
+              raise p
+        in
+        (match result with
+        | Ok _ -> ( try Sched.wait_empty ?at sc with Sched.Cancelled -> stop ())
+        | Error _ -> Sched.cancel_all ?at sc);
+        result
       in
-      (match result with
-      | Ok _ -> ( try Sched.wait_empty ?at sc with Sched.Cancelled -> stop ())
-      | Error _ -> Sched.cancel_all ?at sc);
-      (result, args)
+      (* its body is over once its tasks are, however it ends *)
+      (Fun.protect ~finally:(fun () -> Sched.closed sc) run, args)
   | Task_spawn, [ s; body ] ->
       ignore (spawn (scope_of s) body);
       (Ok VUnit, args)
@@ -1505,6 +1531,11 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       (Ok VUnit, args)
   | Sim_advance, [ VInt ms ] ->
       Sched.advance ms;
+      (Ok VUnit, args)
+  (* `Net.accept_until` gave `None`: the connections in flight have the
+     cleanup deadline *)
+  | Task_drain, [] ->
+      Sched.drain ();
       (Ok VUnit, args)
   (* the test `Random` in a spawned task: a stream of the task's own, for
      each instance, from the seed and its path, so what it draws doesn't
@@ -2116,6 +2147,8 @@ let run ?(start = Real) ?trace (modules : program list) =
                 deps )
   in
   if not (Hashtbl.mem cx.fns fn) then bug "a program with no `main`";
+  (* the real world sends signals; a replay is sent none *)
+  (match start with Real | Record _ -> Sched.catch_signals () | Replay _ -> ());
   match
     rooted ~root:"main" (fun () ->
         apply cx (from_outside cx fn) [] (VEvidence (installed ())))
@@ -2182,8 +2215,9 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
   let install () =
     let runtime = made "Async" (sim "sim_runtime") [ VInt (Int64.of_int seed) ] [] in
     let world =
-      (* `sim.clock()` uses `Async`, the runtime's *)
+      (* `sim.clock()` and `sim.net()` use `Async`, the runtime's *)
       made "Clock" (sim "sim_clock") [] runtime
+      @ made "Net" (sim "sim_net") [] runtime
       @ List.concat_map
         (fun (dep, path, args) -> made dep path args [])
         [

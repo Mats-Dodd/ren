@@ -24,7 +24,8 @@ let pass name f =
   in
   try f () with
   | ( Diag.Error _ | Diag.Errors _ | Eval.Panic _ | Eval.Assert_failed _
-    | Eval.Uncaught _ | Eval.Went_differently _ | Internal_error _ ) as e ->
+    | Eval.Uncaught _ | Eval.Went_differently _ | Sched.Signalled _
+    | Internal_error _ ) as e ->
       raise e
   | e -> raise (Internal_error { pass = name; message = Printexc.to_string e })
 
@@ -949,6 +950,7 @@ let ended ~dir run : Journal.ending * (Value.t, exn) result =
   | exception (Eval.Assert_failed { loc; _ } as e) ->
       (Panicked { at = at loc; msg = "this `assert` failed" }, Error e)
   | exception (Eval.Uncaught { written; _ } as e) -> (Errored written, Error e)
+  | exception (Sched.Signalled n as e) -> (Stopped n, Error e)
 
 (* The built-in dependencies the entry's `main` uses, by name, as a
    journal's header has them (Lower.main_uses): those that reach the

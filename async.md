@@ -389,7 +389,7 @@ exploring every interleaving) stays there.
 ## Five programs
 
 Each one tested a different part of the design. The rules above are what
-they needed. Each is in [bench/11a/tasks](bench/11a/tasks) until its step of stage 11a lands it, then in `examples/`, with its tests.
+they needed. Each is in [bench/11a/tasks](bench/11a/tasks) until its step of stage 11a lands it, then in `examples/`, with its tests: the server is [examples/server](examples/server), and [examples/net.t](examples/net.t) runs one on the real `Net` and sends it SIGTERM.
 
 ### A server that shuts down gracefully
 
@@ -404,7 +404,7 @@ pub fn serve(addr: Addr) ! NetError uses Net, Console, Async =
           s.spawn fn() =>
             match attempt handle(conn)
               Ok(_) => ()
-              Err(e) => Console.error("request failed: ".concat(show(e)))
+              Err(_) => Console.error("request failed")
         None => open = false
 ```
 

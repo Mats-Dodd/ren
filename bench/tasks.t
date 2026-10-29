@@ -17,19 +17,20 @@ too.
   >    fi
   >    rm -f spec.out)
   > }
-  $ for d in server crawler just; do spec 11a/tasks/$d; done
-  11a/tasks/server: not yet
+  $ for d in crawler just; do spec 11a/tasks/$d; done
   11a/tasks/crawler: not yet
   11a/tasks/just: not yet
-  $ for d in transfer refresh; do spec ../examples/$d; done
+  $ for d in transfer refresh server; do spec ../examples/$d; done
   ../examples/transfer: as specified
   ../examples/refresh: as specified
+  ../examples/server: as specified
 
 Each that has landed passes under a thousand seeds too, its tests' own
 and the next 999 (step 5 landed `transfer` and `refresh`, which need
-only `sim`'s virtual time):
+only `sim`'s virtual time; step 7, `server`, on `sim.net()`):
 
-  $ for d in transfer refresh; do (cd ../examples/$d && ren test --seeds 1000 | tail -n 1); done
+  $ for d in transfer refresh server; do (cd ../examples/$d && ren test --seeds 1000 | tail -n 1); done
+  4 passed, each under 1000 seeds
   4 passed, each under 1000 seeds
   4 passed, each under 1000 seeds
 

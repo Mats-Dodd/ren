@@ -17,6 +17,12 @@ type t =
   | Fs_exists
   | Os_args
   | Proc_run
+  | Net_listen
+  | Net_accept
+  | Net_accept_until
+  | Net_read
+  | Net_write
+  | Net_close
   | Journal_kept
   | Journal_gave
   | Journal_answer
@@ -53,6 +59,7 @@ type t =
   | Sim_sleep
   | Sim_advance
   | Task_random
+  | Task_drain
   | Map_empty
   | Map_of
   | Map_get
