@@ -53,9 +53,22 @@ the data stage" below before you start.
    with the width and byte order in the name, `b.u8(at)`,
    `b.u16_le(at)` ... `b.u64_be(at)`, signed forms, `&b.set_u32_le(at,
    x)` and the rest; a cursor over a slice for reading in sequence;
-   `VarUInt` and `VarInt` (LEB128, zigzag) helpers. Out of range panics
-   with the offset and the length, as indexing does. A value that
-   doesn't fit a write panics, as storing into a sized integer does.
+   `VarUInt` and `VarInt` (LEB128, zigzag) helpers. Decided with the owner:
+   - **A read at an offset the program computed,** `b.u32_le(at)`,
+     **panics** when it's out of range, with the offset and the length,
+     as `xs[i]` does: a bad offset is a bug.
+   - **A read through the cursor,** `try &c.u32_le()`, **fails with
+     `Short(at, need)`**, formats.md's error, `at` the offset in the
+     whole buffer: running out of input is an error the program
+     handles, and a framing loop reads the same at layers 2 and 3.
+   - **`u64_le` and `u64_be` return an `Int`, and panic** (through the
+     cursor: fail with `Malformed`) on a value of 2⁶³ or more. `i64_le`
+     and `i64_be` read the same bits as a signed `Int`, so a 64-bit
+     hash or checksum is read with them (decision 15: a 64-bit hash
+     stays an `Int`).
+   - A value that doesn't fit a write panics, as storing into a sized
+     integer does.
+
    In the interpreter and natively. Settle the exact names and the
    cursor's API in the spec (step 0); keep them in the style formats.md
    shows.
@@ -63,7 +76,15 @@ the data stage" below before you start.
    insertion order, `key`, derived `hash` and `==` natively, and the
    `Enumerable` methods on them. A dense array of entries plus an index
    table, as Python's dict and Rust's indexmap keep insertion order, is
-   the expected shape; decide it in the spec.
+   the expected shape; decide it in the spec. **Hashing, decided with
+   the owner:** `Map` and `Set` hash with a fast hash (wyhash or
+   rapidhash class) mixed with a random seed per process, as Go's maps
+   do, so keys chosen by an attacker can't force collisions. Iteration
+   is in insertion order, so the seed changes only speed, never what a
+   program sees. Under `sim` and replay the seed is fixed. The `hash` a
+   program can call, derived `x.hash()`, is unseeded and the same on
+   every run, so what's printed or journaled stays reproducible; the
+   map's internal hash differs from it, which no program can observe.
 
 **Out (don't start them):** inline slices and the uncounted view
 (foundations decision 17's representation B; slices stay
@@ -180,8 +201,10 @@ comparisons and ratios against twins built and run on the same machine
 in the same session. The owner re-measures headline numbers on their
 own hardware, so say which machine yours came from, and record every
 number in bench/native/RESULTS.md with the commands that reproduce it.
-Cloud machines are noisy: interleave runs, and report medians and
-spread.
+On a cloud machine, interleave runs and report medians and spread,
+since its cores are shared. On the owner's Mac, numbers can be
+headline ones: run measurements with nothing else building, interleave
+Ren and its twins, and report medians and spread.
 
 ## Rules
 
