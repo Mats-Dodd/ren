@@ -385,6 +385,10 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
       let t = infer_record env cx e name fields ~written ~expected in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
+  | Update { target; base; fields }, _ ->
+      let t = infer_update env cx e target base fields ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
   (* a block, an `if` or a `match` passes a written type on to where its
      value is made, even where what's expected is still a variable, the
      payload of a constructor `Option<Rates>` is written for *)
@@ -658,6 +662,8 @@ and synth env cx (e : expr) : ty =
   | Record (name, fields) ->
       infer_record env cx e name fields ~written:None
         ~expected:(fresh_var env.st)
+  | Update { target; base; fields } ->
+      infer_update env cx e target base fields ~expected:(fresh_var env.st)
   | Field (r, f) -> infer_field env cx e r f
   | Match (subject, arms) -> infer_match env cx e.node subject arms ~want:None
   | Array xs -> infer_array env cx xs
@@ -799,7 +805,7 @@ and synth env cx (e : expr) : ty =
                     (result_loc array_of) ~found:ta ~expected:(array elem)
                 in
                 match (pat.pkind, iter.kind) with
-                | PTuple _, Ref _ when ok ->
+                | (PTuple _ | PRecord _), Ref _ when ok ->
                     (* here, not in the parser, so that a map's own
                        message comes first, above *)
                     report env
@@ -807,11 +813,11 @@ and synth env cx (e : expr) : ty =
                     TError
                 | _ -> if ok then elem else TError))
       in
-      bind_pattern env cx elem pat;
+      bind_pattern ~binding:true env cx elem pat;
       (* the index is an `Int`, where the element is; a cursor has none *)
       Option.iter
         (fun (i : pattern) ->
-          bind_pattern env cx int i;
+          bind_pattern ~binding:true env cx int i;
           match over with
           | Each iter
             when match Hashtbl.find_opt cx.found iter.node with
@@ -1011,6 +1017,7 @@ and pattern_binders (p : pattern) =
   | PVar b -> [ b ]
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.concat_map pattern_binders ps
+  | PRecord (_, fs) -> List.concat_map (fun (_, q) -> pattern_binders q) fs.fpats
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* Where [e] first changes one of [bs], and which: an assignment to it, or
@@ -1108,7 +1115,8 @@ and stmt env cx = function
             (Hashtbl.replace cx.let_blocks name.id)
             (Hashtbl.find_opt lambda_calls value.node)
       | _ -> ())
-  | Let_tuple { pat; value } -> bind_pattern env cx (infer env cx value) pat
+  | Let_tuple { pat; value } ->
+      bind_pattern ~binding:true env cx (infer env cx value) pat
   | Expr e -> dropped env cx e (infer env cx e)
   | Finally f ->
       (* only among a handler's state ([Infer_handlers.handler]) or an
@@ -2659,6 +2667,141 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
         report env (missing_fields ~names:env.names e.loc td.path missing);
       t
 
+(* `{ ..base, f: v, ... }`, an update (compiler.md, "Data stage", "Record
+   update"): a record of the type [target] names, or else of [base]'s,
+   which has to be known here, as a field read's does, or else be
+   [expected]. The fields given are the target's, each once; every other
+   field of the target is [base]'s, of the same type; and every field of
+   [base] is the target's, so nothing is dropped unseen. [base] is
+   checked first, then the fields, as they're evaluated. *)
+and infer_update env cx (e : expr) target base fields ~expected =
+  let seen = Hashtbl.create 8 in
+  List.iter
+    (fun ((f : ident), _) ->
+      match Hashtbl.find_opt seen f.name with
+      | Some first -> report env (two_fields f first)
+      | None -> Hashtbl.replace seen f.name f.loc)
+    fields;
+  let tb = infer env cx base in
+  let shown = ".." ^ Option.value (env.source base) ~default:"it" in
+  let pr = printer env in
+  (* a record type's declaration and its fields, if [t] is one; reported
+     if it isn't, at [loc] *)
+  let record_of t =
+    match reveal env.st t with
+    | TError -> None
+    | TCon (p, args) as t -> (
+        let td = Hashtbl.find env.types p in
+        match (td.body, record_fields td) with
+        | _, Some fs -> Some (td, fs, args)
+        | Opaque (Hidden _), None ->
+            report_rep env td
+              (opaque_private ~test:(tested env td) base.loc td);
+            None
+        | _ -> 
+            report env (update_not_record base.loc ~base:shown (show pr t));
+            None)
+    | t ->
+        report env (update_not_record base.loc ~base:shown (show pr t));
+        None
+  in
+  let target_decl =
+    match target with
+    | Some (Into_type { tref = Named p; tloc }) -> (
+        let td = Hashtbl.find env.types p in
+        match record_fields td with
+        | Some fs -> Some (Some (td, fs))
+        | None ->
+            report_rep env td
+              (not_a_record ~names:env.names ~test:(tested env td) tloc td);
+            None)
+    | Some (Into_type { tref = Param _; _ }) ->
+        (* resolve.ml only resolves a record's name to a declared type *)
+        assert false
+    | None -> Some None
+  in
+  (* the base, whose type is the target's when it isn't known yet and the
+     target is named, or expected *)
+  let based =
+    match (reveal env.st tb, target_decl) with
+    | TVar _, Some (Some (td, _)) ->
+        let t, _ = instance env td in
+        unify_at env base.loc ~found:tb ~expected:t;
+        record_of tb
+    | TVar _, Some None -> (
+        match known_decl env expected with
+        | Some td when record_fields td <> None ->
+            let t, _ = instance env td in
+            unify_at env base.loc ~found:tb ~expected:t;
+            record_of tb
+        | _ ->
+            report env (no_record_fits e.loc);
+            None)
+    | _, Some _ -> record_of tb
+    | _, None -> None
+  in
+  let unknown () =
+    List.iter (fun (_, v) -> ignore (infer env cx v)) fields;
+    TError
+  in
+  match (based, target_decl) with
+  | None, _ | _, None -> unknown ()
+  | Some (btd, bfs, bargs), Some tgt ->
+      let td, decl = match tgt with Some t -> t | None -> (btd, bfs) in
+      let t, tvars = instance env td in
+      let target_name = type_name env td.path in
+      (* the fields given, at the target's types *)
+      List.iter
+        (fun ((f : ident), v) ->
+          match
+            List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
+          with
+          | Some fd ->
+              check env cx v (field_type ~tvars fd)
+                ~why:
+                  (explain
+                     ~notes:[ part_of target_name "field" f.name ]
+                     ())
+          | None ->
+              report env (no_such_field ~names:env.names f td.path decl);
+              ignore (infer env cx v))
+        fields;
+      let given (d : Iface.field) =
+        List.exists (fun ((f : ident), _) -> f.name = d.fname) fields
+      in
+      (* the rest, from the base *)
+      List.iter
+        (fun (d : Iface.field) ->
+          if not (given d) then
+            match
+              List.find_opt (fun (b : Iface.field) -> b.fname = d.fname) bfs
+            with
+            | None ->
+                report env
+                  (update_needs base.loc ~target:target_name ~base:shown
+                     d.fname)
+            | Some b -> (
+                let found = field_type ~tvars:bargs b in
+                let wanted = field_type ~tvars d in
+                match Unify.unify env.st found wanted with
+                | () -> ()
+                | exception (Unify.Mismatch | Unify.Two_shapes _ | Unify.Infinite)
+                  ->
+                    report env
+                      (update_field_type base.loc ~target:target_name
+                         ~base:shown d.fname ~found:(show pr found)
+                         ~expected:(show pr wanted))))
+        decl;
+      (* nothing of the base is dropped *)
+      List.iter
+        (fun (b : Iface.field) ->
+          if not (List.exists (fun (d : Iface.field) -> d.fname = b.fname) decl)
+          then
+            report env
+              (update_drops base.loc ~target:target_name ~base:shown b.fname))
+        bfs;
+      t
+
 (* `Clock { now: fn() => t, ... }`, a record literal of the dependency
    [td]: an implementation is a handler, which the help writes from the
    literal, an arm for each operation it gives (deps.md,
@@ -2786,14 +2929,17 @@ and bind_fail env cx errs (p : pattern) =
               | _ -> ())
             before)
         rest
-  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PTuple _ ->
+  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PTuple _ | PRecord _ ->
       (* the parser combines only `fail` patterns *)
       bind_pattern env cx TError p
 
 (* Check a pattern against the type of the value it matches, and give the
    variables it binds their types. A constructor is found through that
-   type. *)
-and bind_pattern env cx t (p : pattern) =
+   type. With [binding], it's a `let`'s, a `for`'s or a block parameter's,
+   which only takes apart, so a record pattern there may leave fields out
+   without `..` (compiler.md, "Data stage", "Record patterns"). *)
+and bind_pattern ?(binding = false) env cx t (p : pattern) =
+  let bind_pattern = bind_pattern ~binding in
   Hashtbl.replace cx.nodes p.pnode t;
   let check found = unify_at env p.ploc ~found ~expected:t ~msg:pattern_for in
   match (p.pkind, repr t) with
@@ -2863,10 +3009,94 @@ and bind_pattern env cx t (p : pattern) =
             ~found:(TCon (Ty.tuple_path n, parts))
             ~expected:t ~msg:pattern_for ?help;
           List.iter2 (bind_pattern env cx) parts ps
+      | PRecord (name, fs) -> record_pattern ~binding env cx t p name fs
       | PFail _ | PFail_any | PFail_in _ | POr _ ->
           (* a `fail` pattern is a whole arm's (the parser says so), and
              [infer_match] binds it with [bind_fail] *)
           ())
+
+(* `{ f: q, .. }` or `User { f: q, .. }`, matched against [t]: a record
+   of the type named, or of [t]'s, or else the one visible record type
+   that has the fields named (as a literal's is found, [infer_record]).
+   Each field is the record's, once; one in a `match` names every field
+   or ends in `..`, unless it's [binding]. *)
+and record_pattern ~binding env cx t (p : pattern) name (fs : fields) =
+  let unknown () = List.iter (fun (_, q) -> bind_pattern env cx TError q) fs.fpats in
+  let named = List.map (fun ((f : ident), _) -> f.name) fs.fpats in
+  let has_all decl =
+    List.for_all (fun n -> List.mem n (field_names decl)) named
+    && (fs.rest || binding || List.length (field_names decl) = List.length named)
+  in
+  let decl =
+    match name with
+    | Some { tref = Named path; tloc } -> (
+        let td = Hashtbl.find env.types path in
+        match record_fields td with
+        | Some decl -> Some (td, decl)
+        | None ->
+            report_rep env td
+              (not_a_record ~names:env.names ~test:(tested env td) tloc td);
+            None)
+    | Some { tref = Param _; _ } -> assert false
+    | None -> (
+        match reveal env.st t with
+        | TError -> None
+        | TCon (path, _) as shown -> (
+            let td = Hashtbl.find env.types path in
+            match (td.body, record_fields td) with
+            | _, Some decl -> Some (td, decl)
+            | Opaque (Hidden _), None ->
+                report_rep env td
+                  (opaque_private ~test:(tested env td) p.ploc td);
+                None
+            | _ ->
+                report env (pattern_not_record p.ploc (show (printer env) shown));
+                None)
+        | TVar _ -> (
+            let fits td =
+              match record_fields td with
+              | Some decl when has_all decl -> Some decl
+              | _ -> None
+            in
+            match through_type env ~known:None ~fits with
+            | Found found -> Some found
+            | Nowhere ->
+                report env (no_record_fits p.ploc);
+                None
+            | Several paths ->
+                report env (several_records_fit ~names:env.names p.ploc paths);
+                None)
+        | shown ->
+            report env (pattern_not_record p.ploc (show (printer env) shown));
+            None)
+  in
+  match decl with
+  | None -> unknown ()
+  | Some (td, decl) ->
+      let tr, tvars = instance env td in
+      unify_at env p.ploc ~found:tr ~expected:t ~msg:pattern_for;
+      Hashtbl.replace cx.nodes p.pnode tr;
+      let seen = Hashtbl.create 8 in
+      let unknown_field = ref false in
+      List.iter
+        (fun ((f : ident), q) ->
+          (match Hashtbl.find_opt seen f.name with
+          | Some first -> report env (two_fields f first)
+          | None -> Hashtbl.replace seen f.name f.loc);
+          match List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl with
+          | Some fd -> bind_pattern env cx (field_type ~tvars fd) q
+          | None ->
+              report env (no_such_field ~names:env.names f td.path decl);
+              unknown_field := true;
+              bind_pattern env cx TError q)
+        fs.fpats;
+      let missing = List.filter (fun n -> not (List.mem n named)) (field_names decl) in
+      if missing <> [] && (not fs.rest) && (not binding) && not !unknown_field then
+        let written =
+          Ast.pattern_source ~type_name:(type_name env)
+            { p with pkind = PRecord (name, { fs with rest = true }) }
+        in
+        report env (pattern_misses p.ploc missing ~written)
 
 (* The tag [c] of the error set [errs], destructured by [ps]. A misspelled
    tag is caught here: it isn't one of the errors (errors.md, "Tags are

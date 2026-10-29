@@ -1357,7 +1357,7 @@ fn main() = print(A { id: 1, nam: 2 }.id)
       ┌─ test.ren:2:30
     2 │ fn main() = print(A { id: 1, nam: 2 }.id)
       │                              ^^^
-      help: its fields: `id`, `name`
+      help: did you mean `name`?
     |}]
 
 let%expect_test "functions that call each other see each other as declared" =

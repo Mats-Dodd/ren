@@ -101,6 +101,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     match p.pkind with
     | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
+    | PRecord (_, fs) -> List.iter (fun (_, q) -> pattern_ q) fs.fpats
   in
   let rec expr (e : expr) =
     let go = List.iter expr in
@@ -132,6 +133,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
         go (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
     | Con (_, args) | Fail (_, args) -> go (List.map snd args)
     | Record (_, fields) -> go (List.map snd fields)
+    | Update { base; fields; _ } -> go (base :: List.map snd fields)
     | Match (s, arms) ->
         expr s;
         List.iter
@@ -1946,6 +1948,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         in
         if of_dep then List.iter (walk Said) (List.map snd fields)
         else all In_record (List.map snd fields)
+    | Update { base; fields; _ } -> all In_record (base :: List.map snd fields)
     | Fail (_, args) -> all In_error (List.map snd args)
     | For _ | While _ -> all Elsewhere (Ast.children e)
     | Inline_handler l ->

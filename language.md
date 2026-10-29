@@ -269,8 +269,8 @@ Tested against the compiler on 2026-10-28:
 |---|---|
 | Constructor arguments | positional `Rect(2, 3)` or labelled `Rect(w: 2, h: 3)`, labels in declaration order; mixing is an error |
 | Punning in record literals | `P { x, y }` works |
-| Record update | none: `{ p with x: 5 }` and `P { ..p, x: 5 }` don't parse; only `var p` then `p.x = 5` |
-| Record patterns, `let { id } = u` | don't parse |
+| Record update | none: `{ p with x: 5 }` and `P { ..p, x: 5 }` don't parse; only `var p` then `p.x = 5`. Since the data stage's step 1: `{ ..p, x: 5 }` and `Q { ..p, x: 5 }` work, in the interpreter and natively, a unique `p` updated in place |
+| Record patterns, `let { id } = u` | don't parse. Since step 1: `{ id, .. }` and `User { id, .. }` in a `match`, a `let`, a `for` and a block's parameter |
 | Labels in a pattern, `Rect(h: hh, ..)` | don't parse; patterns are positional, with no `..` |
 | Nested patterns and guards | work: `Some(Active(Pro(n))) if n > 3 =>` |
 | Or-patterns | only on `fail` tags; `A(n) \| B(n)` doesn't parse |

@@ -128,6 +128,18 @@ var user = load(id)
 user.plan = Pro(seats: 5)              // reads like mutation, means "new value"
 ```
 
+A record is updated by naming what changes, `..` taking the rest from another, and taken apart by naming its fields, `..` leaving out the rest. When the record updated isn't shared, its update is built over it in place:
+
+```ren
+let paid = { ..order, paid: true }     // every field of `order` but `paid`
+let shipped = Shipped { ..paid, carrier: "post" }
+let { id, lines } = order              // a `let` takes apart what always matches
+
+match order
+  { paid: true, total, .. } => total   // `..`: the fields left out
+  { lines, .. } => lines.len()
+```
+
 No two names ever see the same mutable thing, a block sharing its frame's variables only during its call, so Ren has no data races and no reference cycles. When a value isn't shared, the compiler updates it in place, so the copies you'd expect from immutable data mostly never happen.
 
 Loops are `for` and `while`, and `break` leaves the innermost one. A `for` goes over an array, a range, a `Map` or a `Set`, or a **cursor**: a value that keeps its place, any type with a method `next(inout self) -> Option<T>`. Since the cursor is a value, `for x in &c` steps `c` itself, so a loop left by `break` leaves it where it stopped, and the next loop goes on from there:

@@ -266,24 +266,35 @@ let prim loc op args (at : expr list) =
 let truth = function VBool b -> b | _ -> bug "a non-Bool condition"
 
 (* Match a value against a pattern. On success, return the environment
-   extended with the variables the pattern binds. *)
-let rec match_pattern p v env =
+   extended with the variables the pattern binds. [types] are the
+   program's, where a record pattern's fields are found by name: it has
+   one for each, in declaration order. *)
+let rec match_pattern types p v env =
   match (p.pkind, v) with
   | PWild, _ -> Some env
   | PVar x, _ -> Some (Env.add x.id (ref v) env)
   | PInt n, VInt m -> if n = m then Some env else None
   | PBool b, VBool c -> if b = c then Some env else None
   | PCon (_, c, ps), VCon { name; args; _ } when c = name ->
-      match_all ps args env
-  | PTag (t, ps), VTag { name; args; _ } when t = name -> match_all ps args env
-  | POr ps, _ -> List.find_map (fun p -> match_pattern p v env) ps
-  | PTuple ps, VTuple xs -> match_all ps xs env
+      match_all types ps args env
+  | PTag (t, ps), VTag { name; args; _ } when t = name ->
+      match_all types ps args env
+  | POr ps, _ -> List.find_map (fun p -> match_pattern types p v env) ps
+  | PTuple ps, VTuple xs -> match_all types ps xs env
+  | PRecord (path, ps), VRecord fields -> (
+      match Hashtbl.find_opt types path with
+      | Some ({ body = Record decl; _ } : Iface.type_decl) ->
+          match_all types ps
+            (List.map (fun (d : Iface.field) -> List.assoc d.fname fields) decl)
+            env
+      | _ -> bug "a record pattern of a type that isn't a record")
   | _ -> None
 
-and match_all ps vs env =
+and match_all types ps vs env =
   match (ps, vs) with
   | [], [] -> Some env
-  | p :: ps, v :: vs -> Option.bind (match_pattern p v env) (match_all ps vs)
+  | p :: ps, v :: vs ->
+      Option.bind (match_pattern types p v env) (match_all types ps vs)
   | _ -> None
 
 let cell env (v : var) =
@@ -1070,7 +1081,7 @@ and arm_for cx env loc v arms =
   let rec first = function
     | [] -> panic loc "no arm of this `match` matched"
     | a :: rest -> (
-        match match_pattern a.pat v env with
+        match match_pattern cx.types a.pat v env with
         | Some env when guard_passes env a.guard -> (env, a.body)
         | _ -> first rest)
   in

@@ -981,7 +981,9 @@ let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
 let receiver_type sc (r : Resolved.expr) =
   match r.kind with
   | Var (Local b) -> List.assoc_opt b.id sc.fn.typed
-  | Record (Some { tref = Named p; _ }, _) -> Some p
+  | Record (Some { tref = Named p; _ }, _)
+  | Update { target = Some (Into_type { tref = Named p; _ }); _ } ->
+      Some p
   | _ -> None
 
 let params env sc ?rows ?top bound ps =
@@ -1300,6 +1302,7 @@ let rec pattern_vars (p : Parsed.pattern) =
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
   | PVar x -> [ x ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
+  | PRecord (_, fs) -> List.concat_map (fun (_, q) -> pattern_vars q) fs.fpats
   | POr ps ->
       (* each alternative binds the same names (see [pattern]) *)
       Option.fold ~none:[] ~some:pattern_vars (List.nth_opt ps 0)
@@ -1357,6 +1360,13 @@ let ctor_ref env sc (c : Parsed.ctor_ref) : Resolved.ctor_ref =
     name = c.name;
   }
 
+(* The record type named before a `{`, in a literal, an update or a
+   pattern: `User { ... }`. *)
+let record_name env sc (t : tyname) =
+  match declared_type env ~params:sc.tparams ~what:"it can't make a record" t with
+  | Some n -> n
+  | None -> { tref = Named (Path.make env.home t.tid.name); tloc = tyname_loc t }
+
 (* A pattern, and the scope its names are bound in. [same] are the
    binders the first alternative of an or-pattern bound, which the names
    of the others are: `fail Short(_, by) | fail Late(by)` binds one `by`. *)
@@ -1407,6 +1417,10 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
     | PTuple ps ->
         let ps, sc = patterns sc ps in
         (PTuple ps, sc)
+    | PRecord (t, fs) ->
+        let qs, sc = patterns sc (List.map snd fs.fpats) in
+        let fpats = List.combine (List.map fst fs.fpats) qs in
+        (PRecord (Option.map (record_name env sc) t, { fs with fpats }), sc)
     | POr [] -> assert false (* the parser makes one of two or more *)
     | POr (first :: rest) ->
         (* `fail on` takes what its tags are, which an alternative beside
@@ -1482,9 +1496,20 @@ let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
             ([], sc) ps
         in
         (PTuple (List.rev ps), sc)
+    | PRecord (t, fs) ->
+        let fpats, sc =
+          List.fold_left
+            (fun (acc, sc) (f, p) ->
+              let p, sc = binding env sc bound p in
+              ((f, p) :: acc, sc))
+            ([], sc) fs.fpats
+        in
+        ( PRecord
+            (Option.map (record_name env sc) t, { fs with fpats = List.rev fpats }),
+          sc )
     | PWild -> (PWild, sc)
     | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
-        (* the parser lets only names, `_` and tuples through *)
+        (* the parser lets only names, `_`, tuples and records through *)
         assert false
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
@@ -1779,22 +1804,16 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let c = ctor_ref env sc c in
         Con (c, List.map (fun (l, a) -> (l, go a)) args)
     | Record (name, fields) ->
-        let name =
-          Option.map
-            (fun (t : tyname) ->
-              match
-                declared_type env ~params:sc.tparams
-                  ~what:"it can't make a record" t
-              with
-              | Some n -> n
-              | None ->
-                  {
-                    tref = Named (Path.make env.home t.tid.name);
-                    tloc = tyname_loc t;
-                  })
-            name
-        in
+        let name = Option.map (record_name env sc) name in
         Record (name, List.map (fun (f, v) -> (f, expr env sc v)) fields)
+    | Update { target; base; fields } ->
+        (* the base first, then the fields, as they're evaluated *)
+        let target =
+          Option.map (fun (Into_type t) -> Into_type (record_name env sc t)) target
+        in
+        let base = go base in
+        Update
+          { target; base; fields = List.map (fun (f, v) -> (f, go v)) fields }
     | Field ({ kind = Var (Bare m); _ }, f) when Env.mem m env.modules ->
         Var (qualified env sc (Env.find m env.modules) f)
     | Field (r, f) -> Field (go r, f)
@@ -1954,7 +1973,8 @@ and block_stmts ?(finally = false) env sc (stmts : Parsed.stmt list) =
             let t = ty_opt env ~params:sc.tparams ~rows:(Body sc.rows) t in
             let b, sc = bind env sc name (if mut then By_var else By_let) in
             (match (t, value.kind) with
-            | None, Record (Some n, _) ->
+            | None, (Record (Some n, _) | Update { target = Some (Into_type n); _ })
+              ->
                 (* `let b = Bag { ... }` is a `Bag` *)
                 note_type sc b (Some (TyName (n, [])))
             | _ -> note_type sc b t);

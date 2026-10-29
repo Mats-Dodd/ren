@@ -31,6 +31,7 @@
                                                      changes)
               |  "(" pattern, ... ")" [":" type]     (a tuple taken apart:
                                                      names, `_` and tuples)
+              |  [tyname] "{" fpats "}" [":" type]  (a record taken apart)
      type_def := "type" UIDENT ["<" UIDENT, ... ">"] "=" type_body [members]
      members  := INDENT op { NEWLINE op } DEDENT
                                                    (or, after an indented
@@ -89,7 +90,9 @@
      stmt     := ("let" | "var") IDENT [":" type] "=" body
               |  "let" "(" pattern, ... ")" "=" body (a tuple taken apart:
                                                      names, `_` and tuples)
-              |  "for" [IDENT ","] (IDENT | tuple_pat) "in"
+              |  "let" [tyname] "{" fpats "}" "=" body
+                                                    (a record taken apart)
+              |  "for" [IDENT ","] (IDENT | tuple_pat | [tyname] "{" fpats "}") "in"
                  (expr | expr ".." expr) INDENT block
                                                     (a range only here; the
                                                      IDENT before "," is
@@ -124,8 +127,11 @@
               |  "break"
               |  lambda | "handler" lambda      (an inline handler)
               |  ctor_ref ["(" con_args ")"] | tyname "{" field_inits "}"
+              |  tyname "{" ".." expr {"," finit} "}"   (an update: the rest
+                                                     from the value after `..`)
               |  tyname "." IDENT               (a member: `Stack.of`)
-              |  "{" field_inits "}" | "(" expr ")" | "[" expr, ... "]"
+              |  "{" field_inits "}" | "{" ".." expr {"," finit} "}"
+              |  "(" expr ")" | "[" expr, ... "]"
               |  "(" expr "," expr ["," expr] ")"   (a tuple)
               |  "if" expr "then" body [[NEWLINE] "else" body]
               |  "with" witem, ... "in" body
@@ -141,6 +147,11 @@
      pattern  := "_" | IDENT | INT | "-" INT | "true" | "false"
               |  ctor_ref ["(" pattern, ... ")"]
               |  "(" pattern "," pattern ["," pattern] ")"
+              |  [tyname] "{" fpats "}"            (a record, of the type
+                                                    named or matched)
+     fpats    := fpat {"," fpat} ["," ".."] | ".." | (nothing)
+     fpat     := IDENT [":" pattern]               (alone, it binds IDENT)
+     finit    := IDENT [":" expr]                  (alone, `IDENT: IDENT`)
 
    UIDENT is an IDENT starting with a capital letter: types and constructors
    are capitalized, variables, functions and modules are not. That's how
@@ -168,6 +179,9 @@ type t = {
 let peek p = fst p.toks.(p.i)
 let peek2 p = fst p.toks.(min (p.i + 1) (Array.length p.toks - 1))
 let peek3 p = fst p.toks.(min (p.i + 2) (Array.length p.toks - 1))
+
+(* The token [k] after the next one: [peek_at p 1] is [peek2 p]. *)
+let peek_at p k = fst p.toks.(min (p.i + k) (Array.length p.toks - 1))
 let loc p = snd p.toks.(p.i)
 let loc2 p = snd p.toks.(min (p.i + 1) (Array.length p.toks - 1))
 let advance p = if p.i < Array.length p.toks - 1 then p.i <- p.i + 1
@@ -766,6 +780,16 @@ let float_pattern p =
   Diag.error (loc p) ~help:"compare it in a guard: `x if x == 1.5 => ...`"
     "a `Float` can't be a pattern"
 
+(* Is the next thing a record pattern of a type named, `User {` or
+   `rows.Row {`, or the thing
+   [after] tokens on: after a `let`, 1. *)
+let at_record_pattern ?(after = 0) p =
+  let at k = peek_at p (after + k) in
+  match (at 0, at 1, at 2, at 3) with
+  | IDENT t, LBRACE, _, _ -> is_upper t
+  | IDENT m, DOT, IDENT t, LBRACE -> (not (is_upper m)) && is_upper t
+  | _ -> false
+
 let rec parse_pattern p : pattern =
   let start = loc p in
   let finish = mk_pattern p start in
@@ -773,6 +797,12 @@ let rec parse_pattern p : pattern =
   | IDENT "_" ->
       advance p;
       finish PWild
+  | IDENT _ when at_record_pattern p ->
+      (* `User { id, .. }`, `rows.Row { id, .. }`: a record of the type
+         named *)
+      let t = parse_tyname p in
+      finish (PRecord (Some t, parse_fields p))
+  | LBRACE -> finish (PRecord (None, parse_fields p))
   | IDENT name when is_upper name || at_module_type p ->
       let c = parse_ctor_ref p in
       if peek p = LPAREN then (
@@ -815,13 +845,71 @@ let rec parse_pattern p : pattern =
       finish (PTuple ps)
   | _ -> fail_expected p "a pattern"
 
+(* A record pattern's fields, in braces: `{ id, lines: ls, .. }`, each
+   `f: p` or `f` alone, which binds `f`, then `..`, last and alone, which
+   leaves out the rest. *)
+and parse_fields p : fields =
+  expect p LBRACE;
+  let field p =
+    let f = ident p in
+    if peek p = COLON then (
+      advance p;
+      (f, parse_pattern p))
+    else (f, mk_pattern p f.loc (PVar f))
+  in
+  (* the fields, then whether there's a `..` *)
+  let rec go acc =
+    match peek p with
+    | RBRACE ->
+        advance p;
+        { fpats = List.rev acc; rest = false }
+    | DOTDOT -> (
+        let at = loc p in
+        advance p;
+        let written rest =
+          show_fields show_pattern { fpats = rest; rest = true }
+        in
+        match peek p with
+        | RBRACE ->
+            advance p;
+            { fpats = List.rev acc; rest = true }
+        | IDENT name when not (is_upper name) ->
+            Diag.error (Loc.span at (loc p))
+              ~help:
+                (Printf.sprintf "bind the whole with `as`: `%s as %s`"
+                   (written (List.rev acc)) name)
+              "a pattern's `..` stands for the fields it leaves out, so it \
+               takes no name"
+        | COMMA ->
+            (* the fields after it, for the help *)
+            advance p;
+            let after = sep_list p ~close:RBRACE field in
+            Diag.error at
+              ~help:
+                (Printf.sprintf "move it to the end: `%s`"
+                   (written (List.rev acc @ after)))
+              "`..` comes last in a pattern"
+        | _ -> fail_expected p "`}`")
+    | _ -> (
+        let f = field p in
+        match peek p with
+        | COMMA ->
+            advance p;
+            go (f :: acc)
+        | RBRACE -> go (f :: acc)
+        | _ -> fail_expected p "`,` or `}`")
+  in
+  go []
+
 (* A pattern that always matches, which a `let`, a `for` or a lambda's
-   parameter can take a tuple apart with: names, `_`, and tuples of
-   them. *)
+   parameter can take a tuple or a record apart with: names, `_`, and
+   tuples and records of them. A braced name is always a record type's
+   until by-name variants (compiler.md, "Data stage"). *)
 let rec irrefutable (pat : pattern) =
   match pat.pkind with
   | PVar _ | PWild -> true
   | PTuple ps -> List.for_all irrefutable ps
+  | PRecord (_, fs) -> List.for_all (fun (_, q) -> irrefutable q) fs.fpats
   | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
       false
 
@@ -834,17 +922,18 @@ let might_not_match (q : pattern) ~what =
       "take it apart with a `match`, which says what happens when it doesn't \
        match"
     (Printf.sprintf
-       "%s takes apart only a tuple, of names and `_`, which always matches, \
-        but `%s` might not"
+       "%s takes apart only a tuple or a record, of names and `_`, which \
+        always matches, but `%s` might not"
        what (show_pattern q))
 
-(* The tuple pattern after a `let` or a `for`, or a lambda's parameter,
-   which has to always match. *)
+(* The tuple or record pattern after a `let` or a `for`, or a lambda's
+   parameter, which has to always match. *)
 let binding_pattern p ~what =
   let pat = parse_pattern p in
   let rec refutable (q : pattern) =
     match q.pkind with
     | PTuple ps -> List.find_map refutable ps
+    | PRecord (_, fs) -> List.find_map (fun (_, q) -> refutable q) fs.fpats
     | _ when irrefutable q -> None
     | _ -> Some q
   in
@@ -970,25 +1059,38 @@ and parse_block p =
 
 and parse_stmt p =
   match (peek p, peek2 p) with
-  | LET, LPAREN ->
+  | LET, (LPAREN | LBRACE) ->
       advance p;
       let pat = binding_pattern p ~what:"a `let`" in
       if peek p = COLON then
         Diag.error (loc p)
-          ~help:"write the type on the value: `let (a, b): (A, B)` isn't Ren"
-          "a `let` that takes a tuple apart has no type written";
+          ~help:
+            (match pat.pkind with
+            | PRecord _ -> "write the type on the value, or name it: `let User { id, .. } = u`"
+            | _ -> "write the type on the value: `let (a, b): (A, B)` isn't Ren")
+          (match pat.pkind with
+          | PRecord _ -> "a `let` that takes a record apart has no type written"
+          | _ -> "a `let` that takes a tuple apart has no type written");
+      expect p EQ;
+      Let_tuple { pat; value = parse_body p }
+  | LET, IDENT _ when at_record_pattern ~after:1 p ->
+      (* `let User { id, .. } = u`, `let rows.Row { id, .. } = r`: a
+         record of the type named *)
+      advance p;
+      let pat = binding_pattern p ~what:"a `let`" in
       expect p EQ;
       Let_tuple { pat; value = parse_body p }
   | LET, IDENT c when is_upper c && (peek3 p = LPAREN || peek3 p = DOT) ->
       (* `let Some(x) = o` *)
       advance p;
       might_not_match (parse_pattern p) ~what:"a `let`"
-  | VAR, LPAREN ->
+  | VAR, (LPAREN | LBRACE) ->
       Diag.error (loc p)
         ~help:
           "take it apart with `let`, then make a `var` of each part that \
            changes: `var x = a`"
-        "a `var` can't take a tuple apart"
+        (if peek2 p = LBRACE then "a `var` can't take a record apart"
+         else "a `var` can't take a tuple apart")
   | (LET | VAR), _ ->
       let kw = peek p in
       advance p;
@@ -1011,7 +1113,8 @@ and parse_for p =
   expect p FOR;
   let one () =
     match peek p with
-    | LPAREN -> binding_pattern p ~what:"a `for`"
+    | LPAREN | LBRACE -> binding_pattern p ~what:"a `for`"
+    | IDENT _ when at_record_pattern p -> binding_pattern p ~what:"a `for`"
     | _ ->
         let l = loc p in
         let x = ident p in
@@ -1023,7 +1126,7 @@ and parse_for p =
     if peek p = COMMA then (
       advance p;
       (match first.pkind with
-      | PTuple _ ->
+      | PTuple _ | PRecord _ ->
           Diag.error first.ploc
             ~help:
               (Printf.sprintf "write `for i, %s in ...`, the index first"
@@ -1371,10 +1474,7 @@ and parse_primary p =
          `rows.Row { ... }` and `Row { ... }` records *)
       let t = parse_tyname p in
       match peek p with
-      | LBRACE ->
-          advance p;
-          let fields = sep_list p ~close:RBRACE parse_field_init in
-          mk (Record (Some t, fields)) start p
+      | LBRACE -> parse_record p start (Some t)
       | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false
         -> (
           (* `stack.Stack.empty`: a member of the type. Without
@@ -1423,10 +1523,7 @@ and parse_primary p =
       advance p;
       advance p;
       mk Unit start p
-  | LBRACE ->
-      advance p;
-      let fields = sep_list p ~close:RBRACE parse_field_init in
-      mk (Record (None, fields)) start p
+  | LBRACE -> parse_record p start None
   | LBRACKET ->
       advance p;
       let xs = sep_list p ~close:RBRACKET parse_expr in
@@ -1496,6 +1593,7 @@ and parse_lambda p =
     match pat.pkind with
     | PVar x -> [ x ]
     | PTuple ps -> List.concat_map names ps
+    | PRecord (_, fs) -> List.concat_map (fun (_, q) -> names q) fs.fpats
     | _ -> []
   in
   let bound =
@@ -1523,28 +1621,16 @@ and parse_lambda p =
   let body = if lets = [] then body else node p (Block (lets, body)) body.loc in
   mk (Lambda (List.map fst params, body)) start p
 
-(* A lambda's parameter: a name, as a function's is, or a tuple taken
-   apart, `fn((k, v)) => ...`, with or without its type written. A tuple
-   is a parameter with a name no program can write, and a `let` that
+(* A lambda's parameter: a name, as a function's is, or a tuple or a
+   record taken apart, `fn((k, v)) => ...`, `fn({ qty, .. }) => ...`,
+   with or without its type written. A tuple or a record is a parameter with a name no program can write, and a `let` that
    takes it apart at the start of the body, `fn(p) => let (k, v) = p`,
    which is checked and lowered as any `let` is: the parameter, and that
    `let`, if there is one. *)
 and parse_lambda_param p =
   match peek p with
-  | LPAREN ->
-      let pat = binding_pattern p ~what:"a lambda's parameter" in
-      let pty =
-        if peek p = COLON then (
-          advance p;
-          Some (parse_ty p))
-        else None
-      in
-      (* `$` starts no name a program writes, and the pattern's node is
-         its own, so no two parameters share a name *)
-      let pname = { name = Printf.sprintf "$%d" pat.pnode; loc = pat.ploc } in
-      let value = node p (Var (Bare pname.name)) pat.ploc in
-      ({ pname; pty; pmode = Read; pblock = Ordinary; pdefault = None },
-       Some (Let_tuple { pat; value }))
+  | LPAREN | LBRACE -> lambda_pattern p
+  | IDENT _ when at_record_pattern p -> lambda_pattern p
   | AMP ->
       (* `fn(&lo, &hi) => ...`: one the block changes, written as a call
          passes it (compiler.md, "Blocks with `inout` parameters") *)
@@ -1565,6 +1651,22 @@ and parse_lambda_param p =
            name)
   | _ -> (parse_param p, None)
 
+(* A lambda's parameter that takes a tuple or a record apart. *)
+and lambda_pattern p =
+  let pat = binding_pattern p ~what:"a lambda's parameter" in
+  let pty =
+    if peek p = COLON then (
+      advance p;
+      Some (parse_ty p))
+    else None
+  in
+  (* `$` starts no name a program writes, and the pattern's node is
+     its own, so no two parameters share a name *)
+  let pname = { name = Printf.sprintf "$%d" pat.pnode; loc = pat.ploc } in
+  let value = node p (Var (Bare pname.name)) pat.ploc in
+  ({ pname; pty; pmode = Read; pblock = Ordinary; pdefault = None },
+   Some (Let_tuple { pat; value }))
+
 (* A constructor's arguments, in parentheses. *)
 and con_args p start c =
   expect p LPAREN;
@@ -1579,6 +1681,63 @@ and parse_con_arg p =
       advance p;
       (Some label, parse_expr p)
   | _ -> (None, parse_expr p)
+
+(* A record literal, `User { id: 1 }`, or an update, `{ ..order, status:
+   Paid }`: `..` and the value it takes the rest from, first and once,
+   then the fields (compiler.md, "Data stage", "The grammar"). [name] is
+   the type written before the `{`, if any. *)
+and parse_record p start name =
+  expect p LBRACE;
+  (* `..e`, where [at] is the `..`: [e], and how it's written *)
+  let rest at =
+    advance p;
+    match peek p with
+    | RBRACE | COMMA ->
+        Diag.error at
+          ~help:
+            "write the value after it, `{ ..o, paid: true }`, or leave it out"
+          "`..` in a value takes the rest from another, so it needs one"
+    | _ ->
+        let i = p.i in
+        let e = parse_expr p in
+        (e, ".." ^ spelled p i (p.i - 1))
+  in
+  (* a field, which is never a second `..` *)
+  let field ~base p =
+    match peek p with
+    | DOTDOT -> (
+        let at = loc p in
+        let _, shown = rest at in
+        match base with
+        | Some _ ->
+            Diag.error
+              (Loc.span at (last_loc p))
+              ~help:"keep one `..`, and write the other's fields"
+              "a record takes the rest from one value"
+        | None ->
+            Diag.error
+              (Loc.span at (last_loc p))
+              ~help:(Printf.sprintf "move it to the front: `{ %s, ... }`" shown)
+              (Printf.sprintf "`%s` comes first, before the fields" shown))
+    | _ -> parse_field_init p
+  in
+  match peek p with
+  | DOTDOT ->
+      let base, _ = rest (loc p) in
+      let fields =
+        match peek p with
+        | COMMA ->
+            advance p;
+            sep_list p ~close:RBRACE (field ~base:(Some base))
+        | _ ->
+            expect p RBRACE;
+            []
+      in
+      let target = Option.map (fun t -> Into_type t) name in
+      mk (Update { target; base; fields }) start p
+  | _ ->
+      let fields = sep_list p ~close:RBRACE (field ~base:None) in
+      mk (Record (name, fields)) start p
 
 (* A field in a record literal: `id: 1`, or just `id` meaning `id: id`. *)
 and parse_field_init p =

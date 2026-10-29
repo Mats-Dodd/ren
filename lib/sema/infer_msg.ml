@@ -372,10 +372,100 @@ let several_records_fit ~names loc paths =
     (sprintf "these fields fit more than one type: %s"
        (quote (List.map names paths)))
 
+(* How many single-character edits turn [a] into [b], swapping two
+   neighbours counting as one (the optimal string alignment distance), for
+   a name that's probably a misspelling of another: `piad` is one from
+   `paid`. *)
+let distance a b =
+  let m = String.length a and n = String.length b in
+  (* [d.(i).(j)]: from the first [i] characters of [a] to the first [j] of
+     [b] *)
+  let d = Array.make_matrix (m + 1) (n + 1) 0 in
+  for i = 0 to m do d.(i).(0) <- i done;
+  for j = 0 to n do d.(0).(j) <- j done;
+  for i = 1 to m do
+    for j = 1 to n do
+      let cost = if a.[i - 1] = b.[j - 1] then 0 else 1 in
+      d.(i).(j) <-
+        min (min (d.(i - 1).(j) + 1) (d.(i).(j - 1) + 1)) (d.(i - 1).(j - 1) + cost);
+      if i > 1 && j > 1 && a.[i - 1] = b.[j - 2] && a.[i - 2] = b.[j - 1] then
+        d.(i).(j) <- min d.(i).(j) (d.(i - 2).(j - 2) + 1)
+    done
+  done;
+  d.(m).(n)
+
+(* The name among [names] that [name] is most likely a misspelling of:
+   the nearest, if it's near enough. *)
+let nearest name names =
+  let near n =
+    let d = distance (String.lowercase_ascii name) (String.lowercase_ascii n) in
+    if d <= max 2 (String.length name / 3) && d < String.length name then
+      Some (d, n)
+    else None
+  in
+  match List.sort compare (List.filter_map near names) with
+  | (_, n) :: _ -> Some n
+  | [] -> None
+
+(* A field [f] that [path], whose fields are [decl], doesn't have: the one
+   it's likely a misspelling of, if one is near, or else all of them. *)
 let no_such_field ~names ?(what = "field") (f : Ast.ident) path decl =
   Diag.make f.loc
-    ~help:(sprintf "its %ss: %s" what (quote (field_names decl)))
+    ~help:
+      (match nearest f.name (field_names decl) with
+      | Some near -> sprintf "did you mean `%s`?" near
+      | None -> sprintf "its %ss: %s" what (quote (field_names decl)))
     (sprintf "`%s` has no %s named `%s`" (names path) what f.name)
+
+(* ---- record update, `{ ..base, f: v }` (compiler.md, "Data stage",
+   "Record update") ----
+
+   [base] is how the value after `..` is written, `..o`. *)
+
+(* `{ ..n }`, where [n] is of the type [shown], which isn't a record. *)
+let update_not_record loc ~base shown =
+  Diag.make loc ~help:"write every field, without `..`"
+    (sprintf "`%s` takes the rest from a record, but `%s` is %s" base
+       (String.sub base 2 (String.length base - 2))
+       (article shown))
+
+(* The field [f] of the target [target], which [base] doesn't have and
+   the update doesn't give. *)
+let update_needs loc ~target ~base f =
+  Diag.make loc
+    ~help:(sprintf "give it: `%s: ...`" f)
+    (sprintf "`%s` needs `%s`, which `%s` doesn't have" target f base)
+
+(* The field [f] of [base], which the target [target] doesn't have. *)
+let update_drops loc ~target ~base f =
+  Diag.make loc
+    ~help:(sprintf "name the fields to keep instead of `%s`" base)
+    (sprintf "`%s` would drop `%s`: `%s` has no field `%s`" base f target f)
+
+(* The field [f], taken from [base], where it's of the type [found], and
+   the target [target] wants [expected]. *)
+let update_field_type loc ~target ~base f ~found ~expected =
+  Diag.make loc
+    ~help:(sprintf "give it: `%s: ...`" f)
+    (sprintf "`%s`'s `%s` is %s, but `%s`'s `%s` is %s" base f (article found)
+       target f (article expected))
+
+(* ---- record patterns ---- *)
+
+(* A record pattern matched against a value of the type [shown]. *)
+let pattern_not_record loc shown =
+  Diag.make loc ~help:"take it apart as what it is, or bind it to a name"
+    (sprintf "a record pattern matches a record, but this is %s"
+       (article shown))
+
+(* A record pattern, in a `match`, that leaves out the fields [missing]
+   without `..`; [written] is it with `..` at the end. *)
+let pattern_misses loc missing ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s` to leave the rest out" written)
+    (sprintf "this pattern doesn't name %s; add %s, or `..` for the rest"
+       (quote missing)
+       (if List.length missing = 1 then code (List.hd missing) else "them"))
 
 (* `c.now`, where `c` is an implementation of the dependency [dep], which
    has the operation `now` or not: an implementation's operations are
@@ -1096,6 +1186,7 @@ let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
     | PCon (c, []) -> c.name.name
     | PCon (c, ps) -> c.name.name ^ args ps
     | PTuple ps -> args ps
+    | PRecord (_, fs) -> Ast.show_fields shown fs
     | PWild | PFail _ | PFail_any | PFail_in _ | POr _ -> "_"
   in
   let parts =
@@ -3327,41 +3418,6 @@ let tag_arity ?(value = false) loc (c : Ast.ident) want given =
 
 (* A tag pattern for an error the set doesn't have; [tags] are those it
    has, as shown. *)
-(* How many single-character edits turn [a] into [b] (the Levenshtein
-   distance), for a name that's probably a misspelling of another. *)
-let distance a b =
-  let n = String.length b in
-  (* [prev.(j)] is the distance from the part of [a] seen so far to the
-     first [j] characters of [b] *)
-  let prev = Array.init (n + 1) Fun.id in
-  String.iteri
-    (fun i ca ->
-      let diag = ref prev.(0) in
-      prev.(0) <- i + 1;
-      for j = 1 to n do
-        let here = prev.(j) in
-        prev.(j) <-
-          min
-            (min (prev.(j) + 1) (prev.(j - 1) + 1))
-            (!diag + if ca = b.[j - 1] then 0 else 1);
-        diag := here
-      done)
-    a;
-  prev.(n)
-
-(* The name among [names] that [name] is most likely a misspelling of:
-   the nearest, if it's near enough. *)
-let nearest name names =
-  let near n =
-    let d = distance (String.lowercase_ascii name) (String.lowercase_ascii n) in
-    if d <= max 2 (String.length name / 3) && d < String.length name then
-      Some (d, n)
-    else None
-  in
-  match List.sort compare (List.filter_map near names) with
-  | (_, n) :: _ -> Some n
-  | [] -> None
-
 (* [c] matched in an error set that doesn't hold it; [tags] are what it
    holds, each its name and how it's shown. *)
 let not_an_error (c : Ast.ident) ?(arm = false) tags =

@@ -101,6 +101,7 @@ and pattern (p : Core.pattern) : Core.pattern =
     | PTag (t, ps) -> PTag (t, List.map pattern ps)
     | POr ps -> POr (List.map pattern ps)
     | PTuple ps -> PTuple (List.map pattern ps)
+    | PRecord (t, ps) -> PRecord (t, List.map pattern ps)
   in
   { p with pkind; ploc = nowhere }
 

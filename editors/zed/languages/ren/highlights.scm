@@ -141,6 +141,8 @@
 (item_expression name: (identifier) @function)
 (field_expression field: (identifier) @property)
 (field_initializer name: (identifier) @property)
+; a record pattern's field, `{ id, lines: ls, .. }`
+(field_pattern name: (identifier) @property)
 (labeled_argument label: (identifier) @property)
 (named_argument name: (identifier) @variable.parameter)
 
@@ -152,6 +154,9 @@
 (negative_number "-" @operator)
 (negative "-" @operator)
 (range ".." @operator)
+; "the rest": an update's, `{ ..order, paid: true }`, and a pattern's
+(record_expression ".." @operator)
+(rest_pattern) @operator
 ["=" "=>" "->" "|"] @operator
 
 ["." "," ":"] @punctuation.delimiter

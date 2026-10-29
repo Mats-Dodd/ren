@@ -1203,7 +1203,7 @@ let rec pattern_vars (p : C.pattern) =
   match p.pkind with
   | PWild | PInt _ | PBool _ -> []
   | PVar v -> [ v ]
-  | PCon (_, _, ps) | PTag (_, ps) | PTuple ps ->
+  | PCon (_, _, ps) | PTag (_, ps) | PTuple ps | PRecord (_, ps) ->
       List.concat_map pattern_vars ps
   | POr (p :: _) -> pattern_vars p
   | POr [] -> []
@@ -3432,6 +3432,11 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
               ps
         | PTuple ps ->
             let sh = tuple_shape cx (at fs p.ploc) p.pty in
+            test ~known vars (fields sh ps @ rest) k
+        | PRecord (_, ps) ->
+            (* each field's read, as a constructor's are, with no tag to
+               test *)
+            let sh = record_shape cx (at fs p.ploc) p.pty in
             test ~known vars (fields sh ps @ rest) k
         | POr alts ->
             (* the first alternative that matches binds the variables, as

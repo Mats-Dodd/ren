@@ -713,6 +713,7 @@ and expr_of cx (e : expr) : C.expr =
             (Record
                (p, List.map (fun ((f : ident), v) -> (f.name, expr cx v)) fields))
       | _ -> bug "a record literal whose type isn't a record")
+  | Update { base; fields; _ } -> update cx e base fields
   | Field (r, f) -> (
       match (node cx e.node).found with
       | Some (Field_of p) -> here (Field (expr cx r, p, f.name))
@@ -2296,8 +2297,85 @@ and pattern cx (p : pattern) : C.pattern =
     | PFail_in _ -> bug "`fail on` other than as a whole arm's pattern"
     | POr ps -> POr (List.map (pattern cx) ps)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
+    | PRecord (_, fs) -> (
+        (* a pattern for every field, in declaration order, `_` for one
+           left out *)
+        match pty with
+        | Con (path, _) ->
+            let field (d : Iface.field) =
+              match
+                List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+              with
+              | Some (_, q) -> pattern cx q
+              | None ->
+                  {
+                    pkind = PWild;
+                    pty = field_ty cx pty path d.fname;
+                    ploc = p.ploc;
+                  }
+            in
+            PRecord (path, List.map field (record_decl cx path))
+        | _ -> bug "a record pattern whose type isn't a record")
   in
   { pkind; pty; ploc = p.ploc }
+
+(* The fields of the record type [path], as it's declared. *)
+and record_decl cx path =
+  match cx.types path with
+  | Some { body = Record fs; _ } -> fs
+  | _ -> bug "a record type without fields"
+
+(* The type of the field [f] of [t], a value of the record type [path]. *)
+and field_ty cx (t : Ty.ty) path f =
+  match t with
+  | Con (_, args) -> (
+      match
+        List.find_opt (fun (d : Iface.field) -> d.fname = f) (record_decl cx path)
+      with
+      | Some d -> Ty.apply { tys = args; rows = [] } d.fty
+      | None -> bug "a field its record doesn't have")
+  | _ -> bug "a field of something that isn't a record"
+
+(* `{ ..base, f: v, ... }` (compiler.md, "Data stage", "Record update"):
+   the base, bound first, then each field given, bound in the order
+   written, then the record, its fields in declaration order, each the
+   one given or the base's. A unique base is built over in place, since
+   reuse (reuse.ml) pairs it, dead once its fields are read, with the
+   record's allocation. *)
+and update cx (e : expr) base fields =
+  let loc = e.loc in
+  let t = ty_of cx e.node in
+  let b = expr cx base in
+  let bv = temp cx "base" b.ty in
+  let given =
+    List.map
+      (fun ((f : ident), v) ->
+        let v = expr cx v in
+        (f.name, temp cx f.name v.ty, v))
+      fields
+  in
+  let bpath =
+    match b.ty with
+    | Con (p, _) -> p
+    | _ -> bug "an update of something that isn't a record"
+  in
+  match t with
+  | Con (path, _) ->
+      let field (d : Iface.field) =
+        match List.find_opt (fun (f, _, _) -> f = d.fname) given with
+        | Some (_, v, _) -> (d.fname, local v loc)
+        | None ->
+            ( d.fname,
+              mk
+                (Field (local bv loc, bpath, d.fname))
+                (field_ty cx b.ty bpath d.fname)
+                loc )
+      in
+      lets
+        ((bv, b) :: List.map (fun (_, v, value) -> (v, value)) given)
+        (mk (Record (path, List.map field (record_decl cx path))) t loc)
+  | _ -> bug "an update whose type isn't a record"
+
 
 (* The locals [e] uses but doesn't bind, in order of id. Every local of a
    function has its own id, so that's every local used, minus every local
@@ -2401,7 +2479,8 @@ and free (e : C.expr) =
   and pat (p : C.pattern) =
     match p.pkind with
     | PVar v -> bind v
-    | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps -> List.iter pat ps
+    | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps) ->
+        List.iter pat ps
     | PWild | PInt _ | PBool _ -> ()
   in
   go e;
@@ -2445,6 +2524,9 @@ let max_binder (f : fn_def) =
         go last
     | Con (_, args) -> List.iter (fun (_, a) -> go a) args
     | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
+    | Update { base; fields; _ } ->
+        go base;
+        List.iter (fun (_, v) -> go v) fields
     | Match (s, arms) ->
         go s;
         List.iter
@@ -2476,6 +2558,7 @@ let max_binder (f : fn_def) =
     match p.pkind with
     | PVar b -> see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
+    | PRecord (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
     | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;
@@ -2656,11 +2739,8 @@ let ops (types : Iface.type_decl list) =
         Iface.requirements)
     types
 
-let program (r : Resolve.t) (inferred : Infer.t) =
+let program ~types (r : Resolve.t) (inferred : Infer.t) =
   let requests = ref [] in
-  (* only a function made for a request looks for a dependency's
-     operations *)
-  let types _ = None in
   let fns =
     List.filter_map
       (fun f ->

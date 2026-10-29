@@ -189,7 +189,15 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
   (r, { iface with tests = iface.tests @ group_tests }, inferred, items)
 
 (* A checked module, lowered to Core. *)
-let lower r inferred = pass "lower" (fun () -> Lower.program r inferred)
+(* [reachable] are the interfaces the module's imports reach, whose
+   types a record pattern or update can be of. *)
+let lower ~reachable (r : Resolve.t) inferred =
+  let types = Hashtbl.create 64 in
+  List.iter
+    (fun (d : Iface.type_decl) -> Hashtbl.replace types d.path d)
+    (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ r.types);
+  pass "lower" (fun () ->
+      Lower.program ~types:(Hashtbl.find_opt types) r inferred)
 
 (* A program's modules, lowered, the prelude first, and the entry last,
    which gets `$start` if it has a `main`. With [lint], Core Lint checks
@@ -235,7 +243,7 @@ let prelude =
        check_module ~home:Path.prelude_home ~imports ~reachable:imports
          ~sees_all:true prog
      in
-     let core, _ = lower r inferred in
+     let core, _ = lower ~reachable:imports r inferred in
      ignore (link_lowered ~lint:true ~imports:[ imports ] [ core ]);
      (* what the standard library's modules see: the whole prelude, the
         runtime's intrinsics among it (std_lib.ml) *)
@@ -431,7 +439,7 @@ let std_modules : (string * checked Lazy.t) list =
            let resolved, iface, inferred, items =
              check_module ~home ~imports:[ whole ] ~reachable:[ whole ] parsed
            in
-           let core = lazy (lower resolved inferred) in
+           let core = lazy (lower ~reachable:[ whole ] resolved inferred) in
            {
              home;
              file = Prelude.file;
@@ -518,7 +526,7 @@ let check_roots ?console ~load ~dir ~entry roots =
          in
          (* [lazy] delays lowering until something needs it, as for
             [prelude]: checking a program, `ren types`, doesn't *)
-         let core = lazy (lower resolved inferred) in
+         let core = lazy (lower ~reachable resolved inferred) in
          {
            home = m.home;
            file = m.file;
@@ -1307,6 +1315,7 @@ let console_spec ~load ~dir ~home ~file ~src ~name lines =
       | PVar b -> [ b.name ]
       | PCon (_, ps) | PFail (_, ps) | PTuple ps | POr ps ->
           List.concat_map names ps
+      | PRecord (_, fs) -> List.concat_map (fun (_, q) -> names q) fs.fpats
       | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
     in
     match parsed text with

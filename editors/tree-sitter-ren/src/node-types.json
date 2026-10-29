@@ -154,6 +154,10 @@
         "named": true
       },
       {
+        "type": "record_pattern",
+        "named": true
+      },
+      {
         "type": "tuple_pattern",
         "named": true
       },
@@ -1228,6 +1232,32 @@
     }
   },
   {
+    "type": "field_pattern",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_pattern",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "finally_statement",
     "named": true,
     "fields": {
@@ -1309,6 +1339,10 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "record_pattern",
             "named": true
           },
           {
@@ -2200,6 +2234,10 @@
         "required": false,
         "types": [
           {
+            "type": "record_pattern",
+            "named": true
+          },
+          {
             "type": "tuple_pattern",
             "named": true
           }
@@ -2856,6 +2894,16 @@
     "type": "record_expression",
     "named": true,
     "fields": {
+      "spread": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
       "type": {
         "multiple": false,
         "required": false,
@@ -2873,6 +2921,36 @@
       "types": [
         {
           "type": "field_initializer",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_pattern",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_name",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field_pattern",
+          "named": true
+        },
+        {
+          "type": "rest_pattern",
           "named": true
         }
       ]
@@ -2908,6 +2986,11 @@
         ]
       }
     }
+  },
+  {
+    "type": "rest_pattern",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "source_file",
@@ -3085,6 +3168,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "record_pattern",
+            "named": true
+          },
           {
             "type": "tuple_pattern",
             "named": true

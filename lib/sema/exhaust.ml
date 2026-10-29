@@ -44,7 +44,8 @@ type env = {
    one field, the value or the error (errors.md, "Handling: `match`"). A
    value pattern, `_` too, is [value] of it, so `_` never matches an
    error; `fail _` is [fail] of anything. A tuple of [n] parts is the one
-   constructor of [Tuple n], with [n] fields. *)
+   constructor of [Tuple n], with [n] fields, and a record the one
+   constructor of [Record], with its declared fields, by name. *)
 type head = { name : string; owner : owner }
 
 and owner =
@@ -53,6 +54,7 @@ and owner =
   | No_list
   | Outcome
   | Tuple of int
+  | Record of Path.t * string list
 
 type space = Any | Ctor of head * space list
 
@@ -93,6 +95,28 @@ let rec simplify env (p : pattern) =
   | PTuple ps ->
       let n = List.length ps in
       Ctor ({ name = "(,)"; owner = Tuple n }, List.map (simplify env) ps)
+  | PRecord (_, fs) -> (
+      (* every declared field, in order, one the pattern leaves out an
+         [Any] *)
+      match (Infer.Nodes.find p.pnode env.nodes).ty with
+      | Con (path, _) -> (
+          match Hashtbl.find env.types path with
+          | { body = Record decl; _ } ->
+              let names = List.map (fun (f : Iface.field) -> f.fname) decl in
+              let field name =
+                match
+                  List.find_opt
+                    (fun ((f : ident), _) -> f.name = name)
+                    fs.fpats
+                with
+                | Some (_, q) -> simplify env q
+                | None -> Any
+              in
+              Ctor
+                ( { name = "{}"; owner = Record (path, names) },
+                  List.map field names )
+          | _ -> Any (* inference reported it *))
+      | _ -> Any)
   | PFail _ | PFail_any | PFail_in _ | POr _ ->
       (* a whole arm's, which [outcomes] simplifies *)
       invalid_arg "Exhaust.simplify: a `fail` pattern inside another"
@@ -122,6 +146,15 @@ let rec show_space = function
   | Ctor ({ owner = Outcome; _ }, [ e ]) -> "fail " ^ show_space e
   | Ctor ({ owner = Tuple _; _ }, args) ->
       "(" ^ String.concat ", " (List.map show_space args) ^ ")"
+  | Ctor ({ owner = Record (_, names); _ }, args) ->
+      (* the fields that matter, and `..` for the rest *)
+      let named =
+        List.filter_map
+          (fun (f, a) ->
+            match a with Any -> None | a -> Some (f ^ ": " ^ show_space a))
+          (List.combine names args)
+      in
+      "{ " ^ String.concat ", " (named @ [ ".." ]) ^ " }"
   | Ctor (c, []) -> c.name
   | Ctor (c, args) ->
       c.name ^ "(" ^ String.concat ", " (List.map show_space args) ^ ")"
@@ -148,6 +181,7 @@ let siblings env c =
       Some (List.map (fun (t, n) -> ({ name = t; owner = c.owner }, n)) tags)
   | Outcome -> Some [ (value, 1); (failed, 1) ]
   | Tuple n -> Some [ (c, n) ]
+  | Record (_, names) -> Some [ (c, List.length names) ]
   | No_list -> None
 
 (* The rows that still apply once we know the first value was built with
@@ -380,6 +414,7 @@ let rec no_bound_errors env (p : pattern) =
       | _ -> ())
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.iter (no_bound_errors env) ps
+  | PRecord (_, fs) -> List.iter (fun (_, q) -> no_bound_errors env q) fs.fpats
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
 
 (* ---- walking the program ---- *)
@@ -410,6 +445,7 @@ let rec check_expr env (e : expr) =
   | Block _ -> List.iter (check_expr env) (children e)
   | Con (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Record (_, fields) -> List.iter (fun (_, v) -> check_expr env v) fields
+  | Update _ -> List.iter (check_expr env) (children e)
   | Match (subject, arms) -> check_match_expr env e subject arms
   | With { items; body } ->
       List.iter (check_expr env) (with_links items @ [ body ])

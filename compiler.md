@@ -6918,7 +6918,36 @@ revisit if a step finds it wrong:
 
 | step | commit | done | left |
 |---|---|---|---|
-| 0 | this commit | this section: the grammar, the AST, each step's rules, passes and files, every error with its help, the layout faults and their fixes, the choices where the design is silent; the inventory of by-name sites (324, counted by a scratchpad script); test/test_data.ml, every test of a feature behind `until "sN"`, the guards written plainly; bench/data/ (update, byname, orpat, variants, todo_panic, shapes, and step 7's nested, rows, optional and interp) and its section of bench/build.t, step 7's three kernels already as specified | steps 1 to 8; nothing of the language is built yet |
+| 0 | f313084 | this section: the grammar, the AST, each step's rules, passes and files, every error with its help, the layout faults and their fixes, the choices where the design is silent; the inventory of by-name sites (324, counted by a scratchpad script); test/test_data.ml, every test of a feature behind `until "sN"`, the guards written plainly; bench/data/ (update, byname, orpat, variants, todo_panic, shapes, and step 7's nested, rows, optional and interp) and its section of bench/build.t, step 7's three kernels already as specified | steps 1 to 8; nothing of the language is built yet |
+| 1 | this commit | record update, `{ ..o, f: v }` and `T { ..o, f: v }`, and record patterns, `{ f: p, g, .. }` and `T { .. }`, in a `match`, a `let`, a `for` and a block's parameter, through the parser, Resolve, Infer (`infer_update`, `record_pattern`), Exhaust (a record is one constructor), Core (`PRecord`) and Core Lint, the interpreter, and Mem IR in both builds; the fourteen refusals; tree-sitter's `record_expression` with a `spread`, `record_pattern`, `field_pattern` and `rest_pattern`, its corpus (records.txt) and Zed's highlights; test_data.ml's s1 tests on, and bench/data/update in build.t's `same`, `release` and `tcc_same`, with its reuse shown (`--stats`: the loop of 1000 updates allocates nothing, each a reuse); the README and language.md's "What Ren has today". Choices: below the table | steps 2 to 8 |
+
+Step 1's choices, where the sections above are silent:
+
+- `Let_tuple` keeps its name until step 3 makes it `Let_pattern`, and
+  `target` has only `Into_type` until step 2 adds `Into_ctor`.
+- An update's base whose type isn't known yet is taken to be the
+  target's when it's named, `Order { ..o }`, or the expected type's
+  when that's a record; only with neither is it `no_record_fits`.
+- A record pattern in a binding position is checked to always match by
+  the parser, as a tuple's is (`binding_pattern`, recursing into its
+  fields), not by Exhaust: in step 1 a braced name is always a record
+  type, so the parser can tell, and its message is today's until step 3
+  rewords it.
+- Lowering is given the types its module can see, its imports'
+  included (`Lower.program ~types`), for a record's declared fields;
+  Core's `PRecord` has a pattern per field in declaration order, and the
+  interpreter finds the fields' names through its types.
+- "Did you mean" measures a swap of two neighbours as one edit (the
+  optimal string alignment distance), so `piad` is near `paid`.
+- A missing record, in Exhaust's "missing:", is written without its
+  type's name, `{ paid: false, .. }`.
+- An update that leaves several fields of the target ungiven reports one
+  error for each; so does one that would drop several.
+- An update of a unique record is built over it in place, but each field
+  it keeps that's counted is still dup'd where it's read and dropped
+  with the old record's cell (bench/data/update's 1000 dups and drops of
+  `lines`): reuse.ml doesn't yet move a reused object's kept fields
+  across. Step 7 may.
 
 ## The runtime model
 

@@ -212,7 +212,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(x)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(x)` might not
       ┌─ test.ren:3:7
     3 │   let Some(x) = o
       │       ^^^^^^^
@@ -225,7 +225,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(b)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(b)` might not
       ┌─ test.ren:2:11
     2 │   let (a, Some(b)) = (1, Some(2))
       │           ^^^^^^^
@@ -359,7 +359,7 @@ fn main() =
 |};
   [%expect
     {|
-    error: a lambda's parameter takes apart only a tuple, of names and `_`, which always matches, but `Some(v)` might not
+    error: a lambda's parameter takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(v)` might not
       ┌─ test.ren:2:18
     2 │   let f = fn((k, Some(v))) => v
       │                  ^^^^^^^

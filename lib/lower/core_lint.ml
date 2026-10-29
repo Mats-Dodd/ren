@@ -1394,6 +1394,16 @@ and pattern env sc (p : pattern) t =
           fail env loc
             (sprintf "a tuple pattern of %d matches a `%s`" (List.length ps)
                (show t')))
+  | PRecord (path, ps) ->
+      (* a pattern for each of its fields, in declaration order *)
+      let td, targs = args_of env loc "a record pattern" path t in
+      let fs = fields_of env loc td in
+      if List.length fs <> List.length ps then
+        fail env loc "a record pattern doesn't have a pattern for each field";
+      List.fold_left2
+        (fun sc (f : Iface.field) sub ->
+          pattern env sc sub (field_ty env loc td targs f.fname))
+        sc fs ps
   | POr [] -> fail env loc "an or-pattern of nothing"
   | POr (first :: rest) ->
       let first_sc = pattern env sc first t in

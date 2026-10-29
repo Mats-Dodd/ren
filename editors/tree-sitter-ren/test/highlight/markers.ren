@@ -302,3 +302,12 @@ fn store(k: Int) ! DbDown uses Sql =
 //^ keyword.failure
 //    ^ keyword
     try Sql.set(k)
+
+fn paid(o: Order) -> Int =
+  let p = { ..o, paid: true }
+//          ^ operator
+//               ^ property
+  match p
+    { total, .. } => total
+//    ^ property
+//           ^ operator

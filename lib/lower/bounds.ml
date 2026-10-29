@@ -362,7 +362,8 @@ let rec max_id (e : expr) =
         let rec pat (p : pattern) =
           match p.pkind with
           | PVar v -> v.id
-          | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps ->
+          | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps)
+            ->
               List.fold_left (fun m p -> max m (pat p)) 0 ps
           | PWild | PInt _ | PBool _ -> 0
         in
@@ -389,6 +390,7 @@ let rename fresh (e : expr) =
       | PCon (t, c, ps) -> PCon (t, c, List.map pat ps)
       | PTag (t, ps) -> PTag (t, List.map pat ps)
       | PTuple ps -> PTuple (List.map pat ps)
+      | PRecord (t, ps) -> PRecord (t, List.map pat ps)
       | POr (first :: rest) ->
           (* each alternative binds the same variables *)
           let first = pat first in
@@ -403,6 +405,7 @@ let rename fresh (e : expr) =
       | PCon (t, c, ps) -> PCon (t, c, List.map pat_again ps)
       | PTag (t, ps) -> PTag (t, List.map pat_again ps)
       | PTuple ps -> PTuple (List.map pat_again ps)
+      | PRecord (t, ps) -> PRecord (t, List.map pat_again ps)
       | POr ps -> POr (List.map pat_again ps)
       | (PWild | PInt _ | PBool _) as k -> k
     in

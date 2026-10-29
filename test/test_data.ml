@@ -35,46 +35,27 @@ type Order = { id: Int, lines: Array<Line>, total: Int, paid: Bool }
 |}
 
 let%expect_test "[s1 accept] record update takes the rest from a record" =
-  until "s1"
-    ~want:
-      {|
-Order { id: 1, lines: [], total: 5, paid: true }
-Order { id: 2, lines: [], total: 5, paid: false }
-Order { id: 1, lines: [], total: 5, paid: false }
-()
-|}
-    (fun () ->
-      run
-        (order_types
-       ^ {|
+  run
+    (order_types
+   ^ {|
 fn main() uses Console =
   let o = Order { id: 1, lines: [], total: 5, paid: false }
   print({ ..o, paid: true })
   let id = 2
   print(Order { ..o, id })
   print({ ..o })
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:6:11
-    6 │   print({ ..o, paid: true })
-      │           ^^
+    Order { id: 1, lines: [], total: 5, paid: true }
+    Order { id: 2, lines: [], total: 5, paid: false }
+    Order { id: 1, lines: [], total: 5, paid: false }
+    ()
     |}]
 
 let%expect_test "[s1 accept] the base, then the fields, in the order they're written" =
   (* `..` is evaluated first, once; the fields after it in their order *)
-  until "s1"
-    ~want:{|
-base
-y
-x
-P { x: 10, y: 20, z: 3 }
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type P = { x: Int, y: Int, z: Int }
 
 fn said(what: Str, n: Int) -> Int uses Console =
@@ -87,105 +68,65 @@ fn base() -> P uses Console =
 
 fn main() uses Console =
   print({ ..base(), y: said("y", 20), x: said("x", 10) })
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-       ┌─ test.ren:12:11
-    12 │   print({ ..base(), y: said("y", 20), x: said("x", 10) })
-       │           ^^
+    base
+    y
+    x
+    P { x: 10, y: 20, z: 3 }
+    ()
     |}]
 
 let%expect_test "[s1 accept] an update of a unique record changes it in place" =
   (* Perceus reuse: the update in the loop allocates nothing new; what
      shows here is only that it's the same value either way *)
-  until "s1"
-    ~want:{|
-499500
-()
-|}
-    (fun () ->
-      run
-        (order_types
-       ^ {|
+  run
+    (order_types
+   ^ {|
 fn main() uses Console =
   var o = Order { id: 1, lines: [], total: 0, paid: false }
   for i in 0..1000
     o = { ..o, total: o.total + i }
   print(o.total)
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:7:11
-    7 │     o = { ..o, total: o.total + i }
-      │           ^^
+    499500
+    ()
     |}]
 
 let%expect_test "[s1 accept] an update's type is its base's" =
-  until "s1"
-    ~want:
-      {|
-fn paid(o: Order) -> Order
-fn renamed(l: Line, sku: Str) -> Line
-fn main()
-|}
-    (fun () ->
-      types
-        (order_types
-       ^ {|
+  types
+    (order_types
+   ^ {|
 fn paid(o: Order) -> Order = { ..o, paid: true }
 fn renamed(l: Line, sku: Str) -> Line = { ..l, sku }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:4:32
-    4 │ fn paid(o: Order) -> Order = { ..o, paid: true }
-      │                                ^^
-
-    error: expected a name, found `..`
-      ┌─ test.ren:5:43
-    5 │ fn renamed(l: Line, sku: Str) -> Line = { ..l, sku }
-      │                                           ^^
+    fn paid(o: Order) -> Order
+    fn renamed(l: Line, sku: Str) -> Line
+    fn main()
     |}]
 
 let%expect_test "[s1 accept] an update across record types, the rest taken by name" =
-  until "s1"
-    ~want:{|
-Shipped { id: 1, total: 5, carrier: "post" }
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Placed = { id: Int, total: Int }
 type Shipped = { id: Int, total: Int, carrier: Str }
 
 fn main() uses Console =
   let p = Placed { id: 1, total: 5 }
   print(Shipped { ..p, carrier: "post" })
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:6:19
-    6 │   print(Shipped { ..p, carrier: "post" })
-      │                   ^^
+    Shipped { id: 1, total: 5, carrier: "post" }
+    ()
     |}]
 
 let%expect_test "[s1 accept] a record pattern in a match, with literals and `..`" =
-  until "s1"
-    ~want:{|
-paid 5
-open 2
-()
-|}
-    (fun () ->
-      run
-        (order_types
-       ^ {|
+  run
+    (order_types
+   ^ {|
 fn state(o: Order) -> Str =
   match o
     { paid: true, total, .. } => "paid ".concat(show(total))
@@ -195,25 +136,16 @@ fn main() uses Console =
   let ls = [Line { sku: "a", qty: 1 }, Line { sku: "b", qty: 2 }]
   print(state(Order { id: 1, lines: [], total: 5, paid: true }))
   print(state(Order { id: 2, lines: ls, total: 0, paid: false }))
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a pattern, found `{`
-      ┌─ test.ren:6:5
-    6 │     { paid: true, total, .. } => "paid ".concat(show(total))
-      │     ^
+    paid 5
+    open 2
+    ()
     |}]
 
 let%expect_test "[s1 accept] a named record pattern, renamed and nested" =
-  until "s1"
-    ~want:{|
-3
-none
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Pt = { x: Int, y: Int }
 type Seg = { from: Pt, to: Pt }
 
@@ -225,29 +157,19 @@ fn rise(s: Seg) -> Str =
 fn main() uses Console =
   print(rise(Seg { from: Pt { x: 0, y: 0 }, to: Pt { x: 1, y: 3 } }))
   print(rise(Seg { from: Pt { x: 0, y: 1 }, to: Pt { x: 1, y: 3 } }))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `=>`, found `{`
-      ┌─ test.ren:6:9
-    6 │     Seg { from: Pt { y: 0, .. }, to: Pt { y: top, .. } } => show(top)
-      │         ^
+    3
+    none
+    ()
     |}]
 
 let%expect_test "[s1 accept] `let { .. } =` takes a record apart" =
   (* a `let` only takes apart, so it may leave fields out (compiler.md,
      "Data stage", "Where the data stage may differ from language.md") *)
-  until "s1"
-    ~want:{|
-1
-5
-2
-()
-|}
-    (fun () ->
-      run
-        (order_types
-       ^ {|
+  run
+    (order_types
+   ^ {|
 fn main() uses Console =
   let o = Order { id: 1, lines: [Line { sku: "a", qty: 2 }], total: 5, paid: false }
   let { id, total } = o
@@ -256,26 +178,18 @@ fn main() uses Console =
   let { lines: ls, .. } = o
   let { qty: n, .. } = ls[0]
   print(n)
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `{`
-      ┌─ test.ren:6:7
-    6 │   let { id, total } = o
-      │       ^
+    1
+    5
+    2
+    ()
     |}]
 
 let%expect_test "[s1 accept] a record pattern in a `for` and a block's parameter" =
-  until "s1"
-    ~want:{|
-3
-[1, 2]
-()
-|}
-    (fun () ->
-      run
-        (order_types
-       ^ {|
+  run
+    (order_types
+   ^ {|
 fn main() uses Console =
   let ls = [Line { sku: "a", qty: 1 }, Line { sku: "b", qty: 2 }]
   var t = 0
@@ -283,338 +197,269 @@ fn main() uses Console =
     t += qty
   print(t)
   print(ls.map(fn({ qty, .. }) => qty))
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `{`
-      ┌─ test.ren:7:7
-    7 │   for { qty, .. } in ls
-      │       ^
+    3
+    [1, 2]
+    ()
+    |}]
+
+let%expect_test "[s1 accept] a named record pattern in a `let`, a `for` and a block's parameter" =
+  (* the type named, another module's too *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import rows.{Row}
+fn main() uses Console =
+  let r = Row { id: 1, name: "a" }
+  let rows.Row { name, .. } = r
+  print(name)
+  for Row { id, .. } in [r, { ..r, id: 2 }]
+    print(id)
+  print([r].map(fn(Row { name: n, .. }) => n))
+|}
+      );
+      ("rows.ren", {|
+pub type Row = { id: Int, name: Str }
+|});
+    ];
+  [%expect {|
+    a
+    1
+    2
+    ["a"]
+    ()
     |}]
 
 let%expect_test "[s1 reject] `..` comes first in a record" =
-  until "s1"
-    ~says:
-      [
-        "error: `..o` comes first, before the fields";
-        "help: move it to the front: `{ ..o, ... }`";
-      ]
-    (fun () ->
-      check_error
-        (order_types ^ {|
+  check_error
+    (order_types ^ {|
 fn f(o: Order) -> Order = { paid: true, ..o }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
+    error: `..o` comes first, before the fields
       ┌─ test.ren:4:41
     4 │ fn f(o: Order) -> Order = { paid: true, ..o }
-      │                                         ^^
+      │                                         ^^^
+      help: move it to the front: `{ ..o, ... }`
     |}]
 
 let%expect_test "[s1 reject] a record takes the rest from one value" =
-  until "s1"
-    ~says:
-      [
-        "error: a record takes the rest from one value";
-        "help: keep one `..`, and write the other's fields";
-      ]
-    (fun () ->
-      check_error
-        (order_types
-       ^ {|
+  check_error
+    (order_types
+   ^ {|
 fn f(a: Order, b: Order) -> Order = { ..a, ..b, paid: true }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:4:39
+    error: a record takes the rest from one value
+      ┌─ test.ren:4:44
     4 │ fn f(a: Order, b: Order) -> Order = { ..a, ..b, paid: true }
-      │                                       ^^
+      │                                            ^^^
+      help: keep one `..`, and write the other's fields
     |}]
 
 let%expect_test "[s1 reject] `..` in a value needs the value it takes the rest from" =
-  until "s1"
-    ~says:
-      [
-        "error: `..` in a value takes the rest from another, so it needs one";
-        "help: write the value after it, `{ ..o, paid: true }`, or leave it out";
-      ]
-    (fun () ->
-      check_error (order_types ^ {|
+  check_error (order_types ^ {|
 fn f() -> Order = { paid: true, .. }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
+    error: `..` in a value takes the rest from another, so it needs one
       ┌─ test.ren:4:33
     4 │ fn f() -> Order = { paid: true, .. }
       │                                 ^^
+      help: write the value after it, `{ ..o, paid: true }`, or leave it out
     |}]
 
 let%expect_test "[s1 reject] `..` comes last in a pattern" =
-  until "s1"
-    ~says:
-      [
-        "error: `..` comes last in a pattern";
-        "help: move it to the end: `{ id, .. }`";
-      ]
-    (fun () ->
-      check_error
-        (order_types
-       ^ {|
+  check_error
+    (order_types
+   ^ {|
 fn f(o: Order) -> Int =
   match o
     { .., id } => id
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a pattern, found `{`
-      ┌─ test.ren:6:5
+    error: `..` comes last in a pattern
+      ┌─ test.ren:6:7
     6 │     { .., id } => id
-      │     ^
+      │       ^^
+      help: move it to the end: `{ id, .. }`
     |}]
 
 let%expect_test "[s1 reject] a pattern's `..` takes no name" =
-  until "s1"
-    ~says:
-      [
-        "error: a pattern's `..` stands for the fields it leaves out, so it \
-         takes no name";
-        "help: bind the whole with `as`: `{ id, .. } as rest`";
-      ]
-    (fun () ->
-      check_error
-        (order_types
-       ^ {|
+  check_error
+    (order_types
+   ^ {|
 fn f(o: Order) -> Int =
   match o
     { id, ..rest } => id
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a pattern, found `{`
-      ┌─ test.ren:6:5
+    error: a pattern's `..` stands for the fields it leaves out, so it takes no name
+      ┌─ test.ren:6:11
     6 │     { id, ..rest } => id
-      │     ^
+      │           ^^^^^^
+      help: bind the whole with `as`: `{ id, .. } as rest`
     |}]
 
 let%expect_test "[s1 reject] an update names a field its record doesn't have" =
-  until "s1"
-    ~says:
-      [
-        "error: `Order` has no field named `piad`"; "help: did you mean `paid`?";
-      ]
-    (fun () ->
-      check_error
-        (order_types ^ {|
+  check_error
+    (order_types ^ {|
 fn f(o: Order) -> Order = { ..o, piad: true }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:4:29
+    error: `Order` has no field named `piad`
+      ┌─ test.ren:4:34
     4 │ fn f(o: Order) -> Order = { ..o, piad: true }
-      │                             ^^
+      │                                  ^^^^
+      help: did you mean `paid`?
     |}]
 
 let%expect_test "[s1 reject] `..` takes the rest from a record" =
-  until "s1"
-    ~says:
-      [
-        "error: `..n` takes the rest from a record, but `n` is an `Int`";
-        "help: write every field, without `..`";
-      ]
-    (fun () ->
-      check_error
-        (order_types
-       ^ {|
+  check_error
+    (order_types
+   ^ {|
 fn f(n: Int) -> Order = Order { ..n, paid: true }
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:4:33
+    error: `..n` takes the rest from a record, but `n` is an `Int`
+      ┌─ test.ren:4:35
     4 │ fn f(n: Int) -> Order = Order { ..n, paid: true }
-      │                                 ^^
+      │                                   ^
+      help: write every field, without `..`
     |}]
 
 let%expect_test "[s1 reject] an update's base lacks a field the target needs" =
-  until "s1"
-    ~says:
-      [
-        "error: `Shipped` needs `carrier`, which `..p` doesn't have";
-        "help: give it: `carrier: ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Placed = { id: Int, total: Int }
 type Shipped = { id: Int, total: Int, carrier: Str }
 fn f(p: Placed) -> Shipped = Shipped { ..p }
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:3:40
+    error: `Shipped` needs `carrier`, which `..p` doesn't have
+      ┌─ test.ren:3:42
     3 │ fn f(p: Placed) -> Shipped = Shipped { ..p }
-      │                                        ^^
+      │                                          ^
+      help: give it: `carrier: ...`
     |}]
 
 let%expect_test "[s1 reject] an update would drop a field of its base" =
-  until "s1"
-    ~says:
-      [
-        "error: `..s` would drop `carrier`: `Placed` has no field `carrier`";
-        "help: name the fields to keep instead of `..s`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Placed = { id: Int, total: Int }
 type Shipped = { id: Int, total: Int, carrier: Str }
 fn f(s: Shipped) -> Placed = Placed { ..s }
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:3:39
+    error: `..s` would drop `carrier`: `Placed` has no field `carrier`
+      ┌─ test.ren:3:41
     3 │ fn f(s: Shipped) -> Placed = Placed { ..s }
-      │                                       ^^
+      │                                         ^
+      help: name the fields to keep instead of `..s`
     |}]
 
 let%expect_test "[s1 reject] an update's base has a field of another type" =
-  until "s1"
-    ~says:
-      [
-        "error: `..a`'s `total` is a `Str`, but `B`'s `total` is an `Int`";
-        "help: give it: `total: ...`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type A = { id: Int, total: Str }
 type B = { id: Int, total: Int }
 fn f(a: A) -> B = B { ..a }
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ test.ren:3:23
+    error: `..a`'s `total` is a `Str`, but `B`'s `total` is an `Int`
+      ┌─ test.ren:3:25
     3 │ fn f(a: A) -> B = B { ..a }
-      │                       ^^
+      │                         ^
+      help: give it: `total: ...`
     |}]
 
 let%expect_test "[s1 reject] a pattern in a match names every field or ends in `..`" =
-  until "s1"
-    ~says:
-      [
-        "error: this pattern doesn't name `lines`; add `lines`, or `..` for \
-         the rest";
-        "help: write `{ id, total, paid, .. }` to leave the rest out";
-      ]
-    (fun () ->
-      check_error
-        (order_types
-       ^ {|
+  check_error
+    (order_types
+   ^ {|
 fn f(o: Order) -> Int =
   match o
     { id, total, paid } => id
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a pattern, found `{`
+    error: this pattern doesn't name `lines`; add `lines`, or `..` for the rest
       ┌─ test.ren:6:5
     6 │     { id, total, paid } => id
-      │     ^
+      │     ^^^^^^^^^^^^^^^^^^^
+      help: write `{ id, total, paid, .. }` to leave the rest out
     |}]
 
 let%expect_test "[s1 reject] a pattern names a field twice" =
-  until "s1"
-    ~says:
-      [ "error: there are two fields named `id`"; "help: remove one of them" ]
-    (fun () ->
-      check_error
-        (order_types
-       ^ {|
+  check_error
+    (order_types
+   ^ {|
 fn f(o: Order) -> Int =
   match o
     { id, id: n, .. } => id + n
 fn main() = ()
-|}));
+|});
   [%expect {|
-    (until s1)
-    error: expected a pattern, found `{`
-      ┌─ test.ren:6:5
+    error: there are two fields named `id`
+      ┌─ test.ren:6:11
     6 │     { id, id: n, .. } => id + n
-      │     ^
+      │           ^^
+      │       -- the first `id` is here
+      help: remove one of them
     |}]
 
 let%expect_test "[s1 reject] a record pattern matches a record" =
-  until "s1"
-    ~says:
-      [
-        "error: a record pattern matches a record, but this is an `Int`";
-        "help: take it apart as what it is, or bind it to a name";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn f(n: Int) -> Int =
   match n
     { x, .. } => x
 fn main() = ()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a pattern, found `{`
+    error: a record pattern matches a record, but this is an `Int`
       ┌─ test.ren:3:5
     3 │     { x, .. } => x
-      │     ^
+      │     ^^^^^^^^^
+      help: take it apart as what it is, or bind it to a name
     |}]
 
 let%expect_test "[s1 reject] an opaque record isn't updated outside its module" =
-  until "s1"
-    ~says:
-      [
-        "error: `Order`'s representation is private to `order`";
-        "help: use a function from `order` to make or read one";
-      ]
-    (fun () ->
-      check_error_files
-        [
-          ( "main.ren",
-            {|
+  check_error_files
+    [
+      ( "main.ren",
+        {|
 import order.{Order}
 fn main() uses Console =
   let o = Order.make(1)
   print({ ..o, total: 3 })
 |}
-          );
-          ( "order.ren",
-            {|
+      );
+      ( "order.ren",
+        {|
 pub type Order = opaque { id: Int, total: Int }
   pub fn make(id: Int) -> Order = Order { id, total: 0 }
 |}
-          );
-        ]);
+      );
+    ];
   [%expect {|
-    (until s1)
-    error: expected a name, found `..`
-      ┌─ main.ren:4:11
+    error: `Order`'s representation is private to `order`
+      ┌─ main.ren:4:13
     4 │   print({ ..o, total: 3 })
-      │           ^^
+      │             ^
+      help: use a function from `order` to make or read one
     |}]
 
 (* ---- s2: by name for several fields, positional for one ---- *)
@@ -667,11 +512,6 @@ fn main() uses Console =
     4 │   | Rect { w: Int, h: Int }
       │          ^
 
-    error: expected `=>`, found `{`
-       ┌─ test.ren:10:10
-    10 │     Rect { w, h } => w * h
-       │          ^
-
     error: expected `,` or `)`, found `{`
        ┌─ test.ren:21:20
     21 │   print(Shape.Rect { w: 2, h: 3 } == a)
@@ -706,11 +546,6 @@ fn main() uses Console =
     error: expected the end of the block, found `{`
       ┌─ test.ren:4:10
     4 │   | Rect { w: Int, h: Int }
-      │          ^
-
-    error: expected `=>`, found `{`
-      ┌─ test.ren:8:10
-    8 │     Rect { h: 0, w } => "flat ".concat(show(w))
       │          ^
     |}]
 
@@ -779,11 +614,6 @@ fn main() uses Console =
     error: expected the end of the block, found `{`
       ┌─ test.ren:2:11
     2 │   | Draft { lines: Array<Int> }
-      │           ^
-
-    error: expected `=>`, found `{`
-      ┌─ test.ren:7:11
-    7 │     Draft { lines } => lines.len()
       │           ^
     |}]
 
@@ -1033,11 +863,6 @@ fn main() = ()
       ┌─ test.ren:4:10
     4 │   | Rect { w: Int, h: Int }
       │          ^
-
-    error: expected `=>`, found `{`
-      ┌─ test.ren:8:12
-    8 │     Circle { r } => r
-      │            ^
     |}]
 
 let%expect_test "[s2 reject] a by-name pattern that leaves a field out without `..`" =
@@ -1062,11 +887,6 @@ fn main() = ()
     error: expected the end of the block, found `{`
       ┌─ test.ren:4:10
     4 │   | Rect { w: Int, h: Int }
-      │          ^
-
-    error: expected `=>`, found `{`
-      ┌─ test.ren:8:10
-    8 │     Rect { w } => w
       │          ^
     |}]
 
@@ -1160,11 +980,6 @@ fn main() = ()
       ┌─ test.ren:4:10
     4 │   | Rect { w: Int, h: Int }
       │          ^
-
-    error: expected a pattern, found `{`
-      ┌─ test.ren:8:5
-    8 │     { w, .. } => w
-      │     ^
     |}]
 
 let%expect_test "[s2 reject] a missing by-name variant is written as one" =
@@ -1341,7 +1156,7 @@ fn main() uses Console =
     5 │   | Enterprise { seats: Int, contract: Int }
       │                ^
 
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Team(n)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Team(n)` might not
       ┌─ test.ren:8:7
     8 │   let Team(n) = p else fail NotTeam
       │       ^^^^^^^
@@ -1381,16 +1196,16 @@ fn main() uses Console =
     5 │   | Enterprise { seats: Int, contract: Int }
       │                ^
 
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Team(s)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Team(s)` might not
        ┌─ test.ren:10:9
     10 │     let Team(s) = p else break
        │         ^^^^^^^
        help: take it apart with a `match`, which says what happens when it doesn't match
 
-    error: expected `=`, found `{`
-       ┌─ test.ren:15:18
+    error: expected the end of the line, found `else`
+       ┌─ test.ren:15:42
     15 │   let Enterprise { seats, contract } = p else fail NotEnterprise
-       │                  ^
+       │                                          ^^^^
     |}]
 
 let%expect_test "[s3 accept] `let ... else` whose else is a block or an `if` that leaves" =
@@ -1418,7 +1233,7 @@ fn main() uses Console =
 |});
   [%expect {|
     (until s3)
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(n)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
       ┌─ test.ren:2:7
     2 │   let Some(n) = o else
       │       ^^^^^^^
@@ -1449,7 +1264,7 @@ fn main() uses Console =
     2 │   | Meters(Int)
       │               ^
 
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Meters(n)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Meters(n)` might not
       ┌─ test.ren:5:7
     5 │   let Meters(n) = Meters(3)
       │       ^^^^^^^^^
@@ -1582,7 +1397,7 @@ fn main() = ()
 |});
   [%expect {|
     (until s3)
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(n)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
       ┌─ test.ren:2:7
     2 │   let Some(n) = o else 0
       │       ^^^^^^^
@@ -1629,7 +1444,7 @@ fn main() = ()
 |});
   [%expect {|
     (until s3)
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(n)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
       ┌─ test.ren:2:7
     2 │   let Some(n) = o
       │       ^^^^^^^
@@ -1764,10 +1579,10 @@ fn main() = ()
     9 │ fn ship(p: Order.Placed, tracking: Str) -> Order = Shipped { id: p.id, tracking }
       │                 ^
 
-    error: expected `=>`, found `{`
-       ┌─ test.ren:13:11
+    error: expected `=>`, found `as`
+       ┌─ test.ren:13:18
     13 │     Draft { .. } as d => place(d, 1)
-       │           ^
+       │                  ^^
     |}]
 
 let%expect_test "[s4 accept] a variant type is a record: fields, patterns and update" =
@@ -1804,10 +1619,10 @@ fn main() uses Console =
     2 │   | Draft { lines: Array<Int> }
       │           ^
 
-    error: expected `=>`, found `{`
-      ┌─ test.ren:8:12
+    error: expected `=>`, found `as`
+      ┌─ test.ren:8:19
     8 │     Placed { .. } as p =>
-      │            ^
+      │                   ^^
     |}]
 
 let%expect_test "[s4 accept] back to the sum with `Placed { ..p }`" =
@@ -2001,10 +1816,10 @@ fn main() = ()
     2 │   | Draft { lines: Array<Int> }
       │           ^
 
-    error: expected `=>`, found `{`
-      ┌─ test.ren:8:12
+    error: expected `=>`, found `|`
+      ┌─ test.ren:8:19
     8 │     Placed { .. } | Shipped { .. } as s => same(s)
-      │            ^
+      │                   ^
     |}]
 
 let%expect_test "[s4 reject] a constructor builds the sum, not its variant type" =
@@ -2157,11 +1972,6 @@ fn main() = ()
       ┌─ test.ren:2:11
     2 │   | Draft { lines: Array<Int> }
       │           ^
-
-    error: expected a name, found `..`
-      ┌─ test.ren:6:36
-    6 │ fn f(o: Order) -> Order = Placed { ..o, total: 0 }
-      │                                    ^^
     |}]
 
 let%expect_test "[s4 reject] a variant type has no methods of its own" =
@@ -2193,10 +2003,10 @@ fn main() = ()
     3 │   | Placed { id: Int, total: Int }
       │            ^
 
-    error: expected `=>`, found `{`
-      ┌─ test.ren:9:12
+    error: expected `=>`, found `as`
+      ┌─ test.ren:9:19
     9 │     Placed { .. } as p => p.size()
-      │            ^
+      │                   ^^
     |}]
 
 (* ---- s5: the errors that teach the model, and `todo` ---- *)
@@ -2408,7 +2218,7 @@ fn main() = ()
 |});
   [%expect {|
     (until s5)
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(n)` might not
+    error: a `let` takes apart only a tuple or a record, of names and `_`, which always matches, but `Some(n)` might not
       ┌─ test.ren:2:7
     2 │   let Some(n) = o else todo
       │       ^^^^^^^
@@ -2692,13 +2502,8 @@ test "an abandoned cart is refused" =
     22 │   | Open { customer: Int, lines: Array<Line> }
        │          ^
 
-    error: expected `=`, found `{`
-       ┌─ test.ren:34:12
+    error: expected the end of the line, found `else`
+       ┌─ test.ren:34:33
     34 │   let Open { lines, .. } = cart else fail Empty
-       │            ^
-
-    error: expected a name, found `{`
-       ┌─ test.ren:40:7
-    40 │   for { qty, price, .. } in lines
-       │       ^
+       │                                 ^^^^
     |}]

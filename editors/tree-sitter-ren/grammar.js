@@ -706,23 +706,27 @@ module.exports = grammar({
           '=',
           field('value', $._body),
         ),
+        // let (k, v) = pair, let { id, lines } = order
         seq(
           'let',
-          field('pattern', $.tuple_pattern),
+          field('pattern', choice($.tuple_pattern, $.record_pattern)),
           '=',
           field('value', $._body),
         ),
       ),
 
-    // for x in xs, for (k, v) in m, for i in 0..n, and for i, x in &xs
-    // with each element's index first
+    // for x in xs, for (k, v) in m, for { qty, .. } in lines, for i in
+    // 0..n, and for i, x in &xs with each element's index first
     for_statement: ($) =>
       seq(
         'for',
         optional(
           seq(field('index', choice($.identifier, $.wildcard)), ','),
         ),
-        field('variable', choice($.identifier, $.wildcard, $.tuple_pattern)),
+        field(
+          'variable',
+          choice($.identifier, $.wildcard, $.tuple_pattern, $.record_pattern),
+        ),
         'in',
         field('iterable', choice($._expression, $.range)),
         field('body', $.block),
@@ -1014,9 +1018,11 @@ module.exports = grammar({
         optional(seq(':', field('type', $._type))),
       ),
 
+    // fn((k, v)) => ..., fn({ qty, .. }) => ...: a tuple or a record taken
+    // apart
     tuple_parameter: ($) =>
       seq(
-        field('pattern', $.tuple_pattern),
+        field('pattern', choice($.tuple_pattern, $.record_pattern)),
         optional(seq(':', field('type', $._type))),
       ),
 
@@ -1053,12 +1059,20 @@ module.exports = grammar({
     labeled_argument: ($) =>
       seq(field('label', $.identifier), ':', field('value', $._expression)),
 
-    // Plan { id: 1, plan }, and without its type, { id: 1 }
+    // Plan { id: 1, plan }, and without its type, { id: 1 }; an update,
+    // { ..order, status: Paid }, takes the rest from `spread`
     record_expression: ($) =>
       seq(
         optional(field('type', $.type_name)),
         '{',
-        commaSep($.field_initializer),
+        choice(
+          seq(
+            '..',
+            field('spread', $._expression),
+            optional(seq(',', commaSep($.field_initializer))),
+          ),
+          commaSep($.field_initializer),
+        ),
         '}',
       ),
 
@@ -1165,6 +1179,7 @@ module.exports = grammar({
         $.boolean,
         $.constructor_pattern,
         $.tuple_pattern,
+        $.record_pattern,
       ),
 
     wildcard: (_) => '_',
@@ -1191,6 +1206,33 @@ module.exports = grammar({
 
     // (k, v), (_, Some(x))
     tuple_pattern: ($) => tupleOf($._pattern),
+
+    // { id, lines: ls, .. }, Seg { from: Pt { y: 0, .. }, .. }: a record
+    // taken apart, `..` last, for the fields left out
+    record_pattern: ($) =>
+      seq(
+        optional(field('type', $.type_name)),
+        '{',
+        optional(
+          choice(
+            seq(
+              sep1($.field_pattern, ','),
+              optional(seq(',', optional($.rest_pattern))),
+            ),
+            $.rest_pattern,
+          ),
+        ),
+        '}',
+      ),
+
+    // `id: n`, or just `id`, which binds `id`
+    field_pattern: ($) =>
+      seq(
+        field('name', $.identifier),
+        optional(seq(':', field('pattern', $._pattern))),
+      ),
+
+    rest_pattern: (_) => '..',
 
     constructor_pattern: ($) =>
       seq(

@@ -70,6 +70,7 @@ let rec binders (p : pattern) =
   | PVar b -> [ (b, p.ploc) ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map binders ps
   | POr ps -> List.concat_map binders ps
+  | PRecord (_, fs) -> List.concat_map (fun (_, q) -> binders q) fs.fpats
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* How to explain a mismatch with an expected type, passed down along with

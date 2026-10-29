@@ -312,6 +312,7 @@ and map_pat f (p : C.pattern) : C.pattern =
     | PCon (t, c, ps) -> PCon (t, c, List.map (map_pat f) ps)
     | PTag (t, ps) -> PTag (t, List.map (map_pat f) ps)
     | PTuple ps -> PTuple (List.map (map_pat f) ps)
+    | PRecord (t, ps) -> PRecord (t, List.map (map_pat f) ps)
     | POr ps -> POr (List.map (map_pat f) ps)
     | (PWild | PInt _ | PBool _) as k -> k
   in
@@ -707,6 +708,7 @@ let rec pattern env (p : C.pattern) : C.pattern * env =
       | PCon (t, c, ps) -> PCon (t, c, List.map go ps)
       | PTag (t, ps) -> PTag (t, List.map go ps)
       | PTuple ps -> PTuple (List.map go ps)
+      | PRecord (t, ps) -> PRecord (t, List.map go ps)
       | POr (first :: rest) ->
           let first = go first in
           POr (first :: List.map (fun q -> fst (pattern !env q)) rest)

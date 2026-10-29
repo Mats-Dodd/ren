@@ -425,6 +425,10 @@ and pattern_kind =
   | PCon of Path.t * string * pattern list
   | PTag of string * pattern list  (** an error with this tag, destructured *)
   | PTuple of pattern list  (** [(k, v)]: a tuple, taken apart *)
+  | PRecord of Path.t * pattern list
+      (** [{ id, .. }]: a record of this type, taken apart, a pattern for each
+          of its fields in declaration order, [PWild] for one the pattern
+          leaves out *)
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
 
@@ -858,6 +862,8 @@ let rec pattern_sexp p =
   | PTag (t, []) -> List [ atom "tag"; Atom t ]
   | PTag (t, ps) -> List (atom "tag" :: Atom t :: List.map pattern_sexp ps)
   | PTuple ps -> List (atom "tuple" :: List.map pattern_sexp ps)
+  | PRecord (p, ps) ->
+      List (atom "record" :: Atom (Path.local p) :: List.map pattern_sexp ps)
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
 
 (* A descriptor, as a print shows it: a type, or a hidden type
