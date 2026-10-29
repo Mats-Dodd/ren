@@ -235,6 +235,33 @@ Record these in the spec; don't reopen them.
   `Merge<D>`. Decision 18's `fn(a, b) => ...` shorthand is the inline
   handler form a one-operation dependency already has; nothing new.
 
+## Working beside bytes part two
+
+The second bytes stage (briefs/stage-bytes-2.md) runs on `main` at the
+same time. It owns strings' runtime and native layout; this stage owns
+the front end's new forms and the interpreter's scheduler.
+
+- **Yours:** wirings and `|>` in the parser and checker; the lexer's
+  `continues()`; lib/eval/sched.ml; `With` and `Dep_call` in eval.ml;
+  std_lib.ml's `sync`, `sim`, `striped` and `actors`; excl.ml; the
+  journal.
+- **Theirs, don't touch:** ren_rt.c and ren_rt.h's string and byte
+  code; `to_mem.ml`, `emit_c.ml` and Mem Lint where `Str` and `Bytes`
+  are laid out; the interpreter's `VStr` and `VBytes`; the lexer's
+  string and character literals.
+- **Shared files** (parser.ml, lower.ml, prelude.ml, builtins.ml,
+  infer_expr.ml): add your cases and entries; don't move, rename or
+  restructure code there. If you need a change that would, stop and say
+  so in the progress log.
+- **New tests go in new files,** and new Ren code avoids names that
+  stage changes: write `s.byte_len()` only once it lands, and until then
+  avoid `len` on a `Str` in new code (use `Bytes`' `len` or none), and
+  avoid `s.lower()`.
+- **Rebase before every push.** If a conflict touches their work, keep
+  theirs and redo yours on top. If a check goes red because of their
+  commits, not yours, record it in the progress log and don't fix their
+  work.
+
 ## Steps
 
 Do them in order. After each step, THE CHECKS must pass; then commit

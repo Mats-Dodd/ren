@@ -135,6 +135,32 @@ isn't merged when you start, stop and say so.
   report (a root kept alive by small slices); `b"…"` literals; x86 SIMD;
   formats (layer 2), `Table`, `Pool`, the world natively, native tasks.
 
+## Working beside the services stage
+
+The services stage (briefs/stage-services.md) runs on `main` at the
+same time. It owns the front end's new forms and the interpreter's
+scheduler; this stage owns strings' runtime and native layout.
+
+- **Yours:** ren_rt.c and ren_rt.h's string and byte code; `to_mem.ml`,
+  `emit_c.ml` and Mem Lint where `Str` and `Bytes` are laid out; the
+  validator; the interpreter's `VStr` and `VBytes` operations; the
+  lexer's string literals (`\{` holes) and character literals (`'a'`).
+- **Theirs, don't touch:** wirings and `|>` in the parser and checker,
+  the lexer's `continues()` (the `|>` and leading-`.` line
+  continuation), lib/eval/sched.ml, `With` and `Dep_call` in eval.ml,
+  std_lib.ml's `sync`, `sim`, `striped` and `actors`, and excl.ml.
+- **Shared files** (parser.ml, lower.ml, prelude.ml, builtins.ml,
+  infer_expr.ml): add your cases and entries; don't move, rename or
+  restructure code there. If you need a change that would, stop and say
+  so in the progress log.
+- **New tests go in new files.** Don't rewrite existing tests, except
+  where a name this stage changes (`lower`, `len` on `Str`,
+  `InvalidUtf8`) forces it, and then only that line.
+- **Rebase before every push.** If a conflict touches their work, keep
+  theirs and redo yours on top. If a check goes red because of their
+  commits, not yours, record it in the progress log and don't fix their
+  work.
+
 ## Steps
 
 Do them in order. After each step THE CHECKS must pass; then commit
