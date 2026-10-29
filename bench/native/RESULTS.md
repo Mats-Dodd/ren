@@ -34,6 +34,46 @@ handlers; interp's `eval` calls through the tag too, recursion through
 didn't move: handlers, blocks, rbtree, deriv, nbody and stack are within
 1% in cycles.
 
+## Bytes stage: the baseline (compiler.md, "Bytes stage")
+
+Where Ren's offset-based byte code spends its cycles against Rust's, on
+the slices benchmark's `_r` kernels and on `bytes`, before any of the
+bytes stage's fixes (at b171b76's compiler). The owner's M4 Max, macOS
+15.1, Apple clang 16.0.0, rustc 1.99.1, Go 1.27.3, nothing else
+building. Each `_r` kernel runs 20 times on its input and again 0
+times, and a pass is the difference over 20; ten runs, Ren, Rust and Go
+interleaved, medians, the spread the 20-round runs' least and most.
+
+```sh
+sh bench/native/profile/build.sh $out            # the kernels, bytes, the twins
+python3 -I bench/native/profile/measure.py $out 10
+python3 -I bench/native/profile/variants.py $out # the C with one cost taken out
+python3 -I bench/native/profile/measure.py $out 7 nob,noovf,noarr,none,push,pushnone,O3
+cc -O2 -g -ffp-contract=off -w $out/json_r-20.c -o json_r-20 -lm -lpthread
+python3 -I bench/native/profile/prof.py ./json_r-20
+```
+
+| kernel | Ren Mcyc a pass | Rust | Go | Ren / Rust | M instructions a pass, Ren / Rust / Go |
+|---|---|---|---|---|---|
+| `logs_r` | 43.9 (856-1096 for 20) | 30.8 (655-747) | 36.0 | 1.43× | 270 / 188 / 170 |
+| `json_r` | 160.0 (3141-3716) | 57.2 (1028-1214) | 95.5 | 2.80× | 565 / 226 / 387 |
+| `pages_r` | 6.29 (337-374) | 2.70 (110-123) | 4.68 | 2.33× | 30.6 / 15.6 / 21.7 |
+| `bytes`, the whole program | 2130 (2125-2131) | 1731 (1726-1733) | 2951 | 1.23× | 2347 / 2260 / 4022 |
+
+With one cost taken out of the emitted C (`variants.py`; seven runs,
+Mcyc / M instructions a pass):
+
+| kernel | base | no `Bytes.at` check | no overflow checks | no array checks | none of the three | push inline | push inline, no checks | -O3 |
+|---|---|---|---|---|---|---|---|---|
+| `logs_r` | 44.0 / 271 | 30.4 / 170 | 41.8 / 196 | 47.8 / 270 | 50.7 / 174 | | | 36.4 / 198 |
+| `json_r` | 157.7 / 560 | 145.3 / 497 | 146.0 / 515 | 139.5 / 546 | 131.1 / 462 | 91.0 / 399 | 103.7 / 311 | 132.8 / 492 |
+| `pages_r` | 7.16 / 31.6 | 6.41 / 27.6 | 5.72 / 30.0 | 6.53 / 31.3 | 5.43 / 22.9 | 4.49 / 20.3 | 3.68 / 12.2 | 6.59 / 29.6 |
+
+The push columns are from a second session of nine runs, whose base was
+json 151.9 and pages 6.33, and Rust's 50.3 and 2.50. Every variant of
+`bytes` ran 2127 to 2131 Mcyc. compiler.md's "Bytes stage" says what
+the profiles show and which fixes step 1 makes of them.
+
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 
 Slices are built as representation A: a slice is a header like its

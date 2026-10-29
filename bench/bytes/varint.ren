@@ -1,0 +1,40 @@
+// `VarUInt` and `VarInt` (formats.md, "What a field can be"): LEB128, and
+// zigzag for signed, written at an offset and read back through a cursor
+// (compiler.md, "Bytes stage"), at the edges of each size and of `Int`.
+
+fn encode(xs: Array<Int>, signed: Bool) -> Bytes =
+  var size = 0
+  for x in xs
+    size += if signed then Bytes.varint_size(x) else Bytes.varuint_size(x)
+  var b = Bytes.zeros(size)
+  var at = 0
+  for x in xs
+    at += if signed then &b.set_varint(at, x) else &b.set_varuint(at, x)
+  b
+
+fn decode(b: Bytes, n: Int, signed: Bool) -> Array<Int> ! FormatError =
+  var c = b.cursor()
+  var out: Array<Int> = []
+  for _ in 0..n
+    &out.push(if signed then try &c.varint() else try &c.varuint())
+  out
+
+fn main() uses Console =
+  let us = [0, 1, 127, 128, 300, 16_383, 16_384, 9_223_372_036_854_775_807]
+  print(us.map(fn(x) => Bytes.varuint_size(x)))
+  let ub = encode(us, false)
+  print(ub)
+  print(attempt decode(ub, us.len(), false))
+  let min = -9_223_372_036_854_775_807 - 1
+  let ss = [0, -1, 1, -64, 64, 63, min, 9_223_372_036_854_775_807]
+  print(ss.map(fn(x) => Bytes.varint_size(x)))
+  let sb = encode(ss, true)
+  print(sb)
+  print(attempt decode(sb, ss.len(), true))
+  // too long, too large, and cut short
+  print(attempt decode(Bytes.of([0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]), 1, false))
+  print(attempt decode(Bytes.of([0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]), 1, false))
+  print(attempt decode(Bytes.of([0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]), 1, true))
+  print(attempt decode(Bytes.of([0x05, 0x80]), 2, false))
+  // a longer form than needed is read, as Go's and protobuf's readers do
+  print(attempt decode(Bytes.of([0x81, 0x00]), 1, false))

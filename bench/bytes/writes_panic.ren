@@ -1,0 +1,9 @@
+// A value that doesn't fit the width written panics, as storing into a
+// sized integer does (compiler.md, "Bytes stage").
+
+fn main() uses Console =
+  var b = Bytes.zeros(4)
+  &b.set_u16_le(0, 65_535)
+  print(b)
+  &b.set_u16_le(2, 65_536)
+  print(b)

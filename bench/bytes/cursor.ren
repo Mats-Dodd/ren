@@ -1,0 +1,62 @@
+// A cursor over bytes, reading in sequence (compiler.md, "Bytes stage"):
+// running out of input fails with `Short(at, need)`, which the program
+// handles, and leaves the cursor where it was; a value an `Int` can't
+// hold is `Malformed`. A framing loop reads records, each a length, that
+// many bytes and an id, and stops at the one that isn't all there yet.
+
+type Record = { body: Bytes, id: Int }
+
+fn record(inout c: ByteCursor) -> Record ! FormatError =
+  let n = try &c.u16_le()
+  let body = try &c.bytes(n)
+  let id = try &c.u32_be()
+  Record { body: body, id: id }
+
+fn u8(inout c: ByteCursor) -> Int ! FormatError = try &c.u8()
+fn i16be(inout c: ByteCursor) -> Int ! FormatError = try &c.i16_be()
+fn u32le(inout c: ByteCursor) -> Int ! FormatError = try &c.u32_le()
+fn u64le(inout c: ByteCursor) -> Int ! FormatError = try &c.u64_le()
+fn i64le(inout c: ByteCursor) -> Int ! FormatError = try &c.i64_le()
+fn skip(inout c: ByteCursor, n: Int) ! FormatError = try &c.skip(n)
+
+fn main() uses Console =
+  let b = Bytes.of([5, 0, 104, 101, 108, 108, 111, 0, 0, 1, 0, 2, 0, 104, 105, 0, 0])
+  var c = b.cursor()
+  var stop = false
+  while not stop
+    var next = c
+    match attempt record(&next)
+      Ok(r) =>
+        print(attempt Str.from_utf8(r.body))
+        print(r.id)
+        c = next
+      Err(e) =>
+        print(e)
+        stop = true
+  print(c.at())
+  print(c.left())
+  print(c.rest())
+
+  // each read moves the cursor by its width; one that fails doesn't
+  var d = Bytes.of([0xFF, 0xFF, 0xFE, 1, 2, 3]).cursor()
+  print(attempt u8(&d))
+  print(attempt i16be(&d))
+  print(d.at())
+  print(attempt u32le(&d))
+  print(d.at())
+  print(attempt skip(&d, 4))
+  print(attempt skip(&d, 3))
+  print(d.left())
+  print(attempt u8(&d))
+
+  // 2^64 - 1 isn't an `Int`, but its bits are
+  var e = Bytes.of([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]).cursor()
+  print(attempt u64le(&e))
+  print(e.at())
+  print(attempt i64le(&e))
+
+  // a cursor over a slice counts from the slice's start
+  var f = b[2..7].cursor()
+  print(attempt u8(&f))
+  print(f.at())
+  print(f.left())

@@ -1,0 +1,24 @@
+// `x.hash()`, the derived hash a program can call (compiler.md, "Bytes
+// stage"): the same for values `==` says are equal, by a type's `key` if
+// it has one, `-0.0` and `0.0` included, and the same on every run, since
+// it has no seed. hash_values.ren prints the values themselves, which a
+// native build has to print too.
+
+type Point = { x: Int, y: Int }
+
+pub type Email = opaque Str
+  pub fn of(s: Str) -> Email = s
+  pub fn key(self) -> Str = self.lower()
+
+fn main() uses Console =
+  print(42.hash() == 42.hash())
+  print(42.hash() == 43.hash())
+  print("ab".hash() == "ab".hash())
+  print("ab".hash() == "ba".hash())
+  print(Point { x: 1, y: 2 }.hash() == Point { x: 1, y: 2 }.hash())
+  print(Point { x: 1, y: 2 }.hash() == Point { x: 2, y: 1 }.hash())
+  print(Email.of("A@b").hash() == Email.of("a@B").hash())
+  print(0.0.hash() == (-0.0).hash())
+  print([1, 2].hash() == [1, 2].hash())
+  print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
+  print(Set.of([1, 2]).hash() == Set.of([2, 1]).hash())

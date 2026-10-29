@@ -5833,6 +5833,431 @@ bug.journal`"; `rm -rf _build` cleared it. THE CHECKS' script runs `ren
 test` in every folder under examples/, and `ren test` reads the folders
 under one too, which is why stage 11a's programs wait in bench/11a/tasks.
 
+## Bytes stage
+
+The first half of "the `just`, natively" (foundations.md, Staging, item
+7): string and byte code at Rust's speed in release builds, layer 3 of
+formats.md (reads and writes at an offset, a cursor, `VarUInt`), and
+`Map` and `Set` natively, all in the interpreter and natively, debug
+and release, agreeing. Inline slices and the uncounted view (decision
+17's representation B), formats (layer 2), `Table`, `Pool`, `bin`, the
+world natively and native tasks are later stages; slices stay
+representation A. Five steps, each green on its own:
+
+0. **This specification,** the baseline profile, and the tests.
+1. **String and byte speed,** fix by fix, each measured before and
+   after in release builds.
+2. **Layer 3,** with a kernel in bench/native that decodes a stream of
+   length-prefixed little-endian records with a `VarUInt` field, and
+   its Rust and Go twins.
+3. **`Map` and `Set` natively,** `x.hash()` with them, and a kernel that
+   builds, looks up, removes from and iterates a map of records keyed by
+   `Int` and by `Str`, with Rust and Go twins.
+4. **A review:** soundness, the spec, the docs and tooling.
+
+**Done when** `logs_r`, `json_r`, `pages_r` and bench/native/bytes each
+run within 2× of their Rust twins' time in release builds; layer 3
+works in both builds and its kernel is measured against Rust and Go;
+and `Map` and `Set` build natively, agreeing with the interpreter, with
+their kernel measured.
+
+This stage runs beside the data stage, which owns the parser, the type
+checker beyond registering built-ins, pattern matching, and record and
+variant layout in to_mem.ml. So this stage adds built-ins and runtime,
+never syntax; its tests are in files of their own; and its Ren uses no
+variant with several fields.
+
+### The tests
+
+**bench/bytes.t** runs the programs in bench/bytes/, each with a
+`.expected` as bench/10d's are (what `ren run` prints, `exit N`, the
+first line of stderr): `spec` says whether `ren run` is as specified,
+and `native` builds each one debug (Perceus and naive) and release
+under AddressSanitizer and UBSan, and debug with tcc, and checks each
+prints, writes to stderr and exits as `ren run` does, with no object
+alive at the end, and that `ren run --release` agrees too. A program
+that doesn't build natively yet prints `not native yet` and `ren
+build`'s first line. The step that lands a program changes its lines
+there; none moves.
+
+| program | what | lands in |
+|---|---|---|
+| `reads` | every read at an offset, each width and order, signed and not, at the first and last offset it can read; a slice's offsets its own | 2 |
+| `reads_panic`, `reads_negative`, `reads_far` | a read past the end, at a negative offset, and at one so large that adding the width overflows: each panics with the same message | 2 |
+| `u64_panic` | `u64_le` of 2^64 - 1 panics; `i64_le` of it is -1 | 2 |
+| `writes` | every write, read back; a copy, a slice and a literal's bytes unchanged by a write | 2 |
+| `writes_panic`, `writes_range` | a value that doesn't fit, and a write past the end | 2 |
+| `varint`, `varint_panic` | `VarUInt` and `VarInt` written and read back at the edges; too long, too large and cut short; a negative `VarUInt` written | 2 |
+| `cursor` | a framing loop, `Short` leaving the cursor where it was, `Malformed` for a `u64` too large, `skip`, `bytes`, `rest`, a cursor over a slice | 2 |
+| `map`, `set`, `map_key` | insertion order, a key set again keeping its place, removed and set again going last, 10,000 keys grown and removed, a map changed while a loop goes over it, keys of every kind, a `key`, the collection methods | run now; native in 3 |
+| `hash`, `hash_values` | `x.hash()` agreeing with `==`; its values, the same on two runs and natively | 3 |
+
+**test/test_bytes.ml** holds what a program's output can't say: whole
+panic messages with their help, the error for a write without `&`, the
+cursor's error set, and `x.hash()` through `key`, each `until "b2"` or
+`until "b3"` (test/helpers.ml), as test_tasks.ml's are. A step leaves
+no `until` of its own number behind.
+
+The kernels of steps 2 and 3 are added by those steps, with their twins
+and RESULTS.md's numbers.
+
+### The baseline: where the cycles go
+
+Measured on the owner's M4 Max (macOS 15.1, Apple clang 16.0.0, rustc
+1.99.1, Go 1.27.3), with nothing else building; a browser was running. The
+`_r` kernels are build.sh's (bench.ren with a `main` running one of
+them 20 times on its input), each built `--release`, and again with 0
+rounds, whose cycles are subtracted, so a pass is (20 rounds - 0
+rounds) / 20; the twins run `slices-rust 200000 20 logs_r` and the
+same with 0. bytes is bench/native/bytes/main.ren whole, and its twins.
+Ten runs each, Ren, Rust and Go interleaved, under `/usr/bin/time -l`;
+medians, and the spread of the 20-round runs.
+
+| kernel | Ren Mcyc a pass | Rust | Go | Ren / Rust | Ren M instructions a pass | Rust | Go |
+|---|---|---|---|---|---|---|---|
+| `logs_r` | 43.9 (20 rounds: 856-1096 Mcyc) | 30.8 (655-747) | 36.0 | **1.43×** | 270 | 188 | 170 |
+| `json_r` | 160.0 (3141-3716) | 57.2 (1028-1214) | 95.5 | **2.80×** | 565 | 226 | 387 |
+| `pages_r` | 6.29 (337-374) | 2.70 (110-123) | 4.68 | **2.33×** | 30.6 | 15.6 | 21.7 |
+| bytes, whole | 2130 (2125-2131) | 1731 (1726-1733) | 2951 | **1.23×** | 2347 | 2260 | 4022 |
+
+In instructions a byte of input: logs 28.5 against Rust's 19.8, json
+47.7 against 19.0. bytes runs 821 ms against Rust's 671.
+
+**How it was found.** Two ways, which agree. Instruments' Time Profiler
+(`xctrace`, 1 ms samples) on each binary rebuilt from its emitted C with
+`-g`, by the leaf function, inlined ones included; and variants of the
+emitted C, each with one cost taken out, measured as above (seven
+runs; not sound programs, only measurements): `nob`, `Bytes.at`
+without its check; `noovf`, `+`, `-` and `*` without theirs; `noarr`,
+arrays' index checks gone; `none`, all three; `push`, an array of
+records' push inline, its stride a constant (below); and `-O3` for
+-O2. bench/native/profile/ holds the scripts, and RESULTS.md's "Bytes
+stage: the baseline" the commands that reproduce every number here.
+
+| kernel | base | `nob` | `noovf` | `noarr` | `none` | `push` | `push` + `none` | `-O3` |
+|---|---|---|---|---|---|---|---|---|
+| `logs_r`, Mcyc / M instructions a pass | 44.0 / 271 | **30.4** / 170 | 41.8 / 196 | 47.8 / 270 | 50.7 / 174 | | | 36.4 / 198 |
+| `json_r` | 157.7 / 560 | 145.3 / 497 | 146.0 / 515 | 139.5 / 546 | 131.1 / 462 | **91.0** / 399 | 103.7 / 311 | 132.8 / 492 |
+| `pages_r` | 7.16 / 31.6 | 6.41 / 27.6 | 5.72 / 30.0 | 6.53 / 31.3 | 5.43 / 22.9 | 4.49 / 20.3 | **3.68** / 12.2 | 6.59 / 29.6 |
+
+(`push` was measured in a second session of nine runs, where the base
+was json 151.9 and pages 6.33, and Rust's twins 50.3 and 2.50.) `none`
+running slower than `nob` on logs is where clang placed the loop, not
+work: it runs 4 fewer instructions a byte.
+
+**`logs_r`: the check in `Bytes.at`, and the loads around it.** Its
+profile, input generation included: `ren_bytes_at` 25.5% of samples,
+`ren_str_len` 19.8%, the loops' own code 26.5%, `ren_add` 13.1%.
+`ren_bytes_at` is a runtime function, not `static inline`, so though
+clang inlines it into the loop, its panic path, a 128-byte buffer and
+an `snprintf`, comes along, and with it the loop reloads the bytes'
+`len` and `data` from the object on every byte, since the panic's call
+might change them as far as clang knows. Rust's loop keeps the pointer
+and length in registers, and LLVM removes the check of `b[j]` for `j in
+0..n` outright. Without the check (`nob`), logs runs at Rust's time,
+30.4 Mcyc against 30.8, in 170 M instructions against 188: the rest is
+the same scan.
+
+**`json_r`: pushing a token.** `_platform_memmove` 30.7% and its stub
+3.8%, `ren_array_push_slots_taking` 7.3%, `ren_array_grow` 4.4%,
+`ren_rc` 5.1%: 51% of the samples are `&out.push(TokR { ... })`.
+Each push is a call to the runtime, which tests uniqueness, calls
+`ren_array_grow` (`noinline`, to test capacity) every time, and copies
+the record's three words with `memcpy` of `k * sizeof(ren_val)` bytes,
+where `k` is the stride read from the array, so the copy is a library
+call per token. Rust's push is inline: a capacity compare and a 12-byte
+store. The rest: `walk_r` 10.6%, `ren_bytes_at` 9.5%, `ren_add` 7.2%,
+the tokenizer 6.0%, `equal` 3.2% (byte by byte, each read checked,
+where Rust's slice `==` is a length compare and one load-and-compare).
+With the push inline and its stride a constant (`push`), json runs in
+91.0 Mcyc, 1.81× Rust's; with the checks gone too, 311 M instructions
+against Rust's 225. Rust's token is also half the size, 12 bytes (a
+`u8` and two `u32`s) against Ren's three `Int`s, 24: the twins differ
+there, which is the kernel's to say, not the compiler's.
+
+**`pages_r`: the same two.** At 400 rounds, so that the kernel
+outweighs its input: memmove and its stub 29%, `ren_bytes_at` 18.1%,
+`ren_add` 16.2%, the push 10.7%, `ren_array_grow` 7.7%. `push` and the
+checks gone reach 3.68 Mcyc, 1.47× Rust's.
+
+**bytes: a remainder that divides.** Ren's loops take mix 65%, fnv 19%
+and smooth 14% of the samples; Rust's 64%, 23% and 11%. fnv is the same
+code. mix's inner loop, `xs[i] = (xs[i] * 3 + xs[i - 1]) % 1_000_003`,
+is 9 instructions in Ren and 10 in Rust, and both keep `xs[i - 1]` in a
+register, but Ren's computes the remainder with `sdiv`: clang's constant
+hoisting gave 1,000,003 a register, as 1,000,000 (which `ints` uses)
+plus 3, so the division by a constant wasn't turned into a multiply, as
+Rust's is (`smulh`, a shift and an `msub`). That `sdiv` is on the loop's
+dependency chain. None of the variants moves bytes: its checks are
+proved already (step 12) or off the chain.
+
+**Overflow checks on counts.** `ren_add` is 7 to 16% of each `_r`
+kernel, and most of those adds are a loop's count stepping, `i + 1`,
+which bounds.ml already proves can't overflow (the count is below a
+bound that is an `Int`), and which still goes through `ren_add` in the
+C.
+
+### Step 1's fixes
+
+Each lands alone, measured before and after in release builds, and
+each that removes a check says why it's sound here; Mem Lint, Core Lint
+and the sanitizers keep running over all of it.
+
+1. **`Bytes.at` inline,** as `ren_array_check` is: `static inline` in
+   ren_rt.h, one unsigned compare under `__builtin_expect`, and the
+   message built in a cold, `noinline` function, so the loop holds no
+   panic's call and keeps `len` and `data` in registers. The same
+   check, so nothing to prove.
+2. **A step that can't overflow is a plain add.** Where bounds.ml marks
+   a count in bounds, `i < n` holds before its step, and `n` is an
+   `Int`, so `i + 1 <= n <= 2^63 - 1`. The step is emitted wrapping (it
+   can't wrap), and Core Lint's [verify] checks the mark as it checks
+   the index's.
+3. **`b.at(i)` in bounds,** as `xs[i]` is: bounds.ml's bound learns
+   `b.len()` of a `Bytes` (or `Str`'s `bytes()`), and an index that is
+   the count, or a copy of it, becomes [In_bounds]. A `Bytes` changes
+   only through an assignment or a `&` (layer 3's writes, from step 2),
+   which the walk forgets its facts at, as it does an array's. A count
+   bounded by a dominating test the loop doesn't change, `while j < n &&
+   b.at(j) ...` with `n = b.len()`, is the same proof with the test as
+   the loop's condition.
+4. **An array of records' push inline,** its stride a constant the C
+   emitter knows: a uniqueness and capacity test inline, the record's
+   words stored directly, and only a full or shared array's case out of
+   line (growing, or copying). The cases are the runtime's own, in the
+   same order.
+5. **A remainder or quotient by a constant** emitted as C's `%` or `/`
+   on the constant itself, with no check: a nonzero constant other
+   than -1 can't fault, so `ren_rem`'s tests are dead, and the constant
+   reaches clang's division lowering before constant hoisting can hide
+   it. If clang still hoists it, the fix is a barrier on the operand,
+   measured either way.
+6. **Comparing a range of bytes with bytes** (`equal` in the kernels,
+   and `==` on two `Bytes` or `Str`s): already `memcmp` where `==` is a
+   runtime call; for a loop written by hand nothing changes. If a kernel
+   is still past 2× for it, that is recorded, not special-cased.
+
+What may not reach 2× without an out-of-scope change: json's tokens
+are 24 bytes against Rust's 12, and an array's growth copies 24 bytes a
+token where Rust's copies 12. Sized fields in an array of records
+(`kind: UInt8, start: Int32, stop: Int32`) would close it, if the
+kernel were written so; step 1 measures the kernel as it is, and says.
+
+### Layer 3: the API
+
+Settled here, in formats.md's style: the width and the byte order in the
+name, `le` or `be` always written. Decided with the owner: a read at an
+offset the program computed panics past the end, with the offset and the
+length, as `xs[i]` does, since a bad offset is a bug; a read through a
+cursor fails with `Short(at, need)`, since running out of input is an
+error the program handles; `u64_le` and `u64_be` return an `Int` and
+panic on 2^63 or more (through a cursor, `Malformed`), and `i64_le` and
+`i64_be` read the same bits as a signed `Int`, which is how a 64-bit
+hash or checksum is read (decision 15: a 64-bit hash stays an `Int`); a
+value that doesn't fit a write panics, as storing into a sized integer
+does.
+
+**Reads at an offset,** methods of `Bytes`, each `fn(self, at: Int) ->
+Int`:
+
+| | unsigned | signed |
+|---|---|---|
+| 1 byte | `u8(at)` | `i8(at)` |
+| 2 | `u16_le(at)`, `u16_be(at)` | `i16_le`, `i16_be` |
+| 4 | `u32_le`, `u32_be` | `i32_le`, `i32_be` |
+| 8 | `u64_le`, `u64_be`, panicking at 2^63 or more | `i64_le`, `i64_be` |
+
+- Out of range, `at < 0` or `at + width > len` (computed so that it
+  can't overflow: `at > len - width`), a read panics: `index 8 is out
+  of bounds for bytes of length 8` for a byte, as `b.at(8)` says, and
+  `4 bytes at 5 are out of bounds for bytes of length 8` for a wider
+  one.
+- `u64_le` past `Int`: `` `u64_le` at 0 read 18446744073709551615,
+  which is more than an `Int` holds``, with the help ``read its bits as
+  an `Int` with `i64_le` ``.
+- Natively, a read is an unaligned load (`memcpy` of the width, which
+  clang makes one `ldr`) and, for `be`, a byte swap
+  (`__builtin_bswap32`): Rust's `from_le_bytes`, Go's
+  `binary.LittleEndian`. Its check is `Bytes.at`'s, so step 1's
+  proofs remove it where they can.
+
+**Writes at an offset,** each `fn(inout self, at: Int, x: Int)`: `&b.set_u8(at, x)`, `set_i8`,
+`set_u16_le`, `set_u16_be`, `set_i16_le`, `set_i16_be`, `set_u32_le`
+... `set_i64_be`. Out of range panics as a read does; a value that
+doesn't fit panics with the sized types' message, `65536 doesn't fit in
+a `UInt16`, which holds 0 to 65535` (`set_u64_*` takes any `Int` from
+0, `set_i64_*` any). A write changes the `Bytes` in its variable:
+
+- **`Bytes` become writable.** Until now nothing wrote a string's bytes
+  once made (ren_rt.h, `ren_str`). A write is a write of a value, as
+  `xs[i] = v` is: in place if the `Bytes` is unique and an owner (count
+  1, `root` NULL, as `ren_array_writable` asks), and otherwise into a
+  copy of its bytes first: a shared one, a slice (whose range is
+  copied, so its root is never written), and a literal's (a static,
+  count 0, never unique). So `let copy = b` then `&b.set_u8(0, 1)`
+  leaves `copy` as it was, and `"abc".bytes()` stays `abc`. `Str` gets
+  no writes. Rule U of the runtime model covers it; Mem Lint checks the
+  write consumes its bundle as it does an array's write in place.
+- **`Bytes.zeros(n)`,** `n` zero bytes, to write into; `n < 0` panics
+  as an array's `reserve` does.
+
+**`VarUInt` and `VarInt`:** LEB128, 7 bits a byte, least first, the top
+bit set on all but the last; `VarInt` zigzag-encodes first (`(x shl 1)
+xor (x shr 63)`), so every `Int` fits.
+
+- `&b.set_varuint(at, x) -> Int` and `&b.set_varint(at, x) -> Int`
+  write the shortest form and return how many bytes they wrote; a
+  negative `VarUInt` panics, `-5 doesn't fit in a `VarUInt`, which
+  holds 0 to 9223372036854775807`, and so does one with no room, as
+  any write does.
+- `Bytes.varuint_size(x)` and `Bytes.varint_size(x)`, from 1 to 9 and
+  1 to 10, to size a buffer first.
+- Reading one is only through a cursor, since how long it is depends on
+  the bytes: a `VarUInt` of more than 10 bytes is `Malformed` (``a
+  `VarUInt` is at most 10 bytes``), one of 2^63 or more too (``a
+  `VarUInt` of 2^63 or more is more than an `Int` holds``), and a
+  `VarInt` whose tenth byte is more than 1 (``a `VarInt` of more than
+  64 bits is more than an `Int` holds``). A longer form than needed
+  (`81 00` for 1) is read, as Go's `binary.Uvarint` and protobuf's
+  readers read it.
+
+**The cursor,** `ByteCursor`, an opaque prelude type written in Ren,
+`{ b: Bytes, at: Int }`, made by `b.cursor()`. It's a value (decision
+17: a cursor that borrows its input needs no lifetime), so copying one
+and reading the copy is how a program tries a record and keeps the
+cursor where it was if the record isn't all there yet. Every read is
+`inout self` and fails with formats.md's `FormatError`, which the
+prelude declares as formats.md does:
+
+```ren
+pub type FormatError = ! Short(at: Int, need: Int)
+                       | Malformed(at: Int, path: Str, why: Str)
+                       | UnknownTag(at: Int, tag: Int)
+```
+
+- `try &c.u8()`, `i8`, `u16_le` ... `i64_be`, as the reads at an
+  offset, each at the cursor and moving it past what it read;
+  `try &c.varuint()`, `try &c.varint()`; `try &c.bytes(n) -> Bytes`, a
+  slice of the next `n`; `try &c.skip(n)`.
+- `c.at()`, where it is; `c.left()`, how many bytes are after it;
+  `c.rest()`, those bytes, a slice.
+- **A read that fails leaves the cursor where it was.** `Short(at,
+  need)`: `at` where the read began, `need` how many more bytes it
+  needs, the width less what's left (1 for a `VarUInt` cut short). That
+  is what a framing loop reads more by. `Malformed(at, "", why)`, with
+  an empty path, since layer 3 has no fields; layer 2 fills it.
+  `UnknownTag` is layer 2's.
+- `n < 0` given to `bytes` or `skip` is a bug, and panics.
+- Its reads check the room left and then read at an offset, so the
+  offset read's own check is one step 1's proofs remove, or one compare
+  more.
+
+**Where it differs from formats.md, and why.**
+
+- **`at` is the offset in the bytes the cursor was made from,** not in
+  the whole buffer a slice was cut from, which formats.md's errors
+  promise. The interpreter's `Bytes` keep no root (a slice is a copy
+  there), so the offset in the root isn't known in both builds; a
+  program that wants it makes the cursor on the whole buffer and
+  `skip`s. Layer 2's views, which carry their root, are where the
+  promise is kept.
+- **Floats (`f32_le` ... `f64_be`), odd widths (`u24_le`) and bit
+  fields are left to layer 2,** which needs them and decides how a
+  read NaN is carried; layer 3 composes them from the integer reads
+  meanwhile.
+- **A range as a place, `&b[a..b].set_u32_le(...)`,** isn't promised
+  here: writes are on a `Bytes` variable. Whether `&` on a range of
+  `Bytes` works is decision 17's, as it is for arrays.
+
+### `Map` and `Set` natively
+
+**Meaning:** the interpreter's (table.ml), which operators.md states:
+iteration in insertion order; setting a key that's there keeps its
+place and its first key (the first of keys equal by their `key`) and
+changes its value; removing one and setting it again puts it last;
+`==` is the same entries in any order, and a map's hash is its entries'
+hashes added, so the same in any order; the collection methods are the
+prelude's, written in Ren over the pairs, which build natively once the
+built-ins do. A map is a value: a loop over it goes over the map as it
+was when the loop began, whatever the body sets or removes, since the
+loop holds the map and a change then copies it, as the interpreter's
+tables are never changed in place.
+
+**Representation,** Python's dict and Rust's indexmap: one object, its
+header, then:
+
+- `len`, the live entries; `used`, the entries' slots used, removed
+  ones included; `cap`, the entries' room; `shift`, log2 of the index's
+  size; `removed`, how many entries are gone.
+- `entries`, a dense array of `{ hash: UInt64, key, value }` in
+  insertion order, each `key` and `value` stored as an array of records
+  stores its fields (release builds: unboxed by the key's and value's
+  layouts, as an `Array` of a record is; debug builds: a word each,
+  counted through descriptors). A `Set`'s entries have no value.
+- `index`, a table of 2^shift slots of `int32_t`, each an entry's
+  number, -1 empty and -2 a removed entry's tombstone, probed linearly
+  from the hash's top bits. It's never more than 2/3 full, counting
+  tombstones. Its slots are 4 bytes until a map passes 2^31 entries,
+  where they become 8 (not built until something needs it; it panics
+  there instead, with the reason).
+- **Finding** a key: hash it, probe, and at each live slot compare the
+  stored 64-bit hash first and call `==` only on a match.
+- **Setting** a key that's there writes its value in place; a new one
+  appends an entry and fills a slot. **Removing** one marks its entry
+  gone (its hash slot set to a value no live hash has, 0, live hashes
+  being forced to 1 or more) and its slot a tombstone, and drops its key
+  and value. When `used` reaches `cap`, the entries are compacted if a
+  third or more are gone, keeping their order, and the index rebuilt;
+  otherwise both double. Iteration walks `entries` in order, skipping
+  the gone.
+- **Uniqueness,** rule U: a change in place needs a count of 1, and a
+  shared map is copied first (entries with each object counted again,
+  and the index), as an array is. Perceus, reuse and Mem Lint treat a
+  map as an object with fields they don't walk, as an array's elements;
+  `--stats` counts its buffers as an array's.
+
+**Hashing,** decided with the owner:
+
+- **A map's hash is seeded.** `Map` and `Set` hash with a fast 64-bit
+  hash of the rapidhash class (wyhash's 128-bit multiply-and-fold, on
+  8 bytes at a time) mixed with a seed the runtime draws from the OS
+  (`getentropy`) when it starts, as Go's maps do, so keys chosen by an
+  attacker can't be made to collide. Nothing a program sees depends on
+  it: iteration is in insertion order. Under `sim` and replay the
+  interpreter's seed is fixed (from the run's seed), so a test's timing
+  reproduces too; native builds have no `sim` yet.
+- **What's hashed** is what `==` compares: through a type's `key` if it
+  has one; an `Int` as its 64 bits; a `Float` as its bits, `-0.0` as
+  `0.0`, a NaN panicking where it's hashed (decision 15); a `Str` or
+  `Bytes` as its bytes and length; records, tuples and variants by
+  their fields in order with the constructor's index, each part's hash
+  mixed in; an `Array` its elements and length; a `Map` or `Set` its
+  entries' hashes added. Release builds hash `Int`, `Str` and `Bytes`
+  keys inline and the rest through the descriptor walk `==` already
+  uses (`ren_equal_any`), a `ren_hash_any` beside it; debug builds walk
+  descriptors for all of them.
+- **`x.hash()`,** the derived hash a program can call, on any type
+  with `hash`, returns an `Int`, and has **no seed**: the same value on
+  every run and in every build, so what's printed or journaled stays
+  reproducible. It is walk.ml's `hash` with the seed 0 (its
+  `fixed_hash`), FNV-1a's step over the same walk, specified by that
+  code; the native build computes the same bits (bench/bytes.t checks
+  `hash_values` against `ren run`). The map's internal hash differs
+  from it, which no program can observe. Step 3 adds the method to
+  every type the checker gives `hash` (a built-in method, as `show`
+  is a function), and an error with a help for a type without one.
+
+### Where this stage may differ from foundations.md
+
+- The cursor's `at`, and the formats deferred, above.
+- None else yet.
+
+### Progress log
+
+| step | commit | what's done | what's left |
+|---|---|---|---|
+| 0 | "Bytes stage, step 0" | this section; the baseline (RESULTS.md, bench/native/profile/); bench/bytes/ and bench/bytes.t, test/test_bytes.ml, each marked for its step | steps 1 to 4 |
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

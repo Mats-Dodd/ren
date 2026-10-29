@@ -1,0 +1,34 @@
+// Layer 3 of formats.md, reads at an offset (compiler.md, "Bytes
+// stage"): the width and the byte order in the name, unsigned and
+// signed, at the first and the last offset each can read, and on a
+// slice, whose offsets are its own.
+
+fn main() uses Console =
+  let b = Bytes.of([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xFF, 0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80])
+  print(b.u8(0))
+  print(b.u8(17))
+  print(b.i8(8))
+  print(b.i8(10))
+  print(b.i8(1))
+  print(b.u16_le(0))
+  print(b.u16_be(0))
+  print(b.u16_le(16))
+  print(b.i16_le(8))
+  print(b.i16_be(8))
+  print(b.u32_le(0))
+  print(b.u32_be(0))
+  print(b.u32_le(8))
+  print(b.i32_le(8))
+  print(b.i32_be(8))
+  print(b.u32_be(14))
+  print(b.u64_le(0))
+  print(b.u64_be(0))
+  print(b.u64_be(2))
+  print(b.i64_le(9))
+  print(b.i64_be(9))
+  print(b.i64_le(10))
+  print(b.i64_be(10))
+  // a slice's offsets are its own
+  let s = b[8..12]
+  print(s.u32_le(0) == b.u32_le(8))
+  print(s.u16_be(2))

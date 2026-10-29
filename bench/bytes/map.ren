@@ -1,0 +1,98 @@
+// `Map` natively (compiler.md, "Bytes stage"): what `ren run` prints, a
+// native build prints too. Insertion order, a key set again keeping its
+// place, a key removed and set again going last, growing past the first
+// table's size and shrinking with removals, keys of every kind a program
+// has, and a map changed while a loop goes over it, which goes over the
+// map as it was when the loop began.
+
+type Point = { x: Int, y: Int }
+type Color = | Red | Green | Blue
+type Tagged = | Plain | Named(name: Str)
+
+fn main() uses Console =
+  // order, set again, removed and set again
+  var m: Map<Str, Int> = Map.empty
+  &m.set("one", 1)
+  &m.set("two", 2)
+  &m.set("three", 3)
+  &m.set("one", 10)
+  &m.remove("two")
+  &m.set("two", 20)
+  &m.remove("nobody")
+  print(m)
+  print(m.len())
+  print(m.get("one"))
+  print(m.get("four"))
+  print(m.includes("three"))
+  print(m.keys())
+  print(m.values())
+  for (k, v) in m
+    print(k.concat("=").concat(show(v)))
+
+  // a map nothing else holds, grown past several tables, every third key
+  // removed, then iterated
+  var big: Map<Int, Int> = Map.empty
+  for i in 0..10_000
+    &big.set(i * 7919 % 10_007, i)
+  for i in 0..10_000
+    if i % 3 == 0 then &big.remove(i * 7919 % 10_007)
+  print(big.len())
+  var sum = 0
+  var order = 0
+  for (k, v) in big
+    sum += k * 3 + v
+    order = (order * 31 + k) % 1_000_000_007
+  print(sum)
+  print(order)
+  print(big.get(7919))
+  print(big.get(0))
+  // all removed, then set again
+  for i in 0..10_000
+    &big.remove(i * 7919 % 10_007)
+  print(big.len())
+  &big.set(5, 5)
+  print(big)
+
+  // a copy is a value of its own
+  let before = m
+  &m.set("five", 5)
+  print(before.len())
+  print(m.len())
+
+  // changed while a loop goes over it: the loop sees the map as it was
+  var n = Map.of([(1, "a"), (2, "b"), (3, "c")])
+  for (k, v) in n
+    &n.remove(k)
+    &n.set(k + 10, v)
+  print(n)
+
+  // keys of each kind
+  let pts = Map.of([(Point { x: 1, y: 2 }, "a"), (Point { x: 2, y: 1 }, "b"), (Point { x: 1, y: 2 }, "c")])
+  print(pts)
+  print(pts.get(Point { x: 2, y: 1 }))
+  let colors = Map.of([(Blue, 3), (Red, 1), (Green, 2), (Red, 4)])
+  print(colors)
+  let tagged = Map.of([(Named("x"), 1), (Plain, 2), (Named("y"), 3)])
+  print(tagged.get(Named("y")))
+  let pairs = Map.of([((1, "a"), true), ((1, "b"), false)])
+  print(pairs.get((1, "b")))
+  let floats = Map.of([(0.0, "zero"), (1.5, "one and a half")])
+  print(floats.get(-0.0))
+  let lists = Map.of([([1, 2], "a"), ([2, 1], "b")])
+  print(lists.get([2, 1]))
+  let nested = Map.of([(Map.of([(1, 2)]), "m")])
+  print(nested.get(Map.of([(1, 2)])))
+  let bytes = Map.of([("ab".bytes(), 1)])
+  print(bytes.get("ab".bytes()))
+
+  // the collection methods, in order
+  print(m.map(fn((k, v)) => k.concat(":").concat(show(v))))
+  print(m.select(fn((_, v)) => v > 3))
+  print(m.reduce(0, fn(acc, (_, v)) => acc + v))
+  print(m.sort_by(fn((k, _)) => k))
+  print(m.first())
+  print(m.last())
+  print(m.count(fn((_, v)) => v % 2 == 0))
+  print(m.take(2))
+  print(m.reverse())
+  print(m == Map.of([("one", 10), ("three", 3), ("two", 20), ("five", 5)]))

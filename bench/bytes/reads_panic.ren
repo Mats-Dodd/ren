@@ -1,0 +1,7 @@
+// A read at an offset the program computed panics past the end, as
+// `xs[i]` does: a bad offset is a bug (compiler.md, "Bytes stage").
+
+fn main() uses Console =
+  let b = Bytes.of([1, 2, 3, 4, 5, 6, 7, 8])
+  print(b.u32_le(4))
+  print(b.u32_le(5))

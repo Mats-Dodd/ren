@@ -1,0 +1,6 @@
+// A `VarUInt` holds no negative number: writing one panics.
+
+fn main() uses Console =
+  var b = Bytes.zeros(10)
+  print(&b.set_varuint(0, 5))
+  print(&b.set_varuint(1, -5))

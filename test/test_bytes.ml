@@ -1,0 +1,233 @@
+(* The bytes stage's specification in the interpreter (compiler.md, "Bytes
+   stage", "The tests"): what bench/bytes.t's programs don't say, the
+   whole of a panic's message with its help, the errors that refuse
+   layer 3 used wrongly, and `x.hash()`'s values.
+
+     b2  layer 3: reads and writes at an offset, the cursor, `VarUInt`
+     b3  `Map` and `Set` natively, and `x.hash()`
+
+   A test still to land runs through [until] (helpers.ml), as
+   test_tasks.ml's do: [want] is the whole output of a program that runs,
+   [says] the lines an error or a panic has to hold. Its [%expect] holds
+   today's output after `(until bN)`. When the program prints what's
+   wanted, the test fails until the step turns it on: written plainly,
+   with the target in its [%expect]. *)
+
+open Helpers
+
+(* ---- b2: layer 3 ---- *)
+
+let%expect_test "[b2] a read past the end panics with the offset, the width and the length" =
+  until "b2"
+    ~says:
+      [
+        "error: panic: 4 bytes at 5 are out of bounds for bytes of length 8";
+        "b.u32_le(5)";
+      ]
+    (fun () ->
+      run_error
+        {|
+fn main() uses Console =
+  let b = Bytes.of([1, 2, 3, 4, 5, 6, 7, 8])
+  print(b.u32_le(5))
+|});
+  [%expect
+    {|
+    (until b2)
+    error: `Bytes` has no method named `u32_le`
+      ┌─ test.ren:3:11
+    3 │   print(b.u32_le(5))
+      │           ^^^^^^
+      help: its methods: `len`, `at`, `copy`, `split_at`
+    |}]
+
+let%expect_test "[b2] a one-byte read past the end panics as `at` does" =
+  until "b2"
+    ~says:[ "error: panic: index 8 is out of bounds for bytes of length 8" ]
+    (fun () ->
+      run_error
+        {|
+fn main() uses Console =
+  let b = Bytes.of([1, 2, 3, 4, 5, 6, 7, 8])
+  print(b.u8(8))
+|});
+  [%expect
+    {|
+    (until b2)
+    error: `Bytes` has no method named `u8`
+      ┌─ test.ren:3:11
+    3 │   print(b.u8(8))
+      │           ^^
+      help: its methods: `len`, `at`, `copy`, `split_at`
+    |}]
+
+let%expect_test "[b2] `u64_le` of 2^63 or more panics, and says to read its bits with `i64_le`" =
+  until "b2"
+    ~says:
+      [
+        "error: panic: `u64_le` at 0 read 18446744073709551615, which is more than an `Int` holds";
+        "help: read its bits as an `Int` with `i64_le`";
+      ]
+    (fun () ->
+      run_error
+        {|
+fn main() uses Console =
+  let b = Bytes.of([255, 255, 255, 255, 255, 255, 255, 255])
+  print(b.u64_le(0))
+|});
+  [%expect
+    {|
+    (until b2)
+    error: `Bytes` has no method named `u64_le`
+      ┌─ test.ren:3:11
+    3 │   print(b.u64_le(0))
+      │           ^^^^^^
+      help: its methods: `len`, `at`, `copy`, `split_at`
+    |}]
+
+let%expect_test "[b2] a write that doesn't fit panics as a store into a sized integer does" =
+  until "b2"
+    ~says:[ "error: panic: -1 doesn't fit in a `UInt32`, which holds 0 to 4294967295" ]
+    (fun () ->
+      run_error
+        {|
+fn main() uses Console =
+  var b = Bytes.zeros(4)
+  &b.set_u32_be(0, -1)
+  print(b)
+|});
+  [%expect
+    {|
+    (until b2)
+    error: `Bytes` has no member named `zeros`
+      ┌─ test.ren:2:17
+    2 │   var b = Bytes.zeros(4)
+      │                 ^^^^^
+      help: its members: `len`, `at`, `copy`, `split_at`, `of`
+    |}]
+
+let%expect_test "[b2] a write changes a `var`, through `&`" =
+  until "b2"
+    ~says:
+      [
+        "error: `set_u8` changes `b`, so the call needs `&`";
+        "help: write `&b.set_u8(0, 1)`";
+      ]
+    (fun () ->
+      check_error
+        {|
+fn main() uses Console =
+  var b = Bytes.zeros(4)
+  b.set_u8(0, 1)
+  print(b)
+|});
+  [%expect
+    {|
+    (until b2)
+    error: `Bytes` has no member named `zeros`
+      ┌─ test.ren:2:17
+    2 │   var b = Bytes.zeros(4)
+      │                 ^^^^^
+      help: its members: `len`, `at`, `copy`, `split_at`, `of`
+    |}]
+
+let%expect_test "[b2] the cursor's reads fail with `FormatError`, which a caller has to handle" =
+  until "b2"
+    ~want:{|
+Ok(513)
+Err(Short(2, 1))
+2
+()
+|}
+    (fun () ->
+      run
+        {|
+fn two(inout c: ByteCursor) -> Int ! FormatError = try &c.u16_le()
+fn main() uses Console =
+  var c = Bytes.of([1, 2, 3]).cursor()
+  print(attempt two(&c))
+  print(attempt two(&c))
+  print(c.at())
+|});
+  [%expect
+    {|
+    (until b2)
+    error: there's no type named `ByteCursor`
+      ┌─ test.ren:1:17
+    1 │ fn two(inout c: ByteCursor) -> Int ! FormatError = try &c.u16_le()
+      │                 ^^^^^^^^^^
+    |}]
+
+(* ---- b3: `x.hash()` ---- *)
+
+let%expect_test "[b3] `x.hash()` is the derived hash, unseeded, agreeing with `==`" =
+  until "b3"
+    ~want:{|
+true
+true
+false
+true
+()
+|}
+    (fun () ->
+      run
+        {|
+type P = { x: Int, y: Int }
+pub type Name = opaque Str
+  pub fn of(s: Str) -> Name = s
+  pub fn key(self) -> Str = self.lower()
+fn main() uses Console =
+  print(P { x: 1, y: 2 }.hash() == P { x: 1, y: 2 }.hash())
+  print(Name.of("Ann").hash() == Name.of("ANN").hash())
+  print((1, 2).hash() == (2, 1).hash())
+  print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
+|});
+  [%expect
+    {|
+    (until b3)
+    error: `P` has no method named `hash`
+      ┌─ test.ren:6:26
+    6 │   print(P { x: 1, y: 2 }.hash() == P { x: 1, y: 2 }.hash())
+      │                          ^^^^
+      help: declare it under `type P`, with `self` first
+
+    error: `P` has no method named `hash`
+      ┌─ test.ren:6:53
+    6 │   print(P { x: 1, y: 2 }.hash() == P { x: 1, y: 2 }.hash())
+      │                                                     ^^^^
+      help: declare it under `type P`, with `self` first
+
+    error: `Name` has no method named `hash`
+      ┌─ test.ren:7:24
+    7 │   print(Name.of("Ann").hash() == Name.of("ANN").hash())
+      │                        ^^^^
+      help: its methods: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`
+
+    error: `Name` has no method named `hash`
+      ┌─ test.ren:7:49
+    7 │   print(Name.of("Ann").hash() == Name.of("ANN").hash())
+      │                                                 ^^^^
+      help: its methods: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`
+
+    error: `(Int, Int)` has no method named `hash`
+      ┌─ test.ren:8:16
+    8 │   print((1, 2).hash() == (2, 1).hash())
+      │                ^^^^
+
+    error: `(Int, Int)` has no method named `hash`
+      ┌─ test.ren:8:33
+    8 │   print((1, 2).hash() == (2, 1).hash())
+      │                                 ^^^^
+
+    error: `Map<Int, Int>` has no method named `hash`
+      ┌─ test.ren:9:34
+    9 │   print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
+      │                                  ^^^^
+      help: its methods: `get`, `set`, `remove`, `includes`, `keys`, `values`, `len`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `any`, `all`, `count`, `reduce`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `zip`, `with_index`, `take`, `drop`, `reverse`
+
+    error: `Map<Int, Int>` has no method named `hash`
+      ┌─ test.ren:9:69
+    9 │   print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
+      │                                                                     ^^^^
+      help: its methods: `get`, `set`, `remove`, `includes`, `keys`, `values`, `len`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `any`, `all`, `count`, `reduce`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `zip`, `with_index`, `take`, `drop`, `reverse`
+    |}]

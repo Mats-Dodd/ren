@@ -69,3 +69,16 @@
   %{project_root}/examples/server/expected
   11a/tasks/journal/v1.journal
   11a/tasks/journal/v1.expected))
+
+; bytes.t runs the bytes stage's programs, in bytes/, through `ren run`
+; and, once each step lands them, `ren build` under the sanitizers, and
+; says which are as specified yet (compiler.md, "Bytes stage", "The
+; tests"). It needs cc and tcc, as build.t does.
+
+(cram
+ (applies_to bytes)
+ (deps
+  %{bin:ren}
+  (env_var REN_TCC)
+  (glob_files bytes/*.ren)
+  (glob_files bytes/*.expected)))

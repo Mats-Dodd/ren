@@ -1,0 +1,8 @@
+// `u64_le` reads an `Int`, and panics on a value of 2^63 or more, which
+// doesn't fit; `i64_le` reads the same bits as a signed `Int`, which is
+// how a 64-bit hash is read (compiler.md, "Bytes stage").
+
+fn main() uses Console =
+  let b = Bytes.of([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+  print(b.i64_le(0))
+  print(b.u64_le(0))

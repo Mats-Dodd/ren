@@ -1,0 +1,12 @@
+[1, 1, 1, 2, 2, 2, 3, 9]
+<bytes 00 01 7f 80 01 ac 02 ff 7f 80 80 01 ff ff ff ff ff ff ff ff 7f>
+Ok([0, 1, 127, 128, 300, 16383, 16384, 9223372036854775807])
+[1, 1, 1, 1, 2, 1, 10, 10]
+<bytes 00 01 02 7f 80 01 7e ff ff ff ff ff ff ff ff ff 01 fe ff ff ff ff ff ff ff ff 01>
+Ok([0, -1, 1, -64, 64, 63, -9223372036854775808, 9223372036854775807])
+Err(Malformed(0, "", "a `VarUInt` is at most 10 bytes"))
+Err(Malformed(0, "", "a `VarUInt` of 2^63 or more is more than an `Int` holds"))
+Err(Malformed(0, "", "a `VarInt` of more than 64 bits is more than an `Int` holds"))
+Err(Short(1, 1))
+Ok([1])
+exit 0

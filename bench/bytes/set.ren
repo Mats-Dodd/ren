@@ -1,0 +1,53 @@
+// `Set` natively (compiler.md, "Bytes stage"), as map.ren is `Map`:
+// insertion order, a member added again keeping its place, one removed
+// and added again going last, growth and removal, and the collection
+// methods.
+
+type Point = { x: Int, y: Int }
+
+fn main() uses Console =
+  var s: Set<Str> = Set.empty
+  &s.add("b")
+  &s.add("a")
+  &s.add("c")
+  &s.add("b")
+  &s.remove("a")
+  &s.add("a")
+  &s.remove("nobody")
+  print(s)
+  print(s.len())
+  print(s.includes("c"))
+  print(s.includes("d"))
+  for x in s
+    print(x)
+
+  var big: Set<Int> = Set.empty
+  for i in 0..10_000
+    &big.add(i * 7919 % 10_007)
+  for i in 0..10_000
+    if i % 2 == 1 then &big.remove(i * 7919 % 10_007)
+  print(big.len())
+  var order = 0
+  for x in big
+    order = (order * 31 + x) % 1_000_000_007
+  print(order)
+
+  // a copy is a value of its own, and one changed while a loop goes
+  // over it is seen as it was
+  let before = s
+  &s.add("z")
+  print(before)
+  var t = Set.of([1, 2, 3])
+  for x in t
+    &t.remove(x)
+    &t.add(x * 10)
+  print(t)
+
+  let pts = Set.of([Point { x: 1, y: 2 }, Point { x: 1, y: 2 }, Point { x: 0, y: 0 }])
+  print(pts)
+  print(Set.of(["a", "b"]) == Set.of(["b", "a"]))
+  print(s.map(fn(x) => x.len()))
+  print(s.select(fn(x) => x != "c"))
+  print(s.sort())
+  print(Set.of([3, 1, 2]).sum())
+  print(Set.of([3, 1, 2]).reverse())

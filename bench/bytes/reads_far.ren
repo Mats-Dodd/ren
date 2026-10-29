@@ -1,0 +1,7 @@
+// An offset so large that the offset plus the width overflows panics
+// with the same message, and doesn't wrap around to a small one.
+
+fn main() uses Console =
+  let b = Bytes.of([1, 2, 3, 4, 5, 6, 7, 8])
+  let at = 9_223_372_036_854_775_807 - 1
+  print(b.u64_le(at))

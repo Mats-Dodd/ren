@@ -1,0 +1,22 @@
+// The values of `x.hash()`, which have no seed: `ren run` prints the same
+// on every run, and a native build prints what `ren run` does (bytes.t).
+
+type Point = { x: Int, y: Int }
+type Color = | Red | Green | Blue
+
+fn main() uses Console =
+  print(0.hash())
+  print(42.hash())
+  print((-1).hash())
+  print("".hash())
+  print("hello".hash())
+  print("hello".bytes().hash())
+  print(true.hash())
+  print(1.5.hash())
+  print(Point { x: 1, y: 2 }.hash())
+  print(Green.hash())
+  print(Some(3).hash())
+  print((1, "a").hash())
+  print([1, 2, 3].hash())
+  print(Map.of([(1, "a")]).hash())
+  print(Set.of(["a"]).hash())

@@ -1,0 +1,8 @@
+// A write past the end panics, as a read does.
+
+fn main() uses Console =
+  var b = Bytes.zeros(4)
+  &b.set_u32_be(0, 1)
+  print(b)
+  &b.set_u16_be(3, 1)
+  print(b)

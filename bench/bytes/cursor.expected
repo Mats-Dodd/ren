@@ -1,0 +1,22 @@
+Ok("hello")
+256
+Short(15, 2)
+11
+6
+<bytes 02 00 68 69 00 00>
+Ok(255)
+Ok(-2)
+3
+Err(Short(3, 1))
+3
+Err(Short(3, 1))
+Ok(())
+0
+Err(Short(6, 1))
+Err(Malformed(0, "", "18446744073709551615 is more than an `Int` holds"))
+0
+Ok(-1)
+Ok(104)
+1
+4
+exit 0

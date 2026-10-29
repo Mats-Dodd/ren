@@ -1,0 +1,19 @@
+Set.of(["b", "c", "a"])
+3
+true
+false
+b
+c
+a
+5000
+126212760
+Set.of(["b", "c", "a"])
+Set.of([10, 20, 30])
+Set.of([Point { x: 1, y: 2 }, Point { x: 0, y: 0 }])
+true
+[1, 1, 1, 1]
+Set.of(["b", "a", "z"])
+["a", "b", "c", "z"]
+6
+Set.of([2, 1, 3])
+exit 0

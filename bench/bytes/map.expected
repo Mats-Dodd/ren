@@ -1,0 +1,40 @@
+Map.of([("one", 10), ("three", 3), ("two", 20)])
+3
+Some(10)
+None
+true
+["one", "three", "two"]
+[10, 3, 20]
+one=10
+three=3
+two=20
+6666
+133343091
+378362665
+Some(1)
+None
+0
+Map.of([(5, 5)])
+3
+4
+Map.of([(11, "a"), (12, "b"), (13, "c")])
+Map.of([(Point { x: 1, y: 2 }, "c"), (Point { x: 2, y: 1 }, "b")])
+Some("b")
+Map.of([(Blue, 3), (Red, 4), (Green, 2)])
+Some(3)
+Some(false)
+Some("zero")
+Some("b")
+Some("m")
+Some(1)
+["one:10", "three:3", "two:20", "five:5"]
+Map.of([("one", 10), ("two", 20), ("five", 5)])
+38
+[("five", 5), ("one", 10), ("three", 3), ("two", 20)]
+Some(("one", 10))
+Some(("five", 5))
+2
+Map.of([("one", 10), ("three", 3)])
+Map.of([("five", 5), ("two", 20), ("three", 3), ("one", 10)])
+true
+exit 0
