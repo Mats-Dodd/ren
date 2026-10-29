@@ -34,8 +34,12 @@
    callee runs one at a time, and rule A below keeps one from running
    inside another. Inside a handler's arm, a dependency call, or a call of
    a block parameter, is a write of all the handler's `var`s for that
-   call: other tasks can run the handler at a dependency call, and the
-   block can call into it again.
+   call (foundations.md, decision 2): at a dependency call, `Async.until`,
+   other tasks can run the handler, and a block parameter can call into
+   it again. An operation otherwise keeps its instance across its own
+   dependency calls (decision 10), so this is more than tasks need; it's
+   what the decision says, and natively it's what keeps a borrow of the
+   state from being changed under it at `Async.until`.
 
    Rule A: a block parameter, or a block that captures one, can't be
    passed to a call of a block parameter. Otherwise a block could run
@@ -358,6 +362,11 @@ let lasting a =
 
 let read_or_changed a = if a.kind = Write then "changed" else "read"
 
+(* Why a dependency call in an arm is a change of its handler's state. *)
+let dep_call_note =
+  "a dependency call in an arm counts as a change of the handler's state: \
+   at one, `Async.until`, other tasks run the handler"
+
 (* [o] happens while [f], which lasts, holds a handler's state: a
    dependency call, or a block parameter's. *)
 let across cx f o =
@@ -396,7 +405,7 @@ let across cx f o =
       in
       report cx o.loc ~says:"a dependency call"
         ~labels:[ (f.loc, label) ]
-        ~notes:[ "other tasks can run this handler at a dependency call" ]
+        ~notes:[ dep_call_note ]
         ~help
         (sprintf "`%s` is %s across a dependency call" x (read_or_changed f))
 
@@ -410,7 +419,7 @@ let block_across cx a call =
         (sprintf "a call of `%s`" g, sprintf "`%s` can run this handler again" g)
     | _ ->
         ( "a dependency call",
-          "other tasks can run this handler at a dependency call" )
+          dep_call_note )
   in
   let help =
     if a.kind = Read then

@@ -246,6 +246,10 @@ let block_uses env cx loc ~listed (bcx : ctx) =
    them. *)
 let op_args : (int, string * Path.t) Hashtbl.t = Hashtbl.create 16
 
+(* The calls in the body of each lambda, by node, which a `let` that binds
+   one keeps for its local ([ctx.let_blocks]). *)
+let lambda_calls : (int, call list ref) Hashtbl.t = Hashtbl.create 16
+
 (* [e], a block passed to an operation if [op_args] says so, which lists
    [listed], what its parameter's type, [expected], lists: once the
    group's rows are decided, its [calls] bring in nothing else
@@ -464,6 +468,7 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
              ~msg:(Option.value why.produces ~default:lambda_produces) ());
       block_uses env cx e.loc ~listed bcx;
       op_block env e ~listed ~expected ~calls:bcx.calls;
+      Hashtbl.replace lambda_calls e.node bcx.calls;
       let t = TFun (ps, eret, errs, listed_row listed) in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
@@ -645,6 +650,7 @@ and synth env cx (e : expr) : ty =
       let bcx = lambda_cx cx params ps ~errs ~uses in
       let tb = infer env bcx body in
       block_uses env cx e.loc ~listed:[] bcx;
+      Hashtbl.replace lambda_calls e.node bcx.calls;
       TFun (ps, tb, errs, REmpty)
   | Block (stmts, last) -> block env cx stmts (fun cx -> infer env cx last)
   | Con (c, args) ->
@@ -1094,7 +1100,14 @@ and stmt env cx = function
             t
         | None, _ -> infer env cx value
       in
-      Hashtbl.replace cx.locals name.id t
+      Hashtbl.replace cx.locals name.id t;
+      (* its calls were just kept, by [infer] or [check] *)
+      (match value.kind with
+      | Lambda _ ->
+          Option.iter
+            (Hashtbl.replace cx.let_blocks name.id)
+            (Hashtbl.find_opt lambda_calls value.node)
+      | _ -> ())
   | Let_tuple { pat; value } -> bind_pattern env cx (infer env cx value) pat
   | Expr e -> dropped env cx e (infer env cx e)
   | Finally f ->
@@ -2160,7 +2173,22 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
           ~finally:(fun () ->
             if op <> None then
               List.iter (fun (a : expr) -> Hashtbl.remove op_args a.node) args)
-          (fun () -> check_args env cx ~name ?callee ~written ps args);
+          (fun () ->
+            check_args env cx ~name ?callee ~written ps args;
+            (* a block bound by `let` and passed here brings in only what
+               the parameter's type lists, as one written here does *)
+            if op <> None then
+              List.iter2
+                (fun (p : Types.param) (a : expr) ->
+                  match (a.kind, reveal env.st p.ty) with
+                  | Var (Local b), TFun (_, _, _, eu) -> (
+                      match Hashtbl.find_opt cx.let_blocks b.id with
+                      | Some calls ->
+                          op_block env a ~listed:(sorted_labels eu)
+                            ~expected:p.ty ~calls
+                      | None -> ())
+                  | _ -> ())
+                ps args);
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
         if keyed_described env cx ?callee args then made env ret else TError)
   | TVar _ ->

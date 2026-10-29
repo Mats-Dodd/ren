@@ -1433,7 +1433,15 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
           | _ -> [])
       | _ -> []
     in
-    Sched.spawn ?key ?at sc ~label:cx.site ~evidence (fun () ->
+    (* a task that captured [sc] in its body, of a scope outside it, can
+       still call this once [sc] has ended (Sched.spawn) *)
+    let ended () =
+      panic_at loc
+        ~notes:[ "a task never outlives its scope, so nothing starts in one that has ended" ]
+        ~help:"spawn it in a scope that's still running: the task's own, or one outside it"
+        "a task is started in a scope that has ended"
+    in
+    Sched.spawn ?key ?at sc ~label:cx.site ~evidence ~ended (fun () ->
         ok (fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence []))))
   in
   (* [calls] made by tasks of a scope of their own, which lets [max] of
@@ -1445,6 +1453,9 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
      came from (async.md, "A failure cancels the tasks beside it"). One of
      the rest failing too is written to stderr, never dropped. [what] is
      what the deadlock panic says the caller waits for *)
+  (* the scopes of `map`, `each`, `both` and `race` are this call's own,
+     so they end only after their tasks have all started *)
+  let mine () = bug "a task started in a scope of `Async`'s own that has ended" in
   let all_of ~what ~max calls =
     let results = Array.make (List.length calls) VUnit in
     let first = ref None in
@@ -1466,7 +1477,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         (fun i call ->
           if Option.is_none !first then begin
             let t =
-              Sched.spawn ?at sc ~label:cx.site ~evidence:[] (fun () ->
+              Sched.spawn ?at sc ~label:cx.site ~evidence:[] ~ended:mine (fun () ->
                   (match call () with
                   | Ok v -> results.(i) <- v
                   | Error err -> failed err);
@@ -1501,7 +1512,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
     List.iter
       (fun call ->
         ignore
-          (Sched.spawn ?at sc ~label:cx.site ~evidence:[] (fun () ->
+          (Sched.spawn ?at sc ~label:cx.site ~evidence:[] ~ended:mine (fun () ->
                (match call () with
                | Ok v when Option.is_none !winner ->
                    winner := Some v;
@@ -1571,12 +1582,9 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         | [ ty ], [ VDict (Hash { equal; _ }) ] -> (ty, equal)
         | _ -> bug "a call of `task_replace` without its key's type and `hash`"
       in
-      (match Sched.keyed sc ty key ~equal with
-      | Some t ->
-          Sched.cancel t;
-          Sched.join ?at t
-      | None -> ());
-      ignore (spawn ~key:(ty, key) sc body);
+      (* the task under the key is cancelled and waited for first
+         (Sched.spawn) *)
+      ignore (spawn ~key:(ty, key, equal) sc body);
       (Ok VUnit, args)
   | Task_join, [ t ] ->
       let t = task_of t in

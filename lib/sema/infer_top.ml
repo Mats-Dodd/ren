@@ -876,6 +876,7 @@ let setup env ~is_value (f : fn_def) =
       self = path;
       locals = Hashtbl.create 16;
       binders = Hashtbl.create 8;
+      let_blocks = Hashtbl.create 4;
       written_locals = Hashtbl.create 8;
       nodes = Hashtbl.create 64;
       found = Hashtbl.create 16;

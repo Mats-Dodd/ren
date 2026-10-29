@@ -2182,7 +2182,7 @@ fn main() = 1
     10 │     update(&cache, k, fn() => next.load(k))
        │                               ^^^^^^^^^^^^ a dependency call
        │            ------ changed for the whole call
-       = other tasks can run this handler at a dependency call
+       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
        help: make the call first, `let v = next.load(k)`, then change `cache` with `v`
     |}]
 

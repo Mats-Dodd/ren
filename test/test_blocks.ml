@@ -1431,7 +1431,7 @@ fn main() uses Console =
     19 │     update(&cache, k, fn(v) => next.load(k))
        │                                ^^^^^^^^^^^^ a dependency call
        │            ------ changed for the whole call
-       = other tasks can run this handler at a dependency call
+       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
        help: make the call first, `let v = next.load(k)`, then change `cache` with `v`
     |}]
 
@@ -2131,7 +2131,7 @@ fn main() uses Console =
        │                                        ^^^^^ read here
        │               -------------------------------- the handler's state can change during this call
        = a block runs during the call it's passed to
-       = other tasks can run this handler at a dependency call
+       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
        help: copy it first: `let c = count`, and use `c` in the block
     |}]
 

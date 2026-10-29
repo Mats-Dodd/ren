@@ -115,9 +115,12 @@ type task = {
   mutable joiners : (unit -> bool) list;  (** what to wake when it ends *)
   ordinals : (string, int) Hashtbl.t;
       (** how many tasks it has started with each label *)
-  mutable withs : int;  (** how many `with`s it has entered, ever *)
   mutable frames : frame list;
       (** the `with`s whose bodies it's running, the innermost first *)
+  context : frame list;
+      (** the `with`s whose bodies the code that spawned it was running
+          then, the innermost first: its spawner's [frames], then its
+          spawner's [context] ([beside]) *)
   mutable pointed : bool;
       (** it's suspended at a scheduling point ([point]), where it hasn't
           waited, only let the tape choose what runs next *)
@@ -135,8 +138,8 @@ and scope = {
   max : int;
   owner : task;
   began : int;
-      (** how many `with`s [owner] had entered when the scope began: one
-          entered after is beside it (see [frame]) *)
+      (** when it began, in the order scopes and `with`s begin ([begun]):
+          a `with` whose body began after it is beside it (see [frame]) *)
   mutable running : task list;
   mutable room : (unit -> bool) list;
   mutable empty : (unit -> bool) list;
@@ -144,18 +147,23 @@ and scope = {
   mutable drain : float option;
       (** the cleanup deadline its tasks have, once its owner has stopped
           accepting connections ([drain]) *)
+  mutable ended : bool;
+      (** its body and its tasks have ended ([closed]): nothing more can
+          start in it *)
 }
 
-(* A `with` whose body a task is running, numbered by the task's count
-   of `with`s, with what it installed: a task spawned in its body into a
-   scope that began before it, whose block's evidence holds what it
-   installed, is its background task ([bg]), which it cancels and waits
-   for when its body ends (compiler.md, "A task spawned beside a `with`
-   is its background task"). *)
+(* A `with` whose body a task is running, numbered in the order scopes
+   and `with`s begin ([begun]), with what it installed: a task spawned in
+   its body into a scope that began before it, whose block's evidence
+   holds what it installed, is its background task ([bg]), which it
+   cancels and waits for when its body ends (compiler.md, "A task spawned
+   beside a `with` is its background task"). Its body is [over] once it
+   has. *)
 and frame = {
   num : int;
   installed : Value.installed list;
   mutable bg : task list;
+  mutable over : bool;
 }
 
 (* A scope and a task's handle, as values a program holds (value.ml,
@@ -596,7 +604,7 @@ let step s (t, action) =
       | Start _ -> ())
 
 (* A task, not started yet, with the path [path], in [scope]. *)
-let task ~path ~root scope =
+let task ?(context = []) ~path ~root scope =
   {
     path;
     root;
@@ -619,8 +627,8 @@ let task ~path ~root scope =
     result = None;
     joiners = [];
     ordinals = Hashtbl.create 4;
-    withs = 0;
     frames = [];
+    context;
     pointed = false;
     randoms = Hashtbl.create 1;
   }
@@ -1035,6 +1043,15 @@ let note line =
 
 (* ---- scopes and tasks ---- *)
 
+(* The order scopes and `with`s begin in, across all tasks, so a scope
+   and a `with` of different tasks can be told apart by which began
+   first. *)
+let order = ref 0
+
+let begun () =
+  incr order;
+  !order
+
 (* A new scope, of the task running, which `spawn` lets run [max] tasks
    at once. *)
 let scope ~max =
@@ -1043,19 +1060,22 @@ let scope ~max =
     {
       max;
       owner = t;
-      began = t.withs;
+      began = begun ();
       running = [];
       room = [];
       empty = [];
       keyed = [];
       drain = None;
+      ended = false;
     }
   in
   t.scopes <- sc :: t.scopes;
   sc
 
 (* The body of [sc] has ended, and so have its tasks. *)
-let closed sc = sc.owner.scopes <- List.filter (fun x -> x != sc) sc.owner.scopes
+let closed sc =
+  sc.ended <- true;
+  sc.owner.scopes <- List.filter (fun x -> x != sc) sc.owner.scopes
 
 (* Wait until [sc]'s tasks have all ended: cancellable, as the end of a
    scope's body is, or not, as cancelling them is. *)
@@ -1075,49 +1095,78 @@ let join ?at t =
     wait ?at ("waits for " ^ t.path ^ " to end") (fun wake ->
         t.joiners <- wake :: t.joiners)
 
-(* The task of the frame a task spawned into [sc] now, whose block's
-   evidence is [evidence], is the background task of: the innermost
-   `with` the running task is in the body of that began after [sc] did,
-   and installed something [evidence] holds. A task running in a scope
-   it doesn't own was started after the scope began, and so was every
-   `with` it's in. *)
+(* The `with` a task spawned into [sc] now, whose block's evidence is
+   [evidence], is the background task of: the innermost whose body the
+   spawn is in, and is still running, that began after [sc] did, and
+   installed something [evidence] holds. The spawn is in the bodies of
+   the running task's `with`s, and of those its own spawn was in, its
+   [context], all the way up: a task spawned in a scope inside a `with`'s
+   body that spawns into a scope outside it is beside that `with` too,
+   though another task is running its body. *)
 let beside sc evidence =
   let t = (sched ()).current in
   List.find_opt
     (fun f ->
-      (sc.owner != t || f.num > sc.began)
+      (not f.over) && f.num > sc.began
       && List.exists (fun i -> List.memq i evidence) f.installed)
-    t.frames
+    (t.frames @ t.context)
 
 (* Start [thunk] as a task of [sc], labelled [label], once [sc] has room
    for it, under [key] if it's given; [evidence] is its block's, the
    evidence where it was written. The task goes on the queue's end, and
-   the task running goes on. *)
-let spawn ?key ?at sc ~label ~evidence thunk =
+   the task running goes on. A scope that has ended starts nothing: it's
+   [ended ()], a panic. Only a task of a scope outside [sc] can still
+   hold it then, one spawned in [sc]'s body that it captured [sc] in, and
+   a task started now would outlive the scope, and the frame whose
+   variables it reads (foundations.md, decision 7). *)
+let rec spawn ?key ?at sc ~label ~evidence ~ended thunk =
   let s = sched () in
   let parent = s.current in
-  while List.length sc.running >= sc.max do
+  while List.length sc.running >= sc.max && not sc.ended do
     wait ?at "waits for room in its scope" (fun wake ->
         sc.room <- sc.room @ [ wake ])
   done;
+  if sc.ended then raise (ended ());
+  (* `s.replace(key)`: the task under the key is cancelled, and waited
+     for, and then it's all asked again, since another task may have
+     started one under it, or taken the room, while this one waited. So
+     there's no wait between finding the key free and the room there, and
+     starting the task: a key never has two *)
+  match
+    Option.bind key (fun (ty, k, equal) ->
+        List.find_map
+          (fun (ty', k', t) ->
+            if t.state <> Ended && ty' = ty && equal k k' then Some t else None)
+          sc.keyed)
+  with
+  | Some old ->
+      cancel old;
+      join ?at old;
+      spawn ?key ?at sc ~label ~evidence ~ended thunk
+  | None -> started ?key sc ~parent ~label ~evidence thunk
+
+(* [spawn]'s task, started now. *)
+and started ?key sc ~parent ~label ~evidence thunk =
+  let s = sched () in
   let n = Option.value (Hashtbl.find_opt parent.ordinals label) ~default:0 in
   Hashtbl.replace parent.ordinals label (n + 1);
   let path = Printf.sprintf "%s/%s:%d" parent.path label n in
-  let t = task ~path ~root:false (Some sc) in
+  let t =
+    task ~context:(parent.frames @ parent.context) ~path ~root:false (Some sc)
+  in
   sc.running <- sc.running @ [ t ];
   s.alive <- t :: s.alive;
-  Option.iter (fun (ty, k) -> sc.keyed <- (ty, k, t) :: sc.keyed) key;
+  Option.iter
+    (fun (ty, k, _) ->
+      (* the keys of tasks that have ended are dropped, so a server that
+         replaces forever keeps only its running ones *)
+      sc.keyed <-
+        (ty, k, t) :: List.filter (fun (_, _, u) -> u.state <> Ended) sc.keyed)
+    key;
   t.drained <- sc.drain;
   Option.iter (fun f -> f.bg <- t :: f.bg) (beside sc evidence);
   Queue.push (t, Start thunk) s.queue;
   t
-
-(* The task [sc] started under a key equal to [k], of the type [ty], if
-   it's still running: keys of different types are never equal. *)
-let keyed sc ty k ~equal =
-  List.find_map
-    (fun (ty', k', t) -> if ty' = ty && equal k k' then Some t else None)
-    sc.keyed
 
 (* ---- `with`s ---- *)
 
@@ -1127,8 +1176,7 @@ let enter_with installed =
   match current () with
   | None -> None
   | Some t ->
-      t.withs <- t.withs + 1;
-      let f = { num = t.withs; installed; bg = [] } in
+      let f = { num = begun (); installed; bg = []; over = false } in
       t.frames <- f :: t.frames;
       Some f
 
@@ -1138,6 +1186,7 @@ let leave_with ?at = function
   | None -> ()
   | Some f ->
       let t = (sched ()).current in
+      f.over <- true;
       t.frames <- List.filter (fun g -> g != f) t.frames;
       let live = List.filter (fun u -> u.state <> Ended) f.bg in
       List.iter cancel live;

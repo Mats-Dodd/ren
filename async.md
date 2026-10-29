@@ -8,7 +8,7 @@ on blocks from [foundations.md](foundations.md). How the calls reach the
 kernel is in [runtime-io.md](runtime-io.md).
 
 > **Status:** built in the interpreter, `ren run` and `ren test`, with
-> the standard library's `sim` and `sync` (stage 11a, steps 1 to 8); the
+> the standard library's `sim` and `sync` (stage 11a, steps 1 to 8, reviewed in step 9); the
 > sequential parts build natively too. This document follows
 > foundations.md, decisions 2 and 7 to 11, which replaced the first
 > version of this design ("What changed", below). What each step built
@@ -71,7 +71,11 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
 - **A scope starts tasks one at a time.** `s.spawn` starts one, and
   `s.start` starts one and gives its handle, `t`, which can `t.join()`
   it, for what it returned, or `t.cancel()` it. `s.replace(key) fn() => ...` cancels the task already
-  running under that key first: one refresh per user, say.
+  running under that key first, and waits for it: one refresh per user,
+  say. Two tasks replacing one key at once still leave one task under
+  it. A scope that has ended starts nothing: a task of an outer scope
+  that captured it and spawns into it panics, since the new task would
+  outlive it.
 - **Everything is bounded.** `spawn` waits while `max` of the scope's
   tasks run, which is a server's backpressure, and `map` and `each` run
   `max` at once. The default is 64, so a server writes `max: 10_000`.
@@ -381,7 +385,10 @@ the scope ends. A `flush` holds the instance until it returns, so no
 sample is lost between `Exporter.send(pending)` and `pending = []`.
 A task spawned into the scope from outside any `with`, as a server's
 connections are, isn't cancelled when the scope's body ends: the scope
-waits for it.
+waits for it. It's the same for a spawn made by a task of a scope inside
+the `with`'s body, or by that task's tasks: their spawn is in the body
+too, so what they spawn into a scope outside it, able to reach the
+handler, is cancelled with the rest.
 
 ## Tests are deterministic
 

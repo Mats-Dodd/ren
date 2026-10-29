@@ -4924,6 +4924,17 @@ revisit if a step finds it wrong:
   key can be seen (an operation with no parameters gives the last
   instance's result). `keyed` isn't native: to_mem refuses it as any
   intrinsic it doesn't know, which the brief allows ("if cheap").
+- **A scope that has ended starts nothing** (step 9): a task of an outer
+  scope can capture an inner scope it was spawned in the body of, and
+  call `i.spawn` after `i` has ended; that's a panic, "a task is started
+  in a scope that has ended", since the new task would outlive its scope
+  and the frame it reads. A static rule would have to know which of two
+  scopes a helper is given is inner, so it's the run time's.
+- **A dependency call in an arm is still a change of all its handler's
+  state** (step 9), as decision 2's table says, though an operation keeps
+  its instance across its own calls: at one, `Async.until`, other tasks
+  do run the handler, and natively it's what keeps a borrow of the state
+  from changing under it there. Its note says so now.
 - **Cancelling the real `Proc.run` kills its program, not what it
   started** (step 8): `sh -c "sleep 5; true"` leaves its `sleep`
   running, since OCaml's `Unix` can't put a child in a process group of
@@ -5638,6 +5649,77 @@ silent, or differs from it:
   specified, and with limit_panic in the `same`, `release` and
   `tcc_same` loops. No `until` is left in test_tasks.ml.
 
+### Step 9, as built
+
+The review, with the brief's three lenses. What it found and fixed, each
+with a test in test_tasks.ml's s9 section:
+
+- **A task started in a scope that had ended** (unsound, structured
+  tasks). `Async.scope fn(o) => Async.scope fn(i) => o.spawn fn() =>
+  ...i.spawn ...`: the outer scope's task captured `i`, and once `i` had
+  ended its spawn still started a task, which outlived `i`, and `o` too
+  ("outer done" came before it). A scope now has `ended` (sched.ml,
+  `closed` sets it), and a spawn into one is the panic of "Where 11a may
+  differ". A spawn into a scope whose body has ended but whose tasks
+  haven't is still taken, and waited for.
+- **Two tasks replacing one key at once** (unsound, `s.replace`): both
+  found the old task, both waited for it, and both started theirs, so the
+  key had two. `Sched.spawn` now takes the key with its `equal`, and after
+  each wait, for room or for the task it cancels, asks again; there's no
+  wait between finding the key free and the room there and starting the
+  task. The keys of tasks that have ended are dropped, so a server that
+  replaces forever doesn't keep them all.
+- **A task spawned beside a `with` by a task inside its body** (unsound,
+  decision 7's background task): `with h() in Async.scope fn(i) =>
+  i.spawn fn() => o.spawn fn() => D.op()` started a task in `o` that
+  wasn't `h`'s background task, since `beside` looked only at the frames
+  of the task spawning, `i`'s, which isn't in the `with`'s body; so it
+  called `D.op()` after `h`'s `finally`. A task now keeps its `context`,
+  the `with`s its spawn was in (its spawner's frames, then its spawner's
+  context), and `beside` looks through the spawning task's frames and its
+  context. Scopes and `with`s are numbered in one order across tasks
+  (`Sched.begun`), so "began after the scope" means the same for any
+  task's `with`, and a frame is `over` once its body is, so a context
+  never names one that has ended.
+- **A block bound by `let` and passed to an operation** (the no-deadlock
+  rule, decision 10): Infer checked only blocks written at the call, so
+  `let g = fn() => Y.poke()` passed to `X.run` while a task in `Y.poke`
+  waited for `X` was the deadlock panic at run time. A `let` of a lambda
+  now keeps its body's calls (`ctx.let_blocks`, from `lambda_calls`), and
+  an operation's argument that's such a local is checked as one written
+  there is (`op_block`). A block parameter passed on to an operation is
+  still not checked statically (low: the run time's panics cover it).
+- **The stale note on a state read across a dependency call:** the error
+  stays, as decision 2's table has it, and its note says why now
+  (`Excl.dep_call_note`).
+
+What it checked and found sound, by program (scratch programs, not
+kept, beyond the tests above): a cancel that `attempt`, `retry(on:
+Cancelled)` or `call.fail(Cancelled)` would catch (each refused, or not
+seen); a handler's `finally` that fails with another error on a cancel
+(the task still stops); a holder cancelled while others queue, and a
+timeout on a queued caller (it never gets in; the state its arm changed
+is kept); `race` and `timeout` at equal times and at 0 or less, and
+nested; a `finally` that runs `Async.map` and a timeout past the
+cleanup deadline (cut at the deadline); an isolated panic with a task
+beside a `with` inside it; rule D through generics, `Option`, tuples,
+blocks returned and `var`s; rule C through a block bound by `let`, a
+helper's locals, nested scopes and loops; rule B through lambdas that
+call the parameter; and a seed's run, `Random` per task included, the
+same each time (`--seed`).
+
+The spec: the README's milestone holds (bench/tasks.t's `milestone`; by
+hand, `ren test --sim --seeds 200 main.ren` in bench/11a/tasks/lost_update
+fails with a seed, `--seed` with it fails the same way, and fixed.ren and
+cached.ren pass under `--seeds 1000`), and so does async.md's "Done when"
+as amended: the five programs are in examples/ and pass under `--seeds
+1000` (bench/tasks.t), an hour of virtual time takes milliseconds, the
+`just` runs a level's recipes at once, kills the rest on a failure, and
+replays byte for byte but its last line (examples/just.t), each error is
+a refusal test, and a failure in a task says its path. The docs: async.md
+says what this step fixed; the README's 11a row says done; runtime-io.md's
+11a row says what was built of it.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -5651,6 +5733,14 @@ silent, or differs from it:
 | 6 | ed2c9a8 | journal version 2: a task column, a call that waits in two lines, poll lines, cancel lines, second failures as comments (journal.ml, the scheduler's `journal` hooks); `ren replay` following the polls, strict about each entry's task and order, byte for byte for a concurrent run (examples/journal.t); a journal as a test keyed by task, with a schedule prefix, then the tape; version 1 refused with a help; examples/just/tests/build.journal re-recorded; bench/11a/tasks/journal as specified | steps 7 to 9 |
 | 7 | f5900d4 | `Net` in the prelude, its real implementation (lib/eval/net.ml) on non-blocking sockets and `Unix.select` in the scheduler's poll; SIGTERM caught by `ren run`, for `accept_until` or cancelling `main` (exit 143), a second ending it at once; the cleanup deadline after `accept_until` gives `None`; `sim.net()` and `sim.SimNet` in Ren, a test's default `Net`; `Net` recorded and replayed, a journal ending `exit 143`; examples/server landed, examples/net.t on the real `Net`; test_tasks.ml's s7 tests | steps 8 and 9 |
 | 8 | 0959e30 | `sync` in Ren: `channel`, `semaphore`, `limit() over any`, `batcher` (with `asked`); `keyed(n, h)` built in, each instance its own lock, a key's instance by a hash with no seed; `lib_panic`, natively too, said at the program's call; `sim.proc()` and `SimProc`, its programs' time passing without the instance (`sim_alarm`); the real `Proc.run` waiting as a task, a cancel killing its program; an arm's state kept when it's cancelled, and read again after `Async.until` however it ends; examples/crawler landed, the `just` folded into examples/just, recorded and replayed at once; bench/11a/limit and limit_panic native; test_tasks.ml's s8 tests on, and more; no `until` left | step 9 |
+| 9 | this commit | the review: a spawn into a scope that has ended is a panic; `s.replace` by two tasks at once leaves one task under the key; a task spawned beside a `with` by a task inside its body is its background task (`context`); a block bound by `let` and passed to an operation is checked by the no-deadlock rule; the across-a-dependency-call note reworded; README, async.md and runtime-io.md brought up to date; test_tasks.ml's s9 tests | nothing of 11a's plan; the low items in "Step 9, as built" and the steps' "as built" sections |
+
+Notes for whoever goes on from 11a: what's left is low, and listed in
+the steps' "as built" sections and step 9's. The ones most worth doing:
+a block parameter passed on to an operation isn't checked by the
+no-deadlock rule; a panic in a task spawned inside `Async.isolate` ends
+the program; `Unix.select` limits a program to about 1024 descriptors;
+`keyed` isn't native.
 
 Notes for step 9 on: what to review first, besides the brief's three
 lenses. The stale note "other tasks can run this handler at a dependency

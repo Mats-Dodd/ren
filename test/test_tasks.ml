@@ -15,6 +15,7 @@
      s5  `single` and `sim` as handlers, and virtual time
      s7  `sim.net()`, the network a test gets
      s8  the standard library, `sync`
+     s9  what the review found (compiler.md, "Step 9, as built")
 
    Step 6, the journal, is specified by test_journal.ml and the programs
    in bench/11a/tasks (bench/tasks.t), and the milestone too; step 7's
@@ -3040,4 +3041,259 @@ test "both entered" =
 
     1 passed, each under 300 seeds
     [exit 0]
+    |}]
+
+(* ---- s9: what the review found ---- *)
+
+let%expect_test "[s9 reject] a task started in a scope that has ended" =
+  (* a task of the outer scope captured the inner one in its body: once
+     the inner scope has ended, nothing can start in it, or the new task
+     would outlive it *)
+  run_error
+    {|
+fn main() uses Console, Async, Clock =
+  Async.scope fn(o) =>
+    Async.scope fn(i) =>
+      o.spawn fn() =>
+        Clock.sleep(Duration.ms(10))
+        i.spawn fn() => print("late")
+    print("inner done")
+  print("outer done")
+|};
+  [%expect {|
+    inner done
+    error: panic: a task is started in a scope that has ended
+      ┌─ test.ren:6:9
+    6 │         i.spawn fn() => print("late")
+      │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = in the task main/main:0
+      = a task never outlives its scope, so nothing starts in one that has ended
+      help: spawn it in a scope that's still running: the task's own, or one outside it
+    |}]
+
+let%expect_test "[s9 accept] a scope still waiting for its tasks takes more" =
+  (* the inner scope's body has ended, but not its task, so a task of the
+     outer scope can still start one in it, which it waits for too *)
+  run
+    {|
+fn main() uses Console, Async, Clock =
+  Async.scope fn(o) =>
+    Async.scope fn(i) =>
+      i.spawn fn() => Clock.sleep(Duration.ms(50))
+      o.spawn fn() =>
+        Clock.sleep(Duration.ms(10))
+        i.spawn fn() => print("in time")
+    print("inner done")
+  print("outer done")
+|};
+  [%expect {|
+    in time
+    inner done
+    outer done
+    ()
+    |}]
+
+let%expect_test "[s9 accept] two tasks replacing one key at once leave one task under it" =
+  (* each `replace` waits for the task it cancels; the one woken second
+     finds the first's new task under the key, and cancels that too *)
+  test ~seeds:300
+    {|
+pub dep Count =
+  enter: fn()
+  leave: fn()
+  most: fn() -> Int
+
+test handler count() for Count =
+  var n = 0
+  var m = 0
+  enter() =>
+    n += 1
+    if n > m then m = n
+  leave() => n -= 1
+  most() => m
+
+pub dep Inside =
+  nothing: fn()
+
+// counts the task in while it runs, and out however it ends
+test handler inside() for Inside uses Count =
+  let entered = Count.enter()
+  finally(r) =>
+    Count.leave()
+    try r
+  nothing() => ()
+
+test fn work() uses Count, Clock =
+  with inside() in
+    Clock.sleep(Duration.ms(30))
+
+test "one task under a key" =
+  with count() in
+    Async.scope fn(s) =>
+      s.replace("k") fn() => work()
+      Async.scope fn(t) =>
+        t.spawn fn() => s.replace("k") fn() => work()
+        t.spawn fn() => s.replace("k") fn() => work()
+    assert Count.most() == 1
+|};
+  [%expect {|
+    test.ren
+      ✓ one task under a key
+
+    1 passed, each under 300 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s9 reject] a block bound by `let` and passed to an operation calls back into it" =
+  (* it's checked as one written at the call is: the operation holds its
+     instance while it runs the block *)
+  check_error
+    {|
+dep Tally =
+  change: fn(f: fn(&Int))
+  get: fn() -> Int
+
+handler counts() for Tally =
+  var c = 0
+  change(f) =>
+    var x = c
+    f(&x)
+    c = x
+  get() => c
+
+fn main() uses Console =
+  with counts() in
+    let g = fn(&x) => x = Tally.get() + 1
+    Tally.change(g)
+    print(Tally.get())
+|};
+  [%expect {|
+    error: a block passed to `Tally.change` can't use `Tally`, which it would wait for while `Tally.change` runs it
+       ┌─ test.ren:15:27
+    15 │     let g = fn(&x) => x = Tally.get() + 1
+       │                           ^^^^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: call it before `Tally.change`, outside the block
+    |}]
+
+let%expect_test "[s9 reject] a block bound by `let` and passed to an operation uses what its type doesn't list" =
+  (* `X.run` holds `X` while `g` waits for `Y`, which a task in `Y.poke`
+     holds while it waits for `X`: refused, rather than the deadlock *)
+  check_error
+    {|
+dep X =
+  run: fn(f: fn())
+  get: fn() -> Int
+dep Y =
+  poke: fn()
+
+handler hx() for X =
+  var n = 0
+  run(f) =>
+    f()
+    n += 1
+  get() => n
+
+handler hy() for Y uses X =
+  var seen = 0
+  poke() => seen = X.get()
+
+fn main() uses Async =
+  with hx() in
+    with hy() in
+      let g = fn() => Y.poke()
+      Async.scope fn(s) =>
+        s.spawn fn() => X.run(g)
+        s.spawn fn() => Y.poke()
+|};
+  [%expect {|
+    error: a block passed to `X.run` can't use `Y`, which its parameter's type doesn't list
+       ┌─ test.ren:21:23
+    21 │       let g = fn() => Y.poke()
+       │                       ^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: list it in the parameter's type, `fn() uses Y`, or call it before `X.run`, outside the block
+    |}]
+
+let%expect_test "[s9 accept] a task spawned beside a `with` by a task inside its body is cancelled when it ends" =
+  (* the `with`'s body is main's, but the spawn into `o` is made by a task
+     of `i`, and by a task of a task's: each is beside the `with`, whose
+     instance its block can reach, so it's cancelled before `h`'s
+     `finally`, not left to call `D.op` after it *)
+  run
+    {|
+dep D =
+  op: fn() -> Int
+
+handler h() for D uses Console =
+  var n = 0
+  finally(r) =>
+    print("h ends")
+    try r
+  op() =>
+    n += 1
+    n
+
+fn main() uses Console, Async, Clock =
+  Async.scope fn(o) =>
+    with h() in
+      Async.scope fn(i) =>
+        i.spawn fn() =>
+          o.spawn fn() =>
+            Clock.sleep(Duration.ms(50))
+            print(D.op())
+          Async.scope fn(j) =>
+            j.spawn fn() =>
+              o.spawn fn() =>
+                Clock.sleep(Duration.ms(50))
+                print(D.op())
+      print("with body done")
+    print("with done")
+  print("outer done")
+|};
+  [%expect {|
+    with body done
+    h ends
+    with done
+    outer done
+    ()
+    |}]
+
+let%expect_test "[s9 accept] a task's task spawned outside a `with` it was spawned beside is cancelled with it" =
+  (* `sa`'s task is beside the `with`, and so is the task it spawns into
+     `sc`, though that task's spawner has ended by the time the `with`'s
+     body does *)
+  run
+    {|
+dep D =
+  op: fn() -> Int
+
+handler h() for D uses Console =
+  var n = 0
+  finally(r) =>
+    print("h ends")
+    try r
+  op() =>
+    n += 1
+    n
+
+fn main() uses Console, Async, Clock =
+  Async.scope fn(sc) =>
+    Async.scope fn(sa) =>
+      with h() in
+        sa.spawn fn() =>
+          sc.spawn fn() =>
+            Clock.sleep(Duration.ms(50))
+            print(D.op())
+        Clock.sleep(Duration.ms(10))
+        print("with body done")
+      print("with done")
+  print("outer done")
+|};
+  [%expect {|
+    with body done
+    h ends
+    with done
+    outer done
+    ()
     |}]

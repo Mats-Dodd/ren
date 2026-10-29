@@ -179,7 +179,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 7** | `Clock`, `Random` and `Console` as dependency types, with real implementations and test ones (done) |
 | **Stage 8** | `Fs`, `Os` and `Proc` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs`, `Os.args` and `test_os`, `Proc.run` and `test_proc` (done) |
 | **Stage 10** | the journal entry format |
-| **Stage 11a** | `Net`; fibers and `Async` on the ring; batched submission; cancellation that waits; linked operations; leased buffers returned to the pool when their count reaches zero |
+| **Stage 11a** | `Net`; fibers and `Async`; cancellation that waits (done in the interpreter: `Async`'s tasks are OCaml effects, and `Net`, `Clock` and `Proc.run` wait on `Unix.select` and timers, not a ring). Still to come from this row: the ring, batched submission, linked operations, and leased buffers returned to the pool when their count reaches zero |
 | **Stage 13** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls; a monotonic `Clock.instant` |
 | **Stage 15** | registered buffers for code without `Alloc` |
 | **Stage 17** | the ring replaced wholesale by the simulator; replay from journal entries |

@@ -612,6 +612,10 @@ and ctx = {
   binders : (int, bound_by) Hashtbl.t;
       (** which locals are parameters, or are bound by a `let`, by binder id,
           and not by a pattern: a message says where to write one's type *)
+  let_blocks : (int, call list ref) Hashtbl.t;
+      (** the calls in the body of each local bound by a `let` to a lambda,
+          by binder id: passed to an operation, it brings in only what its
+          parameter's type lists (Infer_expr.op_block) *)
   written_locals : (int, unit) Hashtbl.t;
       (** the locals whose type is written, a parameter's or a `let`'s or
           `var`'s, by binder id: assigning one narrows the value to it
