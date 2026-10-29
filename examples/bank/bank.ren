@@ -37,14 +37,15 @@ pub type Bank = opaque { accounts: Map<AccountId, Account>, next: Int }
     &self.accounts.set(to, a)
 
   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
-    if t.from == t.to then fail SameAccount
-    if not t.amount.positive() then fail NotPositive(t.amount)
-    var from = try self.get(t.from)
-    var to = try self.get(t.to)
-    try &from.debit(t.amount, Sent { amount: t.amount, to: t.to })
-    try &to.credit(t.amount, Received { amount: t.amount, from: t.from })
-    &self.accounts.set(t.from, from)
-    &self.accounts.set(t.to, to)
+    let { from, to, amount } = t
+    if from == to then fail SameAccount
+    if not amount.positive() then fail NotPositive(amount)
+    var out = try self.get(from)
+    var into = try self.get(to)
+    try &out.debit(amount, Sent { amount, to })
+    try &into.credit(amount, Received { amount, from })
+    &self.accounts.set(from, out)
+    &self.accounts.set(to, into)
 
   // every transfer, or, if one fails, none of them
   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =

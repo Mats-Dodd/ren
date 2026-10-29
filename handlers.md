@@ -92,7 +92,9 @@ pub handler cached(ttl: Duration) over Users uses Clock =
       Some((u, at)) if Clock.now() - at < ttl => Some(u)
       _ =>
         let found = try next.get(id)
-        if found is Some(u) then &cache.set(id, (u, Clock.now()))
+        match found
+          Some(u) => &cache.set(id, (u, Clock.now()))
+          None => ()
         found
   save(u) =>
     try next.save(u)

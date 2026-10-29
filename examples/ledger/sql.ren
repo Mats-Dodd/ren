@@ -20,10 +20,7 @@ pub handler mem_sql(balances: Array<(Str, Int)>, down: Outage) for Sql =
   var kept = Map.of(balances)
   var begun = 0
   var asked = 0
-  get(name) =>
-    match rows.get(name)
-      Some(b) => b
-      None => 0
+  get(name) => rows.get(name) orelse 0
   set(name, balance) => &rows.set(name, balance)
   begin() =>
     asked += 1

@@ -190,7 +190,17 @@ falls short it says so.
   callee, a call's argument or a `let`'s value, but for an instance's
   operations, and no type argument has a function type in it. Infer
   checks the same of the source first (`check_blocks`, and resolve.ml's
-  `no_kept_blocks` for written types).
+  `no_kept_blocks` for written types). Since the data stage a record
+  pattern (`PRecord`) has a pattern for each of its type's fields, in
+  declaration order; an or-pattern's alternatives bind the same
+  variables at the same types, and `PAs` binds the whole of what its
+  pattern matched; and a variant type (`Ty.Variant`, `Order.Placed`) is
+  its sum's value: a field read and an update at one are at its
+  constructor's fields, `Of_variant` takes one back to its sum without
+  changing it, and an `as` binds one only on a pattern of its own
+  constructor. Core Lint checks each. `Core.program`'s `method_calls`
+  lists each operation called on a description as a method, which
+  stateless.ml checks on the linked program (Data stage, step 6).
 - **Mem IR**, later, makes every allocation, copy, count operation and
   free an explicit instruction, so the resource checks read them off
   rather than guess them.
@@ -2314,7 +2324,7 @@ or 65,536 constructors), packed into words after its other fields,
 the widest first, each in the first word with room: Lean's scalar
 fields after the objects (lean.h:592-612, `lean_ctor_get_uint8` and
 `ctor_set_uint*`). Only where that saves a word, so a lone `Bool`
-keeps its own. rbtree's `Node(color, left, key, value, right)` is four
+keeps its own. rbtree's `Node { color, left, key, value, right }` is four
 words, not five, its color and value in one. A type with parameters
 keeps a word a field in the order they're declared, since generic code
 finds a field where any other does. Mem says it in two operations,
@@ -5908,9 +5918,9 @@ relevance,** each with a `.expected` as bench/10d's and bench/11a's
 bench/build.t's last section runs them through `spec`. The step that
 lands one says `as specified` there and adds it to the loops that check
 native builds against `ren run`: `same` (debug, Perceus and naive, under
-the sanitizers), `release`, and `tcc_same`. Step 7's three kernels run
-today, so they say `as specified` already; step 7 adds them to the
-loops once it has measured them.
+the sanitizers), `release`, and `tcc_same`. Step 7's three kernels ran
+from the start, so they said `as specified` already; step 7 added them
+to the loops once it had measured them.
 
 | step | expect tests (test/test_data.ml) | bench/data |
 |---|---|---|
@@ -5920,7 +5930,7 @@ loops once it has measured them.
 | 4 | `as` binds the variant type; fields, patterns, update and `var` on one; back to the sum; returned, stored, passed; `==`, order, `hash` and `show` borrowed; a generic sum's; an or-pattern's `as` is the sum; seven refusals | variants |
 | 5 | a field of a sum, of several variants, of every variant; missing arms to paste, by name, and errors (six refusals); `todo` panics, and leaves a `let ... else` | todo_panic |
 | 6 | three refusals of a stateful description called as a method; a stateless one still called; a stateful one installed beside | shapes (the ADT) |
-| 7 | (no output changes) | nested, rows, optional (one per fault), interp (the milestone) |
+| 7 | none | nested, rows, optional (one per fault), interp (the milestone); the last lines of nested, rows and optional print fields, not the value, whose `show` boxed its type (step 7's choices) |
 
 The end-to-end program is test_data.ml's "[s3 accept] a program, end to
 end": language.md's "A program, end to end" without `|>` and wirings, in
@@ -6071,8 +6081,10 @@ fpat      := IDENT [":" pattern]                     (punned without `:`: binds
 arm       := (pattern | fails) ["if" expr] "=>" body (unchanged: `fails` are
                                                        `fail` patterns joined by
                                                        `|`, never with `as`)
-lparam    := ... | "{" fpats "}" [":" type]
-for       := "for" [IDENT ","] (IDENT | tuple_pat | "{" fpats "}") "in" ...
+lparam    := ... | ("(" | "{" | UIDENT) pattern [":" type]
+                                                     (taken apart: one that
+                                                       always matches)
+for       := "for" [IDENT ","] pattern "in" ...      (the same)
 ```
 
 **`..` and punning.** In a value, `..base` comes first and once, then
@@ -6569,7 +6581,9 @@ kernel bench/data has for it, with `ren build --release --stats` (its
 allocations) and bench/native/measure.sh (time and cycles). Today, on
 this machine (a cloud container; the owner re-measures headline numbers
 on the M4 Max), the kernels allocate: nested 200,005, rows 100,006,
-optional 101,004, for 100,000 items each.
+optional 101,004, for 100,000 items each (as specified; each fix's
+**Built** has what it allocated before and after, measured with a last
+line that no longer `show`s the value: nested 66,671 before).
 
 1. **A small record inside a small variant is boxed** (to_mem.ml,
    `small`, around 395 to 420). A constructor's fields must each be a
@@ -6621,7 +6635,8 @@ optional 101,004, for 100,000 items each.
    B(Int)` is two words, not three. A boxed constructor's tag is
    already its header's. (b) **Pointer niches:** `Nullable (0, 1)`,
    today two constructors, one without fields and one of one object,
-   becomes `Niche of { obj_ctor : int; slot : int }`: any sum with one
+   becomes `Niche of { obj_ctor : int; slot : int }` (built as `Niche {
+   obj_ctor; slot; ctors }`, below): any sum with one
    constructor that has fields, at least one an object after
    flattening, and any number without, has no tag; its object slot
    holds the object for `obj_ctor`, and for the `i`-th constructor
@@ -6658,7 +6673,9 @@ and records the numbers in bench/native/RESULTS.md, a section "The data
 stage", with the commands that reproduce them and the machine they came
 from. That's foundations.md's "Done when" with the bank, the shop and
 the ledger reading as language.md's end-to-end program (step 2's
-migration, step 3's `let ... else` where it fits). **Built** (step 7,
+migration, step 3's `let ... else` where it fits; at 94d4cf7 they used
+none of the new forms but by-name variants, and step 8 made them read
+so: Step 8, as built). **Built** (step 7,
 part 4; its choices are below): on the cloud container, release, one
 hyperfine run, the ADT kernel takes 163.5 ms to Rust's `interp enum`'s
 144.5, **1.13×**, on 886 million instructions to Rust's 871; Rust's
@@ -6995,6 +7012,125 @@ revisit if a step finds it wrong:
 - **Only a small record or tuple is flattened into its parent** (step
   7); a nested small sum stays boxed, since flattening a tag into a tag
   is more than language.md's fault asks for.
+- **A recursive `match` isn't yet the fast way** (open, medium; step 7,
+  part 4). language.md's ethos says the obvious way is the fast way, and
+  §1 that an ADT costs "an inline tag, no indirection". The milestone's
+  ADT kernel is 1.13× Rust's `interp enum`, but 1.60× Ren's own
+  descriptions version of the same kernel (RESULTS.md, "The data stage:
+  the milestone"): a `match` is one jump table for every node, which the
+  predictor can't learn across a random tree, where each description's
+  `eval` calls its children from the arm it's in, eight sites it tells
+  apart. Rust's enum is 2.56× its `dyn` here, the same shape. The ADT
+  kernel is the program the docs teach and costs what Rust's does; per-arm
+  dispatch (threaded code) is a code-generation question past this stage.
+  This is a gap against language.md, not a choice.
+- **`Obj_tag` stays on its instructions, not on the milestone's time**
+  (step 7, part 4). It takes `eval` from 965 to 886 million
+  instructions, but with GCC's default code layout the kernel's time
+  went from 140.0 to 163.5 ms in the table's run (1.06× to 1.18× in
+  six), from where GCC places the jump table's targets: the same C with
+  branches aligned is 0.78×, and with clang 0.94×. deriv and cfold,
+  whose C differs only in that read, take 0.90× to 0.93× the time. So
+  the milestone's 1.13× is with it; at 213b4a9 that one run had the
+  kernel at 0.97× Rust's.
+- **`show`, `==` and `hash` still box a small value's type
+  program-wide** (unfinished, medium; step 7, part 2, "The walks still
+  box"): the walks are given a word, so one `print` of a value anywhere
+  in a program boxes its type everywhere, undoing the layout fixes for
+  that type. language.md's fixes hold for a type no walk sees, and the
+  kernels measure theirs with last lines that print fields, not the
+  value. Walks that read a struct by its address change the
+  descriptors, the walks' signatures, generic code that takes a word,
+  and the debug build: later.
+- **Error tags stay positional,** `! Short(account: AccountId, by:
+  Money)`, `fail Short(a, b)`, `fail Short(_, by) =>`. language.md's
+  "several fields by name" is about variants of data; tags are
+  structural, and formats.md (signed off) writes `fail Short(_, need)`.
+  So a tag with two payloads of one type keeps the reordering hazard
+  language.md names for variants.
+- **An unknown field's error says "`Order` has no field named
+  `stauts`"**, the compiler's one wording for an unknown field (record
+  literals and reads said it before this stage), where language.md
+  writes "has no field `stauts`"; the "did you mean `status`?" is as
+  written.
+- **`ren check` doesn't report a stateful description called as a
+  method** (known, low). It's checked on the linked program (above), so
+  `ren check`, which the Zed task and an editor run on one file, never
+  shows it; `ren run`, `ren test` and `ren build` do. A check of what
+  one module makes and calls itself could run in `ren check` later.
+
+### Step 8, as built
+
+Step 8 reviews the stage with three lenses, soundness, the spec, and the
+docs and tooling, as three reviews over 94d4cf7. This commit is the
+spec's and the docs': the examples and the documents. The soundness
+review's compiler fixes follow in their own commit.
+
+**The examples read as language.md's end-to-end program does.** None
+of the bank, the shop and the ledger used `{ ..x }`, a record pattern
+or `let ... else` at 94d4cf7, so "Done when" didn't hold yet. Now:
+
+- **The bank.** `Bank.transfer` takes its `Transfer` apart, `let {
+  from, to, amount } = t`, and writes each movement punned, `Sent {
+  amount, to }` and `Received { amount, from }`, the accounts it changes
+  `out` and `into`. `Movement.change` is a `match` with an or-pattern,
+  `Deposited(m) | Received { amount: m, .. } => m` and `Sent { amount, ..
+  } => -amount`, and account.ren's new test, "a statement adds up to the
+  balance", takes each entry apart in a block's parameter,
+  `a.statement().map(fn({ what, .. }) => what.change()).sum() ==
+  a.balance()`. Its README says so, notes that `todo` isn't the panic
+  the `-1` arms want, and that the bank doesn't build natively (`Clock`
+  and `Map`).
+- **The shop.** An invoice's `Status` gains `Paid { amount: Int,
+  charge: stripe.ChargeId }`. `invoice.pay` gives back the invoice paid,
+  `! Declined(amount: Int) | NothingDue`: `let Due(amount) = i.status
+  else fail NothingDue`, then `{ ..i, status: Paid { amount, charge: try
+  stripe.charge(amount) } }`. `checkout` takes the charge out with a
+  record pattern, `{ status: Paid { charge, .. }, .. } =>
+  stripe.receipt(charge)`, its `_ => 0` arm for an invoice that isn't
+  paid, which `pay` never gives but the type allows. cart.ren gains
+  language.md's policy ADT, `Discount` with `Flat(off: Int)` and
+  `OverAmount { min: Int, off: Int }` and `apply`, and `Cart.total_after`;
+  `main` prints a paid invoice and a discounted total. The shop has
+  tests now, of `pay` and of the discount, so THE CHECKS run them. It
+  builds natively, and its debug and release builds print what `ren
+  run` does (it's in build.t's `same` loop under the sanitizers).
+- **The ledger.** `mem_sql`'s `get` is `rows.get(name) orelse 0`. Its
+  data is names and balances in a `Map`, and its subject is handlers,
+  `over`, `next` and `finally`, so there's no sum or record to take
+  apart: a `Transfer` record for `transfer(from, to, amount)` would add
+  a constructor at each call and say nothing the three parameters
+  don't, and `transaction`'s `finally` can't be a `let Ok(v) = r else
+  ...`, since its `else` ends in `try r`, which isn't one of the leaves.
+- examples.t's outputs promoted, each diff read: the shop's new lines
+  and interface, `Movement.change` in the bank's interface, the bank's
+  line numbers, its tests' count, and the two edits that add `TooLarge`
+  to `transfer`, rewritten for its new lines.
+
+**The docs review's findings,** fixed: Zed's grammar `rev`, 2f322dd
+(10d's grammar) to 94d4cf7, which has every node the queries name;
+README's status (11a and the data stage), its roadmap row (done, with
+the milestone), `if found is Some(u)`, which isn't Ren, as a `match` in
+README and handlers.md, §2's update block, which treated a sum as a
+record, the tour's rule for by name and positional; language.md's "What
+Ren has today", each row today's behaviour only, a layout row, the
+date; this section's grammar (`lparam` and `for` take any pattern),
+step 7's spec text (the counts before, `Niche`'s record), the tests'
+tense and step 7's row, the Core paragraph of "What each IR promises",
+step 10's rbtree `Node { ... }`; parser.ml's header (a variant type);
+deps.md's error example, now its own `Route`'s; the bank README's
+`todo`; editors/zed/README.md's note on what the colours can't tell;
+differential.py reads bench/data/*.ren too, and agrees on all of them.
+Left for the owner, as the review says: language.md's design sections
+that the stage made stale (the layout fixes "not yet benchmarked", the
+`dep Expr` one-liner and `-> ()`, which don't parse), and
+foundations.md's Staging item 5 and decision 14's "a pointer that may
+be null", now a niche.
+
+**The spec review's unrecorded items** are in "Where the data stage
+may differ from language.md", above: the ADT kernel against the
+descriptions, `Obj_tag`'s time, the walks' boxing, error tags, the
+"named" wording, and `ren check`'s blind spot.
 
 ### Progress log
 
@@ -7010,7 +7146,8 @@ revisit if a step finds it wrong:
 | 7 (part 1) | d86b474 | the before measurements of all three faults, the kernels and bench/native's suite at 8c7c65c (bench/native/RESULTS.md, "Data stage: layout", with the commands and the machine), and the first fix: a small record or tuple in a small value flattened into its slots, the budget counted in slots (to_mem.ml: `small`'s places and `Flat`, `small_of`, `struct_shape`, `flat_var`, `flat_slots`, `within`, a pattern's `flats` and `pending`), so nested.ren allocates 4, not 66,671, and a copy with 100 times its items runs in 17 ms, not 64; three faults of boxed values' counting the tests found, fixed (reuse.ml's sizes known by path, a heap overflow; rc.ml's slot nested once, and a changing variable's views); bench/data's layout, layout_walks, layout_panic and reuse_arms, and the three kernels, in build.t's loops and a release naive one; build.sh's dispatch kernels, which step 6's rename broke, and measure.sh's peak memory on Linux | the second fix (an array of counted structs inline) and the third (byte tags and niches), each measured; rows.ren's and optional.ren's last lines `show` the value, which boxes its type and hides the fix (step 7's choices); the milestone kernel against Rust; `if c then None else p` in debug builds (step 7's choices) |
 | 7 (part 2) | 7c68889 | the second fix: an array of small values that hold objects keeps them inline, counted by the mask of their slots that hold objects, which the array's header keeps in its `objs` byte (1 for counted words, as before), instead of boxing their type program-wide: to_mem.ml's `plain_layout` and `element` no longer demote; ren_rt.h's and ren_rt.c's arrays count by the mask (`REN_ELEM_OBJS` for freeing, copying, the shared mark, splices and joins; `ren_slots_dup` and `ren_slots_drop`; inline reads, writes, field writes and pushes of counted structs, and their hoisted loops' buffer macros); emit_c.ml's `struct_mask` and each operation's C; Mem Lint (arrays of counted structs of at most eight slots, a field written at its slot's layout) and hoist.ml (a field write's struct agrees with a read's); and a fault the suite found: a walk reads an array's elements as words, so a small type that's an array's element anywhere in a walked value is boxed (`no_struct_elements`, for each closed type's descriptor and each built at run time past the specialization budget), which `show` of a record holding an array of uncounted structs crashed on at d86b474 too (build.t's walked_arrays). rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4 (a copy with 100 times the items 187 ms, not 446, 162 MB, not 402); of the suite only slices' C changes in substance, 96 million allocations, not 164 million, 0.88× the time, its `json` kernel 0.78× (RESULTS.md, "Data stage: layout"); rows.ren's last line prints the element's fields; bench/data's rows_objs and rows_panic in build.t's loops and the release naive one, layout_walks' arrays in a walked record, test_native's Mem Lint tests of arrays of counted structs. Choices: below the table | the third fix (byte tags and niches), measured; optional.ren's last line `show`s the value, which boxes its type and hides the fix; the milestone kernel against Rust; borrowed reads of an array's struct, and swap-out of one's objects (step 7's choices, part 2); `if c then None else p` in debug builds (part 1's choices) |
 | 7 (part 3) | 213b4a9 | the third fix: a sum with one constructor that has fields, one of them an object after flattening, and any number without has no tag, `Niche { obj_ctor; slot; ctors }` for `Nullable`, its first object's slot holding `ren_box(UINT32_MAX - t)` for each constructor `t` without fields, read by `ren_niche_tag` or one compare; any other sum's tag is a byte (16 or 32 bits past 256 or 65,536 constructors), `Tagged bits`, each constructor's small scalars (`Bool`, `()`, enums, sized types under 64 bits) packed above it in slot 0, the widest first, and the whole word as before where none is (to_mem.ml's `small` and `small_ctor`, mem.ml(i), emit_c.ml's `Tag_of`, ren_rt.h, Mem Lint's sum structs and niches); and the debug builds' Mem Lint fault from step 3, `if c then None else p`: Mem was right, a boxed constructor without fields is a scalar that holds no reference, and Lint's join counted the parameter dropped on the constant's path against the one moved on the other; a path where some of a class hold constants may now hold fewer references than the paths where none do, at most one fewer for each constant (test_native's two cases, bench/data/niche_join). `Option<Item>` is two words, not three: optional.ren allocates 4, not 101,004, once its last line prints `best`'s fields (4 at 7c68889 too with that line; 2% fewer instructions, the copy with 100 times the items 411 to 401 million, and an array of a million options 25.2 MB to 17.6 MB, 309 to 256 million instructions, 0.80× the time); no program or kernel of the suite compiles to different C (RESULTS.md, "Data stage: layout"); variant types of a niche'd sum cost nothing (niche_reuse: nothing allocated in release, each update a reuse in debug); bench/data's niche, niche_walks, niche_panic, niche_reuse and niche_join in build.t's loops and the release naive one. Choices: below the table | the milestone kernel against Rust; a niche'd or tagged struct as a field of another is still boxed, not flattened (an option of an option, an option in a record); borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
-| 7 (part 4) | this commit | the milestone: bench/native/interp, dispatch's `interp` written ADT-first (`Expr` a sum of eight constructors, `eval` a `match`), at dispatch's sizes (25,600 evaluations; 3, which prints 105), printing what dispatch's Rust twin's `interp enum` and `dyn` print (-326745600) and `ren run` does; in build.sh (which builds no twins for it), measure.sh's `time` (the ADT kernel, Rust enum and `dyn`, dispatch's descriptions, one hyperfine run) and `stats`, summarize.py's milestone table, native.t, bench/dune and build.t's loops; bench/data/interp in build.t's four loops and the release naive one. Measured on the cloud container (RESULTS.md, "The data stage: the milestone"): the ADT kernel 1.13× Rust's enum, 2.90× its `dyn`, 1.60× Ren's descriptions, which are 1.81× `dyn`; both `match`es bound by their jump table. One overhead removed: `Obj_tag`, the tag of a boxed sum all of whose constructors have fields read from its header with no scalar test (mem.ml(i), to_mem.ml's `tag_of` at a `match`'s switch and a nested pattern's test; emit_c.ml; Mem Lint, a `Boxed` operand), `eval` 965 to 886 million instructions, its time moving with GCC's layout either way (1.06× to 1.18× by default, 0.78× with branches aligned, clang 0.94×); deriv 0.90× to 0.92× and cfold 0.91× to 0.93× the time, 7% and 5% fewer instructions, the only programs of the suite whose C changes. Choices: below the table | the overheads left in `eval` (step 7's choices, part 4): the stack check, checked `+` and `-` and `env[i]`'s bounds check, the language's; the switch's unreachable default, not made undefined; a niche'd or tagged struct as a field of another still boxed; borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
+| 7 (part 4) | 94d4cf7 | the milestone: bench/native/interp, dispatch's `interp` written ADT-first (`Expr` a sum of eight constructors, `eval` a `match`), at dispatch's sizes (25,600 evaluations; 3, which prints 105), printing what dispatch's Rust twin's `interp enum` and `dyn` print (-326745600) and `ren run` does; in build.sh (which builds no twins for it), measure.sh's `time` (the ADT kernel, Rust enum and `dyn`, dispatch's descriptions, one hyperfine run) and `stats`, summarize.py's milestone table, native.t, bench/dune and build.t's loops; bench/data/interp in build.t's four loops and the release naive one. Measured on the cloud container (RESULTS.md, "The data stage: the milestone"): the ADT kernel 1.13× Rust's enum, 2.90× its `dyn`, 1.60× Ren's descriptions, which are 1.81× `dyn`; both `match`es bound by their jump table. One overhead removed: `Obj_tag`, the tag of a boxed sum all of whose constructors have fields read from its header with no scalar test (mem.ml(i), to_mem.ml's `tag_of` at a `match`'s switch and a nested pattern's test; emit_c.ml; Mem Lint, a `Boxed` operand), `eval` 965 to 886 million instructions, its time moving with GCC's layout either way (1.06× to 1.18× by default, 0.78× with branches aligned, clang 0.94×); deriv 0.90× to 0.92× and cfold 0.91× to 0.93× the time, 7% and 5% fewer instructions, the only programs of the suite whose C changes. Choices: below the table | the overheads left in `eval` (step 7's choices, part 4): the stack check, checked `+` and `-` and `env[i]`'s bounds check, the language's; the switch's unreachable default, not made undefined; a niche'd or tagged struct as a field of another still boxed; borrowed reads of an array's struct, and swap-out of one's objects (part 2's choices) |
+| 8 (examples and docs) | this commit (examples and docs); compiler fixes follow | the review's spec and docs lenses (Step 8, as built): the bank's `transfer` with `let { from, to, amount } = t` and punned `Sent { amount, to }`, `Movement.change` with an or-pattern, a test taking entries apart in a block's parameter; the shop's `Paid { amount, charge }`, `pay` with `let Due(amount) = i.status else fail NothingDue` and `{ ..i, status: Paid { ... } }`, `checkout` by a record pattern, the `Discount` policy ADT in cart.ren, the shop's first tests, its native builds checked against `ren run`; the ledger's `get` with `orelse`; examples.t promoted; the docs review's findings (Zed's grammar `rev`, README's status, roadmap, `if found is`, §2 and the tour's rule, handlers.md, language.md's "What Ren has today", this section's grammar, tests and step 7 text, the Core paragraph, rbtree's `Node`, parser.ml's header, deps.md's example, the bank and Zed READMEs, differential.py over bench/data); the spec review's unrecorded items in "Where the data stage may differ" | the soundness review's compiler fixes; the owner's items (language.md's stale design text, foundations.md's Staging item 5 and decision 14); the open items above: a recursive `match` against descriptions, the walks' boxing, `ren check`'s blind spot |
 
 Step 1's choices, where the sections above are silent:
 

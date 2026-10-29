@@ -270,13 +270,25 @@ error: expected `Api uses Db`, found `Api uses Clock, Db`
   error whose help writes the `with` that keeps one instance for as
   long as it's wanted:
 
+```ren
+handler hits() for Route =        // counts the paths it's handled
+  var n = 0
+  handle(path) =>
+    n += 1
+    path
+
+fn main() =
+  let r = hits()
+  print(r.handle("/"))
 ```
-error: `c` may be a description of `counter`, which keeps state, so it isn't called as a method
-   ┌─ main.ren:12:11
-12 │   print(c.area())
-   │           ^^^^
+
+```
+error: `r` may be a description of `hits`, which keeps state, so it isn't called as a method
+   ┌─ main.ren:15:11
+15 │   print(r.handle("/"))
+   │           ^^^^^^
    = a call as a method makes a fresh instance, so its state would start again at each call
-   help: install it: `with c in Area.area()`
+   help: install it: `with r in Route.handle("/")`
 ```
 
   Which handlers a description may be is the whole program's to say, so

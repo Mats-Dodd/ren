@@ -174,14 +174,23 @@ public function that needs it, and methods. A `Cart` has methods that
 change it (called with `&`), an associated function and an associated
 value, and the opaque `UserId` gets its whole API from the members under
 it. Since stage 6 a charge over the card's limit is declined, which
-`checkout` handles with a `fail` arm:
+`checkout` handles with a `fail` arm. Since the data stage a paid invoice
+says what it was charged, `Paid { amount, charge }`: `pay` takes what's
+due out with `let Due(amount) = i.status else fail NothingDue` and gives
+back the invoice updated, `{ ..i, status: Paid { amount, charge: ... }
+}`, `checkout` takes the charge out with a record pattern, `{ status:
+Paid { charge, .. }, .. }`, and a cart's total can take a `Discount`, a
+policy that's data, `OverAmount { min: 20, off: 5 }`, with `apply`:
 
   $ ren run shop/main.ren
   Invoice { plan: Free, status: Free }
   0
+  10
+  Ok(Invoice { plan: Pro(1), status: Paid { amount: 10, charge: ChargeId(1010) } })
   7
   2
   30
+  25
   0
   0
   0
@@ -197,6 +206,8 @@ it. Since stage 6 a charge over the card's limit is declined, which
     pub fn raw(self) -> Int
   
   -- cart
+  pub type Discount
+    pub fn apply(self, m: Int) -> Int
   pub type Cart
     pub fn of(owner: UserId) -> Cart
     pub let guest: Cart
@@ -205,6 +216,7 @@ it. Since stage 6 a charge over the card's limit is declined, which
     pub fn clear(inout self)
     pub fn len(self) -> Int
     pub fn total(self) -> Int
+    pub fn total_after(self, d: Discount) -> Int
     fn prices(self) -> Array<Int>
   
   -- billing/stripe
@@ -214,7 +226,7 @@ it. Since stage 6 a charge over the card's limit is declined, which
   
   -- billing/invoice
   pub fn make(p: Plan) -> Invoice
-  pub fn pay(i: Invoice) -> Option<stripe.ChargeId> ! Declined(Int) uses Console
+  pub fn pay(i: Invoice) -> Invoice ! Declined(Int) | NothingDue uses Console
   
   -- main
   fn checkout(p: Plan) -> Int uses Console
@@ -471,6 +483,8 @@ copies of two accounts and sets them back only if neither failed:
   pub type AccountId
     pub fn of(n: Int) -> AccountId
   pub type Refusal = ! Short(AccountId, Money) | Frozen(AccountId)
+  pub type Movement
+    pub fn change(self) -> Money
   pub type Account
     pub fn open(id: AccountId) -> Account
     pub fn balance(self) -> Money
@@ -537,7 +551,7 @@ A new way for a transfer to fail has to be handled wherever its errors
 are told apart. The compiler points at each place that has to decide what
 to do about it:
 
-  $ cp -r bank b4 && perl -0pi -e 's/( \| SameAccount)\n/$1 | TooLarge(amount: Money)\n/; s/(    var from = try self.get\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b4/bank.ren
+  $ cp -r bank b4 && perl -0pi -e 's/( \| SameAccount)\n/$1 | TooLarge(amount: Money)\n/; s/(    var out = try self.get\(from\))/    if amount.in_cents() > 1000000 then fail TooLarge(amount)\n$1/' b4/bank.ren
   $ ren check b4/main.ren
   error: this `match` doesn't handle every error it can fail with
      ┌─ b4/main.ren:34:3
@@ -571,16 +585,16 @@ test's use of a private item is reported at the first one only:
      help: mark `Transfer` `pub`
   
   error: `pub fn Bank.batch`'s signature mentions `Transfer`, which is private to this module
-     ┌─ b5/bank.ren:50:38
+     ┌─ b5/bank.ren:51:38
   17 │ type Transfer = { from: AccountId, to: AccountId, amount: Money }
      │      -------- `Transfer` is declared here, without `pub`
-  50 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
+  51 │   pub fn batch(inout self, ts: Array<Transfer>) ! TransferError uses Clock =
      │                                      ^^^^^^^^
      help: mark `Transfer` `pub`
   
   error: `Transfer` is private, and a test sees what an importer sees
-     ┌─ b5/bank.ren:96:22
-  96 │   try &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(4) })
+     ┌─ b5/bank.ren:97:22
+  97 │   try &acme.transfer(Transfer { from: a, to: b, amount: Money.dollars(4) })
      │                      ^^^^^^^^
      = a test is a specification of `bank`'s interface
      help: mark it `pub`, or explore it in the console: `ren console bank`
@@ -589,14 +603,14 @@ test's use of a private item is reported at the first one only:
 The same new failure, left out of `TransferError`: a public function's
 signature lists exactly what it can fail with, so `transfer` is wrong now:
 
-  $ cp -r bank b6 && perl -0pi -e 's/(    var from = try self.get\(t.from\))/    if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)\n$1/' b6/bank.ren
+  $ cp -r bank b6 && perl -0pi -e 's/(    var out = try self.get\(from\))/    if amount.in_cents() > 1000000 then fail TooLarge(amount)\n$1/' b6/bank.ren
   $ ren check b6/main.ren
   error: `pub fn Bank.transfer` can fail with `TooLarge`, but its signature doesn't say so
      ┌─ b6/bank.ren:39:10
   39 │   pub fn transfer(inout self, t: Transfer) ! TransferError uses Clock =
      │          ^^^^^^^^
-  42 │     if t.amount.in_cents() > 1000000 then fail TooLarge(t.amount)
-     │                                           ----------------------- this fails with `TooLarge`
+  43 │     if amount.in_cents() > 1000000 then fail TooLarge(amount)
+     │                                         --------------------- this fails with `TooLarge`
      = `Bank.transfer` can only fail with what's after its `!`
      help: add `TooLarge(Money)` after `!`, or handle it here with `match`
   [1]
@@ -658,10 +672,10 @@ Stamping an entry reads the clock, so a public signature that drops
   $ cp -r bank b11 && perl -0pi -e 's/(pub fn credit[^\n]*) uses Clock =/$1 =/' b11/account.ren
   $ ren check b11/main.ren
   error: `Account.credit` doesn't declare `Clock`
-     ┌─ b11/account.ren:49:10
-  49 │   pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) =
+     ┌─ b11/account.ren:55:10
+  55 │   pub fn credit(inout self, m: Money, what: Movement) ! Frozen(account: AccountId) =
      │          ^^^^^^
-  52 │     &self.statement.push(Entry { at: Clock.now(), what })
+  58 │     &self.statement.push(Entry { at: Clock.now(), what })
      │                                      ----------- this call uses `Clock`
      = a public function without `uses` uses nothing, and its body is checked against that
      help: add `uses Clock`
@@ -848,6 +862,7 @@ says no, with `attempt`, one runs `main` and checks what it printed, and
     ✓ a frozen account takes nothing in
     ✓ a debit can't go below zero
     ✓ each change is stamped with the time
+    ✓ a statement adds up to the balance
   
   bank.ren
     ✓ a deposit is stamped with the time
@@ -872,7 +887,7 @@ says no, with `attempt`, one runs `main` and checks what it printed, and
   main.ren
     ✓ main prints the balances, and every refusal
   
-  19 passed
+  20 passed
 
 If `debit` only checks the balance isn't negative, an account can go
 below zero. The tests that check nothing moved show the two banks, and
@@ -885,6 +900,7 @@ below zero. The tests that check nothing moved show the two banks, and
     ✓ a frozen account takes nothing in
     ✗ a debit can't go below zero
     ✓ each change is stamped with the time
+    ✓ a statement adds up to the balance
   
   bank.ren
     ✓ a deposit is stamped with the time
@@ -909,9 +925,9 @@ below zero. The tests that check nothing moved show the two banks, and
   main.ren
     ✗ main prints the balances, and every refusal
   
-  ──── a debit can't go below zero ── account.ren:79
+  ──── a debit can't go below zero ── account.ren:85
      │
-  79 │   assert attempt &a.debit(Money.dollars(7), out) == Err(Short(AccountId.of(1), Money.dollars(2)))
+  85 │   assert attempt &a.debit(Money.dollars(7), out) == Err(Short(AccountId.of(1), Money.dollars(2)))
      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      │
      left:  Ok(())
@@ -920,9 +936,9 @@ below zero. The tests that check nothing moved show the two banks, and
   
      seed 736 · rerun: ren test b12 --only "a debit" --seed 736
   
-  ──── an overdraft is refused, and nothing moves ── bank.ren:113
+  ──── an overdraft is refused, and nothing moves ── bank.ren:114
       │
-  113 │   assert acme == before
+  114 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
       left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(-100), ...)), ...]), ...)
@@ -931,9 +947,9 @@ below zero. The tests that check nothing moved show the two banks, and
   
       seed 3529 · rerun: ren test b12 --only "an overdraft" --seed 3529
   
-  ──── a batch that fails moves nothing ── bank.ren:151
+  ──── a batch that fails moves nothing ── bank.ren:152
       │
-  151 │   assert acme == before
+  152 │   assert acme == before
       │          ^^^^^^^^^^^^^^
       │
       left:  Bank(accounts: Map.of([(AccountId(1), Account(..., balance: Money(1100), ...)), ...]), ...)
@@ -967,7 +983,7 @@ below zero. The tests that check nothing moved show the two banks, and
        true
        3
   
-  15 passed, 4 failed
+  16 passed, 4 failed
   [1]
 
 The price lookup puts a cache with expiry in front of a supplier that a

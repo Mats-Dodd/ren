@@ -73,6 +73,10 @@
               |  UIDENT "{" field, ... "}"               (by name)
      field    := IDENT ":" type
      type     := tyname ["<" type, ... ">"]
+              |  tyname "." UIDENT ["<" type, ... ">"]
+                                            (a variant type, `Order.Placed`;
+                                             the arguments are its sum's,
+                                             `Tree.Node<Int>`)
               |  ["over"] tyname { "&" tyname } [errors] [uses]
                                             (an implementation, what
                                              installing it can fail with and

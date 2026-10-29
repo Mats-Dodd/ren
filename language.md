@@ -263,28 +263,29 @@ The Strategy pattern written as handlers can do none of that.
 
 ### What Ren has today
 
-Tested against the compiler on 2026-10-28:
+Tested against the compiler on 2026-10-29, after the data stage:
 
 | Feature | Today |
 |---|---|
-| Constructor arguments | positional `Rect(2, 3)` or labelled `Rect(w: 2, h: 3)`, labels in declaration order; mixing is an error. Since the data stage's step 2: a variant with several fields is declared, built and matched by name, `Rect { w: Int, h: Int }`, `Rect { w: 2, h: 3 }`, `Rect { w, .. }`, and one with one field by position, `Flat(5)`; the other spelling is an error whose help writes this one |
+| Constructor arguments | a variant with several fields is declared, built and matched by name, `Rect { w: Int, h: Int }`, `Rect { w: 2, h: 3 }`, `Rect { w, .. }`; one with one field by position, `Flat(5)`, or by name if it's declared in braces, `Draft { lines: Array<Line> }`; the other spelling is an error whose help writes this one. Error tags stay positional, `fail Short(a, by)` |
 | Punning in record literals | `P { x, y }` works |
-| Record update | none: `{ p with x: 5 }` and `P { ..p, x: 5 }` don't parse; only `var p` then `p.x = 5`. Since the data stage's step 1: `{ ..p, x: 5 }` and `Q { ..p, x: 5 }` work, in the interpreter and natively, a unique `p` updated in place |
-| Record patterns, `let { id } = u` | don't parse. Since step 1: `{ id, .. }` and `User { id, .. }` in a `match`, a `let`, a `for` and a block's parameter |
-| Labels in a pattern, `Rect(h: hh, ..)` | don't parse; patterns are positional, with no `..`. Since step 2: `Rect { h: hh, .. }` |
+| Record update | `{ ..p, x: 5 }` and `Q { ..p, x: 5 }`, in the interpreter and natively, a unique `p` updated in place |
+| Record patterns, `let { id } = u` | `{ id, .. }` and `User { id, .. }` in a `match`, a `let`, a `for` and a block's parameter |
+| Labels in a pattern | by name, `Rect { h: hh, .. }`, `..` for the rest |
 | Nested patterns and guards | work: `Some(Active(Pro(n))) if n > 3 =>` |
-| Or-patterns | only on `fail` tags; `A(n) \| B(n)` doesn't parse. Since step 3: anywhere a pattern goes, nested, `Some(Pro(_) \| Team(_))`, each alternative binding the same names at the same types, and one that matches nothing new an error |
-| `as` | doesn't parse. Since step 3: `Pro(n) as old`, binding the whole of what's matched, looser than `\|` |
-| `if let` | doesn't parse. Since step 3: an error whose help writes the `match` or the `let ... else` |
-| `let Some(n) = o else ...` | rejected with a good error and help to use `match`; `o orelse 0` works. Since step 3: works, its `else` leaving with `fail` or `break` (and `todo`, since step 5); a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too |
+| Or-patterns | anywhere a pattern goes, nested, `Some(Pro(_) \| Team(_))`, each alternative binding the same names at the same types, and one that matches nothing new an error |
+| `as` | `Pro(n) as old`, binding the whole of what's matched, looser than `\|` |
+| `if let` | an error whose help writes the `match` or the `let ... else` |
+| `let Some(n) = o else ...` | works, its `else` leaving with `fail`, `break` or `todo`; a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too; `o orelse 0` works |
 | Methods on a sum type | work |
-| A field every variant has, `s.id` | "`.id` needs a record, but this is a `Shape`". Since step 5: "every variant of `Shape` has `id`, but a sum type has no fields", whose help says to hoist it into a record, `type Shape = { id: Int, kind: ShapeKind }`, or write a method; a field only some variants have, "`Shape` is a sum type; only `Rect` has `w`", whose help writes the `match` that takes it out |
-| Narrowing in an arm | none; a variant isn't a type. Since step 4: a variant with named fields is a type, `Order.Placed`, which a pattern's `as` binds, `Placed { .. } as p`; a record of its fields, read, matched and updated, that goes anywhere a value does, `Placed { ..p }` the sum again; `==`, order, `hash` and `show` the sum's |
-| Exhaustiveness | very good: lists the missing patterns, says guarded arms don't count, flags unreachable arms. Since step 5: the help prints the missing arms as code to paste, `Some(Closed) => todo`, at the arms' column; the editor's code action is later |
-| `todo` | none. Since step 5: a keyword, an expression of any type that panics where it's reached, "reached a `todo`", in `ren run` and natively; it leaves a `let ... else` |
+| A field of a sum, `s.id` | one every variant has: "every variant of `Shape` has `id`, but a sum type has no fields", whose help says to hoist it into a record, `type Shape = { id: Int, kind: ShapeKind }`, or write a method; one only some variants have: "`Shape` is a sum type; only `Rect` has `w`", whose help writes the `match` that takes it out |
+| Narrowing in an arm | a variant with named fields is a type, `Order.Placed`, which a pattern's `as` binds, `Placed { .. } as p`; a record of its fields, read, matched and updated, that goes anywhere a value does, `Placed { ..p }` the sum again; `==`, order, `hash` and `show` the sum's |
+| Exhaustiveness | very good: lists the missing patterns, says guarded arms don't count, flags unreachable arms, and the help prints the missing arms as code to paste, `Some(Closed) => todo`, at the arms' column; the editor's code action is later |
+| `todo` | a keyword, an expression of any type that panics where it's reached, "reached a `todo`", in `ren run` and natively; it leaves a `let ... else` |
 | One constructor name in two types | resolved by the expected type, else "write `A.Open`" |
-| A stateful handler called as a method | starts fresh at each call, so language.md's `counter()` prints `1`, `1`. Since step 6: an error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method", whose help writes the `with`, checked on the linked program by `ren run`, `ren test` and `ren build` (not `ren check` of one module); a stateless one is still called as a method |
+| A stateful handler called as a method | an error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method", whose help writes the `with`, checked on the linked program by `ren run`, `ren test` and `ren build` (not `ren check` of one module); a stateless one is called as a method |
 | Records | nominal: same-shaped records don't mix |
+| Layout, natively | a small record or tuple inside a small value is flattened into its parent's slots; an array of small records that hold objects keeps them inline, counted by the mask of the slots that hold them; a sum's tag is a byte, and a sum with one constructor that has fields, the rest without, has no tag, a pointer niche: `Option<Item>` is two words, not three. `show`, `==` and `hash` of a small value still box its type program-wide (bench/native/RESULTS.md, "Data stage: layout") |
 
 The core is right. What's missing is convenience, and two layout rules
 that make the ADT path slower than it should be.

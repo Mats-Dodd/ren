@@ -40,3 +40,16 @@ them their own colours, add this to your Zed `settings.json`:
   }
 }
 ```
+
+## What the colours can't tell
+
+- **`Name { ... }` with a bare name** is a record or a by-name
+  constructor, whichever is in scope, which only the compiler knows. The
+  grammar parses it as the compiler's parser does, as a record, so
+  `Rect` in `Rect { w: 2, h: 3 }` and `Placed` in `Placed { .. } as p`
+  are coloured as types, not constructors. `Shape.Rect { ... }` is
+  always a constructor, and coloured as one.
+- **A punned field in a pattern,** `{ id, .. }`, is both the field and
+  the name it binds; it's coloured as a field (`property`), in a block's
+  parameter and a `for` too, where a parameter's name is
+  `variable.parameter`.

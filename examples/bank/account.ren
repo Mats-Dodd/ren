@@ -19,6 +19,12 @@ pub type Movement =
   | Sent { amount: Money, to: AccountId }
   | Received { amount: Money, from: AccountId }
 
+  // what it did to the balance: what came in, or less what went out
+  pub fn change(self) -> Money =
+    match self
+      Deposited(m) | Received { amount: m, .. } => m
+      Sent { amount, .. } => -amount
+
 // a line of a statement: a movement, and when it happened, by whichever
 // clock is installed
 pub type Entry = { at: Time, what: Movement }
@@ -84,3 +90,10 @@ test "each change is stamped with the time" =
   TestClock.advance(Duration.seconds(3))
   try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
   assert a.statement() == [Entry { at: Time.epoch + Duration.seconds(3), what: Deposited(Money.dollars(5)) }]
+
+test "a statement adds up to the balance" =
+  var a = Account.open(AccountId.of(1))
+  try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
+  try &a.debit(Money.dollars(2), Sent { amount: Money.dollars(2), to: AccountId.of(2) })
+  try &a.credit(Money.dollars(1), Received { amount: Money.dollars(1), from: AccountId.of(3) })
+  assert a.statement().map(fn({ what, .. }) => what.change()).sum() == a.balance()

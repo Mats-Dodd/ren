@@ -2,10 +2,10 @@
 """The grammar against the compiler: every program the compiler parses has
 to parse here too, without an error.
 
-The programs are every example under examples/, and every Ren snippet in
-the compiler's tests (test/*.ml), the `{|...|}` strings that aren't an
-expected output. Each is parsed by the compiler (`ren ast`) and by
-tree-sitter.
+The programs are every example under examples/, the data stage's
+programs under bench/data/, and every Ren snippet in the compiler's tests
+(test/*.ml), the `{|...|}` strings that aren't an expected output. Each
+is parsed by the compiler (`ren ast`) and by tree-sitter.
 
   compiler parses it, tree-sitter doesn't   a bug in the grammar: fails
   tree-sitter parses it, compiler doesn't   expected: the compiler also
@@ -39,6 +39,8 @@ def snippets():
     # a test of a string that isn't UTF-8 holds bytes that aren't: they're
     # kept as they are, as the compiler reads them
     for f in sorted((ROOT / "examples").rglob("*.ren")):
+        yield str(f.relative_to(ROOT)), f.read_text(errors="surrogateescape")
+    for f in sorted((ROOT / "bench" / "data").glob("*.ren")):
         yield str(f.relative_to(ROOT)), f.read_text(errors="surrogateescape")
     for f in sorted((ROOT / "test").glob("*.ml")):
         text = f.read_text(errors="surrogateescape")
