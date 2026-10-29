@@ -83,7 +83,10 @@ are passed the same way.
   `Async.scope` that made `s` ends.
 - A block captures by reference, and may change an outer `var`.
   [Exclusivity](#2-one-exclusivity-rule) keeps that sound.
-- Blocks can't be bound with `var`, and a `let` binds one literal block.
+- Blocks can't be bound with `var`, and a `let` binds one block made
+  there: a literal, a chain over a cursor, or a call that gives a block,
+  such as a generator that uses a dependency ([streams.md](streams.md#seven-rules)).
+  It can't be chosen with `if`.
 
 ```ren
 var tries = 0
@@ -118,10 +121,16 @@ overlap, any two indices may, and a place overlaps its prefixes.
 | `p = e`, `p += e` | write | an instant, after `e` |
 | `for x in p` | read | an instant: a snapshot, or a borrow if the body doesn't touch `p` |
 | `for x in &p` | write | the loop |
+| `&p` as a chain's head or a pull argument (`&r.map(f)`) | write, at each step | each step where it's looped over; the call where it's passed ([streams.md](streams.md#code-pipelines)) |
 | A block passed to an ordinary parameter | each captured place, as the block uses it | the call |
 | A block passed to a concurrent parameter (`Async.map`) | read; a write is an error | the call |
 | A block passed to `s.spawn` | read | the `Async.scope` call that made `s` |
 | Inside a handler arm, any dependency call or block-parameter call | write of all the handler's state | that call |
+
+Narrowing the handler-state row to `Async.until`, `release` and
+block-parameter calls, so an actor can loop over a reader it keeps, is
+open: it waits on a soundness check of service cycles under decision 10
+([streams.md](streams.md#open)).
 
 Two overlapping accesses in one task, at least one a write, are a compile
 error. Blocks passed to the same call don't conflict with each other,
@@ -179,9 +188,10 @@ A **handler description** is a handler's name and its arguments,
 are values, as they are today. Under this record they're the only values
 that carry code, and they carry it by name.
 
-- A description's arguments are data. They can't hold a block, `next`,
-  or an instance, so a description never carries state: each `with`
-  builds fresh state from it.
+- A description's arguments are data. They can't hold a block or an
+  instance, so a description never carries state: each `with` builds
+  fresh state from it. A value cursor, from a pure `gen fn`, is data
+  ([streams.md](streams.md#producers-gen-fn)).
 - An inline handler for a dependency with one operation captures data by
   copy: `handler fn(req) => respond(req, body)` is a `Route`.
 - A chain, `a over b`, isn't a value in v1. Store the parts and write
@@ -659,10 +669,17 @@ thread can reach every behaviour.
 - Each task allocates its frames from a stack-like bump allocator, as
   Swift's tasks do. Recursion across a suspension just pushes another
   frame. Release may inline small child frames when sizes are known.
-- `gen fn` compiles to a cursor, a value whose fields are data, for pull
-  iteration: zip, merge, lookahead. A cursor owns its inputs. A `gen fn`
-  can't take a block, since the cursor would keep it. Generators come
-  after tasks.
+- **A `gen fn` call is data or a block** ([streams.md](streams.md#seven-rules),
+  rule 2). It's a value cursor, whose fields are data, when its
+  parameters are data and its frame holds no instance across a `yield`:
+  no dependency in its *inferred* `uses` row, no `with` open, no
+  `inout`. Otherwise the call is a block whose frame is a hidden local
+  of the caller, so a `gen fn` may take a block, which is how users
+  write stages. Generators come after tasks.
+- **A generator is pushed when it can be:** a chain headed by a `gen fn`
+  call and consumed by a `for` or a sink runs the body where it yields,
+  with no frame. A recursive `yield from` that must pull runs on one
+  frame stack the consumer owns; child frames are never boxed.
 
 ### 13. Two builds
 
@@ -672,6 +689,9 @@ thread can reach every behaviour.
   compiles alone and incrementally.
 - **Release specializes** in a whole-program back half, cached by
   content per function and specialization.
+- **A recursive `yield from` has the depth limit of a recursive call,**
+  pushed or pulled, so the two lowerings of a generator can't differ in
+  meaning ([streams.md](streams.md#pushed-when-it-can-be)).
 - Nothing in the front half is whole-program. That's the rule that keeps
   the edit loop fast, and why lambda sets leave the type checker.
 - **Debug builds use tcc, now.** clang -O0 on the one C file Ren writes
@@ -1060,14 +1080,14 @@ representation is the compiler's choice.
 ## What's given up
 
 - **Stored closures.** Grammars, schemas and routers built at run time
-  become enums with an interpreter, or handler descriptions. A pull
-  adapter can't carry user code, and turning a recursive producer into a
-  pull sequence needs a task.
-- **Generic lazy pipelines.** An adapter over any cursor needs a trait,
-  and a `map(f)` cursor needs a stored block, so `xs.map(f).select(p)`
-  is eager, and a pull pipeline is a `gen fn` written for its element
-  types. It's also why Rust's nested adapter types, which drive its
-  build times, have no counterpart.
+  become enums with an interpreter, or handler descriptions.
+- **Storable generic adapters.** A lazy pipeline is a block composed
+  where it's written ([streams.md](streams.md#code-pipelines)), so it
+  can be looped over and passed down, but an adapter over any cursor
+  can't be kept in a record (`Peekable<C>`), and a generator that uses
+  a dependency can't be stored: keep a reader, whose position is data.
+  It's also why Rust's nested adapter types, which drive its build
+  times, have no counterpart.
 - **Multishot continuations.** No backtracking or probabilistic
   programming as a library. `gen` and async are built in.
 - **An open world.** No Ren code loaded after compiling.

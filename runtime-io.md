@@ -58,6 +58,8 @@ for chunk in Net.chunks(conn)              // chunk: Bytes from the pool
 
 Ten thousand idle connections each holding a 64 KB receive buffer waste 640 MB. With io_uring's provided buffers, the kernel takes a buffer from the shared pool only when data actually arrives. Reference counting returns it with no lease protocol to get wrong: when the count reaches zero, the buffer goes back to the ring.
 
+A slice of a chunk kept past the body's turn is an ordinary root (foundations.md, decision 17), so it holds the buffer. Under pool pressure the runtime may move a held chunk to the heap, at a safepoint and only when its root isn't shared; positions count from the value, so no program can tell ([strings.md](strings.md#retention), [streams.md](streams.md#data-cursors-you-keep)). Debug builds report it, and a pool metric counts it.
+
 Registered buffers, pinned once so each call skips setup, fit code without `Alloc`. A hot path that uses only pooled buffers needs neither `Alloc` nor per-call kernel work.
 
 ### Cancelling waits for the kernel

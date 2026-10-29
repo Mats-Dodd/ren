@@ -829,7 +829,9 @@ term  := a unary or postfix expression, no binary operators
 - **A line starting with `|>`, indented further than its block,
   continues the line above.** It joins `continues()` (lexer.ml:220)
   beside `uses`, `!` and a trailing `,`. Without this, a vertical chain
-  doesn't parse.
+  doesn't parse. **A line starting with `.`, indented further, continues
+  the line above the same way,** so a chain of stages over a cursor can
+  put one stage on a line ([streams.md](streams.md#pipelines-and-the-pipe)).
 - **Formatting is all or nothing.** If a chain doesn't fit on one line,
   or has more than two steps, the head goes on its own line and each `|>
   [try] step` on its own line, one indent in.

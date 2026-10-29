@@ -43,7 +43,10 @@ pub fn debit(inout self, m: Money, e: Entry) ! Short(account: AccountId, by: Mon
   ([async.md](async.md#cancellation)). `fail Cancelled` anywhere else is
   "`Cancelled` isn't an error a program can fail with", whose help says
   a cancelled task stops by itself; in a `finally`, it goes on with the
-  cancel.
+  cancel. A generator abandoned by its consumer, by `break`, `take` or
+  `find`, is cancelled too: its `finally` sees `Err(Cancelled)`, and its
+  own result is thrown away, so a transaction across `yield`s rolls back
+  ([streams.md](streams.md#stopping)).
 - A `pub` function writes its errors out in full, exactly as it writes its
   `uses`. A private function's errors are inferred; it writes nothing.
 - A name for a set of tags is declared with `!`, and can include other sets:

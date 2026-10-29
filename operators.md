@@ -598,7 +598,7 @@ is.
 | `select(f)`, `reject(f)` | the elements `f` is true of; and false of |
 | `find(f)` | the first element `f` is true of, `Option<T>` |
 | `index(x)` | where `x` first is, `Option<Int>` |
-| `any(f)`, `all(f)`, `count(f)` | whether any, whether all, how many |
+| `any(f)`, `all(f)`, `count(f)` | whether any, whether all, how many; `count()` with no `f` counts them all, on every receiver, a cursor included |
 | `includes(x)` | whether `x` is in it |
 | `reduce(init, f)` | `f` over each element, from `init` |
 | `sum()`, `min()`, `max()` | needing `add` and `zero`, or an order; `min` and `max` give an `Option` |

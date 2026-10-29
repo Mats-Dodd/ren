@@ -41,6 +41,7 @@ let t = s.start fn() => ...                       // and its handle: t.join(), t
 Async.scope(max: n) fn(s) => ...                  // spawn waits while n run
 Async.map(xs) fn(x) => ...                         // results, in order
 Async.each(xs) fn(x) => ...                        // no results
+Async.produce(cap: n, fn() => ...) fn(items) => ... // a producer task; its sends are a stream
 Async.both(fn() => a, fn() => b)                   // a pair
 Async.race(fn() => a, fn() => b)                   // the first to finish
 Async.timeout(d) fn() => ...                       // ! Timeout
@@ -79,6 +80,11 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
 - **Everything is bounded.** `spawn` waits while `max` of the scope's
   tasks run, which is a server's backpressure, and `map` and `each` run
   `max` at once. The default is 64, so a server writes `max: 10_000`.
+- **`map` and `each` take any pull argument,** as `for` does: an
+  array, a named cursor as `&r`, a pipeline or a generator. They pull
+  the next item on the caller's task, only when a slot frees, so memory
+  is bounded by `max`, and `map` keeps order: a finished result behind
+  a slow head keeps its slot ([streams.md](streams.md#concurrency-and-time)).
 - **`each`'s block returns `()`.** If it returns a value, that's an
   error whose help says `map`, so no result is thrown away without
   being written.
@@ -86,6 +92,13 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
   dependencies may run on every core; it's the same call either way.
 - **Wrappers are calls:** `Async.timeout(d) fn() => ...`, `Async.race`,
   and `retry(n, on: Tags)`. `with` installs only handlers.
+- **A producer that needs a task runs in the consumer's scope.**
+  `Async.produce(cap:, f) fn(items) => ...` runs `f` on a task, which
+  sends through a `Send<T>` dependency the call installs, not a channel
+  value it holds (decision 5). `cap` is the backpressure. When the body
+  ends, by finishing, `break` or a failure, the producer is cancelled
+  and waited for. `Async.map_pull(src, max:, f) fn(results) => ...` has
+  the same shape ([streams.md](streams.md#concurrency-and-time)).
 
 ## The rules
 
@@ -258,7 +271,7 @@ over `Async.until`, but for `keyed`:
 
 | | What it is |
 |---|---|
-| `sync.channel(cap)` for `Chan<T>` | `send` waits while it's full, `recv` while it's empty and open, `None` once it's closed and empty; a send on a closed channel panics |
+| `sync.channel(cap)` for `Chan<T>` | `send` waits while it's full, `recv` while it's empty and open, `None` once it's closed and empty; a send on a closed channel panics. A channel is a dependency, `dep Events = Chan<Event>`, and `Events.items()` is a cursor the compiler derives, whose `next` is `recv` |
 | `sync.semaphore(n)` for `Semaphore` | `acquire` waits while no permit is free, `release` gives one back |
 | `sync.limit() over any` | each call takes a permit of the `Semaphore` outside it, is passed on, and gives it back in a `finally`, however it ends |
 | `sync.batcher()` for `Batcher<K, V>` | `get(k)` waits until a `flush` has fetched `k` through the `Fetch<K, V>` outside it, with every key asked for since the last |
@@ -737,9 +750,9 @@ This document was first written before foundations.md, which changed it
 
 ## Later
 
-- **Streams for `each`.** Once generators exist (stage 11c),
-  `Async.each(listener.connections(), max: 10_000)` pulls the next item
-  only when a slot frees.
+- **Streams for `each` and `map`,** decided in streams.md, wait for
+  generators (stage 11c): `Async.each(Net.connections(listener), max:
+  10_000)` pulls the next item only when a slot frees.
 - **Restart policies,** like Erlang's supervisors. Until then, it's
   `attempt` or `retry` inside a task.
 - **Many cores** (stage 11b): `work_stealing`, `per_core` and `pinned`,
