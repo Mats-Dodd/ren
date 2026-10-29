@@ -1,0 +1,4 @@
+import bench
+
+// 200,000 accounts, 20 rounds
+fn main() uses Console = bench.run(200_000, 20)

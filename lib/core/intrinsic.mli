@@ -138,6 +138,9 @@ type t =
   | Float_truncate
   | Float_sqrt
   | Str_lower
+  | Hash
+      (** `x.hash()`, the derived hash a program can call: unseeded, the same
+          on every run *)
 
 (* Its path in the prelude: [show], or a built-in type's member,
    [Array.push]. *)

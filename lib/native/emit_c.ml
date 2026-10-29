@@ -572,6 +572,39 @@ let runtime rt args site_arg =
       let t = match site_arg with Some s -> tag s | None -> "0" in
       sprintf "ren_op_any(%s, %s, %s, %s, %s, %s)" (a 0) code (a 1) b (site ()) t
   | Value_any one -> sprintf "ren_value_any(%s, %b)" (a 0) one
+  (* maps and sets (ren_rt.c, "maps and sets"): keys and values as words,
+     each with its descriptor *)
+  | Map_new set -> sprintf "ren_map_new(%b)" set
+  | Map_len -> sprintf "ren_map_len(%s)" (a 0)
+  | Map_find ->
+      sprintf "ren_map_find(%s, %s, %s, %s)" (a 0) (to_val (List.nth args 1)) (a 2)
+        (site ())
+  | Map_value -> sprintf "ren_map_value(%s, %s)" (a 0) (a 1)
+  | Map_set | Map_set_taking ->
+      sprintf "ren_map_set(%s, %s, %s, %s, %s, %b, %s)" (a 0)
+        (to_val (List.nth args 1))
+        (to_val (List.nth args 2))
+        (a 3) (a 4) (rt = Map_set_taking) (site ())
+  | Set_add | Set_add_taking ->
+      sprintf "ren_map_set(%s, %s, (ren_val){0}, %s, NULL, %b, %s)" (a 0)
+        (to_val (List.nth args 1))
+        (a 2) (rt = Set_add_taking) (site ())
+  | Map_remove | Map_remove_taking ->
+      sprintf "ren_map_remove(%s, %s, %s, %b, %s)" (a 0)
+        (to_val (List.nth args 1))
+        (a 2) (rt = Map_remove_taking) (site ())
+  | Map_of flat ->
+      sprintf "ren_map_of(%s, %s, %s, %b, %s)" (a 0) (a 1) (a 2) flat (site ())
+  | Set_of -> sprintf "ren_map_of(%s, %s, NULL, false, %s)" (a 0) (a 1) (site ())
+  | Map_entries flat -> sprintf "ren_map_entries(%s, %b)" (a 0) flat
+  | Map_keys -> sprintf "ren_map_keys(%s, %s)" (a 0) (a 1)
+  | Map_values -> sprintf "ren_map_values(%s, %s)" (a 0) (a 1)
+  | Hash_fixed ->
+      sprintf "ren_hash_fixed(%s, %s, %s)" (a 0) (to_val (List.nth args 1)) (site ())
+  | Array_sort what ->
+      sprintf "ren_array_sort(%s, %s, %s, %s)" (a 0) (a 1) (c_string what) (site ())
+  | Str_lower -> sprintf "ren_str_lower(%s)" (a 0)
+  | Panic_str -> sprintf "ren_panic_str(%s, %s)" (site ()) (a 0)
   | New_desc _ -> bug "a descriptor built outside a Let"
 
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]
@@ -579,7 +612,8 @@ let runtime rt args site_arg =
 let gives_nothing = function
   | Array_push _ | Array_push_taking _ | Bytes_store _ | Bytes_store_taking _
   | Console_write | Console_error | Array_check | Buf_set _ | Buf_set_field _ | Buf_check | Nan_check _
-  | Nan_check_any _ | Here_set | Here_put ->
+  | Nan_check_any _ | Here_set | Here_put | Map_set | Map_set_taking | Set_add
+  | Set_add_taking | Map_remove | Map_remove_taking | Panic_str ->
       true
   | _ -> false
 
@@ -994,6 +1028,8 @@ let rec stmt o d (s : stmt) =
         | Of_decl k -> ("REN_D_NAMED", sprintf "&ren_decl_%d" k)
         | Of_array -> ("REN_D_ARRAY", "NULL")
         | Of_tuple -> ("REN_D_TUPLE", "NULL")
+        | Of_map -> ("REN_D_MAP", "NULL")
+        | Of_set -> ("REN_D_SET", "NULL")
       in
       line
         (sprintf "ren_obj* %s = ren_desc_new(%s, %s, %d, %s);" (var v) kind decl
@@ -1477,6 +1513,8 @@ let dkind_c (k : dkind) =
   | D_named _ -> "REN_D_NAMED"
   | D_array -> "REN_D_ARRAY"
   | D_tuple -> "REN_D_TUPLE"
+  | D_map -> "REN_D_MAP"
+  | D_set -> "REN_D_SET"
   | D_errors -> "REN_D_ERRORS"
   | D_var _ -> "REN_D_VAR"
   | D_unknown -> "REN_D_UNKNOWN"
@@ -1553,10 +1591,21 @@ let static_types add (descs : desc list) (decls : decl list) =
               "NULL" )
         | Rep_decl r -> ("REN_DECL_REP", false, 0, "NULL", desc_ref r)
       in
+      (* its own `key`, the program's function, through a wrapper that
+         takes and gives words ([key_wrapper]), which the first unit
+         defines *)
+      let key =
+        match dc.dkey with
+        | Some (_, d) ->
+            add (sprintf "static ren_val ren_key_%d(ren_val v);\n" i);
+            sprintf "ren_key_%d, %s" i (desc_ref d)
+        | None -> "NULL, NULL"
+      in
       add
         (sprintf
-           "%sconst ren_decl ren_decl_%d = {%s, %s, %b, %b, %d, %s, %s};\n"
-           !linkage i (c_string dc.dname) kind dc.dopaque enumlike nctors ctors rep))
+           "%sconst ren_decl ren_decl_%d = {%s, %s, %b, %b, %d, %s, %s, %s};\n"
+           !linkage i (c_string dc.dname) kind dc.dopaque enumlike nctors ctors
+           rep key))
     decls;
   List.iteri
     (fun i (d : desc) ->
@@ -1698,6 +1747,35 @@ let method_ops (hs : handler list) =
        (fun (h : handler) -> List.map (fun (d, o, _) -> (d, o)) h.methods)
        hs)
 
+(* The wrapper of the [i]-th declaration's `key`, the function [name],
+   which the walks call with a value as a word it borrows, and which
+   gives the key as a word the caller owns (ren_rt.h, [ren_key_fn]). A
+   parameter the function takes is counted again first; its evidence,
+   which a `key` never uses, is none. *)
+let key_wrapper (fns : fn list) i name =
+  let f =
+    match List.find_opt (fun (f : fn) -> f.name = name) fns with
+    | Some f -> f
+    | None -> bug ("a `key` that isn't compiled: " ^ name)
+  in
+  let b = Buffer.create 256 in
+  let add = Buffer.add_string b in
+  add (sprintf "static ren_val ren_key_%d(ren_val v) {\n" i);
+  let args =
+    List.map2
+      (fun (v : var) m ->
+        match v.layout with
+        | Ev -> "((const ren_ev*)NULL)"
+        | l ->
+            if m = Owned && counted l then add (sprintf "  ren_dup(v.o);\n");
+            of_val l "v")
+      f.params f.modes
+  in
+  add
+    (sprintf "  return %s;\n}\n"
+       (word_of f.result (sprintf "%s(%s)" f.name (String.concat ", " args))));
+  Buffer.contents b
+
 let parts ~restrict ~release ~site_pieces (p : program) =
   is_release := release;
   numbered_tags := release;
@@ -1779,6 +1857,12 @@ let parts ~restrict ~release ~site_pieces (p : program) =
   in
   let b = Buffer.create 4096 in
   let add = Buffer.add_string b in
+  List.iteri
+    (fun i (dc : decl) ->
+      match dc.dkey with
+      | Some (name, _) -> add (key_wrapper p.fns i name)
+      | None -> ())
+    p.decls;
   let record (h : handler) =
     sprintf "{%d, %d, %s, %s, %d, %s}" h.hid h.hwords (c_string h.hname)
       (if h.install = "" then "NULL" else "(ren_hcode)" ^ h.install)

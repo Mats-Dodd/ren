@@ -26,9 +26,9 @@ steps they leave checked:
   bytes/proofs_step.ren: as specified
   bytes/proofs_negative.ren: as specified
 
-Layer 3 landed in step 2. `Map` and `Set` already run in the
-interpreter, so their programs are as specified there; `x.hash()` lands
-in step 3.
+Layer 3 landed in step 2. `Map` and `Set` already ran in the
+interpreter; `x.hash()` landed in step 3, and hash_values.expected pins
+its values.
 
   $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor writes_loop writes_alias; do spec bytes/$f.ren; done
   bytes/reads.ren: as specified
@@ -44,17 +44,27 @@ in step 3.
   bytes/cursor.ren: as specified
   bytes/writes_loop.ren: as specified
   bytes/writes_alias.ren: as specified
-  $ for f in map set map_key hash; do spec bytes/$f.ren; done
+  $ for f in map set map_key hash hash_values; do spec bytes/$f.ren; done
   bytes/map.ren: as specified
   bytes/set.ren: as specified
   bytes/map_key.ren: as specified
-  bytes/hash.ren: not yet
+  bytes/hash.ren: as specified
+  bytes/hash_values.ren: as specified
+
+Added in step 3: maps and sets at their edges, grown and emptied while
+a loop goes over them, of a generic function's keys, of sized and
+struct keys and values, in a record and in a map; and a failed `assert`
+of the prelude's, which a native build says as `ren run` does.
+
+  $ for f in map_edges take_panic; do spec bytes/$f.ren; done
+  bytes/map_edges.ren: as specified
+  bytes/take_panic.ren: as specified
 
 `x.hash()` has no seed, so two runs print the same values (step 3):
 
   $ (cd bytes && ren run hash_values.ren > one.out 2>&1; a=$?; ren run hash_values.ren > two.out 2>&1;
   >  if [ $a -eq 0 ] && cmp -s one.out two.out; then echo "the same on every run"; else echo "not yet"; fi; rm -f one.out two.out)
-  not yet
+  the same on every run
 
 Each program built natively prints what `ren run` prints, to stdout and
 stderr, and exits as it does: debug, with Perceus's counting and the
@@ -63,7 +73,7 @@ object alive at the end; release run by `ren run --release` too; and a
 debug build compiled by tcc, as bench/build.t checks its programs. A
 program the native build can't compile yet says so, with the first
 line of what `ren build` said. Layer 3 landed natively in step 2, `Map`,
-`Set` and `x.hash()` land in step 3.
+`Set` and `x.hash()` landed in step 3.
 
   $ export ASAN_OPTIONS=detect_stack_use_after_return=0:detect_leaks=0
   $ native() {
@@ -202,8 +212,46 @@ line of what `ren build` said. Layer 3 landed natively in step 2, `Map`,
   bytes/writes_alias.ren, tcc: the same, exit 0, objects live at exit 0
   bytes/writes_alias.ren, ren run --release: the same
   $ for f in map set map_key hash hash_values; do native bytes/$f.ren; done
-  bytes/map.ren: not native yet: error: the associated value `Map.empty` of a generic type isn't in the native slice yet
-  bytes/set.ren: not native yet: error: the associated value `Set.empty` of a generic type isn't in the native slice yet
-  bytes/map_key.ren: not native yet: error: the associated value `Map.empty` of a generic type isn't in the native slice yet
-  bytes/hash.ren: not native yet: error: `Int` has no method named `hash`
-  bytes/hash_values.ren: not native yet: error: `Int` has no method named `hash`
+  bytes/map.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/map.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 38 copies, 5 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/map.ren, release: the same, exit 0, objects live at exit 0
+  bytes/map.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/map.ren, ren run --release: the same
+  bytes/set.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/set.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 21 copies, 2 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/set.ren, release: the same, exit 0, objects live at exit 0
+  bytes/set.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/set.ren, ren run --release: the same
+  bytes/map_key.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/map_key.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 7 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/map_key.ren, release: the same, exit 0, objects live at exit 0
+  bytes/map_key.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/map_key.ren, ren run --release: the same
+  bytes/hash.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/hash.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/hash.ren, release: the same, exit 0, objects live at exit 0
+  bytes/hash.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/hash.ren, ren run --release: the same
+  bytes/hash_values.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/hash_values.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/hash_values.ren, release: the same, exit 0, objects live at exit 0
+  bytes/hash_values.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/hash_values.ren, ren run --release: the same
+  $ for f in map_edges take_panic; do native bytes/$f.ren; done
+  bytes/map_edges.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/map_edges.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 30 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/map_edges.ren, release: the same, exit 0, objects live at exit 0
+  bytes/map_edges.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/map_edges.ren, ren run --release: the same
+  bytes/take_panic.ren, perceus: the same, exit 1, objects live at exit 7
+  bytes/take_panic.ren, naive: the same, exit 1, objects live at exit 7
+  ren specialized: 5 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/take_panic.ren, release: the same, exit 1, objects live at exit 6
+  bytes/take_panic.ren, tcc: the same, exit 1, objects live at exit 7
+  bytes/take_panic.ren, ren run --release: the same

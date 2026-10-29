@@ -1,0 +1,83 @@
+// `Map` and `Set` at their edges, natively (compiler.md, "Bytes stage",
+// step 3): a map grown and emptied while a loop goes over it, a shared
+// map changed through one name only, maps of a generic function's keys,
+// sized keys and values, maps as values in a record and in a map,
+// structs as keys and values in a release build, and `sort` and
+// `take` of their pairs.
+
+type Pair = { a: Int, b: Int }
+type Account = { id: Int, name: Str, balance: Int }
+type Book = { title: Str, by_id: Map<Int, Account> }
+
+fn tally<T>(xs: Array<T>) -> Map<T, Int> =
+  var m: Map<T, Int> = Map.empty
+  for x in xs
+    let n = m.get(x).unwrap_or(0)
+    &m.set(x, n + 1)
+  m
+
+fn uniq<T>(xs: Array<T>) -> Array<T> =
+  var s: Set<T> = Set.empty
+  for x in xs
+    &s.add(x)
+  var out: Array<T> = []
+  for x in s
+    &out.push(x)
+  out
+
+fn main() uses Console =
+  // grown while a loop goes over it: the loop sees the map it began with
+  var m = Map.of([(0, 0)])
+  for (k, v) in m
+    for i in 1..100
+      &m.set(i, i * i)
+  print(m.len())
+  // emptied while a loop goes over it
+  var count = 0
+  for (k, _) in m
+    &m.remove(k)
+    count += 1
+  print(count)
+  print(m.len())
+  print(m)
+  // shared, then changed through one name
+  var a = Map.of([("x", 1), ("y", 2)])
+  let b = a
+  &a.set("x", 10)
+  &a.remove("y")
+  print(a)
+  print(b)
+  // a generic function's keys and members
+  print(tally(["b", "a", "b", "c", "b"]))
+  print(tally([3, 1, 3]))
+  print(uniq([Pair { a: 1, b: 2 }, Pair { a: 1, b: 2 }, Pair { a: 2, b: 1 }]))
+  print(uniq([[1], [2], [1]]))
+  // sized keys and values
+  var sized: Map<UInt8, Float32> = Map.empty
+  &sized.set(200, 1.5)
+  &sized.set(7, 2.25)
+  &sized.set(200, 3.0)
+  print(sized)
+  print(sized.keys())
+  print(sized.values())
+  // structs as keys and as values, flat pairs in a release build
+  let pairs = Map.of([((1, 2), Pair { a: 1, b: 2 }), ((2, 1), Pair { a: 2, b: 1 })])
+  print(pairs.get((2, 1)))
+  for ((i, _), v) in pairs
+    print(i + v.b)
+  // records keyed by `Int` in a record, and a map of maps
+  var book = Book { title: "t", by_id: Map.empty }
+  &book.by_id.set(7, Account { id: 7, name: "ann", balance: 10 })
+  &book.by_id.set(3, Account { id: 3, name: "bob", balance: 5 })
+  print(book.by_id.get(3))
+  print(book.by_id.len())
+  var nested: Map<Str, Map<Int, Int>> = Map.empty
+  &nested.set("a", Map.of([(1, 1)]))
+  &nested.set("b", Map.empty)
+  print(nested)
+  print(nested == Map.of([("b", Map.empty), ("a", Map.of([(1, 1)]))]))
+  // the collection methods over pairs
+  print(Map.of([(3, "c"), (1, "a"), (2, "b")]).sort())
+  print(Map.of([(3, "c"), (1, "a"), (2, "b")]).take(0))
+  print(Set.of([5, 3, 9]).sort())
+  print(Map.of([(1, 1)]).drop(5))

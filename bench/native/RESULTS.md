@@ -169,6 +169,35 @@ KERNELS=frames python3 -I bench/native/profile/measure.py $out 11   # one kernel
 
 The other programs with and without the inlining, release, five runs:
 `vec` 4.39 / 4.39 G cycles, `nbody` 7.14 / 7.14.
+## Bytes stage, step 3 (compiler.md, "Bytes stage", "Step 3, as built")
+
+The same machine and method; load 4.1 to 4.4 (the OS's photo analysis
+was running again, nothing else building). `maps` is the new kernel
+(bench/native/maps): 200,000 accounts in a `Map<Int, Account>` and a
+`Map<Str, Int>`, each round built, looked up 400,000 times, a third
+removed and iterated in insertion order, 20 rounds against 0, with Rust
+(std `HashMap` of each key to its place in a `Vec` of entries) and Go
+(a `map` the same way) twins. Eleven runs interleaved, Mcyc a round,
+the 20-round runs' spread in brackets, then M instructions a round:
+
+| kernel | Ren | Rust | Go | Ren / Rust |
+|---|---|---|---|---|
+| `maps` | **108.1** (2065-2679) | 157.0 (3036-3325) | 255.4 (5116-5259) | **0.69×** |
+| M instructions | 282.2 | 358.7 | 904.0 | |
+
+Whole runs at the full size, three each, wall clock: Ren release 0.48
+to 0.55 s, Rust 0.73 to 0.74 s, Go 0.84 to 0.86 s; Ren debug 2.85 to
+3.11 s. Ren's spread is wide under the load, but its slowest 20-round
+run is under Rust's fastest. Rust's std `HashMap` hashes with SipHash,
+where Ren's map hashes an `Int` with one multiply-and-fold and a `Str`
+8 bytes at a time; the rest is the same shape, an index of entry
+numbers into a dense array of entries.
+
+```sh
+sh bench/native/profile/build.sh $out
+KERNELS=maps python3 -I bench/native/profile/measure.py $out 11
+```
+
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 
 Slices are built as representation A: a slice is a header like its

@@ -164,6 +164,8 @@ Every native benchmark, at its small size:
   native/handlers/small.ren, naive: the same, exit 0, objects live at exit 0
   native/inout/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/inout/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/maps/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/maps/small.ren, naive: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, naive: the same, exit 0, objects live at exit 0
   native/nested/small.ren, perceus: the same, exit 0, objects live at exit 0
@@ -350,6 +352,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/frames/small.ren, release: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, release: the same, exit 0, objects live at exit 0
   native/inout/small.ren, release: the same, exit 0, objects live at exit 0
+  native/maps/small.ren, release: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, release: the same, exit 0, objects live at exit 0
   native/nested/small.ren, release: the same, exit 0, objects live at exit 0
   native/nqueens/small.ren, release: the same, exit 0, objects live at exit 0
@@ -928,7 +931,7 @@ past the budget, where the call isn't specialized.
 A NaN (foundations.md, decision 15; nan.ml) is carried by arithmetic
 and stores, and panics where it's observed: a comparison, `==`, `show`,
 `round`, a dependency's operation given one (an order through `sort`,
-and hashing, are test_nan.ml's, which the native slice doesn't have). Each
+and hashing, natively since the bytes stage's step 3, are at the end). Each
 build panics where `ren run` does, with its message; a debug build says
 where the NaN was made too, and a release build, which tags no NaN,
 says the rest. A panic in the prelude, `show` inside `print` here, is
@@ -1517,6 +1520,8 @@ same objects alive at the end as clang's build above.
   native/handlers/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/inout/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/inout/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/maps/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/maps/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/nested/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1670,3 +1675,53 @@ in debug and release alike:
   [1]
   $ (cd 11a && ren build --release spawns.ren -o ./spawns.bin 2>&1 | head -n 1)
   error: `Async.scope` runs tasks, and tasks aren't native yet
+
+The bytes stage's step 3: `Map`, `Set`, `x.hash()` and `sort` natively.
+A NaN in a key panics where it's hashed, in a map's hashing and in
+`x.hash()` alike, and one `sort` compares panics, each where `ren run`
+panics, with its message (bench/bytes.t has the rest).
+
+  $ cat > map_nan.ren <<'EOF'
+  > // A NaN in a key panics where it's hashed, saying where it was made
+  > // (decision 15), natively as in `ren run`: here inside a tuple key set
+  > // into a map, after a key that has none.
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   var m: Map<(Int, Float), Str> = Map.empty
+  >   &m.set((1, 1.5), "fine")
+  >   print(m.len())
+  >   &m.set((2, z / z), "not reached")
+  >   print(m.len())
+  > EOF
+  $ cat > hash_nan.ren <<'EOF'
+  > // `x.hash()` of a value with a NaN in it panics as a map's hashing does.
+  > type P = { x: Float, y: Float }
+  > fn main() uses Console =
+  >   let z = 0.0
+  >   print(P { x: 1.0, y: 2.0 }.hash() == P { x: 1.0, y: 2.0 }.hash())
+  >   print(P { x: 1.0, y: z / z }.hash())
+  > EOF
+  $ cat > sort_nan.ren <<'EOF'
+  > // `sort`, natively, compares through the elements' order, a type's
+  > // `key` if it has one, and equal ones keep their order; a NaN it
+  > // compares panics.
+  > type Job = { rank: Int, tag: Str }
+  >   pub fn key(self) -> Int = self.rank
+  > fn main() uses Console =
+  >   print([3, 1, 2, 1].sort())
+  >   print(["b", "a", "c"].sort())
+  >   print([(2, "x"), (1, "y"), (2, "a")].sort())
+  >   print([Job { rank: 2, tag: "x" }, Job { rank: 1, tag: "y" }, Job { rank: 2, tag: "a" }].sort())
+  >   let z = 0.0
+  >   print([2.0, z / z, 1.0].sort().len())
+  > EOF
+  $ for f in map_nan hash_nan sort_nan; do same $f.ren; nan_release $f.ren; done
+  map_nan.ren, perceus: the same, exit 1, objects live at exit 4
+  map_nan.ren, naive: the same, exit 1, objects live at exit 4
+  map_nan.ren, release: the same, exit 1
+  hash_nan.ren, perceus: the same, exit 1, objects live at exit 2
+  hash_nan.ren, naive: the same, exit 1, objects live at exit 2
+  hash_nan.ren, release: the same, exit 1
+  sort_nan.ren, perceus: the same, exit 1, objects live at exit 2
+  sort_nan.ren, naive: the same, exit 1, objects live at exit 2
+  sort_nan.ren, release: the same, exit 1

@@ -281,6 +281,53 @@ type rt =
   | Var_size of bool
       (** how many bytes a `VarInt` ([true]) or a `VarUInt` takes, which panics
           at its site for a negative `VarUInt` *)
+  | Map_new of bool
+      (** an empty `Map`, or `Set` with [true]: `Map.empty` (ren_rt.h, "maps
+          and sets") *)
+  | Map_len  (** a map's or a set's entries, an [Int] *)
+  | Map_find
+      (** the number of a map's or a set's entry whose key is the [Word] after
+          it, of the descriptor after that, or -1, an [Int]: hashing a NaN
+          panics at its site *)
+  | Map_value
+      (** the value, a [Word], of a map's entry whose number [Map_find] gave,
+          counted again *)
+  | Map_set
+      (** `&m.set(k, v)`, through a [Cell] of a map, of [Word]s [k] and [v] and
+          their descriptors: a copy with [k] set put back, counting [k] and
+          [v] again. Panics as [Map_find] does *)
+  | Map_set_taking
+      (** [Map_set], which takes [k] and [v], and sets [k] in place if the map
+          is unique *)
+  | Set_add  (** `&s.add(k)`, of a [Word] and its descriptor, as [Map_set] *)
+  | Set_add_taking  (** [Set_add], which takes [k], as [Map_set_taking] *)
+  | Map_remove
+      (** `&m.remove(k)`, a set's too, of a [Word] and its descriptor: a copy
+          without it, if it's there; it borrows [k] *)
+  | Map_remove_taking  (** [Map_remove], in place if the map is unique *)
+  | Map_of of bool
+      (** `Map.of(pairs)`, an array of tuples, each two words in the array
+          with [true] (a release build's struct) or else an object, and the
+          descriptors of the keys and the values; panics as [Map_find] does *)
+  | Set_of  (** `Set.of(xs)`, an array of [Word]s, and its descriptor *)
+  | Map_entries of bool
+      (** a map's keys and values, in order, an array of tuples, two words
+          each with [true]: what a `for` goes over *)
+  | Map_keys
+      (** a map's keys, or a set's members, in order, an array of elements of
+          the descriptor after it *)
+  | Map_values  (** a map's values, the same way *)
+  | Hash_fixed
+      (** a descriptor and a [Word]: `x.hash()`, the derived hash with no
+          seed, an [Int], which panics at its site on a NaN *)
+  | Array_sort of string
+      (** `xs.sort()`, of an array and its elements' descriptor: a new array,
+          sorted stably through the descriptor, which panics at its site
+          saying the string if it compares a NaN *)
+  | Str_lower  (** `s.lower()`, its ASCII letters made lower case *)
+  | Panic_str
+      (** panic at its site with this [Str]: a failed `assert` of the
+          prelude's, whose message shows values ([assert_message]) *)
   | Show_int
   | Show_float
   | Show_bool
@@ -337,7 +384,7 @@ type rt =
           declaration, the program's [decls]'s n-th, or an array's or a tuple's
       *)
 
-and new_desc = Of_decl of int | Of_array | Of_tuple
+and new_desc = Of_decl of int | Of_array | Of_tuple | Of_map | Of_set
 
 (* What a slice is of: a `Str` and `Bytes` are both the runtime's strings,
    but a `Str`'s slice can't cut a character. *)
@@ -597,6 +644,8 @@ type dkind =
       (** a description of a handler (foundations.md, decision 3): an object,
           which nothing shows, compares or looks into for a NaN *)
   | D_sized of Sized.t
+  | D_map  (** a `Map`: its keys' and its values' descriptors *)
+  | D_set  (** a `Set`: its members' *)
 
 type desc = { dkind : dkind; dargs : int list; dcounted : bool }
 
@@ -617,6 +666,10 @@ type decl = {
           the bit it starts at, shifted left 8, and how many bits, 64 for a
           word of its own; [None] where each field is the word of its number
           (ren_rt.h, [ren_ctor_info]) *)
+  dkey : (string * int) option;
+      (** its own `key`: the C name of the function, and the descriptor of
+          what it gives, which `==`, ordering and `hash` go through (ren_rt.h,
+          [ren_key_fn]) *)
 }
 
 (* An associated value: its C name, the function that makes it, and its
@@ -693,6 +746,8 @@ let takes (rt : rt) n =
   match rt with
   | Array_set_taking _ | Array_set_field_taking _ -> n = 0 || n = 2
   | Array_push_taking _ -> n = 1
+  | Map_set_taking -> n = 1 || n = 2
+  | Set_add_taking -> n = 1
   | Array_own -> n = 0
   | Buf_set _ | Buf_set_field _ -> n = 3
   | _ -> false
@@ -752,7 +807,8 @@ let show_sliced = function
    or a write of layer 3's, each putting back the value it made. *)
 let changes_cell = function
   | Array_push _ | Array_push_taking _ | Bytes_store _ | Bytes_store_taking _
-  | Bytes_set_var _ | Bytes_set_var_taking _ ->
+  | Bytes_set_var _ | Bytes_set_var_taking _ | Map_set | Map_set_taking
+  | Set_add | Set_add_taking | Map_remove | Map_remove_taking ->
       true
   | _ -> false
 
@@ -835,6 +891,27 @@ let show_rt = function
   | New_desc (Of_decl n) -> "new-desc:" ^ string_of_int n
   | New_desc Of_array -> "new-desc:array"
   | New_desc Of_tuple -> "new-desc:tuple"
+  | New_desc Of_map -> "new-desc:map"
+  | New_desc Of_set -> "new-desc:set"
+  | Map_new set -> if set then "set-new" else "map-new"
+  | Map_len -> "map-len"
+  | Map_find -> "map-find"
+  | Map_value -> "map-value"
+  | Map_set -> "map-set"
+  | Map_set_taking -> "map-set-taking"
+  | Set_add -> "set-add"
+  | Set_add_taking -> "set-add-taking"
+  | Map_remove -> "map-remove"
+  | Map_remove_taking -> "map-remove-taking"
+  | Map_of flat -> if flat then "map-of-flat" else "map-of"
+  | Set_of -> "set-of"
+  | Map_entries flat -> if flat then "map-entries-flat" else "map-entries"
+  | Map_keys -> "map-keys"
+  | Map_values -> "map-values"
+  | Hash_fixed -> "hash-fixed"
+  | Array_sort _ -> "array-sort"
+  | Str_lower -> "str-lower"
+  | Panic_str -> "panic-str"
 
 let atoms xs = List.map (fun a -> Core.Atom (show_atom a)) xs
 let a x = Core.Atom x

@@ -598,6 +598,14 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
                     (items xs)))
         | _ -> bug x)
   (* ---- `Map` and `Set`, by the `hash` of their keys (table.ml) ---- *)
+  (* `x.hash()`: its type's `hash`, with no seed (walk.ml, [fixed_hash]) *)
+  | Hash -> (
+      pure (function
+        | [ v ] -> (
+            match one_dict x dicts with
+            | Hash { hash; _ } -> VInt (Walk.unseeded (fun () -> hash v))
+            | _ -> bug x)
+        | _ -> bug x))
   | Map_empty | Set_empty -> pure (fun _ -> VTable Table.empty)
   | Map_of ->
       pure (function

@@ -1350,6 +1350,10 @@ let scheme (x : Intrinsic.t) =
   | Float_sqrt -> fn [ read float ] float
   (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
   | Str_lower -> fn [ read str ] str
+  (* fn<T has hash>(self: T) -> Int: `x.hash()`, the derived hash, with no
+     seed, so the same on every run and in every build (walk.ml,
+     [fixed_hash]) *)
+  | Hash -> fn ~reqs:hashed [ read (Var 0) ] int
   (* fn<T>(what: Str) -> T: a panic, saying [what]: how the standard
      library's handlers refuse what they can't go on from, a send on a
      closed channel (std_lib.ml) *)
@@ -1511,7 +1515,7 @@ let reaches (x : Intrinsic.t) =
   | Array_split_at | Str_split_at | Bytes_split_at | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
-  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower ->
+  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower | Hash ->
       None
 
 (* Who can call it. Any program can, unless only the prelude's own
@@ -1540,7 +1544,7 @@ let caller (x : Intrinsic.t) =
       | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
       | Task_each | Task_both | Task_race | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-      | Sim_advance | Sim_alarm | Sync_keyed | Task_drain ) ) ->
+      | Sim_advance | Sim_alarm | Sync_keyed | Task_drain | Hash ) ) ->
       Internal
   | None, _ -> Any
 
@@ -1608,6 +1612,7 @@ let fns : Intrinsic.t list =
     Sync_keyed;
     Task_random;
     Task_drain;
+    Hash;
   ]
 
 (* ---- built-in types ----

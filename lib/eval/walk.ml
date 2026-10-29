@@ -158,6 +158,12 @@ let keyed cx (t : Ty.ty) v =
    it: a table keeps its keys in the order they were set (table.ml). *)
 let seed = ref (Random.State.bits64 (Random.State.make_self_init ()))
 
+(* The seed made a constant, before anything is hashed: what `ren test`
+   and `ren replay` run with, so a test, or a replay, goes the same way
+   inside too, not only in what it shows (compiler.md, "Bytes stage"). It
+   can't change once a table is made, which keeps its keys' hashes. *)
+let fix_seed () = seed := 0x5eed_0f_7e57L
+
 (* Two hashes made one, so each part's place counts: FNV-1a's step, with
    the seed. The multiplication's carries make where two parts' hashes
    collide differ from seed to seed. *)
@@ -244,15 +250,21 @@ let rec hash cx (t : Ty.ty) v =
             13L (Table.to_list members)
       | (Hidden _ | Shape), _ -> hash_shape v)
 
-(* [v]'s hash as [hash] gives it, but with no seed, so the same in every
-   run: what has to be, which of `sync.keyed`'s instances a key goes to
-   (compiler.md, "The standard library (step 8)"), since what each instance
-   holds can be seen. Nothing hashes meanwhile but [hash]'s own walk, and a
-   key's function, which can't wait. *)
-let fixed_hash cx t v =
+(* What [f] gives with the seed 0: a hash with no seed, the same in every
+   run. Nothing hashes meanwhile but [f]'s own walk, and a key's
+   function, which can't wait. *)
+let unseeded f =
   let s = !seed in
   seed := 0L;
-  Fun.protect ~finally:(fun () -> seed := s) (fun () -> hash cx t v)
+  Fun.protect ~finally:(fun () -> seed := s) f
+
+(* [v]'s hash as [hash] gives it, but with no seed: what has to be the
+   same in every run, which of `sync.keyed`'s instances a key goes to
+   (compiler.md, "The standard library (step 8)"), since what each instance
+   holds can be seen, and `x.hash()`, which a program can print or journal
+   (compiler.md, "Bytes stage"). A native build computes the same bits
+   (ren_rt.c, [ren_hash_fixed]). *)
+let fixed_hash cx t v = unseeded (fun () -> hash cx t v)
 
 (* ---- `==` ---- *)
 

@@ -6482,9 +6482,114 @@ header, then:
   every type the checker gives `hash` (a built-in method, as `show`
   is a function), and an error with a help for a type without one.
 
+### Step 3, as built
+
+`Map`, `Set` and `x.hash()` run natively, debug and release, as the
+section above says, and bench/bytes.t's `map`, `set`, `map_key`, `hash`
+and `hash_values`, and step 3's own `map_edges` and `take_panic`, are
+the same as `ren run` in every build, with no object alive at the end;
+build.t has NaN keys, `x.hash()` of a NaN and `sort`'s NaN.
+
+**The runtime** (ren_rt.c, "maps and sets") is the representation
+above: `ren_map`, its header, `len`, `used`, `cap`, `shift` and `width`
+(3 words an entry, 2 for a set), the dense `entries` of `{hash, key,
+value}` and the `int32_t` index, probed linearly from the hash's top
+bits, -1 empty and -2 a removed entry's, at most 2/3 full counting
+those; when `used` reaches `cap` the entries are compacted if a third
+are gone, and otherwise doubled. A hash kept is never 0, so a gone
+entry is one whose hash is 0. Finding a key compares the stored hash
+first. A change in place needs a count of 1 (`ren_map_writable`); a
+shared map is copied first. Perceus, Mem Lint and `--stats` see a map
+as an object (`REN_TAG_MAP`) whose entries they don't walk; the
+descriptors are `REN_D_MAP` and `REN_D_SET`, so `==` (the same entries
+in any order), ordering, `show` (`Map.of([...])`), the NaN walk and
+hashing (entries' hashes added) go through maps as through anything
+else. Mem's operations are `Map_new`, `Map_len`, `Map_find` (an entry's
+number, or -1), `Map_value`, `Map_set`, `Set_add`, `Map_remove` (each
+with its `_taking` form, which rc.ml's `erase` gives Perceus, through
+the variable's cell as `push`'s), `Map_of`, `Set_of`, `Map_entries`,
+`Map_keys`, `Map_values` and `Hash_fixed`. `m.get(k)` is a find, then
+`Some` of the value made as Core's constructor is, or `None`; a `for`
+over a map is over `Map_entries`, an array of its pairs as they were
+when the loop began, so the body's changes copy the map, as the
+interpreter's do.
+
+**Hashing.** A map's hash is a wyhash-class 64-bit hash (`ren_mum`, a
+128-bit multiply and fold, with a fallback for tcc, which has no
+`__int128`) over 8 bytes at a time, mixed with `ren_map_seed`, which
+`ren_run` reads from /dev/urandom when the program starts (an address
+if it can't). `Int` and `Str` keys are hashed inline in
+`ren_key_hash`; anything else walks its descriptor as `==` does
+(`ren_hash_in`), through a `key`, `-0.0` as `0.0`, a NaN panicking with
+"`hash` of a NaN" where it's hashed. `x.hash()` is `Hash_fixed`,
+`ren_hash_fixed`: walk.ml's FNV-1a walk with no seed, the same bits,
+which hash_values.expected pins. The interpreter's seed is fixed, for
+the whole process, under `ren test` and `ren replay` (walk.ml,
+`fix_seed`), and drawn from its random state otherwise.
+
+**`x.hash()` in the checker** is a built-in method of every type that
+has `hash` and no field or method of that name (infer_expr.ml,
+`derived_hash`): the prelude's `hash_of`, `Intrinsic.Hash`, registered
+where it's called, as `show` is a function of the prelude's.
+
+**`key` natively.** A type with a `key` of its own that isn't the
+value itself was refused natively. Now a type with no parameters whose
+`key` can't fail has it called from the runtime's walks: its
+declaration (`ren_decl`) holds `key`, a wrapper emit_c.ml makes
+(`key_wrapper`) that takes the value as a word and gives the key as one,
+and `keyd`, the key's descriptor, so `==`, ordering and hashing go
+through it, natively as in walk.ml. Such a type, and its key's type,
+are kept boxed if they'd be structs, since the walk passes words. A
+generic type with a `key` is still refused.
+
+**Built because the programs needed them,** which the spec hadn't
+listed: the collection methods are the prelude's Ren, and they call
+`Array.take`, `drop` and `sort`, and `map_key`'s key calls `Str.lower`.
+So a failed `assert` of the prelude's is native, saying what eval.ml's
+`unmet` says (`` `take` needs `n >= 0`, but `n` is -3 ``) at the
+program's call, through Mem's `Panic_str`; `Array.sort` is native,
+`ren_array_sort`, a stable merge sort through the elements' descriptor,
+which panics on a NaN as `ren run` does ("`sort` compared a NaN"); and
+`Str.lower` is `ren_str_lower`.
+
+**Where it differs from the spec above.**
+
+- Keys and values are words in both builds, counted through their
+  descriptors, not unboxed by their layouts in release builds: a
+  record or tuple type that would be a struct is kept boxed when it's a
+  map's key or value (to_mem.ml's `word_only`, as a type variable's
+  values are). A `for` over pairs of two scalars, `(Int, Int)`, still
+  gets them as two words an element (`Map_entries true`), a struct each.
+  The kernel below didn't need more; a map of small structs would.
+- `Int`, `Str` and `Bytes` keys aren't hashed in the program's own
+  code: release and debug builds both call the runtime, which takes
+  `Int` and `Str` keys inline without the walk, and everything else
+  through the walk.
+- The seed comes from /dev/urandom, not `getentropy`, which the
+  runtime's units (no system headers) can't declare portably; and the
+  interpreter's fixed seed under `ren test` and `ren replay` is one
+  constant, not the run's seed.
+- Past 2^31 - 1 entries a map exits with an error saying it isn't built
+  yet, rather than a panic at the program's site.
+
+**The kernel,** bench/native/maps: 200,000 accounts, a record with a
+`Str` name, kept in a `Map<Int, Account>` keyed by a scattered id (some
+the same) and a `Map<Str, Int>` keyed by name, each round built, 400,000
+lookups, a third removed, both iterated in order into a checksum; the
+Rust twin keeps std's `HashMap` (SipHash) of each key to its entry's
+place in a `Vec`, in insertion order, with holes compacted as Ren's
+are (indexmap's shape, no crate), names `Rc<str>`; the Go a `map` the
+same way. All three print the same checksum. RESULTS.md, "Bytes stage,
+step 3", has the numbers: a round, release, Ren **108** Mcyc, Rust 157,
+Go 255 (0.69× Rust); the debug build takes 2.9 s to Go's 0.85.
+
 ### Where this stage may differ from foundations.md
 
 - The cursor's `at`, and the formats deferred, above.
+- Step 3 keeps a map's keys and values as words in release builds
+  too, a struct's type boxed, makes `key` native only for a type with
+  no parameters, and built `assert` in the prelude, `Array.sort` and
+  `Str.lower` natively, which the spec hadn't listed (Step 3, as built).
 - Step 2 made `Str.from_utf8` native (layer 3 needed it, the spec
   hadn't said), fixed hoist.ml's soundness bug with `&` (Step 2, as
   built), and inlines the prelude's small functions in C, which the
@@ -6501,6 +6606,7 @@ header, then:
 | 0 | "Bytes stage, step 0" | this section; the baseline (RESULTS.md, bench/native/profile/); bench/bytes/ and bench/bytes.t, test/test_bytes.ml, each marked for its step | steps 1 to 4 |
 | 1 | "Bytes stage, step 1" | `Bytes.at` inline; a `Bytes`' length and data read before a loop (hoist.ml); Core's `Step` and `Byte_at` (bounds.ml), verified by Core Lint; push of a struct inline; `%` and `/` by a constant; bounds.ml's `&` bug; bench/bytes/proofs*, test_bytes.ml's b1; every kernel within 2× (logs 1.13×, json 1.81×, pages 1.71×, bytes 1.23×) | steps 2 to 4; bytes' `sdiv` (clang 16) |
 | 2 | "Bytes stage, step 2" | layer 3: reads and writes at an offset, `Bytes.zeros`, `VarUInt`/`VarInt`, `ByteCursor` and `FormatError` in the prelude, in the interpreter and natively; `Str.from_utf8` native; hoist.ml's `&` bug; the prelude's small functions inlined in C; bench/native/frames with Rust and Go twins (Ren 46.1, Rust 22.3, Go 51.4 Mcyc a pass, 2.06×); test_bytes.ml's b2 on | frames' last 3% to 2×; steps 3 and 4; journal tests flake under load (not this step's) |
+| 3 | "Bytes stage, step 3" | `Map` and `Set` natively, debug and release (ren_rt.c's `ren_map`, indexmap's shape), seeded with a wyhash-class hash; `x.hash()` in the checker, the interpreter and natively, unseeded; `key` natively for a type with no parameters; the prelude's `assert`, `Array.sort` and `Str.lower` natively; bench/native/maps with Rust and Go twins (Ren 108, Rust 157, Go 255 Mcyc a round, 0.69×); test_bytes.ml's b3 on | step 4; keys and values unboxed by layout in release builds; a generic type's `key` natively; journal.t's `recipes` timing fails under load, at the baseline too (not this step's) |
 
 ## The runtime model
 

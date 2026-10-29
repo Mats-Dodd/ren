@@ -78,7 +78,11 @@ let rt h (r : rt) : rt =
     | Bits _ | Shift _ | Widen | Narrow _ | Wrap_to _
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _
     | Op_any _ | Value_any _ | New_desc _ | Nan_check _ | Nan_check_any _
-    | Float_lanes | Float_sum | Here_set | Here_get | Here_put ) as r ->
+    | Float_lanes | Float_sum | Here_set | Here_get | Here_put | Map_new _
+    | Map_len | Map_find | Map_value | Map_set | Map_set_taking | Set_add
+    | Set_add_taking | Map_remove | Map_remove_taking | Map_of _ | Set_of
+    | Map_entries _ | Map_keys | Map_values | Hash_fixed | Array_sort _
+    | Str_lower | Panic_str ) as r ->
       r
 
 let kept h = List.map (fun (i, a) -> (i, atom h a))

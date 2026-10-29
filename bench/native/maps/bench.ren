@@ -1,0 +1,53 @@
+// `Map` natively (compiler.md, "Bytes stage", step 3): accounts, records
+// with a name, kept in a map keyed by `Int` id and one keyed by `Str`
+// name, each round built, looked up, a third removed and iterated, in
+// insertion order, into a checksum. Ids are scattered and some repeat,
+// so a set keeps a key's place and changes its value; the names are
+// made once, before the rounds. The Rust keeps std's `HashMap` of each
+// key to its entry's place in a `Vec` of entries, in insertion order,
+// the Go a `map` the same way, as Ren's map is (ren_rt.h, [ren_map]).
+
+type Account = { id: Int, name: Str, balance: Int }
+
+// account `i`'s id: scattered over 0 to 2n, some the same
+fn id_of(i: Int, n: Int) -> Int = i * 2_654_435_761 % (2 * n)
+
+fn names(n: Int) -> Array<Str> =
+  var out: Array<Str> = []
+  for i in 0..n
+    &out.push("user-".concat(show(i * 7_919 % n)))
+  out
+
+// one round: both maps built, looked up, a third removed, iterated
+fn round(names: Array<Str>, n: Int) -> Int =
+  var by_id: Map<Int, Account> = Map.empty
+  var by_name: Map<Str, Int> = Map.empty
+  for i in 0..n
+    let id = id_of(i, n)
+    &by_id.set(id, Account { id: id, name: names[i], balance: i % 1000 })
+    &by_name.set(names[i], id)
+  var h = 0
+  for i in 0..n
+    match by_id.get(i * 3)
+      Some(a) => h += a.balance
+      None => h += 1
+    match by_name.get(names[i * 31 % n])
+      Some(id) => h = h.wrapping_add(id)
+      None => h -= 1
+  for i in 0..n
+    if i % 3 == 0 then
+      &by_id.remove(id_of(i, n))
+      &by_name.remove(names[i])
+  for (k, a) in by_id
+    h = h.wrapping_mul(31).wrapping_add(k + a.balance + a.name.len())
+  for (s, id) in by_name
+    h = h.wrapping_mul(17).wrapping_add(id + s.len())
+  h.wrapping_add(by_id.len() * 1_000 + by_name.len())
+
+pub fn run(n: Int, rounds: Int) uses Console =
+  let ns = names(n)
+  var x = 0
+  for _ in 0..rounds
+    x = x.wrapping_add(round(ns, n))
+  print(ns.len())
+  print(x)

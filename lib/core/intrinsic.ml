@@ -159,6 +159,7 @@ type t =
   | Float_truncate
   | Float_sqrt
   | Str_lower
+  | Hash
 
 (* Its path in the prelude (path.ml): a function's, [show], or a built-in
    type's member's, [Array.push]. *)
@@ -289,6 +290,9 @@ let path x =
   | Float_truncate -> member "Float" "truncate"
   | Float_sqrt -> member "Float" "sqrt"
   | Str_lower -> member "Str" "lower"
+  (* `x.hash()` on a value of any type with `hash`, which the checker finds
+     for a type with no `hash` of its own (compiler.md, "Bytes stage") *)
+  | Hash -> fn "hash_of"
 
 let name x = Path.local (path x)
 let member_name x = Path.short (path x)

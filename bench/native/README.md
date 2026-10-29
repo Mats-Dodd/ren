@@ -43,6 +43,7 @@ The twins take the size as their first argument and default to
 | `vec` | arrays of 1,000, 1,000,000 rounds | 100, 10 | **decision 16**: loops by `for x in &xs`, `for i, x in &ys` and `zip`, each a kernel a vector unit could do (a dot product, a Float sum, scaling, axpy, an LCG with `*%`, a checked Int sum, a `UInt8` blend); which vectorize is RESULTS.md's "Follow-ups" |
 | `dispatch` | 65,536 descriptions, 100 rounds | 1,000, 1 | **decision 4**: research/dispatch.md's kernels, calls on descriptions chosen at run time: 2, 4, 8 and 32 shapes in an array, a `Db` of four handlers called in a loop, a router of 50 inline handlers, and an expression tree's `eval`, recursion through its own dependency; Rust is run `dyn` and enum, Go through an interface |
 | `frames` | 1,000,000 records, 20 passes | 1,000, 2 | layer 3 of formats.md (compiler.md, "Bytes stage"): a stream of length-prefixed little-endian records, each a `u32` length, a `u8` kind, a `VarUInt` id, an `i64` time, an `i32` value and a short name, written with writes at an offset into `Bytes.zeros` and decoded through a cursor, a framing loop; the Rust reads a `&[u8]` through a cursor of its own with `from_le_bytes`, the Go a `[]byte` with `encoding/binary` and `binary.Uvarint` |
+| `maps` | 200,000 accounts, 20 rounds | 1,000, 2 | `Map` natively (compiler.md, "Bytes stage", step 3): records with a name kept in a `Map<Int, Account>` and a `Map<Str, Int>`, each round built, looked up, a third removed and iterated in insertion order; the Rust keeps std's `HashMap` of each key to its entry's place in a `Vec` in insertion order (indexmap's shape, no crate), the Go a `map` the same way |
 | `slices` | 200,000 log lines, 100,000 objects and 4,000 pages, each parsed 20 times | 1,000 lines, 500 objects and 20 pages, twice | **decision 17**: research/slices.md's three parsers, each with slices, `b[i..j]`, and with offsets, its twin in the same file: log lines split into fields read and dropped, a JSON-ish tokenizer whose tokens keep slices, and pages parsed into records that keep them; the Rust holds `&[u8]`s, the Go `[]byte`s. `retain` keeps 1,000 small slices of each of eight 8 MiB buffers, and then their `copy()`s, which build.sh's `retain` kernels run |
 
 The first four are the Perceus set, ported from Koka's
@@ -150,6 +151,7 @@ times, Rust then Go:
 | `nested` | 2.62 s | 2.81 s |
 | `bytes` | 0.43 s | 0.72 s |
 | `frames` | 0.12 s | 0.28 s |
+| `maps` | 0.74 s | 0.85 s |
 
 Three miss the range on purpose. `frames` is timed a pass at a time, its 20 passes less none (profile/measure.py), as the slices kernels are. `cfold` keeps Koka's size, so it can be
 compared with Koka's published numbers. `binary-trees` keeps the

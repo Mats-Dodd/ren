@@ -48,6 +48,9 @@ change here is a change in what the program computes.
   2997
   == inout
   60809898
+  == maps
+  1000
+  252739647558794404
   == nbody
   -0.169075164
   -0.169087605

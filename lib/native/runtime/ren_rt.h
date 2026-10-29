@@ -99,6 +99,7 @@ typedef uint8_t ren_unit;
    strings (lean.h:113-125) and kklib's `KK_TAG_STRING` and the rest
    theirs. */
 enum {
+  REN_TAG_MAP = 0xFFFC,
   REN_TAG_ARRAY = 0xFFFD,
   REN_TAG_STR = 0xFFFE,
   REN_TAG_DESC = 0xFFFF,
@@ -299,6 +300,10 @@ extern ren_stats_t ren_stats;
    with exit code 1, as `ren run` does. Values still held are leaked
    (foundations.md, decision 8). */
 _Noreturn void ren_panic(const ren_site *site, const char *msg);
+
+/* The same, with the message a `Str`, [s]: a failed `assert` of the
+   prelude's, which shows the values it's about. */
+_Noreturn void ren_panic_str(const ren_site *site, ren_obj *s);
 
 /* Where a panic in the prelude is said to be: the program's call that
    reached it, as `ren run` says, since the prelude's source isn't shown.
@@ -1067,6 +1072,9 @@ ren_obj *ren_str_join(ren_obj *a, ren_obj *b);
 ren_obj *ren_str_split(ren_obj *s, ren_obj *sep, const ren_site *site);
 ren_obj *ren_str_trim(ren_obj *s);
 
+/* `s.lower()`: a new string, each ASCII letter of [s] lower case. */
+ren_obj *ren_str_lower(ren_obj *s);
+
 /* `copy()`: [a] with a buffer of its own, counted again if it already
    has one (an owner), else a copy of its range. */
 ren_obj *ren_array_copied(ren_obj *a);
@@ -1574,6 +1582,8 @@ enum {
   REN_D_SIZED,   /* a sized type's, [var] its kind, [REN_ELEM_U8]... */
   REN_D_HANDLER, /* a handler's description, an object nothing looks into */
   REN_D_BYTES,   /* `Bytes`, a string the walk shows each byte of */
+  REN_D_MAP,     /* a `Map` of [args][0]'s to [args][1]'s */
+  REN_D_SET,     /* a `Set` of [args][0]'s */
 };
 
 struct ren_decl;
@@ -1609,6 +1619,12 @@ ren_obj *ren_array_reserve_d(int64_t cap, ren_obj *d);
 
 enum { REN_DECL_RECORD, REN_DECL_SUM, REN_DECL_REP };
 
+/* A type's `key` (operators.md, "`key`"), which `==`, ordering and
+   `hash` go through: [key] of a value, a word it borrows, is its key, a
+   word the caller owns, of the type [keyd] describes. The program's
+   code, given the type's values as words (emit_c.ml, [key_wrapper]). */
+typedef ren_val (*ren_key_fn)(ren_val v);
+
 typedef struct ren_decl {
   const char *name;
   uint8_t kind;
@@ -1617,6 +1633,8 @@ typedef struct ren_decl {
   int32_t nctors;
   const ren_ctor_info *ctors; /* a record's one, or a sum's, by tag */
   ren_desc *rep;              /* an opaque type's representation */
+  ren_key_fn key;             /* its own `key`, or NULL */
+  ren_desc *keyd;             /* what [key] gives */
 } ren_decl;
 
 /* The kind of a sized type [d] describes, [REN_ELEM_U8] and the rest,
@@ -1685,8 +1703,9 @@ extern const char *const *ren_tag_names;
 _Noreturn void ren_uncaught(ren_obj *e);
 
 /* `show` of [v], a value of the type [d] describes, as shown.ml shows
-   it: a `Str` is itself. Through a type's own `show` or `key` the walk
-   never goes: a type that has one isn't in the native slice yet. */
+   it: a `Str` is itself. Through a type's own `show` the walk never
+   goes: a type that has one isn't in the native slice yet. A `key` is
+   for `==`, ordering and hashing, never `show`. */
 ren_obj *ren_show_any(ren_obj *d, ren_val v, const ren_site *site);
 
 /* [v] as it's written, a `Str` in quotes: how `ren run` prints what
@@ -1708,6 +1727,13 @@ bool ren_equal_any(ren_obj *d, ren_val a, ren_val b, const char *what,
 int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b, const char *what,
                         const ren_site *site);
 
+/* `xs.sort()`: a new array of [a]'s elements, of [d]'s type, by its
+   order, a merge sort, which keeps equal ones in the order they were, as
+   walk.ml's [List.stable_sort] does. A NaN compared panics at [site],
+   saying [what] compared it. */
+ren_obj *ren_array_sort(ren_obj *a, ren_obj *d, const char *what,
+                        const ren_site *site);
+
 /* Panics at [site] if a NaN is anywhere in [v], of [d]'s type, saying
    [what] was given it (walk.ml, [nan_in]). */
 void ren_nan_in(ren_obj *d, ren_val v, const char *what, const ren_site *site);
@@ -1723,6 +1749,101 @@ enum { REN_OP_ADD, REN_OP_SUB, REN_OP_MUL, REN_OP_DIV, REN_OP_REM, REN_OP_NEG };
 ren_val ren_op_any(ren_obj *d, int op, ren_val a, ren_val b,
                    const ren_site *site, uint32_t tag);
 ren_val ren_value_any(ren_obj *d, bool one);
+
+/* ---- maps and sets (compiler.md, "Bytes stage", "`Map` and `Set`
+   natively") ----
+
+   Python's dict and Rust's indexmap: a dense array of entries in the
+   order each key was first set, and an index of where each is, found by
+   the key's hash. An entry is its hash, its key and, a map's, its value,
+   each a word, counted through the map's [objs]; a removed one's hash is
+   0, which no live one's is, and its key and value are gone. The index
+   has 2^[shift] slots, each an entry's number, [REN_MAP_EMPTY], or
+   [REN_MAP_GONE] for a removed one's, probed linearly from the hash's
+   top bits, and never more than 2/3 full, removed ones included, since
+   [used] counts them. When the entries are full they're compacted, if
+   a third or more are removed, keeping their order, or else doubled,
+   and the index is made again from the hashes they keep.
+
+   A map is a value, as an array is (rule U): a change is in place only
+   when nothing else holds it, and otherwise to a copy, which is put
+   back in the variable's cell. A loop over a map goes over the array
+   its entries were copied into ([ren_map_entries]), so what its body
+   sets or removes changes nothing it goes over.
+
+   The hash a map keeps is seeded ([ren_map_seed]): which keys share one
+   changes from run to run, so keys can't be chosen ahead of time to
+   collide, as Go's maps do. Nothing a program sees depends on it, since
+   entries are in the order they were set. `x.hash()` is another walk,
+   with no seed ([ren_hash_fixed]). */
+
+typedef struct {
+  ren_obj h;      /* [objs]: 1 if keys are objects, 2 if values are;
+                     [nfields]: 1 for a `Set`, whose entries have no value */
+  int64_t len;    /* live entries */
+  int64_t used;   /* entries used, removed ones included */
+  int64_t cap;    /* room for entries */
+  int32_t shift;  /* the index has 1 << shift slots, or none if 0 */
+  int32_t width;  /* words an entry: 3, or 2 for a set's */
+  ren_val *entries;
+  int32_t *index;
+} ren_map;
+
+enum { REN_MAP_EMPTY = -1, REN_MAP_GONE = -2 };
+
+/* What every map's hash is mixed with, drawn when the program starts. */
+extern uint64_t ren_map_seed;
+
+/* A new empty map, or set if [set]: `Map.empty`. */
+ren_obj *ren_map_new(bool set);
+
+static inline int64_t ren_map_len(ren_obj *m) { return ((ren_map *)m)->len; }
+
+/* The number of the entry whose key is [k], of the type [kd] describes,
+   or -1. A NaN in [k] panics at [site], as hashing one does. */
+int64_t ren_map_find(ren_obj *m, ren_val k, ren_obj *kd, const ren_site *site);
+
+/* Entry [i]'s value, counted again: [i] is one [ren_map_find] gave. */
+static inline ren_val ren_map_value(ren_obj *m, int64_t i) {
+  ren_map *map = (ren_map *)m;
+  ren_val v = map->entries[i * map->width + 2];
+  if (m->objs & 2)
+    ren_dup(v.o);
+  return v;
+}
+
+/* `&m.set(k, v)`, of keys and values [kd] and [vd] describe, and a
+   set's `&s.add(k)` with [vd] NULL: in place if [taking] and the map is
+   unique, taking [k] and [v], and otherwise into a copy put back in the
+   cell, counting them again. A key that's there keeps its place and its
+   first key, and gets [v]. */
+void ren_map_set(ren_obj **cell, ren_val k, ren_val v, ren_obj *kd,
+                 ren_obj *vd, bool taking, const ren_site *site);
+
+/* `&m.remove(k)`, the same way, which borrows [k]: removing a key
+   that isn't there changes nothing, and copies nothing. */
+void ren_map_remove(ren_obj **cell, ren_val k, ren_obj *kd, bool taking,
+                    const ren_site *site);
+
+/* `Map.of(pairs)`, an array of tuples, each its own object or, with
+   [flat], two words in the array (a release build's struct); or
+   `Set.of(xs)` if [vd] is NULL. */
+ren_obj *ren_map_of(ren_obj *pairs, ren_obj *kd, ren_obj *vd, bool flat,
+                    const ren_site *site);
+
+/* A map's keys and values, in order, as an array of tuples, each its own
+   object or, with [flat], two words in the array: what a `for` goes
+   over. */
+ren_obj *ren_map_entries(ren_obj *m, bool flat);
+
+/* Its keys, or a set's members, or a map's values, in order, as an array
+   of elements [d] describes. */
+ren_obj *ren_map_keys(ren_obj *m, ren_obj *d);
+ren_obj *ren_map_values(ren_obj *m, ren_obj *d);
+
+/* `x.hash()` of [v], of the type [d] describes: walk.ml's [fixed_hash],
+   the same bits. A NaN in it panics at [site]. */
+int64_t ren_hash_fixed(ren_obj *d, ren_val v, const ren_site *site);
 
 /* ---- blocks and evidence ----
 

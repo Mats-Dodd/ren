@@ -309,6 +309,25 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
     bytes = (int64_t)size;
     break;
   }
+  case REN_TAG_MAP: {
+    ren_map *m = (ren_map *)o;
+    for (int64_t e = 0; e < m->used; e++) {
+      ren_val *ent = &m->entries[e * m->width];
+      if (ent[0].i == 0)
+        continue;
+      if (o->objs & 1)
+        ren_release(t, ent[1].o);
+      if ((o->objs & 2) && m->width > 2)
+        ren_release(t, ent[2].o);
+    }
+    bytes = (int64_t)sizeof(ren_map) +
+            m->cap * m->width * (int64_t)sizeof(ren_val) +
+            (m->shift ? ((int64_t)1 << m->shift) * (int64_t)sizeof(int32_t) : 0);
+    free(m->entries);
+    free(m->index);
+    size = sizeof(ren_map);
+    break;
+  }
   }
 #ifdef REN_STATS
   ren_stats.frees++;
@@ -379,6 +398,9 @@ void ren_mark_shared(ren_obj *o) {
     case REN_TAG_STR:
       n = ((ren_str *)x)->root != NULL;
       break;
+    case REN_TAG_MAP:
+      n = (size_t)((ren_map *)x)->len * 2;
+      break;
     }
     if (len + n > cap) {
       while (len + n > cap)
@@ -407,6 +429,19 @@ void ren_mark_shared(ren_obj *o) {
       if (n)
         todo[len++] = ((ren_str *)x)->root;
       break;
+    case REN_TAG_MAP: {
+      ren_map *m = (ren_map *)x;
+      for (int64_t e = 0; e < m->used; e++) {
+        ren_val *ent = &m->entries[e * m->width];
+        if (ent[0].i == 0)
+          continue;
+        if (x->objs & 1)
+          todo[len++] = ent[1].o;
+        if ((x->objs & 2) && m->width > 2)
+          todo[len++] = ent[2].o;
+      }
+      break;
+    }
     }
   }
   free(todo);
@@ -965,6 +1000,19 @@ ren_obj *ren_str_trim(ren_obj *s) {
   return ren_str_part(s, i, j);
 }
 
+ren_obj *ren_str_lower(ren_obj *s) {
+  int64_t n = ren_str_len(s);
+  const char *from = ren_str_data(s);
+  ren_obj *o = ren_alloc_str(n);
+  char *to = ((ren_str *)o)->bytes;
+  for (int64_t i = 0; i < n; i++) {
+    char c = from[i];
+    to[i] = c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
+  }
+  to[n] = 0;
+  return o;
+}
+
 ren_obj *ren_array_copied(ren_obj *a) {
   if (((ren_array *)a)->root == NULL) {
     ren_dup(a);
@@ -1429,11 +1477,33 @@ static int64_t ren_ctor_tag(const ren_decl *decl, ren_val v) {
   return decl->enumlike ? v.i : ren_tag(v.o);
 }
 
-/* A walk's site: where a NaN it finds panics, and what it says. */
+/* A walk's site: where a NaN it finds panics, and what it says; whether
+   it goes through a type's `key` ([keyed]), as `==`, ordering and `hash`
+   do, and, hashing, whether it's `x.hash()`'s, with no seed ([fixed]). */
 typedef struct {
   const ren_site *site;
   const char *what;
+  bool keyed;
+  bool fixed;
 } ren_walk;
+
+/* [v]'s key, a word the caller owns, through its type's [decl]. */
+static inline ren_val ren_key_of(const ren_decl *decl, ren_val v) {
+  return decl->key(v);
+}
+static inline void ren_key_done(const ren_decl *decl, ren_val k) {
+  ren_drop_val(k, &decl->keyd->h);
+}
+
+/* A map's live entries, in order: [e] each one's words, its hash first. */
+#define REN_MAP_EACH(map, e)                                                  \
+  for (ren_val *e = (map)->entries,                                           \
+               *e##_end = e == NULL ? e : e + (map)->used * (map)->width;     \
+       e < e##_end; e += (map)->width)                                        \
+    if (e[0].i != 0)
+
+static int64_t ren_map_find_in(ren_map *m, ren_val k, const ren_desc *kd,
+                               const ren_tenv *env, const ren_walk *w);
 
 /* [f], unless it's a NaN, which panics as [w] says. */
 static inline void ren_walk_float(const ren_walk *w, double f) {
@@ -1547,6 +1617,30 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
   case REN_D_HANDLER:
     ren_puts(b, "<handler>");
     break;
+  /* as it's made, in order (shown.ml) */
+  case REN_D_MAP:
+  case REN_D_SET: {
+    ren_map *m = (ren_map *)v.o;
+    bool set = d->kind == REN_D_SET;
+    ren_puts(b, set ? "Set.of([" : "Map.of([");
+    bool first = true;
+    REN_MAP_EACH(m, e) {
+      if (!first)
+        ren_puts(b, ", ");
+      first = false;
+      if (set)
+        ren_show_val(b, d->args[0], env, e[1], w);
+      else {
+        ren_puts(b, "(");
+        ren_show_val(b, d->args[0], env, e[1], w);
+        ren_puts(b, ", ");
+        ren_show_val(b, d->args[1], env, e[2], w);
+        ren_puts(b, ")");
+      }
+    }
+    ren_puts(b, "])");
+    break;
+  }
   case REN_D_NAMED: {
     const ren_decl *decl = d->decl;
     ren_tenv inner = {d->args, env};
@@ -1580,7 +1674,7 @@ ren_obj *ren_show_any(ren_obj *d, ren_val v, const ren_site *site) {
     ren_dup(v.o);
     return v.o;
   }
-  ren_walk w = {site, "`show` of a NaN"};
+  ren_walk w = {site, "`show` of a NaN", false, false};
   ren_buf b = {NULL, 0, 0};
   ren_show_val(&b, (ren_desc *)d, NULL, v, &w);
   ren_obj *s = ren_str_of(b.data, (int64_t)b.len);
@@ -1589,7 +1683,7 @@ ren_obj *ren_show_any(ren_obj *d, ren_val v, const ren_site *site) {
 }
 
 void ren_print_value(FILE *out, ren_obj *d, ren_val v, const ren_site *site) {
-  ren_walk w = {site, "`show` of a NaN"};
+  ren_walk w = {site, "`show` of a NaN", false, false};
   ren_buf b = {NULL, 0, 0};
   ren_show_val(&b, (ren_desc *)d, NULL, v, &w);
   fwrite(b.data, 1, b.len, out);
@@ -1656,9 +1750,33 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
         return false;
     return true;
   }
+  /* the same keys, each with an equal value, in any order (walk.ml) */
+  case REN_D_MAP:
+  case REN_D_SET: {
+    ren_map *x = (ren_map *)a.o, *y = (ren_map *)b.o;
+    if (x->len != y->len)
+      return false;
+    REN_MAP_EACH(x, e) {
+      int64_t i = ren_map_find_in(y, e[1], d->args[0], env, w);
+      if (i < 0)
+        return false;
+      if (d->kind == REN_D_MAP &&
+          !ren_equal_in(d->args[1], env, e[2], y->entries[i * y->width + 2], w))
+        return false;
+    }
+    return true;
+  }
   case REN_D_NAMED: {
     const ren_decl *decl = d->decl;
     ren_tenv inner = {d->args, env};
+    /* through its key, the one way to change what equal means */
+    if (decl->key != NULL) {
+      ren_val ka = ren_key_of(decl, a), kb = ren_key_of(decl, b);
+      bool same = ren_equal_in(decl->keyd, NULL, ka, kb, w);
+      ren_key_done(decl, ka);
+      ren_key_done(decl, kb);
+      return same;
+    }
     if (decl->kind == REN_DECL_REP)
       return ren_equal_in(decl->rep, &inner, a, b, w);
     if (decl->kind == REN_DECL_RECORD)
@@ -1685,7 +1803,7 @@ static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
    comparing a value with one in it panics, met or not. */
 bool ren_equal_any(ren_obj *d, ren_val a, ren_val b, const char *what,
                    const ren_site *site) {
-  ren_walk w = {site, what};
+  ren_walk w = {site, what, true, false};
   bool same = ren_equal_in((ren_desc *)d, NULL, a, b, &w);
   if (!same) {
     ren_nan_val((ren_desc *)d, NULL, a, &w);
@@ -1728,6 +1846,13 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
     return 0;
   case REN_D_NAMED: {
     ren_tenv inner = {d->args, env};
+    if (d->decl->key != NULL) {
+      ren_val ka = ren_key_of(d->decl, a), kb = ren_key_of(d->decl, b);
+      int64_t c = ren_compare_in(d->decl->keyd, NULL, ka, kb, w);
+      ren_key_done(d->decl, ka);
+      ren_key_done(d->decl, kb);
+      return c;
+    }
     if (d->decl->kind == REN_DECL_REP)
       return ren_compare_in(d->decl->rep, &inner, a, b, w);
     return REN_CMP(ren_ctor_tag(d->decl, a), ren_ctor_tag(d->decl, b));
@@ -1739,7 +1864,7 @@ static int64_t ren_compare_in(const ren_desc *d, const ren_tenv *env,
 
 int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b, const char *what,
                         const ren_site *site) {
-  ren_walk w = {site, what};
+  ren_walk w = {site, what, true, false};
   int64_t c = ren_compare_in((ren_desc *)d, NULL, a, b, &w);
   /* as [ren_equal_any]: an order decided early looks for a NaN */
   if (c != 0) {
@@ -1747,6 +1872,56 @@ int64_t ren_compare_any(ren_obj *d, ren_val a, ren_val b, const char *what,
     ren_nan_val((ren_desc *)d, NULL, b, &w);
   }
   return c;
+}
+
+/* [xs], [n] words, sorted, through [tmp], as much room again. */
+static void ren_merge_sort(ren_obj *d, ren_val *xs, ren_val *tmp, int64_t n,
+                           const char *what, const ren_site *site) {
+  if (n < 2)
+    return;
+  int64_t h = n / 2;
+  ren_merge_sort(d, xs, tmp, h, what, site);
+  ren_merge_sort(d, xs + h, tmp, n - h, what, site);
+  int64_t i = 0, j = h, k = 0;
+  /* the right one first only if it's less, so equal ones keep their
+     order */
+  while (i < h && j < n)
+    tmp[k++] = ren_compare_any(d, xs[j], xs[i], what, site) < 0 ? xs[j++]
+                                                                 : xs[i++];
+  while (i < h)
+    tmp[k++] = xs[i++];
+  while (j < n)
+    tmp[k++] = xs[j++];
+  memcpy(xs, tmp, (size_t)n * sizeof(ren_val));
+}
+
+ren_obj *ren_array_sort(ren_obj *a, ren_obj *d, const char *what,
+                        const ren_site *site) {
+  int64_t n = ren_array_len(a);
+  ren_val *xs = malloc((size_t)(2 * n + 1) * sizeof(ren_val));
+  if (xs == NULL)
+    ren_out_of_memory();
+  for (int64_t i = 0; i < n; i++)
+    xs[i] = ren_array_load(a, i);
+  ren_merge_sort(d, xs, xs + n, n, what, site);
+  ren_obj *r = ren_alloc_array_d(n, d);
+  for (int64_t i = 0; i < n; i++) {
+    if (r->objs)
+      ren_dup(xs[i].o);
+    ren_array_init_w(r, i, xs[i]);
+  }
+  free(xs);
+  return r;
+}
+
+_Noreturn void ren_panic_str(const ren_site *site, ren_obj *s) {
+  int64_t n = ren_str_len(s);
+  char *msg = malloc((size_t)n + 1);
+  if (msg == NULL)
+    ren_out_of_memory();
+  memcpy(msg, ren_str_data(s), (size_t)n);
+  msg[n] = 0;
+  ren_panic(site, msg);
 }
 
 /* walk.ml's [nan_in]: the first NaN in [v], in the order its parts are
@@ -1780,9 +1955,27 @@ static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
                     ren_fields(v.o)[i], w);
     }
     break;
+  case REN_D_MAP:
+  case REN_D_SET: {
+    ren_map *m = (ren_map *)v.o;
+    REN_MAP_EACH(m, e) {
+      ren_nan_val(d->args[0], env, e[1], w);
+      if (d->kind == REN_D_MAP)
+        ren_nan_val(d->args[1], env, e[2], w);
+    }
+    break;
+  }
   case REN_D_NAMED: {
     const ren_decl *decl = d->decl;
     ren_tenv inner = {d->args, env};
+    /* what's compared is seen through its key (walk.ml, [nan_compared]);
+       what's given to an operation isn't */
+    if (w->keyed && decl->key != NULL) {
+      ren_val k = ren_key_of(decl, v);
+      ren_nan_val(decl->keyd, NULL, k, w);
+      ren_key_done(decl, k);
+      break;
+    }
     if (decl->kind == REN_DECL_REP) {
       ren_nan_val(decl->rep, &inner, v, w);
       break;
@@ -1800,8 +1993,585 @@ static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
 }
 
 void ren_nan_in(ren_obj *d, ren_val v, const char *what, const ren_site *site) {
-  ren_walk w = {site, what};
+  ren_walk w = {site, what, false, false};
   ren_nan_val((ren_desc *)d, NULL, v, &w);
+}
+
+/* ---- hashing ----
+
+   Two walks over a value, which agree with `==` (walk.ml, [hash]): by
+   its key if its type has one; an `Int` as its 64 bits; a `Float` as its
+   bits, `-0.0` as `0.0`, a NaN panicking; a `Str` or `Bytes` by its
+   bytes; a record, a tuple, a constructor, an array, an error by its
+   parts in order, each mixed in; a map or a set by its entries' hashes
+   added, so the same in any order. [fixed] is `x.hash()`'s, walk.ml's
+   with the seed 0, FNV-1a's step, the same bits as the interpreter's.
+   The other is a map's, a wyhash-class mix with [ren_map_seed]. */
+
+uint64_t ren_map_seed;
+
+#define REN_FNV_PRIME UINT64_C(0x100000001b3)
+#define REN_FNV_BASIS UINT64_C(0xcbf29ce484222325)
+#define REN_WY0 UINT64_C(0x2d358dccaa6c78a5)
+#define REN_WY1 UINT64_C(0x8bb84b93962eacc9)
+#define REN_WY2 UINT64_C(0x4b33a62ed433d4a3)
+
+/* [a] times [b], 128 bits, its halves xored: wyhash's `mum`. tcc has no
+   128-bit type, so it multiplies the halves; both give the same bits. */
+static inline uint64_t ren_mum(uint64_t a, uint64_t b) {
+#ifdef __SIZEOF_INT128__
+  __uint128_t r = (__uint128_t)a * b;
+  return (uint64_t)r ^ (uint64_t)(r >> 64);
+#else
+  uint64_t ha = a >> 32, la = (uint32_t)a, hb = b >> 32, lb = (uint32_t)b;
+  uint64_t rh = ha * hb, rm0 = ha * lb, rm1 = hb * la, rl = la * lb;
+  uint64_t t = rl + (rm0 << 32), c = t < rl;
+  uint64_t lo = t + (rm1 << 32);
+  c += lo < t;
+  uint64_t hi = rh + (rm0 >> 32) + (rm1 >> 32) + c;
+  return lo ^ hi;
+#endif
+}
+
+static inline uint64_t ren_read8(const unsigned char *p) {
+  uint64_t v;
+  memcpy(&v, p, 8);
+  return v;
+}
+static inline uint64_t ren_read4(const unsigned char *p) {
+  uint32_t v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+/* [n] bytes at [p], seeded: wyhash's (final version 4), which reads 16
+   bytes a step and at most two overlapping loads for what's left. */
+static uint64_t ren_wyhash(const unsigned char *p, size_t n, uint64_t seed) {
+  seed ^= ren_mum(seed ^ REN_WY0, REN_WY1);
+  uint64_t a, b;
+  if (n <= 16) {
+    if (n >= 4) {
+      size_t k = (n >> 3) << 2;
+      a = (ren_read4(p) << 32) | ren_read4(p + k);
+      b = (ren_read4(p + n - 4) << 32) | ren_read4(p + n - 4 - k);
+    } else if (n > 0) {
+      a = ((uint64_t)p[0] << 16) | ((uint64_t)p[n >> 1] << 8) | p[n - 1];
+      b = 0;
+    } else
+      a = b = 0;
+  } else {
+    size_t i = n;
+    while (i > 16) {
+      seed = ren_mum(ren_read8(p) ^ REN_WY1, ren_read8(p + 8) ^ seed);
+      p += 16;
+      i -= 16;
+    }
+    a = ren_read8(p + i - 16);
+    b = ren_read8(p + i - 8);
+  }
+  return ren_mum(REN_WY1 ^ n, ren_mum(a ^ REN_WY1, b ^ seed));
+}
+
+/* Two hashes made one, so each part's place counts: walk.ml's [mix]. */
+static inline uint64_t ren_mix(const ren_walk *w, uint64_t h, uint64_t x) {
+  return w->fixed ? (h ^ x) * REN_FNV_PRIME
+                  : ren_mum(h ^ x ^ REN_WY0, ren_map_seed ^ REN_WY1);
+}
+
+/* A string's bytes: walk.ml's [hash_string], or seeded. */
+static uint64_t ren_hash_chars(const ren_walk *w, const char *s, int64_t n) {
+  if (!w->fixed)
+    return ren_wyhash((const unsigned char *)s, (size_t)n, ren_map_seed);
+  uint64_t h = REN_FNV_BASIS;
+  for (int64_t i = 0; i < n; i++)
+    h = (h ^ (unsigned char)s[i]) * REN_FNV_PRIME;
+  return h;
+}
+
+static uint64_t ren_hash_in(const ren_desc *d, const ren_tenv *env, ren_val v,
+                            const ren_walk *w);
+
+/* A `Float`'s: `-0.0` is `0.0`, which `==` says it equals. */
+static inline uint64_t ren_hash_float(const ren_walk *w, double f) {
+  ren_walk_float(w, f);
+  uint64_t bits;
+  if (f == 0)
+    f = 0;
+  memcpy(&bits, &f, 8);
+  return ren_mix(w, 2, bits);
+}
+
+/* [h] with each of [n] fields of [o] mixed in, in order. */
+static uint64_t ren_hash_fields(uint64_t h, ren_obj *o, const ren_ctor_info *c,
+                                int32_t n, ren_desc *const *types,
+                                const ren_tenv *env, const ren_walk *w) {
+  for (int32_t i = 0; i < n; i++)
+    h = ren_mix(w, h, ren_hash_in(types[i], env, ren_ctor_field(o, c, i), w));
+  return h;
+}
+
+static uint64_t ren_hash_in(const ren_desc *d, const ren_tenv *env, ren_val v,
+                            const ren_walk *w) {
+  d = ren_resolve(d, &env);
+  switch (d->kind) {
+  case REN_D_INT:
+    return ren_mix(w, 1, (uint64_t)v.i);
+  case REN_D_FLOAT:
+    return ren_hash_float(w, v.f);
+  case REN_D_SIZED:
+    return d->var == REN_ELEM_F32 ? ren_hash_float(w, v.f)
+                                  : ren_mix(w, 1, (uint64_t)v.i);
+  case REN_D_STR:
+    return ren_mix(w, 3, ren_hash_chars(w, ren_str_data(v.o), ren_str_len(v.o)));
+  case REN_D_BYTES:
+    return ren_mix(w, 4, ren_hash_chars(w, ren_str_data(v.o), ren_str_len(v.o)));
+  case REN_D_BOOL:
+    return ren_mix(w, 5, v.i ? 1 : 0);
+  case REN_D_ARRAY: {
+    uint64_t h = 9;
+    for (int64_t i = 0; i < ren_array_len(v.o); i++)
+      h = ren_mix(w, h, ren_hash_in(d->args[0], env, ren_array_load(v.o, i), w));
+    return h;
+  }
+  case REN_D_TUPLE:
+    return ren_hash_fields(11, v.o, NULL, d->nargs, d->args, env, w);
+  case REN_D_ERRORS: {
+    const char *name = ren_tag_names[ren_tag(v.o)];
+    uint64_t h = ren_mix(w, 10, ren_hash_chars(w, name, (int64_t)strlen(name)));
+    if (ren_is_scalar(v.o))
+      return h;
+    int32_t n = (int32_t)v.o->nfields / 2;
+    for (int32_t i = 0; i < n; i++)
+      h = ren_mix(w, h,
+                  ren_hash_in((ren_desc *)ren_fields(v.o)[n + i].o, NULL,
+                              ren_fields(v.o)[i], w));
+    return h;
+  }
+  /* each entry's hash, added, so the same in any order, as `==` is */
+  case REN_D_MAP:
+  case REN_D_SET: {
+    ren_map *m = (ren_map *)v.o;
+    uint64_t h = d->kind == REN_D_MAP ? 12 : 13;
+    REN_MAP_EACH(m, e) {
+      uint64_t k = ren_hash_in(d->args[0], env, e[1], w);
+      h += d->kind == REN_D_MAP
+               ? ren_mix(w, k, ren_hash_in(d->args[1], env, e[2], w))
+               : k;
+    }
+    return h;
+  }
+  case REN_D_NAMED: {
+    const ren_decl *decl = d->decl;
+    ren_tenv inner = {d->args, env};
+    if (decl->key != NULL) {
+      ren_val k = ren_key_of(decl, v);
+      uint64_t h = ren_hash_in(decl->keyd, NULL, k, w);
+      ren_key_done(decl, k);
+      return h;
+    }
+    if (decl->kind == REN_DECL_REP)
+      return ren_hash_in(decl->rep, &inner, v, w);
+    if (decl->kind == REN_DECL_RECORD)
+      return ren_hash_fields(7, v.o, &decl->ctors[0], decl->ctors[0].nfields,
+                             decl->ctors[0].types, &inner, w);
+    int64_t tag = ren_ctor_tag(decl, v);
+    const ren_ctor_info *c = &decl->ctors[tag];
+    uint64_t h = ren_mix(w, 8, (uint64_t)tag);
+    return c->nfields == 0
+               ? h
+               : ren_hash_fields(h, v.o, c, c->nfields, c->types, &inner, w);
+  }
+  default: /* `Unit`, and a type variable nothing decided */
+    return 6;
+  }
+}
+
+int64_t ren_hash_fixed(ren_obj *d, ren_val v, const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, true};
+  return (int64_t)ren_hash_in((ren_desc *)d, NULL, v, &w);
+}
+
+/* ---- maps and sets ---- */
+
+/* A key's hash, as a map keeps it: never 0, which marks a removed
+   entry. An `Int`'s and a `Str`'s without the walk's switch. */
+static inline uint64_t ren_key_hash(const ren_desc *kd, const ren_tenv *env,
+                                    ren_val k, const ren_walk *w) {
+  uint64_t h;
+  switch (kd->kind) {
+  case REN_D_INT:
+    h = ren_mix(w, 1, (uint64_t)k.i);
+    break;
+  case REN_D_STR:
+    h = ren_mix(w, 3, ren_wyhash((const unsigned char *)ren_str_data(k.o),
+                                 (size_t)ren_str_len(k.o), ren_map_seed));
+    break;
+  default:
+    h = ren_hash_in(kd, env, k, w);
+  }
+  return h ? h : 1;
+}
+
+/* Two keys the same: [ren_equal_in], an `Int`'s and a `Str`'s without
+   its switch. */
+static inline bool ren_key_eq(const ren_desc *kd, const ren_tenv *env,
+                              ren_val a, ren_val b, const ren_walk *w) {
+  switch (kd->kind) {
+  case REN_D_INT:
+    return a.i == b.i;
+  case REN_D_STR:
+    return ren_str_eq(a.o, b.o);
+  default:
+    return ren_equal_in(kd, env, a, b, w);
+  }
+}
+
+/* [n] entries' and [slots] slots' bytes, for the statistics. */
+static inline int64_t ren_map_bytes(int64_t cap, int32_t width, int32_t shift) {
+  return cap * width * (int64_t)sizeof(ren_val) +
+         (shift ? ((int64_t)1 << shift) * (int64_t)sizeof(int32_t) : 0);
+}
+
+ren_obj *ren_map_new(bool set) {
+  ren_map *m = ren_alloc_bytes(sizeof(ren_map));
+#ifdef REN_STATS
+  ren_count_alloc((int64_t)sizeof(ren_map));
+#endif
+  m->h.rc = 1;
+  m->h.tag = REN_TAG_MAP;
+  m->h.nfields = set;
+  m->h.objs = 0;
+  m->len = m->used = m->cap = 0;
+  m->shift = 0;
+  m->width = set ? 2 : 3;
+  m->entries = NULL;
+  m->index = NULL;
+  return &m->h;
+}
+
+/* The index made again for [m]'s entries, its size for [m->cap] of them,
+   at most 2/3 full: each entry's slot found from the hash it keeps. */
+static void ren_map_reindex(ren_map *m) {
+  int32_t shift = 3;
+  while (((int64_t)1 << shift) * 2 < m->cap * 3)
+    shift++;
+  if (shift != m->shift) {
+#ifdef REN_STATS
+    ren_stats.live_bytes += ren_map_bytes(0, 0, shift) - ren_map_bytes(0, 0, m->shift);
+    if (ren_stats.live_bytes > ren_stats.peak_bytes)
+      ren_stats.peak_bytes = ren_stats.live_bytes;
+#endif
+    free(m->index);
+    m->index = ren_malloc(((size_t)1 << shift) * sizeof(int32_t));
+    m->shift = shift;
+  }
+  uint64_t mask = ((uint64_t)1 << shift) - 1;
+  memset(m->index, 0xFF, ((size_t)1 << shift) * sizeof(int32_t));
+  for (int64_t e = 0; e < m->used; e++) {
+    uint64_t h = (uint64_t)m->entries[e * m->width].i;
+    if (h == 0)
+      continue;
+    uint64_t i = h >> (64 - shift);
+    while (m->index[i] != REN_MAP_EMPTY)
+      i = (i + 1) & mask;
+    m->index[i] = (int32_t)e;
+  }
+}
+
+/* The removed entries taken out, the live ones kept in order. */
+static void ren_map_compact(ren_map *m) {
+  int64_t to = 0;
+  for (int64_t e = 0; e < m->used; e++)
+    if (m->entries[e * m->width].i != 0) {
+      if (to != e)
+        memcpy(&m->entries[to * m->width], &m->entries[e * m->width],
+               (size_t)m->width * sizeof(ren_val));
+      to++;
+    }
+  m->used = to;
+}
+
+/* Room for one entry more in [m], unique: its entries compacted if a
+   third or more are removed, or else doubled, and the index made again.
+   The index's slots are 32 bits, so a map has at most 2^31 - 1. */
+static void ren_map_room(ren_map *m) {
+  if (m->used < m->cap)
+    return;
+  int64_t removed = m->used - m->len;
+  int64_t cap = m->cap;
+  if (m->used == 0 || removed * 3 < m->used)
+    cap = cap < 8 ? 8 : cap * 2;
+  if (cap > INT32_MAX) {
+    fflush(stdout);
+    fputs("error: a `Map` or a `Set` of more than 2^31 - 1 entries isn't "
+          "built yet\n",
+          stderr);
+    exit(1);
+  }
+  ren_map_compact(m);
+  if (cap != m->cap) {
+    ren_val *entries =
+        realloc(m->entries, (size_t)cap * (size_t)m->width * sizeof(ren_val));
+    if (entries == NULL)
+      ren_out_of_memory();
+#ifdef REN_STATS
+    ren_stats.grows++;
+    ren_stats.live_bytes += (cap - m->cap) * m->width * (int64_t)sizeof(ren_val);
+    if (ren_stats.live_bytes > ren_stats.peak_bytes)
+      ren_stats.peak_bytes = ren_stats.live_bytes;
+#endif
+    m->entries = entries;
+    m->cap = cap;
+  }
+  ren_map_reindex(m);
+}
+
+/* The entry whose key is [k], of hash [h], or -1, with [*slot] the
+   empty slot the probe ended at. */
+static inline int64_t ren_map_probe(ren_map *m, uint64_t h, ren_val k,
+                                    const ren_desc *kd, const ren_tenv *env,
+                                    const ren_walk *w, uint64_t *slot) {
+  if (m->shift == 0)
+    return -1;
+  uint64_t mask = ((uint64_t)1 << m->shift) - 1;
+  uint64_t i = h >> (64 - m->shift);
+  for (;; i = (i + 1) & mask) {
+    int32_t e = m->index[i];
+    if (e == REN_MAP_EMPTY) {
+      *slot = i;
+      return -1;
+    }
+    if (e >= 0) {
+      ren_val *ent = &m->entries[(int64_t)e * m->width];
+      if ((uint64_t)ent[0].i == h && ren_key_eq(kd, env, ent[1], k, w))
+        return e;
+    }
+  }
+}
+
+static int64_t ren_map_find_in(ren_map *m, ren_val k, const ren_desc *kd,
+                               const ren_tenv *env, const ren_walk *w) {
+  uint64_t slot;
+  /* a key's type's descriptor read under [env] hashes as the map's own
+     did, which had it resolved */
+  const ren_desc *rd = ren_resolve(kd, &env);
+  return ren_map_probe(m, ren_key_hash(rd, env, k, w), k, rd, env, w, &slot);
+}
+
+int64_t ren_map_find(ren_obj *m, ren_val k, ren_obj *kd, const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, false};
+  uint64_t slot;
+  const ren_desc *d = (const ren_desc *)kd;
+  return ren_map_probe((ren_map *)m, ren_key_hash(d, NULL, k, &w), k, d, NULL,
+                       &w, &slot);
+}
+
+/* A copy of [m] with room for [extra] entries more, its removed ones
+   left out, each key and value counted again. */
+static ren_map *ren_map_copy(ren_map *m, int64_t extra) {
+  ren_map *c = (ren_map *)ren_map_new(m->h.nfields);
+  c->h.objs = m->h.objs;
+  int64_t cap = m->len + extra;
+  c->cap = cap < 8 ? 8 : cap;
+  c->entries = ren_malloc((size_t)c->cap * (size_t)c->width * sizeof(ren_val));
+#ifdef REN_STATS
+  ren_stats.live_bytes += c->cap * c->width * (int64_t)sizeof(ren_val);
+#endif
+  int64_t to = 0;
+  REN_MAP_EACH(m, e) {
+    memcpy(&c->entries[to * c->width], e, (size_t)c->width * sizeof(ren_val));
+    if (m->h.objs & 1)
+      ren_dup(e[1].o);
+    if ((m->h.objs & 2) && c->width > 2)
+      ren_dup(e[2].o);
+    to++;
+  }
+  c->len = c->used = to;
+  ren_map_reindex(c);
+  return c;
+}
+
+/* [*cell], which is to change: itself if it's unique and [taking], and
+   otherwise a copy, with room for one entry more, put in the cell. */
+static ren_map *ren_map_writable(ren_obj **cell, bool taking) {
+  ren_obj *o = *cell;
+  if (taking && ren_is_unique(o))
+    return (ren_map *)o;
+  ren_map *c = ren_map_copy((ren_map *)o, 1);
+  ren_drop(o);
+  *cell = &c->h;
+  return c;
+}
+
+/* [k] set to [v] in [m], unique, [k] of hash [h]: [owned] says whether
+   [k] and [v] are taken or counted again where they're kept. */
+static void ren_map_put(ren_map *m, uint64_t h, ren_val k, ren_val v,
+                        const ren_desc *kd, const ren_walk *w, bool owned) {
+  uint64_t slot;
+  int64_t e = ren_map_probe(m, h, k, kd, NULL, w, &slot);
+  bool kobj = m->h.objs & 1, vobj = m->h.objs & 2;
+  if (e >= 0) {
+    /* there: its first key stays, with the new value */
+    if (owned && kobj)
+      ren_drop(k.o);
+    if (m->width > 2) {
+      ren_val *at = &m->entries[e * m->width + 2];
+      if (!owned && vobj)
+        ren_dup(v.o);
+      if (vobj)
+        ren_drop(at->o);
+      *at = v;
+    } else if (owned && vobj)
+      ren_drop(v.o);
+    return;
+  }
+  if (m->used == m->cap) {
+    ren_map_room(m);
+    ren_map_probe(m, h, k, kd, NULL, w, &slot);
+  }
+  if (!owned) {
+    if (kobj)
+      ren_dup(k.o);
+    if (vobj && m->width > 2)
+      ren_dup(v.o);
+  }
+  ren_val *ent = &m->entries[m->used * m->width];
+  ent[0].i = (int64_t)h;
+  ent[1] = k;
+  if (m->width > 2)
+    ent[2] = v;
+  m->index[slot] = (int32_t)m->used;
+  m->used++;
+  m->len++;
+}
+
+/* Whether a map of keys [kd] and values [vd] counts them. */
+static inline uint8_t ren_map_objs(ren_obj *kd, ren_obj *vd) {
+  return (uint8_t)((ren_desc_counted(kd) ? 1 : 0) |
+                   (vd != NULL && ren_desc_counted(vd) ? 2 : 0));
+}
+
+void ren_map_set(ren_obj **cell, ren_val k, ren_val v, ren_obj *kd,
+                 ren_obj *vd, bool taking, const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, false};
+  /* hashed first, so a NaN panics before anything changes */
+  uint64_t h = ren_key_hash((ren_desc *)kd, NULL, k, &w);
+  ren_map *m = ren_map_writable(cell, taking);
+  m->h.objs = ren_map_objs(kd, vd);
+  ren_map_put(m, h, k, v, (ren_desc *)kd, &w, taking);
+}
+
+void ren_map_remove(ren_obj **cell, ren_val k, ren_obj *kd, bool taking,
+                    const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, false};
+  const ren_desc *d = (const ren_desc *)kd;
+  uint64_t h = ren_key_hash(d, NULL, k, &w), slot;
+  if (ren_map_probe((ren_map *)*cell, h, k, d, NULL, &w, &slot) < 0)
+    return;
+  ren_map *m = ren_map_writable(cell, taking);
+  int64_t e = ren_map_probe(m, h, k, d, NULL, &w, &slot);
+  /* its slot is the one the probe found it at, marked removed */
+  uint64_t mask = ((uint64_t)1 << m->shift) - 1;
+  uint64_t i = h >> (64 - m->shift);
+  while (m->index[i] != (int32_t)e)
+    i = (i + 1) & mask;
+  m->index[i] = REN_MAP_GONE;
+  ren_val *ent = &m->entries[e * m->width];
+  if (m->h.objs & 1)
+    ren_drop(ent[1].o);
+  if ((m->h.objs & 2) && m->width > 2)
+    ren_drop(ent[2].o);
+  ent[0].i = 0;
+  m->len--;
+}
+
+ren_obj *ren_map_of(ren_obj *pairs, ren_obj *kd, ren_obj *vd, bool flat,
+                    const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, false};
+  bool set = vd == NULL;
+  ren_map *m = (ren_map *)ren_map_new(set);
+  m->h.objs = ren_map_objs(kd, vd);
+  int64_t n = ren_array_len(pairs);
+  for (int64_t i = 0; i < n; i++) {
+    ren_val k, v = {0};
+    if (set)
+      k = ren_array_load(pairs, i);
+    else if (flat) {
+      k = ren_elems(pairs)[2 * i];
+      v = ren_elems(pairs)[2 * i + 1];
+    } else {
+      ren_obj *t = ren_elems(pairs)[i].o;
+      k = ren_fields(t)[0];
+      v = ren_fields(t)[1];
+    }
+    ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, k, &w), k, v,
+                (ren_desc *)kd, &w, false);
+  }
+  return &m->h;
+}
+
+ren_obj *ren_map_entries(ren_obj *o, bool flat) {
+  ren_map *m = (ren_map *)o;
+  if (flat) {
+    ren_obj *a = ren_alloc_array_n(m->len, 2);
+    int64_t i = 0;
+    REN_MAP_EACH(m, e) {
+      ren_elems(a)[2 * i] = e[1];
+      ren_elems(a)[2 * i + 1] = e[2];
+      i++;
+    }
+    return a;
+  }
+  ren_obj *a = ren_alloc_array(m->len, true);
+  int64_t i = 0;
+  REN_MAP_EACH(m, e) {
+    /* a tuple's fields that hold objects, as the map's do */
+    ren_obj *t = ren_alloc_ctor(0, 2, o->objs);
+    ren_fields(t)[0] = e[1];
+    ren_fields(t)[1] = e[2];
+    if (o->objs & 1)
+      ren_dup(e[1].o);
+    if (o->objs & 2)
+      ren_dup(e[2].o);
+    ren_elems(a)[i++].o = t;
+  }
+  return a;
+}
+
+/* Word [at] of each live entry of [o], as an array of [d]'s, counted
+   again if [counted]. */
+static ren_obj *ren_map_column(ren_obj *o, ren_obj *d, int at, bool counted) {
+  ren_map *m = (ren_map *)o;
+  ren_obj *a = ren_alloc_array_d(m->len, d);
+  int64_t i = 0;
+  REN_MAP_EACH(m, e) {
+    if (counted)
+      ren_dup(e[at].o);
+    ren_array_init_w(a, i++, e[at]);
+  }
+  return a;
+}
+
+ren_obj *ren_map_keys(ren_obj *m, ren_obj *d) {
+  return ren_map_column(m, d, 1, m->objs & 1);
+}
+
+ren_obj *ren_map_values(ren_obj *m, ren_obj *d) {
+  return ren_map_column(m, d, 2, m->objs & 2);
+}
+
+/* The seed, from the system's randomness, once, when the program
+   starts: /dev/urandom, which every system the runtime builds on has; if
+   it can't be read, two addresses, which differ from run to run where
+   the system places a program at random. */
+static void ren_map_seed_init(void) {
+  FILE *f = fopen("/dev/urandom", "rb");
+  uint64_t s = 0;
+  if (f == NULL || fread(&s, sizeof s, 1, f) != 1)
+    s = (uint64_t)(uintptr_t)&s ^ ((uint64_t)(uintptr_t)&ren_map_seed << 17);
+  if (f != NULL)
+    fclose(f);
+  ren_map_seed = s;
 }
 
 /* Whether a number type is a `Float`, or represented as one, rather
@@ -1992,6 +2762,7 @@ int ren_run(void (*program)(void)) {
   pthread_attr_init(&attr);
   pthread_attr_setstacksize(&attr, REN_STACK_SIZE);
   ren_entry = program;
+  ren_map_seed_init();
   if (pthread_create(&thread, &attr, ren_thread, NULL) != 0) {
     fputs("error: couldn't start the program's thread\n", stderr);
     return 1;

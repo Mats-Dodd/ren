@@ -218,17 +218,8 @@ fn main() uses Console =
 (* ---- b3: `x.hash()` ---- *)
 
 let%expect_test "[b3] `x.hash()` is the derived hash, unseeded, agreeing with `==`" =
-  until "b3"
-    ~want:{|
-true
-true
-false
-true
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type P = { x: Int, y: Int }
 pub type Name = opaque Str
   pub fn of(s: Str) -> Name = s
@@ -238,53 +229,11 @@ fn main() uses Console =
   print(Name.of("Ann").hash() == Name.of("ANN").hash())
   print((1, 2).hash() == (2, 1).hash())
   print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
-|});
-  [%expect
-    {|
-    (until b3)
-    error: `P` has no method named `hash`
-      ┌─ test.ren:6:26
-    6 │   print(P { x: 1, y: 2 }.hash() == P { x: 1, y: 2 }.hash())
-      │                          ^^^^
-      help: declare it under `type P`, with `self` first
-
-    error: `P` has no method named `hash`
-      ┌─ test.ren:6:53
-    6 │   print(P { x: 1, y: 2 }.hash() == P { x: 1, y: 2 }.hash())
-      │                                                     ^^^^
-      help: declare it under `type P`, with `self` first
-
-    error: `Name` has no method named `hash`
-      ┌─ test.ren:7:24
-    7 │   print(Name.of("Ann").hash() == Name.of("ANN").hash())
-      │                        ^^^^
-      help: its methods: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`
-
-    error: `Name` has no method named `hash`
-      ┌─ test.ren:7:49
-    7 │   print(Name.of("Ann").hash() == Name.of("ANN").hash())
-      │                                                 ^^^^
-      help: its methods: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`
-
-    error: `(Int, Int)` has no method named `hash`
-      ┌─ test.ren:8:16
-    8 │   print((1, 2).hash() == (2, 1).hash())
-      │                ^^^^
-
-    error: `(Int, Int)` has no method named `hash`
-      ┌─ test.ren:8:33
-    8 │   print((1, 2).hash() == (2, 1).hash())
-      │                                 ^^^^
-
-    error: `Map<Int, Int>` has no method named `hash`
-      ┌─ test.ren:9:34
-    9 │   print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
-      │                                  ^^^^
-      help: its methods: `get`, `set`, `remove`, `includes`, `keys`, `values`, `len`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `any`, `all`, `count`, `reduce`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `zip`, `with_index`, `take`, `drop`, `reverse`
-
-    error: `Map<Int, Int>` has no method named `hash`
-      ┌─ test.ren:9:69
-    9 │   print(Map.of([(1, 2), (3, 4)]).hash() == Map.of([(3, 4), (1, 2)]).hash())
-      │                                                                     ^^^^
-      help: its methods: `get`, `set`, `remove`, `includes`, `keys`, `values`, `len`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `any`, `all`, `count`, `reduce`, `min`, `max`, `min_by`, `max_by`, `sort`, `sort_by`, `group_by`, `partition`, `zip`, `with_index`, `take`, `drop`, `reverse`
+|};
+  [%expect {|
+    true
+    true
+    false
+    true
+    ()
     |}]

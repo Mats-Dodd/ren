@@ -1677,6 +1677,20 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           desc_method env cx e f r m i d args
       | Some (td, o), _ -> method_call env cx ?changed e f r m tr td o args
       | None, TError -> nothing ()
+      (* `x.hash()` of a type with no `hash` of its own, nor a field of
+         that name: the derived hash, which any type with `hash` has *)
+      | None, ((TCon _ | TSkol _ | TFun _ | TVar _) as t)
+        when m.name = "hash" && args = [] && changed = None
+             &&
+             match t with
+             | TVar _ ->
+                 not
+                   (List.exists
+                      (fun td -> field_in m.name td <> None)
+                      env.visible)
+             | _ -> Option.bind (known_decl env t) (field_in m.name) = None
+        ->
+          derived_hash env cx f r tr
       | None, (TCon (p, _) as t)
         when Option.bind (known_decl env t) (field_in m.name) = None ->
           let td = Hashtbl.find env.types p in
@@ -1788,6 +1802,25 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
               nothing ())
       | None, _ -> field_call ())
   | _ -> call_with env cx e f (infer env cx f) args
+
+(* `r.hash()`, [f] the method, [r] of type [tr], which has no `hash` of
+   its own: the built-in `hash_of(r)` (compiler.md, "Bytes stage"), the
+   derived hash with no seed. Its requirement, `hash` of [tr], is checked
+   as any is, so a type without one, a function's, is an error there. *)
+and derived_hash env cx (f : expr) (r : expr) tr =
+  let path = Intrinsic.path Hash in
+  (* a program never names it, so it's in no module's imports *)
+  if not (Hashtbl.mem env.globals path) then
+    Hashtbl.replace env.globals path (of_scheme env.st (Prelude.scheme Hash));
+  let tm = lookup env cx ~node:f.node f.loc (Global path) in
+  Hashtbl.replace cx.nodes f.node tm;
+  Hashtbl.replace cx.found f.node (Method_of path);
+  match repr tm with
+  | TFun ([ self ], ret, _, _) ->
+      blame_args cx f [ (self.ty, r.loc) ];
+      unify_at env r.loc ~found:tr ~expected:self.ty;
+      ret
+  | _ -> TError
 
 (* `d.op(args)`, the call [e] of [f], where [d] is [r], a description of
    the dependency [dep], whose type is [i], and [op] one of its operations

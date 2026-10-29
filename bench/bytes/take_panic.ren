@@ -1,0 +1,7 @@
+// A failed `assert` of the prelude's says what the function needs and
+// what its variable is, at the program's call, natively as in `ren run`.
+fn main() uses Console =
+  let m = Map.of([(1, "a"), (2, "b")])
+  print(m.take(1))
+  let n = 0 - 3
+  print(m.take(n))

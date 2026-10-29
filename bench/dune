@@ -31,6 +31,7 @@
   (glob_files native/frames/*.ren)
   (glob_files native/handlers/*.ren)
   (glob_files native/inout/*.ren)
+  (glob_files native/maps/*.ren)
   (glob_files native/nbody/*.ren)
   (glob_files native/nested/*.ren)
   (glob_files native/nqueens/*.ren)

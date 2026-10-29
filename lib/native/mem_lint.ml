@@ -189,6 +189,21 @@ let rt_sig (rt : rt) : layout list * layout =
   | Op_any None -> ([ Desc; Word 0 ], Word 0)
   | Value_any _ -> ([ Desc ], Word 0)
   | New_desc _ -> ([], Desc)
+  | Map_new _ -> ([], Boxed)
+  | Map_len -> ([ Boxed ], Int)
+  | Map_find -> ([ Boxed; Word 0; Desc ], Int)
+  | Map_value -> ([ Boxed; Int ], Word 0)
+  | Map_set | Map_set_taking -> ([ Cell Boxed; Word 0; Word 0; Desc; Desc ], Unit)
+  | Set_add | Set_add_taking | Map_remove | Map_remove_taking ->
+      ([ Cell Boxed; Word 0; Desc ], Unit)
+  | Map_of _ -> ([ Boxed; Desc; Desc ], Boxed)
+  | Set_of -> ([ Boxed; Desc ], Boxed)
+  | Map_entries _ -> ([ Boxed ], Boxed)
+  | Map_keys | Map_values -> ([ Boxed; Desc ], Boxed)
+  | Hash_fixed -> ([ Desc; Word 0 ], Int)
+  | Array_sort _ -> ([ Boxed; Desc ], Boxed)
+  | Str_lower -> ([ Boxed ], Boxed)
+  | Panic_str -> ([ Boxed ], Unit)
 
 let args env what (want : layout list) xs =
   if List.length want <> List.length xs then

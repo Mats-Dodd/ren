@@ -195,6 +195,9 @@ let rec erase (b : block) : block =
     | Runtime (Array_push l, xs, s) -> Runtime (Array_push_taking l, xs, s)
     | Runtime (Bytes_store a, xs, s) -> Runtime (Bytes_store_taking a, xs, s)
     | Runtime (Bytes_set_var k, xs, s) -> Runtime (Bytes_set_var_taking k, xs, s)
+    | Runtime (Map_set, xs, s) -> Runtime (Map_set_taking, xs, s)
+    | Runtime (Set_add, xs, s) -> Runtime (Set_add_taking, xs, s)
+    | Runtime (Map_remove, xs, s) -> Runtime (Map_remove_taking, xs, s)
     | r -> r
   in
   match b with

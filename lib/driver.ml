@@ -726,6 +726,7 @@ type suite = {
    [roots], each a file and its source (see [load_all]). A module that
    has a `main` is checked as the program's entry. *)
 let suite ?lint ?(load = fun _ -> None) ~dir roots =
+  Walk.fix_seed ();
   let home file =
     let rel =
       if dir = Filename.current_dir_name then file
@@ -1002,6 +1003,7 @@ let run ?lint ?load ?(release = false) ?(args = []) ?record ?trace ~file src =
    ended as the recording did, after the same calls; if it did, it ends
    that way again, a panic raised as it was. *)
 let replay ?lint ?load ?trace ~(journal : Journal.t) ~file src =
+  Walk.fix_seed ();
   let checked = check_all ?load ~file src in
   let modules = link ?lint checked in
   (* what's replayed is what `main` uses now *)

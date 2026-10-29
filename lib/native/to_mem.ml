@@ -28,8 +28,13 @@
    locals, installs its instance, and calls the `with`'s body, lifted as
    a block, with that evidence.
 
-   What the subset leaves out, a `Map` or a `Set`, a type's own `show`,
-   `key` or operators, the world but the real `Console`, is an
+   A `Map` or a `Set` is an object of the runtime's (ren_rt.h,
+   [ren_map]), its keys and values words with their descriptors
+   ([intrinsic]); a type's own `key`, of a type with no parameters, the
+   walks call through its declaration ([decl_id]).
+
+   What the subset leaves out, a type's own `show` or operators, a
+   generic type's own `key`, the world but the real `Console`, is an
    [Unsupported] error at the code that needs it, which the driver
    reports. *)
 
@@ -96,6 +101,9 @@ type ctx = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
   fns : (Path.t, C.fn_def) Hashtbl.t;
   own_members : (Path.t, string) Hashtbl.t;
+  key_fns : (Path.t, Path.t) Hashtbl.t;
+      (** each type's own `key`, by the type, which its declaration's walks
+          call ([decl_id]) *)
   own_ops : (Path.t * string, unit) Hashtbl.t;
       (** the types with an operator or associated value of their own, by the
           requirement: a dictionary for it would need the member called *)
@@ -218,6 +226,8 @@ let dep_id cx dep = number cx.deps dep
 let array_path = match Ty.array Ty.int with Con (p, _) -> p | _ -> bug "Array"
 let cell_path = match C.cell_ty Ty.int with Con (p, _) -> p | _ -> bug "Cell"
 let bytes_ty = Ty.Con (Path.prelude "Bytes", [])
+let map_path = Path.prelude "Map"
+let set_path = Path.prelude "Set"
 let is_struct (l : layout) = match l with Struct _ -> true | _ -> false
 
 let is_cell (t : Ty.ty) =
@@ -522,6 +532,8 @@ and plain_layout cx loc (t : Ty.ty) : layout =
          | _ -> ());
       Boxed
   | Con (p, _) when Ty.is_tuple p -> Boxed
+  (* a map or a set is an object (ren_rt.h, [ren_map]) *)
+  | Con (p, _) when p = map_path || p = set_path -> Boxed
   | Con (p, args) -> (
       match Hashtbl.find_opt cx.types p with
       | Some { body = Record _; _ } -> Boxed
@@ -713,6 +725,23 @@ let floaty cx (t : Ty.ty) =
   in
   go t
 
+(* Whether a function returns a status and its value through a pointer:
+   whether its type says it can fail with a tag. A row of errors that
+   only has a tail, `! ..e`, which every function whose errors are
+   inferred has, can't bring one in unless a parameter's type has that
+   tail too, and no parameter is a block in the subset: so most
+   functions, fib's among them, return their value. *)
+let fn_fails (f : C.fn_def) =
+  match f.scheme.ty with
+  | Fun (ps, _, errs, _) ->
+      errs.labels <> []
+      || errs.tail <> None
+         && List.exists
+              (fun (p : Ty.param) ->
+                match p.ty with Fun _ -> true | _ -> false)
+              ps
+  | _ -> false
+
 (* ---- descriptors ---- *)
 
 (* The program's descriptor of [t], static data, by its index: a closed
@@ -738,6 +767,8 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
             (D_sized (Option.get (Sized.of_path p)), [])
         | Con (p, [ e ]) when p = array_path -> (D_array, [ arg e ])
         | Con (p, parts) when Ty.is_tuple p -> (D_tuple, List.map arg parts)
+        | Con (p, [ k; v ]) when p = map_path -> (D_map, [ arg k; arg v ])
+        | Con (p, [ k ]) when p = set_path -> (D_set, [ arg k ])
         | Con (p, args) -> (D_named (decl_id cx loc p), List.map arg args)
         | Errors _ -> (D_errors, [])
         | Var i when template -> (D_var i, [])
@@ -749,7 +780,9 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
       in
       let counted =
         match kind with
-        | D_str | D_bytes | D_array | D_tuple | D_errors | D_handler -> true
+        | D_str | D_bytes | D_array | D_tuple | D_map | D_set | D_errors
+        | D_handler ->
+            true
         | D_named k -> (
             match (Hashtbl.find cx.decl_bodies k).dbody with
             | Record_decl _ -> true
@@ -788,22 +821,39 @@ and decl_id cx loc (p : Path.t) : int =
   match Hashtbl.find_opt cx.decls p with
   | Some n -> n
   | None ->
-      (match Hashtbl.find_opt cx.own_members p with
-      | Some what ->
-          unsupported loc
-            (sprintf "a value of `%s`, which has %s of its own" p.name what)
-      | None -> ());
       let d =
         match Hashtbl.find_opt cx.types p with
         | Some d -> d
         | None -> unsupported loc (sprintf "a value of type `%s`" p.name)
+      in
+      (* a `key` of a type with no parameters, which can't fail, is called
+         from the walks, through a wrapper of words (emit_c.ml,
+         [key_wrapper]): the type's values and the key are words, so a
+         struct's type is kept boxed *)
+      let key =
+        match (Hashtbl.find_opt cx.own_members p, Hashtbl.find_opt cx.key_fns p) with
+        | Some _, Some k when d.params = [] && not (fn_fails (Hashtbl.find cx.fns k))
+          -> (
+            match (Hashtbl.find cx.fns k).scheme.ty with
+            | Fun (_, r, _, _) -> Some (k, r)
+            | _ -> bug "a `key` without a function type")
+        | Some what, _ ->
+            unsupported loc
+              (sprintf "a value of `%s`, which has %s of its own" p.name what)
+        | None, _ -> None
       in
       let n = Hashtbl.length cx.decls in
       Hashtbl.replace cx.decls p n;
       (* the body's templates may name this type again: it has its number
          first *)
       Hashtbl.replace cx.decl_bodies n
-        { dname = p.name; dopaque = d.opaque; dbody = Rep_decl 0; dplaces = [] };
+        {
+          dname = p.name;
+          dopaque = d.opaque;
+          dbody = Rep_decl 0;
+          dplaces = [];
+          dkey = None;
+        };
       let tmpl t = static_desc cx loc ~template:true t in
       let dbody =
         match d.body with
@@ -839,26 +889,19 @@ and decl_id cx loc (p : Path.t) : int =
         | Sum cs -> List.map (fun (c : Iface.ctor) -> places c.cfields) cs
         | _ -> []
       in
+      let dkey =
+        match key with
+        | Some (k, r) ->
+            with_words cx 0 (fun () ->
+                word_only cx (layout cx loc (Con (p, [])));
+                word_only cx (layout cx loc r));
+            cx.todo <- (k, loc) :: cx.todo;
+            Some (c_name cx k, static_desc cx loc ~template:false r)
+        | None -> None
+      in
       Hashtbl.replace cx.decl_bodies n
-        { dname = p.name; dopaque = d.opaque; dbody; dplaces };
+        { dname = p.name; dopaque = d.opaque; dbody; dplaces; dkey };
       n
-
-(* Whether a function returns a status and its value through a pointer:
-   whether its type says it can fail with a tag. A row of errors that
-   only has a tail, `! ..e`, which every function whose errors are
-   inferred has, can't bring one in unless a parameter's type has that
-   tail too, and no parameter is a block in the subset: so most
-   functions, fib's among them, return their value. *)
-let fn_fails (f : C.fn_def) =
-  match f.scheme.ty with
-  | Fun (ps, _, errs, _) ->
-      errs.labels <> []
-      || errs.tail <> None
-         && List.exists
-              (fun (p : Ty.param) ->
-                match p.ty with Fun _ -> true | _ -> false)
-              ps
-  | _ -> false
 
 (* ---- a function ---- *)
 
@@ -1373,12 +1416,47 @@ let rec desc fs env (d : C.desc) : atom =
       let how =
         if p = array_path then Of_array
         else if Ty.is_tuple p then Of_tuple
+        else if p = map_path then Of_map
+        else if p = set_path then Of_set
         else Of_decl (decl_id fs.cx fs.here p)
       in
       let r = owned fs env "$desc" Desc (Runtime (New_desc how, args, None)) in
       (* the runtime counts again what it keeps *)
       List.iter (drop fs env) args;
       r
+
+(* The descriptor of [t], a type here, owned, as [desc] gives one: static
+   if none of its type variables is a word here, and otherwise built from
+   theirs. What a `Set`'s members need, which a [Prim] gives no
+   descriptor of. *)
+and ty_desc fs env (t : Ty.ty) : atom =
+  let rec has_word (t : Ty.ty) =
+    match t with
+    | Var n -> n < fs.cx.nwords
+    | Con (_, ts) -> List.exists has_word ts
+    | _ -> false
+  in
+  match t with
+  | Var n when n < fs.cx.nwords ->
+      let d = word_desc fs n in
+      let t = fresh fs "$desc" Desc in
+      emit fs (Let (t, Atom d));
+      dup fs (Var t);
+      own env t;
+      Var t
+  | Con (p, ts) when has_word t ->
+      let args = List.map (ty_desc fs env) ts in
+      let how =
+        if p = array_path then Of_array
+        else if Ty.is_tuple p then Of_tuple
+        else if p = map_path then Of_map
+        else if p = set_path then Of_set
+        else Of_decl (decl_id fs.cx fs.here p)
+      in
+      let r = owned fs env "$desc" Desc (Runtime (New_desc how, args, None)) in
+      List.iter (drop fs env) args;
+      r
+  | _ -> Desc_lit (static_desc fs.cx fs.here ~template:false t)
 
 (* A requirement's dictionary, owned: the descriptor of its type. One of
    a type with that operator of its own, `Instant`'s `sub`, would need its
@@ -1800,13 +1878,84 @@ and expr_at fs env (e : C.expr) : atom =
       own env r;
       Var r
   | Match (s, arms) -> match_ fs env e s arms
+  (* the prelude's, which says what the function it's in needs and what
+     each variable in it is, at the program's call ([assert_message]) *)
+  | Assert x when x.loc.file = Prelude.file ->
+      let c = expr fs env x in
+      let fail =
+        block fs (fun () ->
+            branch env (fun () ->
+                let msg = assert_message fs env x in
+                emit fs (Do (Runtime (Panic_str, [ msg ], Some (here_site fs))));
+                drop fs env msg))
+      in
+      emit fs (If (c, [], fail));
+      Unit
   | Assert x ->
-      if x.loc.file = Prelude.file then
-        unsupported_at fs e.loc "a call of the prelude that `assert`s";
       let c = expr fs env x in
       emit fs (Assert (c, new_site cx ~kind:Asserts x.loc));
       Unit
   | Assert_equal _ -> unsupported_at fs e.loc "`assert a == b`"
+
+(* What a failed `assert` [a] of the prelude's says, a [Str], owned, as
+   eval.ml's [unmet] says it: the function it's in, which the program
+   called, what it needs, and what each variable in it is, `` `take` needs
+   `n >= 0`, but `n` is -1 ``. The function is the prelude's last
+   declared before [a]. *)
+and assert_message fs env (a : C.expr) : atom =
+  let cx = fs.cx in
+  let fn =
+    Hashtbl.fold
+      (fun _ (f : C.fn_def) found ->
+        match found with
+        | _
+          when f.loc.file <> Prelude.file
+               || f.loc.start.line > a.loc.start.line
+               || f.origin <> Written ->
+            found
+        | Some (g : C.fn_def) when g.loc.start.line >= f.loc.start.line -> found
+        | _ -> Some f)
+      cx.fns None
+  in
+  let who =
+    match fn with
+    | Some f -> sprintf "`%s`" (Path.short f.path)
+    | None -> "this call"
+  in
+  let text =
+    let line =
+      List.nth
+        (String.split_on_char '\n' (String.trim Prelude.source))
+        (a.loc.start.line - 1)
+    in
+    String.sub line (a.loc.start.col - 1) (a.loc.stop.col - a.loc.start.col)
+  in
+  let rec locals (e : C.expr) =
+    match e.kind with
+    | Local v -> [ v ]
+    | _ -> List.concat_map locals (C.children e)
+  in
+  let cat x y =
+    let r = owned fs env "$msg" Boxed (Runtime (Str_concat, [ x; y ], None)) in
+    drop fs env x;
+    drop fs env y;
+    r
+  in
+  match List.sort_uniq compare (locals a) with
+  | [] -> literal cx (sprintf "%s needs `%s`, and it isn't so" who text)
+  | vs ->
+      List.fold_left
+        (fun (msg, first) (v : C.var) ->
+          let lead =
+            sprintf "%s`%s` is " (if first then "" else " and ") v.name
+          in
+          let shown =
+            show fs env a.loc v.ty (C.Known v.ty) (read fs env v)
+          in
+          (cat (cat msg (literal cx lead)) shown, false))
+        (literal cx (sprintf "%s needs `%s`, but " who text), true)
+        vs
+      |> fst
 
 (* Leave the innermost loop: drop what every scope up to it holds, and
    run the [after] of each `Finally` on the way. *)
@@ -2218,7 +2367,22 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       in
       drop fs env d;
       r
-  | (Entries | Members), _ -> unsupported_at fs e.loc "a `Map` or a `Set`"
+  (* what a `for` goes over (ren_rt.h, [ren_map_entries]) *)
+  | Entries, [ a ] -> (
+      match a.ty with
+      | Con (_, [ k; v ]) ->
+          let flat = flat_pairs fs e.loc k v in
+          let m = expr fs env a in
+          let r = owned fs env "$entries" Boxed (Runtime (Map_entries flat, [ m ], None)) in
+          drop fs env m;
+          r
+      | _ -> bug "the entries of what isn't a map")
+  | Members, [ a ] -> (
+      match a.ty with
+      | Con (_, [ k ]) ->
+          let m = expr fs env a in
+          keys fs env e Map_keys m k [] (ty_desc fs env k)
+      | _ -> bug "the members of what isn't a set")
   (* what a dependency's operation is given, checked for a NaN where it
      could hold one (nan.ml), and given on as it is *)
   | Nan_check op, [ a ] ->
@@ -2448,6 +2612,41 @@ and show fs env loc t (d : C.desc) x =
       drop fs env x;
       s
 
+(* Where [key], of type [k] that [dk] describes, is in the map [m], an
+   [Int], -1 if it isn't, both borrowed: the key's done with. The map's
+   other types, [others], are words too. *)
+and find fs env (e : C.expr) m key others k dk : atom =
+  let cx = fs.cx in
+  List.iter (fun t -> word_only cx (layout_at fs e.loc t)) (k :: others);
+  let d = desc fs env dk in
+  let i =
+    borrowed fs "$at" Int
+      (Runtime (Map_find, [ m; as_word fs key; d ], Some (new_site cx e.loc)))
+  in
+  List.iter (drop fs env) [ key; d ];
+  i
+
+(* A map's keys or its values, or a set's members, [rt], of the map [m],
+   which is done with: an array of those [d] describes. *)
+and keys fs env (e : C.expr) rt m k others d : atom =
+  let cx = fs.cx in
+  List.iter (fun t -> word_only cx (layout_at fs e.loc t)) (k :: others);
+  let r = owned fs env "$keys" Boxed (Runtime (rt, [ m; d ], None)) in
+  List.iter (drop fs env) [ m; d ];
+  r
+
+(* Whether an array of [(k, v)] pairs keeps each as two words of its own
+   ([Struct]), of two scalars, or as a tuple object: what [Map_of] and
+   [Map_entries] are told. A struct of more words, or of fewer, is kept
+   boxed instead. *)
+and flat_pairs fs loc k v =
+  let cx = fs.cx in
+  List.iter (fun t -> word_only cx (layout_at fs loc t)) [ k; v ];
+  match element cx (layout_at fs loc (Ty.tuple [ k; v ])) with
+  | Struct (n, false) when List.length (struct_of cx n).sfields = 2 -> true
+  | Struct (n, _) -> raise (Demote (struct_ty cx n))
+  | _ -> false
+
 and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
@@ -2564,6 +2763,142 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
           drop fs env v;
           r
       | _ -> bug "a layer 3 write without `&`")
+  (* maps and sets (ren_rt.c, "maps and sets"): their keys and values
+     are words, each with its descriptor, so a struct's type is kept boxed
+     ([words]) *)
+  | (Map_empty | Set_empty), _, _ ->
+      owned fs env "$empty" Boxed (Runtime (Map_new (x = Set_empty), [], None))
+  | (Map_len | Set_len), _, _ -> runtime Map_len
+  | (Map_keys | Map_values), [ k; v ], [ dk; dv ] -> (
+      match values () with
+      | [ m ] ->
+          let rt, d = if x = Map_keys then (Map_keys, dk) else (Map_values, dv) in
+          keys fs env e rt m k [ v ] (desc fs env d)
+      | _ -> bug "a `keys` of no map")
+  | (Map_includes | Set_includes), k :: _, dk :: _ -> (
+      match values () with
+      | [ m; key ] ->
+          let i = find fs env e m key (List.tl tys) k dk in
+          drop fs env m;
+          borrowed fs "$includes" Bool (Compare (Ge, i, Int 0L))
+      | _ -> bug "an `includes` of no map")
+  (* the value, if the key's there: `Some` of it, made as Core's
+     constructor would be, of a variable of its own *)
+  | Map_get, [ k; v ], [ dk; _ ] -> (
+      match values () with
+      | [ m; key ] ->
+          let i = find fs env e m key [ v ] k dk in
+          let found = borrowed fs "$found" Bool (Compare (Ge, i, Int 0L)) in
+          let opt = match e.ty with Con (p, _) -> p | _ -> bug "a `get` not of an `Option`" in
+          let r = fresh fs "$get" (lay e.ty) in
+          emit fs (Decl r);
+          let arm f =
+            block fs (fun () ->
+                branch env (fun () ->
+                    let a = f () in
+                    consume env a;
+                    emit fs (Set (r, a))))
+          in
+          let yes =
+            arm (fun () ->
+                let value =
+                  from_word fs env "$value" (Runtime (Map_value, [ m; i ], None)) (lay v)
+                in
+                let cv : C.var = { id = -1 - fs.next_id; name = "$value"; ty = v } in
+                let m' = match value with Var m' -> m' | _ -> bug "a value that isn't a variable" in
+                let some =
+                  expr fs (bind env cv m')
+                    { e with kind = Con (opt, "Some", [ { e with kind = Local cv; ty = v } ]) }
+                in
+                drop fs env value;
+                some)
+          in
+          let no = arm (fun () -> expr fs env { e with kind = Con (opt, "None", []) }) in
+          emit fs (If (found, yes, no));
+          drop fs env m;
+          own env r;
+          Var r
+      | _ -> bug "a `get` of no map")
+  | (Map_set | Set_add | Map_remove | Set_remove), k :: _, dk :: _ -> (
+      let m, rest =
+        match args with
+        | Ref m :: rest -> (m, rest)
+        | _ -> bug "a map's change without `&`"
+      in
+      let mv = mem_var env m in
+      let cell =
+        match mv.layout with
+        | Cell _ -> Var mv
+        | l -> borrowed fs ("&" ^ m.name) (Cell l) (Addr mv)
+      in
+      let xs =
+        List.map
+          (function
+            | C.Value a -> expr fs env a | Ref _ -> bug "a key given with `&`")
+          rest
+      in
+      List.iter (fun t -> word_only cx (lay t)) tys;
+      let ds = List.map (desc fs env) (match x with Map_set -> descs | _ -> [ dk ]) in
+      ignore k;
+      let rt =
+        match x with
+        | Map_set -> Map_set
+        | Set_add -> Set_add
+        | _ -> Map_remove
+      in
+      emit fs
+        (Do (Runtime (rt, (cell :: List.map (as_word fs) xs) @ ds, Some (site ()))));
+      List.iter (drop fs env) (xs @ ds);
+      Unit)
+  | Map_of, [ k; v ], [ dk; dv ] -> (
+      match values () with
+      | [ pairs ] ->
+          let flat = flat_pairs fs e.loc k v in
+          let dk = desc fs env dk and dv = desc fs env dv in
+          let r =
+            owned fs env "$map" Boxed
+              (Runtime (Map_of flat, [ pairs; dk; dv ], Some (site ())))
+          in
+          List.iter (drop fs env) [ pairs; dk; dv ];
+          r
+      | _ -> bug "a `Map.of` of no pairs")
+  | Set_of, [ k ], [ dk ] -> (
+      match values () with
+      | [ xs ] ->
+          word_only cx (lay k);
+          let dk = desc fs env dk in
+          let r =
+            owned fs env "$set" Boxed (Runtime (Set_of, [ xs; dk ], Some (site ())))
+          in
+          List.iter (drop fs env) [ xs; dk ];
+          r
+      | _ -> bug "a `Set.of` of no members")
+  (* `x.hash()`, unseeded, as walk.ml's [fixed_hash] *)
+  | Hash, _, [ d ] -> (
+      match values () with
+      | [ v ] ->
+          let d = desc fs env d in
+          let r =
+            owned fs env "$hash" Int
+              (Runtime (Hash_fixed, [ d; as_word fs v ], Some (site ())))
+          in
+          List.iter (drop fs env) [ v; d ];
+          r
+      | _ -> bug "a `hash` of no value")
+  (* a merge sort, through the elements' descriptor, so they're words *)
+  | Array_sort, [ t ], [ d ] -> (
+      match values () with
+      | [ xs ] ->
+          word_only cx (element cx (lay t));
+          let d = desc fs env d in
+          let r =
+            owned fs env "$sorted" Boxed
+              (Runtime (Array_sort (Nan.compared "sort"), [ xs; d ], Some (site ())))
+          in
+          List.iter (drop fs env) [ xs; d ];
+          r
+      | _ -> bug "a `sort` of no array")
+  | Str_lower, _, _ -> runtime Str_lower
   | Float_of, _, _ -> runtime Float_of_int
   | Float_sqrt, _, _ ->
       runtime ~site:(new_site cx ~made:(Nan.where e.loc) e.loc) Float_sqrt
@@ -3360,6 +3695,11 @@ and global_value fs env (e : C.expr) p =
     | Some f -> f
     | None -> bug ("the value `" ^ Path.local p ^ "`, which isn't there")
   in
+  match f.body.kind with
+  (* `Map.empty` and `Set.empty`, generic, are each a new empty one *)
+  | Call ({ kind = Intrinsic (((Map_empty | Set_empty) as x), _, _, _); _ }, [], _) ->
+      owned fs env "$empty" Boxed (Runtime (Map_new (x = Set_empty), [], None))
+  | _ ->
   if f.tys <> [] || f.dicts <> [] then
     unsupported_at fs e.loc
       (sprintf "the associated value `%s` of a generic type" (Path.local p));
@@ -3679,6 +4019,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       types = Hashtbl.create 64;
       fns = Hashtbl.create 256;
       own_members = Hashtbl.create 16;
+      key_fns = Hashtbl.create 16;
       own_ops = Hashtbl.create 16;
       names = Hashtbl.create 64;
       taken = Hashtbl.create 64;
@@ -3728,7 +4069,9 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       in
       List.iter
         (fun (t, k) ->
-          if not (itself k) then Hashtbl.replace cx.own_members t "a `key`")
+          if not (itself k) then (
+            Hashtbl.replace cx.own_members t "a `key`";
+            Hashtbl.replace cx.key_fns t k))
         m.keys;
       List.iter
         (fun ((t, req), _) -> Hashtbl.replace cx.own_ops (t, req) ())
