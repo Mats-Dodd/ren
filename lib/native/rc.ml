@@ -933,6 +933,12 @@ and alive fi ~after ~uses ~moved gid =
     Ids.mem gid after || (Ids.mem gid uses && not (moved gid))
   else true
 
+(* Whether a dead view of [gid] may be of a value it held before a [Set]
+   changed it: [gid] is a variable that changes, so a part read through
+   the view isn't a field of what it holds when it dies, and its drop
+   isn't specialized through the view. *)
+let stale fi gid = Ids.mem gid fi.mutables
+
 (* The counting that makes the descendants of [gid], which is dying,
    that are live in [live] own their references: one more of each, but a
    view, the same object, which can take [gid]'s own if [transfer]. The
@@ -957,7 +963,9 @@ let promote pl gid ~live ~transfer =
             | _ -> incs := !incs @ count fi g ~dup:true
           else
             go c
-              ~direct:(direct && match g.kind with View _ -> true | _ -> false))
+              ~direct:
+                (direct
+                && match g.kind with View _ -> not (stale fi gid) | _ -> false))
       (find_group fi gid).children
   in
   go gid ~direct:true;
@@ -971,7 +979,8 @@ let promote pl gid ~live ~transfer =
    Parc.hs:356, which drops the children in the unique branch through
    [optimizeDupDrops] again, Parc.hs:359, so a pattern's inner nodes are
    specialized too). A field is nested only if no other variable of the
-   same slot is used: that would hold the same object. *)
+   same slot is used, and none is nested already: that would hold the
+   same object. *)
 type dtree = {
   incs : stmt list;
   parts : (int * var) list;
@@ -999,6 +1008,7 @@ let rec dtree pl gid ~scope ~live ~transfer : dtree =
       (fun k -> match (find_group fi k).kind with Part _ -> true | _ -> false)
       (find_group fi c).children
   in
+  let stale = stale fi in
   let rec go gid ~direct =
     List.iter
       (fun c ->
@@ -1015,10 +1025,14 @@ let rec dtree pl gid ~scope ~live ~transfer : dtree =
             | _ -> incs := !incs @ count fi g ~dup:true
           else
             match (g.kind, count_var g) with
+            (* a slot is nested once: another dead read of it, `r.q.z`
+               after `r.q.p.x`, is the same object, its live parts
+               counted again below *)
             | Part (_, slot), Some v
               when direct && v.layout = Boxed
                    && Ids.mem v.id scope
                    && (not (shared_slot c slot))
+                   && (not (List.exists (fun (s, _, _) -> s = slot) !nested))
                    && known c ->
                 nested :=
                   !nested
@@ -1026,7 +1040,10 @@ let rec dtree pl gid ~scope ~live ~transfer : dtree =
             | _ ->
                 go c
                   ~direct:
-                    (direct && match g.kind with View _ -> true | _ -> false))
+                    (direct
+                    && match g.kind with
+                       | View _ -> not (stale gid)
+                       | _ -> false))
       (find_group fi gid).children
   in
   go gid ~direct:true;

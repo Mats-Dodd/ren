@@ -9,6 +9,95 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Data stage: layout (compiler.md, "Data stage", "The layout fixes (step 7)")
+
+The data stage's three layout faults, each measured before its fix and
+after it, on the kernel bench/data has for it and on this folder's
+suite. **The machine isn't the M4 Max of the sections below:** a cloud
+container, an Intel Xeon at 2.10 GHz, 4 vCPUs under KVM, 15 GiB, Linux
+6.18.44, GCC 13.3, rustc 1.97.0, go 1.24.7, hyperfine 2.0.0, load
+average under 1. Its numbers are for before and after only; whole runs
+drift by up to 15% between hours (the Rust and Go twins, which don't
+change, moved 0.83× to 1.17× from one run of the suite to the next).
+
+**Before, at 8c7c65c, all three faults.** Release builds, 100,000 items
+each; allocations from `--stats`, peak resident memory from GNU time,
+time hyperfine's (`-N --warmup 5 --runs 50`, the kernels in one run),
+mostly the process starting:
+
+| kernel | the fault | allocations | peak RSS | time (ms) |
+|---|---|---|---|---|
+| nested | a small record in a small variant, `Draft(u: Unvalidated)` | 66,671 | 2.1 MB | 2.60 ± 0.36 |
+| rows | an array of records holding a `Str`, `Array<Line>` | 100,006 | 5.8 MB | 6.25 ± 1.36 |
+| optional | an `Option` of a record holding a `Str`, `Option<Item>` | 101,004 | 2.1 MB | 3.25 ± 0.50 |
+
+nested's last line printed an `Item` when step 0 wrote it, and `show`
+boxes a small value's type program-wide (compiler.md, "Small values are
+values"), which boxed `Unvalidated` too: 200,005 allocations, whatever
+the layout. It prints the total now (compiler.md, step 7's choices).
+rows' and optional's last lines `show` a `Line` and an `Option<Item>`
+the same way.
+
+**The first fix: a small record or tuple in a small value is flattened
+into its slots.** `Item` is a tag and `Unvalidated`'s two slots, and a
+`Draft` allocates nothing:
+
+| kernel | allocations, 8c7c65c | after | time (ms), 8c7c65c | after |
+|---|---|---|---|---|
+| nested | 66,671 | **4** | 2.47 ± 0.53 | 1.71 ± 0.42 |
+| nested, 100 times the items | 6,666,671 | **4** | 64.2 ± 8.7 | **17.0 ± 4.5** |
+| rows | 100,006 | 100,006 | | |
+| optional | 101,004 | 101,004 | | |
+
+Each pair of times is one hyperfine run of both binaries (200 runs for
+nested, 20 for the copy with a loop of 10 million, built from nested.ren
+by changing its count). Peak memory doesn't move (2.1 MB); rows and
+optional wait for the second and third fixes.
+
+**The suite**, every kernel measure.sh times, before and after, in two
+runs about two hours apart. Of its 49 programs and kernels, only three
+compile to different C, through the fix to reuse's sizes that the
+layout tests needed (compiler.md, step 7's choices), not the layout:
+deriv reuses 9.7 million objects, not 4.5 million, and allocates 31.4
+million, not 36.6 million; rbtree drops a reset in its `Leaf` arm that
+never ran; cfold's drops move. In one hyperfine run of before and after
+(`-N --warmup 3 --runs 20`): deriv 1.440 ± 0.096 s to 1.381 ± 0.088 s,
+rbtree 1.333 ± 0.105 to 1.371 ± 0.142, cfold 0.214 ± 0.017 to 0.212 ±
+0.020, so no regression. The rest of the suite is the same C, so its
+changes between the two runs, 0.82× to 1.05×, are the machine's, as the
+twins' are; peak memory is the same to 0.1 MB for every Ren build.
+
+| program | build | 8c7c65c (s) | after (s) | after / before |
+|---|---|---|---|---|
+| rbtree | perceus | 1.335 ± 0.150 | 1.250 ± 0.134 | 0.94× |
+| deriv | perceus | 1.388 ± 0.102 | 1.364 ± 0.073 | 0.98× |
+| nqueens | perceus | 1.072 ± 0.093 | 1.007 ± 0.059 | 0.94× |
+| cfold | perceus | 0.213 ± 0.024 | 0.195 ± 0.020 | 0.91× |
+| binary-trees | perceus | 13.245 ± 0.546 | 12.283 ± 0.374 | 0.93× |
+| nbody | perceus | 3.842 ± 0.238 | 3.700 ± 0.234 | 0.96× |
+| fannkuch | perceus | 2.788 ± 0.189 | 2.869 ± 0.137 | 1.03× |
+| inout | perceus | 3.022 ± 0.298 | 2.762 ± 0.338 | 0.91× |
+| nested | perceus | 1.754 ± 0.237 | 1.543 ± 0.096 | 0.88× |
+| dispatch interp | perceus | 0.117 ± 0.031 | 0.110 ± 0.032 | 0.93× |
+
+**How.** `$S` is a scratch folder, `ren` the compiler at each commit
+copied there before building the next:
+
+    sh bench/native/build.sh $S/bench-before          # REN=$S/before/ren
+    REN=$S/before/ren sh bench/native/measure.sh $S/bench-before $S/res-before machine stats time memory
+    sh bench/native/build.sh $S/bench-after           # REN=$S/after/ren
+    REN=$S/after/ren sh bench/native/measure.sh $S/bench-after $S/res-after machine stats time memory
+    python3 -I bench/native/summarize.py $S/res-after
+    # the kernels, from bench/data, each binary built both ways
+    ren build --release nested.ren -o nested
+    ren build --release --stats nested.ren -o nested-stats && ./nested-stats
+    /usr/bin/time -v ./nested        # peak RSS
+    hyperfine -N --warmup 5 --runs 200 -n before $S/before/nested -n after $S/after/nested
+
+measure.sh's whole run took 67 minutes here. build.sh stopped at the
+dispatch kernels at 8c7c65c (step 6 renamed `shapesK` to `codecsK`), and
+measure.sh's peak memory needed BSD time's `-l`: both are fixed.
+
 ## Dispatch (foundations.md, decision 4; compiler.md, "Dispatch (step 4)")
 
 `dispatch`'s kernels, each alone at main.ren's size (build.sh's

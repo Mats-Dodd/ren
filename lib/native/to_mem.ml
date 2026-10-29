@@ -290,8 +290,10 @@ let recursive cx (p : Path.t) =
 
 (* Where a field of an object is kept: a word of its own, [Slot n], or
    [bits] bits from bit [at] of word [n], which it shares with other small
-   scalars ([Bits (n, at, bits)]). *)
-type place = Slot of int | Bits of int * int * int
+   scalars ([Bits (n, at, bits)]). Of a small value only, a field that's a
+   small record or tuple itself, flattened into the slots listed, its own
+   slots in order ([Flat ks], [small]). *)
+type place = Slot of int | Bits of int * int * int | Flat of int list
 
 (* Where each field of a constructor goes, in the order they're declared:
    its place, and its layout; and how many words the object has. A
@@ -404,33 +406,55 @@ let rec layout cx loc (t : Ty.ty) : layout =
 
 (* How a release build keeps a value of [Con (p, args)] if it's a small
    value (foundations.md, decision 14), a C struct passed by value, and
-   the slot of each field of each constructor, by tag:
+   the place of each field of each constructor in it, by tag:
    - a copied record or tuple (copied.ml) of scalars, however many;
-   - a record or a tuple of at most four fields, each a scalar or an
-     object;
+   - a record or a tuple of at most four slots, each field a scalar, an
+     object, or a small record or tuple flattened into it;
    - a sum that isn't recursive, whose constructors' fields are each a
-     scalar or an object, with a tag and at most three slots, which the
-     constructors share where their fields' layouts are the same (as
-     Koka's constructors of a value type share their scan fields,
-     Kind/Repr.hs:150-170); or, if it has two constructors, one with no
-     fields and one with an object, that object, or a value no object is
-     (Koka's [DataAsMaybe], Core/Core.hs:533).
-   A field that would be a struct itself isn't one of these: the type
-   with that field stays boxed, and so the field's type is boxed too
+     scalar, an object or a small record or tuple, with a tag and at most
+     three slots, which the constructors share where their fields'
+     layouts are the same (as Koka's constructors of a value type share
+     their scan fields, Kind/Repr.hs:150-170); or, if it has two
+     constructors, one with no fields and one with an object, that
+     object, or a value no object is (Koka's [DataAsMaybe],
+     Core/Core.hs:533).
+   A field that's a small record or tuple, a [Product], is flattened:
+   its slots are the value's, in order, each placed as a field of its
+   layout is, and the budget is counted in slots after flattening (the
+   data stage's first layout fix, compiler.md, "The layout fixes (step
+   7)"). A field that would be any other struct isn't one of these: the
+   type with that field stays boxed, and so the field's type is boxed too
    ([slot]), after which this one is a struct. *)
-and small cx loc p args : (strukt * int list list) option =
+and small cx loc p args : (strukt * place list list) option =
   let t : Ty.ty = Con (p, args) in
   let types_of (fs : Iface.field list) =
     List.map (fun (f : Iface.field) -> subst args f.fty) fs
   in
-  (* the layouts of fields of types [tys], if each is a scalar or an
-     object *)
+  (* the slots of fields of types [tys], if each is a scalar or an
+     object, a slot, [`One l], or a small record or tuple, whose slots
+     are its own, [`Flat ls] *)
   let simple tys =
-    let ls = List.map (layout cx loc) tys in
-    if List.for_all (fun l -> scalar l || l = Boxed) ls then Some ls else None
+    let slots (l : layout) =
+      match l with
+      | _ when scalar l || l = Boxed -> Some (`One l)
+      | Struct (n, _) -> (
+          match List.nth (List.rev cx.struct_list) n with
+          | { skind = Product; sfields } -> Some (`Flat sfields)
+          | _ -> None)
+      | _ -> None
+    in
+    let ls = List.map (fun t -> slots (layout cx loc t)) tys in
+    if List.mem None ls then None else Some (List.map Option.get ls)
+  in
+  let slots_of = function `One l -> [ l ] | `Flat ls -> ls in
+  (* the place of [field], whose slots, each placed, are [ks] *)
+  let place_of field ks =
+    match (field, ks) with
+    | `One _, [ k ] -> Slot k
+    | `One _, _ -> bug "a field in slots"
+    | `Flat _, _ -> Flat ks
   in
   let product tys =
-    let slots = [ List.mapi (fun i _ -> i) tys ] in
     let plain = List.map (plain_layout cx loc) tys in
     if Copied.is ~types:(Hashtbl.find_opt cx.types) t && List.for_all scalar plain
     then
@@ -447,12 +471,26 @@ and small cx loc p args : (strukt * int list list) option =
             | Some (_, l) -> l
             | None -> Int
           in
-          Some ({ sfields = List.init words word; skind = Product }, slots)
-      | None -> Some ({ sfields = plain; skind = Product }, slots)
+          Some ({ sfields = List.init words word; skind = Product }, [ places ])
+      | None ->
+          Some
+            ( { sfields = plain; skind = Product },
+              [ List.mapi (fun i _ -> Slot i) tys ] )
     else
       match simple tys with
-      | Some ls when List.length ls <= 4 ->
-          Some ({ sfields = ls; skind = Product }, slots)
+      | Some fields when List.length (List.concat_map slots_of fields) <= 4 ->
+          let next = ref 0 in
+          let places =
+            List.map
+              (fun field ->
+                let ks = List.mapi (fun i _ -> !next + i) (slots_of field) in
+                next := !next + List.length ks;
+                place_of field ks)
+              fields
+          in
+          Some
+            ( { sfields = List.concat_map slots_of fields; skind = Product },
+              [ places ] )
       | _ -> None
   in
   if Ty.is_tuple p then product args
@@ -468,29 +506,39 @@ and small cx loc p args : (strukt * int list list) option =
         else
           let ctors = List.map Option.get ctors in
           match ctors with
-          | [ []; [ Boxed ] ] ->
-              Some ({ sfields = [ Boxed ]; skind = Nullable (0, 1) }, [ []; [ 0 ] ])
-          | [ [ Boxed ]; [] ] ->
-              Some ({ sfields = [ Boxed ]; skind = Nullable (1, 0) }, [ [ 0 ]; [] ])
+          | [ []; [ `One Boxed ] ] ->
+              Some
+                ( { sfields = [ Boxed ]; skind = Nullable (0, 1) },
+                  [ []; [ Slot 0 ] ] )
+          | [ [ `One Boxed ]; [] ] ->
+              Some
+                ( { sfields = [ Boxed ]; skind = Nullable (1, 0) },
+                  [ [ Slot 0 ]; [] ] )
           | _ ->
-              (* slot 0 is the tag; each field goes in the first slot after
-                 of its layout that its constructor hasn't used *)
+              (* slot 0 is the tag; each slot of a field goes in the first
+                 slot after of its layout that its constructor hasn't
+                 used *)
               let slots = ref [ (Int : layout) ] in
               let place ls =
                 let used = ref [] in
                 List.map
-                  (fun l ->
-                    let rec find i = function
-                      | [] ->
-                          slots := !slots @ [ l ];
-                          i
-                      | l' :: rest ->
-                          if i > 0 && l' = l && not (List.mem i !used) then i
-                          else find (i + 1) rest
-                    in
-                    let i = find 0 !slots in
-                    used := i :: !used;
-                    i)
+                  (fun field ->
+                    place_of field
+                      (List.map
+                         (fun l ->
+                           let rec find i = function
+                             | [] ->
+                                 slots := !slots @ [ l ];
+                                 i
+                             | l' :: rest ->
+                                 if i > 0 && l' = l && not (List.mem i !used)
+                                 then i
+                                 else find (i + 1) rest
+                           in
+                           let i = find 0 !slots in
+                           used := i :: !used;
+                           i)
+                         (slots_of field)))
                   ls
               in
               let placed = List.map place ctors in
@@ -586,39 +634,9 @@ let rec decl cx loc (t : Ty.ty) =
       | None -> unsupported loc (sprintf "a value of type `%s`" (ty_name t)))
   | _ -> bug "a constructor of a type that isn't named"
 
-(* Whether an object of the type declared [d], [t], packs its small
-   scalars: only a type with no parameters, and one that's an object. *)
-let packs cx loc (d : Iface.type_decl) (t : Ty.ty) tys =
-  d.params = []
-  &&
-  match with_words cx 0 (fun () -> layout cx loc t) with
-  | Boxed -> true
-  (* a small value whose record [small] packed: it has fewer words than
-     fields *)
-  | Struct (n, _) -> (
-      match d.body with
-      | Record _ -> List.length (struct_of cx n).sfields < List.length tys
-      | _ -> false)
-  | _ -> false
-
-(* The shape of an object of [t], declared [d], whose fields, of types
-   [tys], are given [layouts]: packed if it can be ([pack]). *)
-let placed cx loc d t tag tys layouts =
-  match if packs cx loc d t tys then pack cx tys else None with
-  | Some (places, words) ->
-      { tag; places = List.combine places layouts; words }
-  | None -> shape tag layouts
-
-(* The constructor [c] of the sum type [t]: of a small value, its fields'
-   slots in the struct ([small]). *)
-let ctor_shape cx loc (t : Ty.ty) c =
-  let t = Ty.erase_variants t in
-  let small_of (t : Ty.ty) =
-    match (t, layout cx loc t) with
-    | Con (p, args), Struct _ -> small cx loc p args
-    | _ -> None
-  in
-  (* an opaque type is its representation, where it can be seen *)
+(* Of [t], if its values are small ones, how [small] keeps them: an
+   opaque type's are its representation's, where it can be seen. *)
+let small_of cx loc (t : Ty.ty) =
   let rec rep (t : Ty.ty) =
     match t with
     | Con (p, args) -> (
@@ -627,19 +645,62 @@ let ctor_shape cx loc (t : Ty.ty) c =
         | _ -> t)
     | _ -> t
   in
-  match (small_of (rep t), decl cx loc t) with
-  | Some (st, slots), ({ body = Sum ctors; _ }, _) ->
+  match rep (Ty.erase_variants t) with
+  | Con (p, args) as t -> (
+      match layout cx loc t with Struct _ -> small cx loc p args | _ -> None)
+  | _ -> None
+
+(* The shape of the constructor [tag] of a small value kept as [st], its
+   fields, of types [tys], at the [places] [small] gave them: a slot's
+   layout is the struct's, a packed field's its own, and a flattened
+   field's the struct it is. *)
+let struct_shape cx loc (st : strukt) tag places tys =
+  {
+    tag;
+    places =
+      List.map2
+        (fun place t ->
+          match place with
+          | Slot n -> (place, List.nth st.sfields n)
+          | Bits _ | Flat _ -> (place, layout cx loc t))
+        places tys;
+    words = List.length st.sfields;
+  }
+
+(* Whether an object of the type declared [d], [t], packs its small
+   scalars: only a type with no parameters, and one that's an object. *)
+let packs cx loc (d : Iface.type_decl) (t : Ty.ty) =
+  d.params = []
+  &&
+  match with_words cx 0 (fun () -> layout cx loc t) with
+  | Boxed -> true
+  (* a small value whose record [small] packed *)
+  | Struct _ -> (
+      match (d.body, with_words cx 0 (fun () -> small_of cx loc t)) with
+      | Record _, Some (_, [ places ]) ->
+          List.exists (function Bits _ -> true | _ -> false) places
+      | _ -> false)
+  | _ -> false
+
+(* The shape of an object of [t], declared [d], whose fields, of types
+   [tys], are given [layouts]: packed if it can be ([pack]). *)
+let placed cx loc d t tag tys layouts =
+  match if packs cx loc d t then pack cx tys else None with
+  | Some (places, words) ->
+      { tag; places = List.combine places layouts; words }
+  | None -> shape tag layouts
+
+(* The constructor [c] of the sum type [t]: of a small value, its fields'
+   slots in the struct ([small]). *)
+let ctor_shape cx loc (t : Ty.ty) c =
+  let t = Ty.erase_variants t in
+  match (small_of cx loc t, decl cx loc t) with
+  | Some (st, places), ({ body = Sum ctors; _ }, args) ->
       let rec find i = function
         | [] -> bug ("no constructor " ^ c)
         | (k : Iface.ctor) :: _ when k.cname = c ->
-            {
-              tag = i;
-              places =
-                List.map2
-                  (fun n _ -> (Slot n, List.nth st.sfields n))
-                  (List.nth slots i) k.cfields;
-              words = List.length st.sfields;
-            }
+            struct_shape cx loc st i (List.nth places i)
+              (List.map (fun (f : Iface.field) -> subst args f.fty) k.cfields)
         | _ :: rest -> find (i + 1) rest
       in
       find 0 ctors
@@ -690,13 +751,19 @@ let record_shape cx loc (t : Ty.ty) =
   | Variant (_, c, _) ->
       (* a field at a known constructor: its place in the sum's value *)
       ctor_shape cx loc t c
-  | _ ->
-  let tys = List.map snd (record_fields cx loc t) in
-  placed cx loc (fst (decl cx loc t)) t 0 tys (List.map (slot cx loc) tys)
+  | _ -> (
+      let tys = List.map snd (record_fields cx loc t) in
+      match small_of cx loc t with
+      | Some (st, [ places ]) -> struct_shape cx loc st 0 places tys
+      | _ ->
+          placed cx loc (fst (decl cx loc t)) t 0 tys
+            (List.map (slot cx loc) tys))
 
 let tuple_shape cx loc (t : Ty.ty) =
-  match t with
-  | Con (_, parts) -> shape 0 (List.map (slot cx loc) parts)
+  match (t, small_of cx loc t) with
+  | Con (_, parts), Some (st, [ places ]) ->
+      struct_shape cx loc st 0 places parts
+  | Con (_, parts), _ -> shape 0 (List.map (slot cx loc) parts)
   | _ -> bug "a tuple whose type isn't one"
 
 let error_shape cx loc name (payload : Ty.ty list) =
@@ -852,14 +919,15 @@ and decl_id cx loc (p : Path.t) : int =
       (* where each field is, for the walks, as [placed] puts it *)
       let places (fs : Iface.field list) =
         let tys = List.map (fun (f : Iface.field) -> f.fty) fs in
-        match if packs cx loc d (Con (p, [])) tys then pack cx tys else None with
+        match if packs cx loc d (Con (p, [])) then pack cx tys else None with
         | None -> None
         | Some (places, _) ->
             Some
               (List.map
                  (function
                    | Slot n -> (n lsl 16) lor 64
-                   | Bits (n, at, bits) -> (n lsl 16) lor (at lsl 8) lor bits)
+                   | Bits (n, at, bits) -> (n lsl 16) lor (at lsl 8) lor bits
+                   | Flat _ -> bug "an object's field flattened")
                  places)
       in
       let dplaces =
@@ -1065,6 +1133,7 @@ let field_var fs name (x : atom) ((place, l) : place * layout) words : var =
   | Bits (n, at, bits) ->
       let w = get "$packed" Int (field_rhs x n words) in
       get name l (Unpack (Var w, at, bits))
+  | Flat _ -> bug "a flattened field read as a part ([flat_var])"
 
 (* The descriptor of the type variable [n], a word here. *)
 let word_desc fs n : atom =
@@ -1085,6 +1154,49 @@ let drop_now fs (x : atom) =
   | Word n -> emit fs (Drop_word (x, word_desc fs n))
   | l when counted l -> emit fs (Drop x)
   | _ -> ()
+
+(* [place], a field's in a small record or tuple kept flattened in the
+   slots [ks] of another small value ([Flat]), as a place in that one. *)
+let within ks place =
+  let at = List.nth ks in
+  match place with
+  | Slot j -> Slot (at j)
+  | Bits (j, b, bits) -> Bits (at j, b, bits)
+  | Flat js -> Flat (List.map at js)
+
+(* Of a small value [x], the small record or tuple of layout [l] kept
+   flattened in its slots [ks] ([Flat]): those slots read, each counted
+   again, and made a struct, which the variable given holds; nothing in
+   scope owns it yet. *)
+let flat_var fs name (x : atom) ks (l : layout) : var =
+  let st =
+    match l with Struct (n, _) -> struct_of fs.cx n | _ -> bug "a struct"
+  in
+  let parts =
+    List.map2
+      (fun k l -> Var (field_var fs "$part" x (Slot k, l) 0))
+      ks st.sfields
+  in
+  List.iter (dup fs) parts;
+  let v = fresh fs name l in
+  emit fs (Let (v, Make_struct parts));
+  v
+
+(* The slots of [y], a small record or tuple that another small value
+   keeps flattened ([Flat]), which takes them: each read and counted
+   again, and [y] dropped, so they hold what it held. *)
+let flat_slots fs (y : atom) : atom list =
+  let st =
+    match atom_layout y with
+    | Struct (n, _) -> struct_of fs.cx n
+    | _ -> bug "a flattened field that isn't a struct"
+  in
+  let parts =
+    List.mapi (fun j l -> Var (field_var fs "$slot" y (Slot j, l) 0)) st.sfields
+  in
+  List.iter (dup fs) parts;
+  drop_now fs y;
+  parts
 
 (* The statements [f] emits, as a block, and what it gives. *)
 let sub fs f =
@@ -1682,8 +1794,10 @@ and expr_at fs env (e : C.expr) : atom =
       owned fs env "$struct" (lay e.ty) (Make_struct words)
   | Tuple xs when is_struct (lay e.ty) ->
       let xs = List.map (expr fs env) xs in
+      (* a part that's a small tuple or record is flattened ([Flat]) *)
+      let words = packed_words fs (tuple_shape cx (at fs e.loc) e.ty) xs in
       List.iter (consume env) xs;
-      owned fs env "$struct" (lay e.ty) (Make_struct xs)
+      owned fs env "$struct" (lay e.ty) (Make_struct words)
   | Record (_, fields) ->
       let decl_fields = record_fields cx (at fs e.loc) e.ty in
       let values = List.map (fun (f, x) -> (f, expr fs env x)) fields in
@@ -1691,15 +1805,33 @@ and expr_at fs env (e : C.expr) : atom =
         (record_shape cx (at fs e.loc) e.ty)
         (List.map (fun (f, _) -> List.assoc f values) decl_fields)
   | Field (r, _, f) ->
-      let x = expr fs env r in
-      let fields = record_fields cx (at fs e.loc) r.ty in
-      let sh = record_shape cx (at fs e.loc) r.ty in
-      let t =
-        field_var fs f x
-          (List.assoc f (List.combine (List.map fst fields) sh.places))
-          sh.words
+      (* where [f] is in what's read, [r]: a field of a small record kept
+         flattened in another's slots, `x.u.qty`, is read from the outer
+         one's slot, and the inner one is never made *)
+      let place_in (t : Ty.ty) f =
+        let fields = record_fields cx (at fs e.loc) t in
+        let sh = record_shape cx (at fs e.loc) t in
+        (List.assoc f (List.combine (List.map fst fields) sh.places), sh.words)
       in
-      dup fs (Var t);
+      let rec locate (r : C.expr) f =
+        let (place, l), words = place_in r.ty f in
+        match r.kind with
+        | Field (r', _, g) -> (
+            match locate r' g with
+            | base, (Flat ks, _), words' -> (base, (within ks place, l), words')
+            | _ -> (r, (place, l), words))
+        | _ -> (r, (place, l), words)
+      in
+      let base, (place, l), words = locate r f in
+      let x = expr fs env base in
+      let t =
+        match place with
+        | Flat ks -> flat_var fs f x ks l
+        | _ ->
+            let t = field_var fs f x (place, l) words in
+            dup fs (Var t);
+            t
+      in
       drop fs env x;
       own env t;
       Var t
@@ -1713,9 +1845,12 @@ and expr_at fs env (e : C.expr) : atom =
           (fun (name, _) place ->
             if name = f then y
             else
-              let t = Var (field_var fs name x place sh.words) in
-              dup fs t;
-              t)
+              match place with
+              | Flat ks, l -> Var (flat_var fs name x ks l)
+              | _ ->
+                  let t = Var (field_var fs name x place sh.words) in
+                  dup fs t;
+                  t)
           fields sh.places
       in
       let r =
@@ -1867,6 +2002,7 @@ and small_ctor fs env (l : layout) (sh : shape) xs =
     (fun ((place : place), _) x ->
       match place with
       | Slot k -> slots.(k) <- x
+      | Flat ks -> List.iter2 (fun k y -> slots.(k) <- y) ks (flat_slots fs x)
       | Bits _ -> bug "a struct's field packed")
     sh.places xs;
   owned fs env "$struct" l (Make_struct (Array.to_list slots))
@@ -1877,6 +2013,10 @@ and packed_words fs (sh : shape) fields =
     (fun ((place : place), _) x ->
       match place with
       | Slot n -> words.(n) <- [ (x, -1, 0) ]
+      | Flat ks ->
+          List.iter2
+            (fun k y -> words.(k) <- [ (y, -1, 0) ])
+            ks (flat_slots fs x)
       | Bits (n, at, bits) -> words.(n) <- words.(n) @ [ (x, at, bits) ])
     sh.places fields;
   Array.to_list
@@ -2172,14 +2312,14 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
                     (record_shape cx (at fs e.loc) ty).places)
              with
             | Slot _, _ -> true
-            | Bits _, _ -> false) ->
+            | Bits _, _ | Flat _, _ -> false) ->
       let n = match lay ty with Struct (n, _) -> n | _ -> bug "a struct" in
       let fields = record_fields cx (at fs e.loc) ty in
       let sh = record_shape cx (at fs e.loc) ty in
       let k, l =
         match List.assoc f (List.combine (List.map fst fields) sh.places) with
         | Slot k, l -> (k, l)
-        | Bits _, _ -> bug "a struct's field packed"
+        | Bits _, _ | Flat _, _ -> bug "a struct's field packed or flattened"
       in
       let at_get = new_site cx get.loc in
       (* an index bounds.ml proved is checked by neither *)
@@ -3407,6 +3547,15 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
      its own (see [test]'s [POr]), declared with the arm's, before the
      [Joins] *)
   let alt_decls = ref [] in
+  (* A field that's a small record or tuple kept flattened in its
+     subject's slots ([Flat]) isn't made to be tested: it's a subject of
+     its own, a variable never set, whose subject and slots are in
+     [flats], and its fields are read from that subject's slots. A name
+     bound to it is given it made, [flat_var], only where the arm has
+     matched: [pending] holds those of the path being tested, so a path
+     that doesn't match has made nothing to drop. *)
+  let flats = Hashtbl.create 4 in
+  let pending = ref [] in
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
   let no_arm = new_site cx e.loc in
   (* the arm [a] has matched, its pattern's names bound to [vars]: count
@@ -3421,7 +3570,18 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
           joins := !joins @ [ (vars, l) ];
           l
     in
-    List.iter (fun (_, (m : var)) -> dup fs (Var m)) vars;
+    (* each flattened field a name is bound to, made, and so counted *)
+    let made =
+      List.rev_map
+        (fun ((m : var), (f : var)) ->
+          let x, ks = Hashtbl.find flats f.id in
+          emit fs (Set (m, Var (flat_var fs m.name x ks m.layout)));
+          m)
+        !pending
+    in
+    List.iter
+      (fun (_, (m : var)) -> if not (List.memq m made) then dup fs (Var m))
+      vars;
     let go () =
       List.iter
         (fun x ->
@@ -3461,13 +3621,44 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
           let c = borrowed fs "$test" Bool rhs in
           emit fs (If (c, block fs rest_then, []))
         in
+        (* the field at [place] of [x], to test: a flattened one a
+           subject of its own, and one of a flattened one read from the
+           slots it's kept in *)
+        let part (place, l) words =
+          let x, place =
+            match x with
+            | Var f when Hashtbl.mem flats f.id ->
+                let x, ks = Hashtbl.find flats f.id in
+                (x, within ks place)
+            | _ -> (x, place)
+          in
+          match place with
+          | Flat ks ->
+              let f = fresh fs "$flat" l in
+              Hashtbl.replace flats f.id (x, ks);
+              Var f
+          | _ -> Var (field_var fs "$part" x (place, l) words)
+        in
         let fields (sh : shape) ps =
           List.filter_map
             (fun ((q : C.pattern), place) ->
               match q.pkind with
               | PWild -> None
-              | _ -> Some (q, Var (field_var fs "$part" x place sh.words)))
+              | _ -> Some (q, part place sh.words))
             (List.combine ps sh.places)
+        in
+        (* [m] set to [x], then [k]: a flattened field is made only where
+           the arm matches *)
+        let set (m : var) k =
+          match x with
+          | Var f when Hashtbl.mem flats f.id ->
+              let saved = !pending in
+              pending := (m, f) :: saved;
+              k ();
+              pending := saved
+          | _ ->
+              emit fs (Set (m, x));
+              k ()
         in
         let tagged sh ps =
           let inner () = test ~known vars (fields sh ps @ rest) k in
@@ -3482,14 +3673,11 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
         in
         match p.pkind with
         | PWild -> rest_then ()
-        | PVar v ->
-            emit fs (Set (slot vars v, x));
-            rest_then ()
+        | PVar v -> set (slot vars v) rest_then
         | PAs (q, v) ->
             (* the whole is the subject itself, counted as a [PVar]'s is
                where the arm matched: `as` never copies *)
-            emit fs (Set (slot vars v, x));
-            test ~known vars ((q, x) :: rest) k
+            set (slot vars v) (fun () -> test ~known vars ((q, x) :: rest) k)
         | PInt n -> check (Compare (Eq, x, Int n))
         | PBool true -> emit fs (If (x, block fs rest_then, []))
         | PBool false -> emit fs (If (x, [], block fs rest_then))

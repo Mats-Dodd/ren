@@ -121,12 +121,14 @@ for k in with function; do
 done
 # decision 4's dispatch (research/dispatch.md): each of `dispatch`'s
 # kernels alone, at main.ren's size; its Rust and Go twins run one
-# kernel given its name (measure.sh)
+# kernel given its name (measure.sh). The shapesK kernels are the
+# codecsK functions since the data stage's step 6, under their old names
+# (RESULTS.md, "Dispatch")
 dk() { kernel dispatch "$1" "fn main() uses Console = print($2)"; }
-dk shapes2 "shapes2(65_536, 100)"
-dk shapes4 "shapes4(65_536, 100)"
-dk shapes8 "shapes8(65_536, 100)"
-dk shapes32 "shapes32(65_536, 100)"
+dk shapes2 "codecs2(65_536, 100)"
+dk shapes4 "codecs4(65_536, 100)"
+dk shapes8 "codecs8(65_536, 100)"
+dk shapes32 "codecs32(65_536, 100)"
 dk db "db(100, 104_857_600)"
 dk router "router(65_536, 100)"
 dk interp "interp(25_600)"

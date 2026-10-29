@@ -1,7 +1,10 @@
 // Data stage, step 7: the first layout fault (language.md §2, "Layout
 // fixes"). A small record inside a small variant: `Draft(u:
 // Unvalidated)` boxes `Unvalidated`, so each `Draft` allocates twice;
-// flattened into `Item`'s slots, it allocates nothing.
+// flattened into `Item`'s slots, it allocates nothing. Its last line
+// prints the total, not the `Item`: `show` of a small value boxes its
+// type program-wide (compiler.md, "Small values are values"), which
+// would measure that instead; layout.ren shows them.
 
 type Unvalidated = { qty: Int, price: Int }
 
@@ -26,4 +29,6 @@ fn main() uses Console =
       _ => voids += 1
   print(sum)
   print(voids)
-  print(priced(Draft(Unvalidated { qty: 2, price: 5 })))
+  match priced(Draft(Unvalidated { qty: 2, price: 5 }))
+    Priced(t) => print(t)
+    _ => print(-1)

@@ -115,9 +115,16 @@ for part in $parts; do
     memory)
       # peak resident memory, once each: H4 and H7
       : >"$res/memory.tsv"
+      # BSD time's -l counts bytes, first on its line; GNU time's -v,
+      # on Linux, kilobytes, last
       rss() {
-        kb=$(/usr/bin/time -l "$bin/$1" 2>&1 >/dev/null |
-          awk '/maximum resident set size/ { print $1 }')
+        if [ "$(uname)" = Darwin ]; then
+          kb=$(/usr/bin/time -l "$bin/$1" 2>&1 >/dev/null |
+            awk '/maximum resident set size/ { print $1 }')
+        else
+          kb=$(/usr/bin/time -v "$bin/$1" 2>&1 >/dev/null |
+            awk '/Maximum resident set size/ { print $NF * 1024 }')
+        fi
         printf '%s\t%s\n' "$1" "$kb" | tee -a "$res/memory.tsv"
       }
       for p in $programs; do

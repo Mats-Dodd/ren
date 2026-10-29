@@ -2368,12 +2368,14 @@ struct.
 A struct is never a field of another, nor a word, nor what a
 descriptor describes, nor, if counted, an array's element, whose
 elements the runtime counts as words or not at all: a type whose value
-would be one is boxed, as before ([Demote]). Boxing one can make a type
-that held it a struct, which a later pass of compiling may box in
-turn; each boxes types none before did, so it ends. So `==` and `show`
-of a small value box its type, and so does an option of an option,
-whose inner one is a field. Debug builds don't make small values: the
-types stay boxed there, as they were.
+would be one is boxed, as before ([Demote]). (Since the data stage's
+step 7, a small record or tuple in a small value is flattened into its
+slots instead: "Data stage", "The layout fixes (step 7)".) Boxing one
+can make a type that held it a struct, which a later pass of compiling
+may box in turn; each boxes types none before did, so it ends. So `==`
+and `show` of a small value box its type, and so does an option of an
+option, whose inner one is a field. Debug builds don't make small
+values: the types stay boxed there, as they were.
 
 bench/values.ren, under the sanitizers in build.t in both builds and
 both countings, has an `Option` of a string, a `Result`, a sum of
@@ -6578,7 +6580,10 @@ optional 101,004, for 100,000 items each.
    `x.u.qty`, one `Struct_get` of the parent's slot; building one copies
    the nested struct's slots in. Mem Lint's rules don't change: no slot
    is a struct. nested.ren should allocate a constant number, not one
-   per item.
+   per item. **Built** (step 7, part 1; its choices are below): nested.ren
+   allocates 4, where it allocated 66,671, one `Unvalidated` for each
+   `Draft`, once its last line no longer `show`s an `Item`, which boxed
+   it (step 7's choices).
 2. **An array of small records holding an object boxes the type
    everywhere** (`plain_layout`'s `Array` case, line 517). An array's
    elements are counted as words or not at all, so `Array<T>` with `T`
@@ -6696,6 +6701,13 @@ migration, step 3's `let ... else` where it fits).
   mask), mem_lint.ml, emit_c.ml, ren_rt.h and ren_rt.c (arrays of
   counted structs, the niche scalars), bench/native/interp/,
   bench/native/RESULTS.md; build.t's loops gain bench/data's kernels.
+  Part 1, as built: to_mem.ml (`place`'s `Flat`, `small`, `small_of`,
+  `struct_shape`, `packs`, `within`, `flat_var`, `flat_slots`, the
+  `Field`, `Update` and `Tuple` cases, `small_ctor`, `packed_words`,
+  `match_`'s `flats` and `pending`); reuse.ml (`learn`) and rc.ml
+  (`dtree`, `stale`), for three counting faults the tests found;
+  bench/data's layout, layout_walks, layout_panic and reuse_arms;
+  bench/native's build.sh and measure.sh.
 - **Step 8:** the review, its three lenses (the brief's), and what it
   finds; language.md's "What Ren has today" table brought up to date.
 
@@ -6937,7 +6949,8 @@ revisit if a step finds it wrong:
 | 3 | b885fcd | or-patterns anywhere a pattern goes, nested, `as`, and `let PATTERN = e else LEAVE`, through the whole pipeline: the parser (`parse_pattern`'s alternatives, `as` and grouping; `let` and `for` taking any pattern and a block's parameter one that starts with `(`, `{` or a capital; the `let ... else` statement; `if let` refused with its help; `as` after `fail` patterns refused), Resolve (one message for a name only some alternatives bind, `fail` ones too; `leaves`; the `else` resolved before the pattern binds), Infer (`bind_pattern`'s `POr`, through `alternatives`, which `bind_fail` shares, with the new message; `PAs`; the `else` checked against the rest of the block's type), Exhaust (`Or` spaces, each alternative checked useful, the patterns of a `let`, a `for` and a block's parameter checked to always match, and a `let ... else`'s to not), lowering (`let ... else` a `Match` of two arms, `PAs`), Core's `PAs` and Core Lint, the interpreter, and Mem IR in both builds (`PAs` the subject itself; an or-pattern that binds names gives each alternative its own variables and its own join, which Perceus needs, and a pattern's variable found by id); tree-sitter's `or_pattern` for any patterns, `as_pattern`, `parenthesized_pattern`, `let_else`, patterns in a `let`, a `for` and a block's parameter, the corpus (patterns.txt) and the highlight markers, Zed's highlights; test_data.ml's s3 tests on, the end-to-end program among them; bench/data/orpat as specified and in `same`, `release` and `tcc_same`, with bench/data/orpat_strs beside it (or-patterns binding counted values); the bank's `worth_retrying` in two arms with or-patterns; README's tour, language.md's "What Ren has today". The parser's `binding_pattern`, `irrefutable` and `might_not_match` are gone, and so is Resolve's refusal of a by-name constructor in a binding position: Exhaust decides. Choices: below the table | steps 4 to 8 |
 | 4 | e77a8bb | variant types, `Order.Placed`, through the whole pipeline: the parser (`parse_ty`'s `TyVariant`, `Tree.Node<Int>`, and `Tree<Int>.Node` refused with its help), Resolve (the sum's name, and the three refusals: not a sum, no such variant with "did you mean", a variant not by name; and a variant type of a private sum in a public signature), Types and Ty (`TVariant` and `Variant`, unifying only with themselves, printed `Order.Placed`, every walk of a type), Infer (`as` on a by-name constructor's pattern binds its variant type; field reads, record patterns, `{ ..p, total: x }` an `Order.Placed`, `var p` and `p.total = x`; `Placed { ..p }` the sum; a pattern of a variant type's own constructor that always matches, and of another one refused; the two mismatch helps and the constructor's note; `..` from a sum, and the method refusal), Infer_reqs (`==`, `hash` and order borrowed, through the sum's `key`), Exhaust (a variant type's one constructor), the interfaces (a variant type in a `pub` signature, written `order.Order.Placed` by an importer), Core (`Of_variant`, `Con`, `PCon`, `Field` and `Update` at a `Variant`, `PAs` binding one; `describe` the sum's) and Core Lint, the interpreter (a variant type's value is its sum's; its walks, `show`, `==`, `hash`, `key` and the journal, the sum's), and Mem IR in both builds (the sum's layout, struct and descriptor; a field read at its constructor's slot; no tag test; `Of_variant` no code; an update of a small one keeps its tag); release specialization; tree-sitter's `variant_type`, its corpus (types.txt) and highlight markers, Zed's highlights; test_data.ml's s4 tests on, and four more (another module's signature, round trips and a variant type's own patterns, another variant's pattern refused, the arguments' place); bench/data/variants as specified and in `same`, `release` and `tcc_same`, with variants_small (variant types of sums kept as structs), variants_escape (stored, passed through generic functions, round-tripped) and variants_reuse beside it, whose loop of 1000 updates and conversions allocates nothing (`--stats`, both builds: 4 allocations, 1000 reuses); README's tour, language.md's "What Ren has today", operators.md's "Equality, hashing and `show`". Choices: below the table | steps 5 to 8 |
 | 5 | ed8f0f8 | the errors that teach the model, and `todo`, through the whole pipeline: `todo` a keyword (token.ml, the lexer, the parser's `primary`, Ast's `Todo`), Resolve (one of `let ... else`'s leaves), Infer (a fresh type variable), lowering (the intrinsic `Lib_panic`, "reached a `todo`", at the `todo`, so Core, Core Lint and the interpreter see a call they already know), and Mem IR in both builds (a `Lib_panic` in the program's code is said where it's written, not at the function's site, so native and `ren run` print the same); `$start` calls a `main` that never gives a value, `fn main<T>() -> T`, at `Unit`, which natively was Mem Lint's "`$start` isn't what the program says it is"; Diag's `code` and `code_at`, lines a help writes; `field_access`'s sum case (Infer_msg.field_of_sum): "`Shape` is a sum type; only `Ring` has `r`" with the `match` to paste, its variants in one arm with `\|` when the field has one type, an arm each otherwise; "every variant of `Shape` has `id`, but a sum type has no fields" with the hoisting help, or, at different types, the `match`; Exhaust's arms to paste, up to three and an arm for the rest, values' `_` or errors' `fail _`, by name where a variant is, after their sum where a record type shadows a bare constructor (Infer_msg.braced_ctor), at the column of the match's arms; tree-sitter's `todo`, the corpus (statements.txt) and the highlight markers, Zed's keyword highlight; test_data.ml's s5 tests on, and thirteen more: a positional variant's label, a field at different types, no variant, a generic sum's hoist, more missing than shown, nested, the shadowed constructor, values and errors, `Err`'s tags, a `todo` body and `main`, `todo` not a name, the arms of nine programs pasted back in after their last arm, and the `match` of three field errors pasted in for the read, each of which then checks; every "missing:" error's help in test_exhaust, test_errors, test_modules, test_tasks, test_collections and examples.t promoted, each new line pasteable; bench/data/todo_panic as specified and in `same`, `release` and `tcc_same`, and `fn main() = todo` in build.t; errors.md's `match` section and the README's tour show the printed arms; language.md's "What Ren has today". Choices: below the table | steps 6 to 8 |
-| 6 | this commit | descriptions: an operation called on a description only when its handler is stateless, through the pipeline: Infer's `Calls_op` gains the receiver as written and the call a `with` would make, its arguments as written; Lower records each method call (Core.program's `method_calls`, by its `With`'s location, from `Lower.program` and `Lower.made`); a new link-time pass, lib/lower/stateless.ml (`Stateless.check`), run by `Driver.link` after the modules are linked, so `ren run`, `ren test` and `ren build` refuse (not `ren check`): a handler is stateful if its body makes a cell (a `var`) or its instance has a `finally`; a method call on a description made where it's installed, or held by a local never changed and only installed, may be only that handler's; any other may be any kept handler's (refined from the specification's per-dependency rule: "Where the data stage may differ"); the error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method" ("which has a `finally`"), at the operation's name, with its note and the help that writes the `with`; the interpreter and native builds unchanged, each program that still compiles running the same; test_data.ml's s6 tests on (the refusals through `run_error`; the last accept's program had a dropped `Area.area()`, now `let _ =`), and seven more: a stateful handler bound and only installed beside stored stateless calls, one called where it's made, a local that's assigned, one passed, returned, stored and wrapped, a handler of another module kept there, and `ren check` not seeing it; test_descriptions.ml's stateful method call a refusal, its `with` half its own accept test, its `Shape` a `Codec` (numbers kept); test_deps.ml's handler of several called as a method through `id(...)`, now a stateless `fixed_rates`, with the `counting_rates` one a refusal; bench/10d/methods.ren, review_deps.ren and dispatch_mix.ren's calls that may reach a handler with state written as `with`s, their outputs and every site's lowering unchanged; the renames: bench/10d/shapes.ren's `Shape` a `Codec`, dispatch.ren's `Shape` and `Expr` `Codec` and `Pipe`, dispatch_mix's `Area`, `Size` and `Label` `Codec`, `Width` and `Name`, build.t's `--explain-dispatch` listings redone, bench/native/dispatch's `ShapeK` `CodecK` (gen.py and bench.ren; the twins byte for byte as they were, checksums the same, the release C the same but for handlers' names, so RESULTS.md's numbers stand, as it now says); bench/data/shapes in `same`, `release` and `tcc_same`; deps.md's example a library's routes, with the rule, its error and that `ren check` doesn't report it; handlers.md's "Called as a method"; README's handlers section; bench/native/README.md; language.md's "What Ren has today". Choices: below the table | steps 7 and 8 |
+| 6 | 8c7c65c | descriptions: an operation called on a description only when its handler is stateless, through the pipeline: Infer's `Calls_op` gains the receiver as written and the call a `with` would make, its arguments as written; Lower records each method call (Core.program's `method_calls`, by its `With`'s location, from `Lower.program` and `Lower.made`); a new link-time pass, lib/lower/stateless.ml (`Stateless.check`), run by `Driver.link` after the modules are linked, so `ren run`, `ren test` and `ren build` refuse (not `ren check`): a handler is stateful if its body makes a cell (a `var`) or its instance has a `finally`; a method call on a description made where it's installed, or held by a local never changed and only installed, may be only that handler's; any other may be any kept handler's (refined from the specification's per-dependency rule: "Where the data stage may differ"); the error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method" ("which has a `finally`"), at the operation's name, with its note and the help that writes the `with`; the interpreter and native builds unchanged, each program that still compiles running the same; test_data.ml's s6 tests on (the refusals through `run_error`; the last accept's program had a dropped `Area.area()`, now `let _ =`), and seven more: a stateful handler bound and only installed beside stored stateless calls, one called where it's made, a local that's assigned, one passed, returned, stored and wrapped, a handler of another module kept there, and `ren check` not seeing it; test_descriptions.ml's stateful method call a refusal, its `with` half its own accept test, its `Shape` a `Codec` (numbers kept); test_deps.ml's handler of several called as a method through `id(...)`, now a stateless `fixed_rates`, with the `counting_rates` one a refusal; bench/10d/methods.ren, review_deps.ren and dispatch_mix.ren's calls that may reach a handler with state written as `with`s, their outputs and every site's lowering unchanged; the renames: bench/10d/shapes.ren's `Shape` a `Codec`, dispatch.ren's `Shape` and `Expr` `Codec` and `Pipe`, dispatch_mix's `Area`, `Size` and `Label` `Codec`, `Width` and `Name`, build.t's `--explain-dispatch` listings redone, bench/native/dispatch's `ShapeK` `CodecK` (gen.py and bench.ren; the twins byte for byte as they were, checksums the same, the release C the same but for handlers' names, so RESULTS.md's numbers stand, as it now says); bench/data/shapes in `same`, `release` and `tcc_same`; deps.md's example a library's routes, with the rule, its error and that `ren check` doesn't report it; handlers.md's "Called as a method"; README's handlers section; bench/native/README.md; language.md's "What Ren has today". Choices: below the table | steps 7 and 8 |
+| 7 (part 1) | this commit | the before measurements of all three faults, the kernels and bench/native's suite at 8c7c65c (bench/native/RESULTS.md, "Data stage: layout", with the commands and the machine), and the first fix: a small record or tuple in a small value flattened into its slots, the budget counted in slots (to_mem.ml: `small`'s places and `Flat`, `small_of`, `struct_shape`, `flat_var`, `flat_slots`, `within`, a pattern's `flats` and `pending`), so nested.ren allocates 4, not 66,671, and a copy with 100 times its items runs in 17 ms, not 64; three faults of boxed values' counting the tests found, fixed (reuse.ml's sizes known by path, a heap overflow; rc.ml's slot nested once, and a changing variable's views); bench/data's layout, layout_walks, layout_panic and reuse_arms, and the three kernels, in build.t's loops and a release naive one; build.sh's dispatch kernels, which step 6's rename broke, and measure.sh's peak memory on Linux | the second fix (an array of counted structs inline) and the third (byte tags and niches), each measured; rows.ren's and optional.ren's last lines `show` the value, which boxes its type and hides the fix (step 7's choices); the milestone kernel against Rust; `if c then None else p` in debug builds (step 7's choices) |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7328,6 +7341,116 @@ Step 6's choices, where the sections above are silent:
 - **bench/native/dispatch's kernels keep their names,** `shapesK`, in
   the twins, measure.sh and RESULTS.md; only Ren's code says codecs
   (`codecsK`, `CodecK`, `cK_i`, `cost`).
+
+Step 7's choices, part 1 (the measurements before, and the first fix),
+where the sections above are silent:
+
+- **Measured before at 8c7c65c, on a cloud container** (an Intel Xeon
+  at 2.10 GHz, 4 vCPUs under KVM, 15 GiB, Linux 6.18, GCC 13.3; the
+  owner re-measures headline numbers on the M4 Max), and after on the
+  same machine: the three kernels, release, their allocations from
+  `--stats` and their time from hyperfine, and bench/native's whole
+  suite as measure.sh runs it. bench/native/RESULTS.md, "Data stage:
+  layout", has the numbers and the commands. Timings there vary by
+  about 10% run to run.
+- **A kernel prints what it computes, not a value whose `show` would
+  measure something else.** A walk (`show`, `==`, hashing) is given a
+  word, so a small value's type is boxed program-wide wherever one is
+  walked (step 10, "Small values are values"). nested.ren's last line,
+  `print(priced(Draft(...)))`, boxed `Item`, and so `Unvalidated`, a
+  field of an object: 200,005 allocations whatever the layout. It now
+  prints the total, `10`, through a `match`. Before this step, that
+  kernel allocated 66,671, one `Unvalidated` for each `Draft`, `Item` a
+  struct of a tag and a pointer; now it allocates 4. rows.ren's
+  `print(ls[4])` and optional.ren's `print(best)` box `Line`, and
+  `Option<Item>` and with it `Item`, the same way: the second and third
+  fixes should change those lines likewise, or teach the walks a struct
+  (its slots described, the struct given by its address), which would
+  let any small value be printed without boxing its type, more than the
+  fixes ask.
+- **The places** (to_mem.ml, `small`): `small` gives each field of each
+  constructor a place, `Slot`, `Bits`, or the new `Flat ks`, a small
+  record or tuple whose slots, in order, are the outer value's slots
+  `ks`. A product's are consecutive; a sum's are each placed as a field
+  of that layout is, in the first slot of it after the tag that the
+  constructor hasn't used, so constructors share them as before. The
+  budget is counted after flattening: four slots, a sum's tag one of
+  them. `ctor_shape`, `record_shape` and `tuple_shape` take a small
+  value's places from `small` (`small_of`, `struct_shape`); an object's
+  never has a `Flat` one.
+- **Reading one** (`flat_var`): each of its slots read (`Struct_get`),
+  counted again, and made a struct (`Make_struct`), which the reader
+  owns. `x.u.qty`, at any depth, is one read of the outer value's slot,
+  the inner one never made (the `Field` case's `locate`; `within` maps
+  a place in the inner value to one in the outer).
+- **Building one** (`small_ctor`, `packed_words`, which a record's, a
+  tuple's and an update's build go through): the inner struct split
+  into its slots (`flat_slots`: each read and counted again, then the
+  inner one dropped), which Perceus makes a free that keeps them, so
+  nothing is counted. An update keeps a flattened field it doesn't
+  change by reading it (`flat_var`).
+- **Matching one:** a pattern on a flattened field doesn't make it to
+  test it. It's a subject of its own, a variable that's never set,
+  whose fields are read from the outer value's slots (`match_`'s
+  `flats`); a name bound to it, `Draft(u)`, is made where the arm has
+  matched (`pending`, made in `matched`, and not counted again there),
+  so a path that doesn't match has made nothing it must drop.
+- **Not flattened:** a nested `Tagged` or `Nullable` value, as
+  specified; it's demoted as before. A record whose one slot is an
+  object, in a sum whose other constructors have no fields, `| Named(n:
+  Name) | Anon`, is `Tagged`, a tag and the slot, not `Nullable`: the
+  niche fix generalizes that.
+- **Mem Lint's rules don't change:** no slot is a struct, and a
+  flattened read or build is `Struct_get`s, counting and a
+  `Make_struct`, which it already checks.
+- **Walked, a flattened type is boxed** as any small type is
+  (layout_walks.ren). Hashing isn't tested natively: `Map` isn't native
+  yet (`Map.empty`, an associated value of a generic type, is refused).
+- **Three faults in boxed values' counting, which the tests found,
+  fixed**, since each failed a build or the sanitizers at 8c7c65c
+  (bench/data/reuse_arms.ren has each):
+  - **reuse.ml paired a reset with a build by the object's size**, from
+    any read of its fields anywhere in the function, the last one
+    winning. A `match` whose arms read constructors of different sizes
+    gave its subject one size in every arm, so an arm that builds a
+    constructor of another arm's size from a unique subject wrote past
+    the object: `Draft(l) => Priced { l, total }`, a heap overflow
+    under AddressSanitizer, debug and release. Now a size is known
+    where a read of the object's fields, or its build, comes before on
+    the same path (`learn`): that read ran, so the object is that
+    constructor there. A `Set` of a variable forgets what was known of
+    the object it held (`forget`), after it and, conservatively, in any
+    block of a statement that sets it, a loop's included, which runs
+    again after the `Set`. Of the suite, only deriv's, rbtree's and cfold's
+    C changed: deriv reuses 9.7 million objects, not 4.5 million, since
+    right sizes pair arms the wrong ones kept apart, and allocates 31.4
+    million, not 36.6; rbtree lost a reset in `Leaf`'s arm, a scalar
+    that's never unique, so it never ran; cfold's drops moved.
+  - **rc.ml's specialized drop nested every dead read of a field whose
+    shape it knew**, guarded against a live read of the same slot but
+    not against another dead one: `r.q.p.x + r.q.p.y + r.q.z` freed `r`
+    keeping slot 0 three times (Mem Lint, "slot 0 kept twice"). A slot
+    is nested once now.
+  - **rc.ml's specialized drop of a `var` kept parts read through its
+    views,** which may be of a value it held before a `Set`: `m = {
+    ..m, q: { ..m.q, ... } }`, then `m` dying, freed the new `m`
+    keeping the old one's `q` (Mem Lint, "is kept, but isn't a field").
+    A dying variable that changes isn't specialized through its views
+    (`stale`); its views' own drops still are, so an update in a loop
+    reuses as before. No count in build.t moved.
+- **Found, not fixed:** the step-3 agent's `type Plan = | Free |
+  Pro(...)` returned as `if c then Free else p` fails Mem Lint, "`$if`
+  holds 0 and 1 references on different paths", in debug builds only,
+  and so does `fn pick(c: Bool, p: Option<Str>) -> Option<Str> = if c
+  then None else p`: a boxed variable set to a constructor without
+  fields on one path and to a parameter on the other. Release builds
+  keep both as structs and pass. It's in the boxed path's counting or
+  Mem Lint's join, not in the layout code, and the niche fix won't
+  reach it, since debug builds keep every type boxed.
+- **bench/native/build.sh** called dispatch's kernels by step 6's old
+  names, `shapes2(...)`, so it stopped there: it calls `codecsK` under
+  the kernels' names now. **measure.sh's `memory` part** used BSD
+  time's `-l`; on Linux it uses GNU time's `-v`, still in bytes.
 
 ## The runtime model
 
