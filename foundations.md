@@ -7,7 +7,12 @@ rounds summarized at the end, and amended on 2026-10-27 with what the
 native slice measured: decisions 14 to 16 are new, and 2, 4, 8, 10 and
 13 changed. It was amended again the same day from nine research spikes
 and three programs written against it: decision 17 is new, and 3, 4,
-7, 8, 10, 13, 14 and 15 changed. It reverses parts of [deps.md](deps.md),
+7, 8, 10, 13, 14 and 15 changed. On 2026-10-28 it took 11a's
+follow-ups (decisions 7 and 10), then the actor design and the language
+record, [language.md](language.md): decision 18 is new, 3 is reframed,
+10 changed, and [Staging](#staging) is rewritten. language.md is the
+language a program is written in, data, services, the pipe and
+collections; this record is how it runs. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
 [compiler.md](compiler.md). Those documents keep describing what's built
 today, and each is updated by the stage that implements its part of this
@@ -15,8 +20,11 @@ record ([Staging](#staging)).
 
 ## The bet
 
-**Code flows down the stack, data flows anywhere, and behaviour that
-varies is a handler.**
+**Code flows down the stack, data flows anywhere, and services are
+handlers.**
+
+What a thing is, is data, an ADT; what code needs is a service, a
+handler it's given by name ([language.md](language.md)).
 
 Every mechanism in Ren keeps that shape:
 
@@ -29,6 +37,7 @@ Every mechanism in Ren keeps that shape:
 | A suspended frame | its task, in memory the scope already owns |
 | A value | as long as it's used, counted by Perceus |
 | A handler description | a value: code named by its handler, plus data copied in |
+| An actor | until it's evicted, or its family's `with` ends |
 
 Only values outlive the call that made them, and values are data. So
 lifetimes come from the program's structure and nobody writes them down,
@@ -48,6 +57,15 @@ unboxed or boxed, pack its fields, keep a slice as a root and a range,
 lay an array out by field, or build data in an arena's chunks, and no
 program can tell. The rule that keeps this true: **no feature exposes
 an address or an identity outside `trust`.**
+
+**The programmer never holds an instance, so instances are the
+compiler's choice.** It's the same principle one level up. A handler's
+instance is reached through a dependency, never held as a value, so the
+runtime may make one per key, evict it, stripe it, lock it or skip the
+lock, and run it on any core, and no program can tell (decision 18).
+The price is that a program can't keep live instances of its own
+outside `trust`: synchronous calls and operations that don't interleave
+were worth more.
 
 ## Decisions
 
@@ -175,24 +193,29 @@ that carry code, and they carry it by name.
   happening ("one that needs more can't stand in for one that needs
   less"), and its direction is fixed now.
 
+**A stored description is an enum the compiler writes.** In a closed
+world each `handler ... for D` is a variant and each operation call a
+`match` the compiler writes, which is how decision 4 lowers it. So the
+difference between an ADT and a description is who writes the enum:
+**if you own every kind, write the ADT; if others add kinds, let the
+compiler write it** ([language.md §6](language.md#6-stored-descriptions-an-enum-the-compiler-writes)).
+Routes, middleware, codecs and plugins are descriptions. Shapes and
+expression trees are ADTs.
+
 A **stateless handler**, with no `var`, no `finally`, no setup that can
 fail and no `next`, can also be called as a method, without a `with`.
-That's Ren's answer to `dyn Trait`:
+Calling an operation on a description of a stateful handler is an error
+whose help writes the `with`, so method syntax on a description always
+means a pure dispatch:
 
 ```ren
-dep Shape = area: fn() -> Float
-handler circle(r: Float) for Shape = area() => 3.14 * r * r
-handler square(s: Float) for Shape = area() => s * s
+dep Route = handle: fn(req: Request) -> Response uses Db
+handler health() for Route = handle(_) => ok("up")
+handler user_page(limit: Int) for Route = handle(req) => ...
 
-let shapes: Array<Shape> = [circle(1.0), square(2.0)]
-let total = shapes.map(fn(s) => s.area()).sum()
+let routes: Array<(Str, Route)> = [("/up", health()), ("/users", user_page(50))]
+let resp = route_for(routes, req.path).handle(req)
 ```
-
-An enum and a dependency answer opposite sides of one question. Adding a
-variant to an enum means editing every `match`, and adding an operation
-is one function. Adding a handler is one declaration anywhere, and
-adding an operation means editing every handler. Use an enum when you own
-all the variants, and a dependency when others add them.
 
 ### 4. Static dispatch, in a closed world
 
@@ -440,7 +463,12 @@ happen, with nothing to annotate.
   early only at `Async.until`, which is a condition variable. Other
   callers queue for the instance as tasks: a thread never blocks while
   its task is parked, so across threads it costs what a plain lock does
-  uncontended, about 5 to 20 ns. So state read before a dependency call
+  uncontended, about 5 to 20 ns. **The queue is fair, not first in first
+  out:** the runtime chooses who gets the instance next, and no waiter
+  is passed over without bound, so 11b may let a running task take it
+  before a parked one, as Go's mutex does. `sim` chooses among the
+  waiters and the arrivals from its tape, so no program can come to
+  rely on an order. So state read before a dependency call
   is still the state after it, and an invariant that spans the call
   needs no flag.
 - **Why.** Letting other operations in at every dependency call, as
@@ -494,6 +522,14 @@ happen, with nothing to annotate.
   channel: each is marked once and for good, and counted atomically from
   then on. A shared object costs what Rust's `Arc` costs, and one counted
   from every core at once doesn't scale.
+- **Whether a shared handler's state is marked is open.** A marked
+  object is never unique, so every change to an actor's state would
+  copy it. The alternative is to mark only what crosses the instance's
+  edge, a result that shares the state's structure, an argument it
+  keeps, and leave the state counted plainly, since only the task
+  holding the instance reaches it, as a Rust `Mutex<T>` needs only
+  `T: Send`. The lean is toward the edge; experiment K3 decides, before
+  11b builds marking ([Staging](#staging)).
 - **Or it's built in an arena** (below), the explicit tool for big data
   read from every core.
 
@@ -541,16 +577,16 @@ that belong to the arena.
 - The runtime's rules for arenas, marking and crossing are in
   [compiler.md](compiler.md#the-runtime-model).
 
-**Hot state is sharded, and reads can take no lock.**
+**Hot state is striped or split by key, and reads can take no lock.**
 
-- **A hot handler with state is a queue.** `keyed(n, h) over any`, a
-  standard-library handler, keeps `n` instances of `h` and sends each
-  operation to one by its first parameter's `key`; an operation with no
-  key goes to every instance. A hot counter is the standard library's
-  striped counter, a line per worker.
+- **A hot handler with state is a queue.** Two standard-library
+  services spread it (decision 18): `striped`, a fixed number of
+  instances map-reduced over, and `actors`, one instance per key made
+  on demand. A hot counter is `striped(counter(), by: Worker, merge:
+  Sum)`, a line per worker.
 - **Handler operations aren't compiled to atomics.** Uncontended, an
   atomic gains nothing (2.4 ns for a spin lock against 2.7 for an atomic
-  add on an M4), and contended, the striped counter beats it (34 against
+  add on an M4), and contended, a striped counter beats it (34 against
   13 million operations a second at 8 threads). Its rules would have
   been the most special-cased in the model.
 - **Reads that take no lock: `snapshot(v)`,** a standard-library
@@ -845,6 +881,133 @@ borrows its input needs no lifetime.
   shared, so many tasks keeping slices of one buffer is the hot-root
   trap of decision 10: keep offsets, or `copy()`.
 
+### 18. Actors and stripes
+
+A program never holds an instance ([the bet](#the-bet)), so it can't
+keep a collection of live handlers of its own. Two standard-library
+services buy back what it needs, and both are dependencies, installed
+by the root and swapped in tests. What a program writes with them, and
+when to choose them over data in one service, is in
+[language.md §11](language.md#11-many-stateful-things-data-or-actors).
+
+**`actors`: one instance per key, made on demand.** These are virtual
+actors, as Orleans' grains and Cloudflare's Durable Objects are:
+
+```ren
+dep Docs = Actors<DocId, Doc>
+with store(), actors(doc, max: 50_000) as Docs in serve()
+
+try Docs.at(id) fn() => Doc.edit(op)
+```
+
+- **Addressing.** The key is the address. `Docs.at(k) fn() => body`
+  installs k's actor as `Doc` for its block. `doc` names a handler
+  whose one parameter is the key, and its other dependencies come from
+  the `with` set, so an actor can't use its own family: that's a cycle
+  in one `with`, already an error (decision 10). `post` is the
+  exception, below.
+- **Holding.** Each operation takes the actor for one call, as decision
+  10 says for every instance. The `at` block pins it, so it isn't
+  evicted while the block runs, but other callers' operations
+  interleave between the block's calls.
+- **Setup.** The actor is made when `at` is entered, so setup's errors
+  are `at`'s: `try Docs.at(id)`. Callers waiting on the same key's setup
+  get the same error, and the next `at` tries again. If setup is
+  cancelled, the waiters try it themselves.
+- **Eviction.** `max:` is required: an unbounded family is a memory leak
+  keyed by whatever the network sends. Making one past `max:` evicts the
+  least recently released actor that's evictable, and the caller that
+  makes it pays: the victim's `finally` runs on its task. If none is
+  evictable, it waits. An actor that's pinned, running an operation, or
+  waited for is never evicted. Expiry is the program's own call,
+  `Docs.evict_idle(d)` and `Docs.evict(k)`, from a task it owns; the
+  runtime has no sweeper.
+- **`finally` can't fail.** It runs at eviction and at the family's end,
+  and an error there would belong to no caller. So durability is
+  write-through in the operations, and a final flush that can fail is a
+  step before the family ends, `Docs.each(fn() => try Doc.flush())`.
+- **Periodic work** is `Docs.each(block)` from `Async.beside`. It visits
+  the actors live when it's called, in creation order, pinning each in
+  turn; it doesn't make actors, and doesn't count as use for eviction.
+  There are no alarms and no timers per actor: a handler has no task of
+  its own (decision 7).
+- **No deadlock.** `Docs.at` inside a block of `Docs.at` is a compile
+  error. A task that pins an actor may wait for a slot only in a family
+  installed outside the families it pins; anywhere else a full family
+  fails at once with `Full`, the inner-to-outer rule of decision 10.
+- **`post` is Erlang's send, deferred.** `Docs.post(k) fn() =>
+  Doc.edit(op)` puts the call in k's mailbox and returns. It runs as a
+  task owned by the family's `with`, so it can't fail, as a spawned
+  task can't. A mailbox is bounded: a full one makes the poster wait, or
+  fails with `Full` where waiting could close a cycle. An actor may post
+  to its siblings, the one use of its own family the cycle rule allows,
+  since a post never holds anything. Posts are journaled.
+- **Policies are data.** `evict: Lru`, the default, or `Lfu`. Expiry
+  after a time without use or since a write (`expire:`) and a weight
+  per actor (`weigh:`) are designed with the server milestone, as
+  Caffeine's knobs are.
+- **Teardown** runs the actors' `finally`s in reverse creation order, as
+  nested `with`s run. `Docs.count()` and counts of actors made and
+  evicted are exposed, which is how leaks and thrashing are found.
+- **`sim` is faithful to the policy.** Eviction happens only through
+  `max:`, `evict_idle` and `evict`, which depend only on the schedule
+  and the clock, so `sim` already reaches every eviction the runtime
+  could make. `sim.scheduler(seed, evict: AnyIdle)` is opt-in chaos: it
+  evicts any evictable actor at any scheduling point, to test that
+  nothing important lives only in memory. The journal names an actor
+  `docs[DocId(7)]#3`, its family, key and incarnation, so replay can
+  tell two lives of one key apart.
+- **Open:** whether `Docs.at_all(keys)`, holding several actors for a
+  block in sorted order, is in v1; and whether `Async.isolate` can
+  contain a panic in an actor by dropping it without its `finally`.
+
+**`striped`: map-reduce over fixed stripes.**
+
+- `striped(n, h)` keeps n instances of h. An operation whose first
+  parameter has a `key` goes to one stripe by it (`by: Key`, the
+  default). `striped(h, by: Worker)` gives each worker a stripe and
+  sends an operation to the caller's; it takes no n.
+- An operation with no key runs on every stripe. If it returns `()`,
+  that's all; if it returns a value, the results are folded with
+  `merge:`, left to right in stripe order: `Sum`, `Max`, `Min`,
+  `Concat`, or `Custom(m)`, where m describes a stateless handler for
+  `Merge<D>`, a dependency the compiler derives with one operation per
+  keyless operation that returns a value (`fn(a, b) => ...` shorthand
+  for its arms).
+- The fold needs no algebraic law, since its order is fixed, and it
+  isn't an atomic snapshot: stripes are visited one at a time.
+- **The split law.** Under `by: Worker` which stripe an operation lands
+  on is the runtime's choice, so a program's results may depend on it
+  only as far as the merge erases it. That's documented, and `sim` runs
+  at least two virtual workers, so tests see it.
+- It replaces `sync.keyed(n, h)` as 11a built it.
+
+**On many cores, decided now so 11b only adds.**
+
+- **Operations are calls, not messages.** An operation runs as if in its
+  caller's task. There's no `Send` bound: every value can cross, marked,
+  copied or moved at a join (decision 10), and opaque C resources stay
+  on one thread with `Async.pinned`. `at` works from any task.
+- **No home core.** A caller takes the instance and runs the operation
+  where it is, and a release hands it to a waiter on the releasing
+  worker. Shipping operations to a home core, as Seastar does, costs a
+  hop per call; a `place:` parameter can come later if measurements
+  ask for it.
+- **Fair, not first in first out** (decision 10).
+- **A family is split into partitions**, a fixed number the program
+  sets with `parts:`, whose default comes from `max:` and never from the
+  core count. Each has its own lock, map, exact LRU and a cap of
+  `max / parts`. So a journal from a run on one thread replays on
+  sixteen.
+- **The runtime changes cost, never meaning:**
+
+| Runtime | `striped(by: Key)` | `striped(by: Worker)` | `actors` |
+|---|---|---|---|
+| `single`, `pinned` | stripes with no locks | one stripe: the merge is the identity | partitions and actors with no locks |
+| `work_stealing` | locked stripes | locked stripes per worker, padded, made on their worker | locked partitions, an actor's lock per call |
+| `per_core` | locked stripes | a stripe per core, never locked across threads | as `work_stealing`, without migration |
+| `sim` | as `single`, choices from the tape | at least two virtual workers, routing from the tape | as `single`, choices from the tape |
+
 ## What's given up
 
 - **Stored closures.** Grammars, schemas and routers built at run time
@@ -881,6 +1044,14 @@ borrows its input needs no lifetime.
 - **Addresses:** pointers into arrays, a value's identity, and anything
   else that would fix a representation, outside `trust`; and outer
   variables changed by an isolated block or an arena's body.
+- **Held instances.** A program can't keep handler instances as values,
+  in a map of its own or a record. Keys address actors; a stripe is
+  never named.
+- **First in first out on a busy instance.** Waiters are served fairly,
+  in an order the runtime picks.
+- **Interfaces over data.** A data interface was a `dep` with stateless
+  handlers, `Shape`; it's an ADT, or a generic function that takes a
+  block ([language.md §3](language.md#3-generic-code-no-user-defined-interfaces)).
 
 ## What it isn't
 
@@ -890,7 +1061,9 @@ borrows its input needs no lifetime.
 - **Not Go:** no shared memory between tasks, no unstructured goroutines,
   no preemption.
 - **Not Erlang:** no heap per task, no copied messages, no supervisor
-  trees in the language.
+  trees in the language. Its actors are kept, addressed by key, with
+  `post` as its send; but an operation is a call that returns, not a
+  message.
 - **Not Effect:** no effects as values, no fiber interpreter.
 - **Not OxCaml:** no modes for users to write. Blocks are the only lambda.
 
@@ -926,6 +1099,10 @@ and 32-bit references as the default.
 | A `with` whose setup can fail is written `with` | `try with` |
 | The journal has no task column | A task path column, answers keyed by task |
 | A `Float` operation that makes a NaN panics | A NaN panics where it's observed |
+| `sync.keyed(n, h)`: stripes by key, each held across its outward calls, and a keyless operation gives the last stripe's result | `striped`, a map-reduce with `merge:`, and `actors`, one instance per key, both dependencies (decision 18) |
+| Callers queue for an instance first in first out | Fairly, in an order the runtime chooses |
+| A stateful handler called as a method starts fresh at each call | An error whose help writes the `with` |
+| Data interfaces as dependencies (`Shape`, `Expr`) | ADTs ([language.md](language.md)) |
 
 ## Staging
 
@@ -1035,16 +1212,88 @@ and 32-bit references as the default.
    built rule that cancelled such tasks when the `with` ended;
    `release` on one call, with `sim` switching at it and the stale-read
    warning (decision 10); `Proc.run(cmd, kill: Tree | Child)`, `Tree`
-   by default.
-5. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the
+   by default. They land in item 6.
+5. **Data** ([language.md](language.md) §2, §3 and §6), first, because
+   it breaks programs and every week of new code makes that dearer.
+   Record update, `{ ..order, status: Paid }`; record patterns and `let
+   { id } = u`; variants with several fields by name, with `..`, and one
+   field positional; or-patterns, `as` and `let ... else`; variant
+   types, `Order.Placed`; the errors that teach the model, with missing
+   arms printed as code. The layout fixes, measured: small structs
+   flattened into their parent, arrays holding counted small structs
+   inline, byte tags and pointer niches. Calling an operation on a
+   description of a stateful handler is an error. `Shape` and `Expr`
+   become ADTs in docs, examples and benchmarks, and every example and
+   test moves to by-name variants. In the interpreter and natively.
+   **Done when** the bank, the shop and the ledger read as language.md's
+   end-to-end program does, and an ADT-first rewrite of bench/10d's
+   interpreter kernel is measured against Rust.
+6. **Services and concurrency.** Wirings and the pipe with `try` on
+   each step ([language.md](language.md) §5 and §8). 11a's follow-ups:
+   the compile error for a task that reaches a handler installed inside
+   its scope, `Async.beside` and `Async.background`, `release` with
+   `sim` switching at it and the stale-read warning, and
+   `Proc.run(kill:)`. `striped` and `actors` as decision 18 says, as
+   dependencies, with `post`, `evict: Lru`, `sim`'s chaos eviction and
+   the journal's incarnations; `sync.keyed` goes. Interpreter first, as
+   tasks are. **Done when** language.md §11's document server runs
+   under `sim` with `evict: AnyIdle`, and `ren test --sim --seeds` finds
+   a lost update split over two operations of one actor.
+
+   **Alongside 5 and 6: phase one of the many-cores experiments,** C
+   and Rust prototypes in `experiments/`, run on the M4 Max, not on
+   cloud machines, whose shared cores make these numbers noise. In
+   order:
+   - **K3, marking.** An actor doing `subs.push` and `text.apply`,
+     called from 8 workers, its state marked shared against marked only
+     at its edge. Predicted: 3× the operations a second at the edge.
+     Decides decision 10's open marking question.
+   - **P1, the cost of a hop.** One task, one instance, operations of
+     10 ns to 10 µs. Predicted: taking the instance and running costs 5
+     to 20 ns over a call; a hop to a home core 300 ns with it spinning,
+     2 µs parked.
+   - **P3, handing off against barging.** 64 tasks on one instance,
+     workers allowed to park. Predicted: strict first-in-first-out
+     handoff loses 3× the throughput to barging with a 1 ms starvation
+     guard.
+   - **S1, stripes against atomics.** A counter's add at 1 to 16
+     workers: one instance; stripes per worker, locked and not; an
+     atomic add. Predicted: stripes 5× the others at 16.
+   - **K1 and K2, partitions.** `at`'s cost on a hit and its scaling
+     with 1, 8 and 64 partitions, uniform keys and Zipf(1.1); what a
+     cap per partition wastes against one global cap (predicted under
+     2% for uniform keys).
+   - **The same cache three ways.** A read-mostly cache whose misses
+     fetch, as one handler, as `striped` by key and as `actors`, for
+     throughput and p99 at 1 to 16 workers, against Rust's dashmap and
+     moka.
+   - **Second:** P2, contended operations touching 1 to 64 cache lines;
+     P4, a hot key held across a 100 µs fsync, where placement shouldn't
+     matter; P5, a home core on an efficiency core; S2, padding stripes
+     to 64 or 128 bytes; S3, a merge's latency while workers write; S4,
+     stripes made on their own worker; K4, an eviction's `finally` not
+     stalling other keys in its partition.
+7. **The `just`, natively.** Strings and bytes at Rust's speed (2.6 to
+   2.8× its time today), the inline slice and the uncounted view of a
+   borrowed parameter's slice (item 3's gaps), `Map` natively, and
+   `Table` and `Pool` ([language.md §9](language.md#9-collections-array-table-and-pool))
+   in the interpreter and natively. **Done when** the `just` builds
+   natively and its string kernels are within 2× of Rust's time. `ren
+   review` with its "this is data" hint, and `ren profile`'s
+   suggestions, come after.
+8. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the
    runtime model of [compiler.md](compiler.md#the-runtime-model): the
    shared mark and atomic counts on shared objects, a heap per thread
    with frees returned to the heap they came from, the current heap a
    pointer each task holds; arenas, sealed when shared, with copy-in;
    `snapshot` and its reclamation; lock-free handlers with `Atomic`
-   fields; the striped counter.
-6. **11c, generators** and the stream library on them.
-7. **Native, stages 13 and 14.** The task frame allocator; the build
+   fields; `striped` and `actors` on many cores as decision 18 says,
+   with fair handoff, partitions and marking as K3 decided. **Phase two
+   of the experiments:** the prototypes' questions again on the real
+   runtime, a check that journals recorded on many cores replay on one,
+   and a server benchmark against Go and Rust.
+9. **11c, generators** and the stream library on them.
+10. **Native, stages 13 and 14.** The task frame allocator; the build
    notes; the front half run per module in parallel; release built with
    clang -O2 per module in parallel, cached by content. Specialization
    per block and per handler, and most of the memory work, are built
@@ -1056,13 +1305,11 @@ need no native code.
 ## Open questions
 
 - The size budget for cloning a `with` body per handler.
-- **What a keyed handler is.** `keyed(n, h)` is `n` fixed stripes
-  routed by the first argument's key, built into the runtime since Ren
-  code can't hold `n` instances of a handler. Under decision 10 a stripe
-  is held across its outward calls, so striping only divides the
-  waiting, and an operation with no key gives the last stripe's result.
-  One instance per key, made on first use (Orleans' activations), is the
-  candidate, with its lifecycle (eviction, its `finally`) to decide.
+- **Actors' open items** (decision 18): `at_all` in v1 or later;
+  containing a panic in an actor under `Async.isolate`; how `weigh:`
+  is given.
+- **How a shared handler's state is marked** (decision 10), decided by
+  experiment K3.
 - Whether `both` gets a "runs once" marker.
 - What a runtime written by users looks like.
 - Where folding and sharing per layout run (on Mem IR before C, or on
@@ -1142,7 +1389,11 @@ that take no lock, slices, dispatch over descriptions, combinations of
 types, compressed references and the debug backend, and three programs,
 a task runner, a bank's HTTP API and a key-value store, were written
 against the whole record; decisions 3, 4, 7, 10, 13, 14, 15 and 17 come
-from them.
+from them. After 11a, research into Effect, Kotlin, Eio, Java's
+structured concurrency, Orleans, Durable Objects, Erlang, Seastar and
+Caffeine gave the follow-ups in decisions 7 and 10 and decision 18; a
+review of the whole language gave [language.md](language.md), and
+decision 3's reframing.
 
 It leans on Effect, Koka, Effekt (second-class blocks), Roc (lambda sets
 and their split between builds, seamless slices), Swift (exclusivity,
