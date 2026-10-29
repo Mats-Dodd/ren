@@ -133,7 +133,7 @@ match attempt record(&next)
   Err(_) => wait_for_more()
 ```
 
-A `u64` too large for an `Int`, or a `VarUInt` longer than 10 bytes, is `Malformed`. `c.at()`, `c.left()` and `c.rest()` say where it is and what's after it (compiler.md, "Bytes stage", "Layer 3: the API").
+A `u64` too large for an `Int`, or a `VarUInt` longer than 10 bytes, is `Malformed`. `c.at()`, `c.left()` and `c.rest()` say where it is and what's after it. `c.at()` and the errors' `at` count from the start of the bytes the cursor was made from, or from a base, `b.cursor(from: n)`, so a cursor over a buffer that starts at byte `n` of a stream reports stream offsets ([strings.md](strings.md#positions)) (compiler.md, "Bytes stage", "Layer 3: the API").
 
 ### `x.hash()`, and a map's own hash
 
@@ -261,7 +261,7 @@ pub dep Queue =
 
 ```ren
 fn claim(job: JobId) -> Lease ! Taken uses Blob, BlobCas =
-  try BlobCas.put_if_absent("jobs/{job}", owner())
+  try BlobCas.put_if_absent("jobs/\{job}", owner())
 ```
 
 Code with `uses Blob` alone runs on any store. Code that needs compare-and-swap says so, and can't be wired to a store without it.
@@ -374,7 +374,7 @@ let cfg = try config.load<Cfg>()           // reads PORT, DB_URL, REGION
 Query parameters are bound, never spliced into the string:
 
 ```ren
-for row in Sql.query(sql"select * from users where plan = {plan}")
+for row in Sql.query(sql"select * from users where plan = \{plan}")
   ...
 ```
 

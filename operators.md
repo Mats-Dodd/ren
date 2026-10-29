@@ -111,12 +111,17 @@ error: `Duration` has no `+` that takes a `Time`
 ordering all go through it:
 
 ```ren
-pub type Email = opaque Str
-  pub fn of(s: Str) -> Email = s
-  pub fn key(self) -> Str = self.lower()
+pub type Order = { id: OrderId, placed: Time, lines: Array<Line> }
+  pub fn key(self) -> OrderId = self.id
 
-assert Email.of("Ann@Example.com") == Email.of("ann@example.com")
+assert order == { ..order, placed: later }    // the same order, by id
 ```
+
+A key projects what makes two values the same. It shouldn't normalize:
+a key runs on every `==` and every hash, and the value kept isn't the
+value compared. A type whose identity needs normalizing, an email or a
+username, normalizes once in its constructor and compares bytes after
+([strings.md](strings.md#equality-hashing-and-order)).
 
 There's no writing `eq`, `hash` or `compare` by hand, so they can't
 disagree, as Java's `equals` and `hashCode` can.
@@ -628,7 +633,9 @@ which adds members to a built-in type.
   is: in both, `index` finds where something is, and `find` takes a
   function.
 - There's one name for each: no `filter` beside `select`, no `inject`
-  beside `reduce`, no `length` or `size` beside `len`.
+  beside `reduce`, no `length` or `size` beside `len`. `Str` has
+  `byte_len` instead of `len`, not beside it: on `Str`, a name whose
+  unit is ambiguous doesn't compile ([strings.md](strings.md#length-and-indexing)).
 
 ## How it runs
 

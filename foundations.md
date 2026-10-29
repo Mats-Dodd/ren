@@ -877,7 +877,9 @@ borrows its input needs no lifetime.
   `inout` parameters (10d).
 - **A `Str` slice panics if it cuts a character.** The slices `split`,
   `index`, `trim` and `lines` make are at boundaries they found, and
-  don't check; `Bytes` never checks.
+  don't check; `Bytes` never checks. `s.char_floor(i)` and
+  `s.char_ceil(i)` give a boundary for a computed limit
+  ([strings.md](strings.md#cutting-a-character)).
 - **Across tasks,** a task's slices of what it borrowed from its
   captures are free. A slice it keeps counts its root, which is then
   shared, so many tasks keeping slices of one buffer is the hot-root
@@ -1042,9 +1044,13 @@ representation is the compiler's choice.
   and no exclusivity rule changes. A read view is a value; one kept
   while its page is written makes the write copy the page, which debug
   builds report.
-- **Offsets are free in errors.** A slice is a root and a range, so a
-  malformed field's offset is reported within the whole buffer, the
-  file's or the socket's, at no cost.
+- **Offsets count from the value.** A malformed field's offset counts
+  from the start of the bytes given to `view`, or from the base it was
+  given, `view(b, from: n)`, so a program that knows where its bytes
+  sit in a file or a stream gets offsets in the file or the stream.
+  An offset never depends on how the bytes were shared or copied, so
+  no layout the compiler chooses can change it
+  ([strings.md](strings.md#positions)).
 - **Sizes and offsets are promised only by formats.** `T.disk.size` and
   `T.disk.offset(f)` are shapes, checked at build time. A record's size
   is a fact of this build, never a promise.

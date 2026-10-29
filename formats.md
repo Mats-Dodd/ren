@@ -346,9 +346,17 @@ pub type FormatError = ! Short(at: Int, need: Int)
                        | UnknownTag(at: Int, tag: Int)
 ```
 
-- **`at` is the offset in the whole buffer,** the file or the socket's,
-  not just the slice the view was made from, because a slice is a root
-  and a range. That's free, and Erlang can't do it.
+- **`at` counts from the start of the bytes given to `view`,** or from
+  the base it was given: `T.disk.view(page, from: page_no * 4096)`
+  reports offsets in the file. A cursor takes the same base,
+  `b.cursor(from: n)`. Counting from the root a slice was cut from
+  would depend on which buffer the bytes happen to be in, a leased
+  chunk, a joined one or the interpreter's copy, and on every layout
+  the compiler chooses ([strings.md](strings.md#positions)).
+- **`at` is for reports, never for indexing.** It goes in a message or
+  a log. Code that indexes the buffer with it works while the base is
+  0, as in every test, and reads the wrong bytes once it isn't. To
+  reach bytes, use the view or the cursor.
 - **`path`** follows shapes.md's: `"Parse.oids[2]"`.
 - **`Short(need)` is what a framing loop needs:** read that much more
   and try again. So no streaming parser is needed:

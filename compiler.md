@@ -6268,7 +6268,9 @@ pub type FormatError = ! Short(at: Int, need: Int)
   there), so the offset in the root isn't known in both builds; a
   program that wants it makes the cursor on the whole buffer and
   `skip`s. Layer 2's views, which carry their root, are where the
-  promise is kept.
+  promise is kept. strings.md has since made this the rule for views
+  too: offsets count from the value, or from a base given with
+  `from:`.
 - **Floats (`f32_le` ... `f64_be`), odd widths (`u24_le`) and bit
   fields are left to layer 2,** which needs them and decides how a
   read NaN is carried; layer 3 composes them from the integer reads
@@ -6582,6 +6584,9 @@ are (indexmap's shape, no crate), names `Rc<str>`; the Go a `map` the
 same way. All three print the same checksum. RESULTS.md, "Bytes stage,
 step 3", has the numbers: a round, release, Ren **108** Mcyc, Rust 157,
 Go 255 (0.69× Rust); the debug build takes 2.9 s to Go's 0.85.
+That's against SipHash. Against Rust with FxHash or aHash, the strings
+measurements put the same map at 1.02–1.05×: the same speed, not
+faster ([strings.md](strings.md#representation)).
 
 ### Step 4, the review
 
