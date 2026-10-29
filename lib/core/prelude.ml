@@ -377,6 +377,190 @@ pub type Set<T> = builtin
   pub fn drop(self, n: Int) -> Set<T> = Set.of(self.members().drop(n))
   pub fn reverse(self) -> Set<T> = Set.of(self.members().reverse())
 
+// ---- bytes: layer 3 of formats.md (compiler.md, "Bytes stage", "Layer
+// 3: the API") ----
+//
+// Reads and writes at an offset, `b.u32_le(at)` and `&b.set_u32_le(at,
+// x)`, are built in: a bad offset is a bug, and panics. A cursor reads
+// in sequence, and fails with a `FormatError` when the input runs out,
+// which a program handles.
+
+// why bytes couldn't be read as what they were asked to be: `need` more
+// bytes at `at`; or not a value of the type, `why`, at `at`, in the field
+// `path` (layer 3 has no fields, so its path is empty); or a tag no case
+// has (layer 2's)
+pub type FormatError =
+  ! Short(at: Int, need: Int) | Malformed(at: Int, path: Str, why: Str) | UnknownTag(at: Int, tag: Int)
+
+pub type Bytes = builtin
+  // a cursor at the start of these bytes, to read them in sequence
+  pub fn cursor(self) -> ByteCursor = ByteCursor { b: self, pos: 0 }
+
+// the 64 bits of `x` as the number they are unsigned, written out: `x`
+// if it isn't negative, else 2^64 + `x`, whose last digit is found by
+// halving it first, since no `Int` holds it
+fn show_unsigned(x: Int) -> Str =
+  if x >= 0 then show(x)
+  else
+    let q = x.shr(1).bit_and(9_223_372_036_854_775_807) / 5
+    show(q).concat(show(x.wrapping_sub(q.wrapping_mul(10))))
+
+// fails with `Short(at, need)`, as a `FormatError`, all of it: each of a
+// cursor's reads says it can fail with any, as layer 2's do, so a
+// framing loop reads the same at either layer
+fn short(at: Int, need: Int) ! FormatError =
+  let e: Result<Unit, ! FormatError> = Err(Short(at, need))
+  try e
+
+// fails unless `n` bytes are left at `at` of `len`: of a cursor's
+// numbers, not the cursor, which a call would count once more
+fn room(len: Int, at: Int, n: Int) ! FormatError =
+  if len - at < n then try short(at, n - (len - at)) else ()
+
+// bytes read in sequence from `pos`: what `b.cursor()` gives. It's a
+// value, so a copy of one tries a record, and the cursor stays where it
+// was if the record isn't all there yet. A read that fails moves it
+// nowhere: `Short(at, need)` says where the read began and how many
+// more bytes it needs
+pub type ByteCursor = opaque { b: Bytes, pos: Int }
+  // where it is, in the bytes it was made from
+  pub fn at(self) -> Int = self.pos
+  // how many bytes are after it
+  pub fn left(self) -> Int = self.b.len() - self.pos
+  // those bytes, a slice
+  pub fn rest(self) -> Bytes = self.b[self.pos..self.b.len()]
+  pub fn u8(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 1 then try short(at, at + 1 - self.b.len()) else ()
+    self.pos = at + 1
+    self.b.u8(at)
+  pub fn i8(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 1 then try short(at, at + 1 - self.b.len()) else ()
+    self.pos = at + 1
+    self.b.i8(at)
+  pub fn u16_le(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    self.pos = at + 2
+    self.b.u16_le(at)
+  pub fn u16_be(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    self.pos = at + 2
+    self.b.u16_be(at)
+  pub fn i16_le(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    self.pos = at + 2
+    self.b.i16_le(at)
+  pub fn i16_be(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    self.pos = at + 2
+    self.b.i16_be(at)
+  pub fn u32_le(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    self.pos = at + 4
+    self.b.u32_le(at)
+  pub fn u32_be(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    self.pos = at + 4
+    self.b.u32_be(at)
+  pub fn i32_le(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    self.pos = at + 4
+    self.b.i32_le(at)
+  pub fn i32_be(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    self.pos = at + 4
+    self.b.i32_be(at)
+  // a `u64` of 2^63 or more isn't an `Int`: `Malformed`, which reading
+  // its bits with `i64_le` doesn't fail with
+  pub fn u64_le(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    let x = self.b.i64_le(at)
+    if x < 0 then
+      fail Malformed(at, "", show_unsigned(x).concat(" is more than an `Int` holds"))
+    else
+      self.pos = at + 8
+      x
+  pub fn u64_be(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    let x = self.b.i64_be(at)
+    if x < 0 then
+      fail Malformed(at, "", show_unsigned(x).concat(" is more than an `Int` holds"))
+    else
+      self.pos = at + 8
+      x
+  pub fn i64_le(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    self.pos = at + 8
+    self.b.i64_le(at)
+  pub fn i64_be(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    self.pos = at + 8
+    self.b.i64_be(at)
+  // a `VarUInt`, LEB128: 7 bits a byte, least first, the top bit set on
+  // all but the last, at most 10 bytes, and less than 2^63. A longer form
+  // than needed is read, as Go's `binary.Uvarint` reads it. One byte, a
+  // number below 128, is read at once
+  pub fn varuint(inout self) -> Int ! FormatError =
+    let at = self.pos
+    if at < self.b.len() && self.b.u8(at) < 128 then
+      self.pos = at + 1
+      self.b.u8(at)
+    else try &self.var_bits(false)
+  // a `VarInt`: a `VarUInt`'s bits, zigzag, so every `Int` is one
+  pub fn varint(inout self) -> Int ! FormatError =
+    let z = try &self.var_bits(true)
+    z.shr(1).bit_and(9_223_372_036_854_775_807).xor(0 - z.bit_and(1))
+  // the bits of a `VarInt` (`signed`) or a `VarUInt`, and the cursor
+  // moved past them
+  fn var_bits(inout self, signed: Bool) -> Int ! FormatError =
+    let n = self.b.len()
+    var i = self.pos
+    var z = 0
+    var shift = 0
+    var more = true
+    while more
+      if i >= n then try short(self.pos, 1) else ()
+      let v = self.b.u8(i)
+      if shift == 63 then
+        if v >= 128 then fail Malformed(self.pos, "", "a `VarUInt` is at most 10 bytes")
+        else if signed && v > 1 then
+          fail Malformed(self.pos, "", "a `VarInt` of more than 64 bits is more than an `Int` holds")
+        else if not signed && v > 0 then
+          fail Malformed(self.pos, "", "a `VarUInt` of 2^63 or more is more than an `Int` holds")
+        else ()
+      else ()
+      z = z.bit_or(v.bit_and(127).shl(shift))
+      shift += 7
+      i += 1
+      more = v >= 128
+    self.pos = i
+    z
+  // the next `n` bytes, a slice
+  pub fn bytes(inout self, n: Int) -> Bytes ! FormatError =
+    if n < 0 then lib_panic("a cursor's `bytes` of a negative count") else ()
+    try room(self.b.len(), self.pos, n)
+    let s = self.b[self.pos..self.pos + n]
+    self.pos += n
+    s
+  // past the next `n` bytes
+  pub fn skip(inout self, n: Int) ! FormatError =
+    if n < 0 then lib_panic("a cursor's `skip` of a negative count") else ()
+    try room(self.b.len(), self.pos, n)
+    self.pos += n
+
 // ---- time ----
 //
 // Inside the prelude each is a number of milliseconds. A `Duration` is a
@@ -1105,6 +1289,20 @@ let scheme (x : Intrinsic.t) =
   | Bytes_at -> fn [ read bytes; read int ] int
   (* fn(xs: Array<Int>) -> Bytes, each 0 to 255 *)
   | Bytes_of -> fn [ read (array int) ] bytes
+  (* layer 3 of formats.md (compiler.md, "Bytes stage", "Layer 3: the
+     API"): fn(self: Bytes, at: Int) -> Int, the number at [at] of the
+     width and order its name says, panicking out of range *)
+  | Bytes_read _ -> fn [ read bytes; read int ] int
+  (* fn(inout self: Bytes, at: Int, x: Int): [x] written there, panicking
+     out of range or if it doesn't fit *)
+  | Bytes_write _ -> fn [ inout bytes; read int; read int ] unit
+  (* fn(n: Int) -> Bytes: [n] zero bytes *)
+  | Bytes_zeros -> fn [ read int ] bytes
+  (* fn(inout self: Bytes, at: Int, x: Int) -> Int: [x] written as a
+     `VarInt` or a `VarUInt` at [at], how many bytes that took *)
+  | Bytes_set_var _ -> fn [ inout bytes; read int; read int ] int
+  (* fn(x: Int) -> Int: how many bytes that would take *)
+  | Bytes_var_size _ -> fn [ read int ] int
   (* fn(self) -> Self: a value equal to [self] that holds its own buffer,
      not a slice of another's (foundations.md, decision 17); [self] itself
      if it already does *)
@@ -1309,6 +1507,7 @@ let reaches (x : Intrinsic.t) =
   | Array_len | Array_push | Str_len | Str_index | Str_split
   | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
   | Bytes_len | Bytes_at | Bytes_of | Array_copy | Str_copy | Bytes_copy
+  | Bytes_read _ | Bytes_write _ | Bytes_zeros | Bytes_set_var _ | Bytes_var_size _
   | Array_split_at | Str_split_at | Bytes_split_at | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
@@ -1488,8 +1687,12 @@ let types =
         ]
       ~functions:[ Str_from_utf8 ];
     t "Bytes"
-      ~methods:[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at ]
-      ~functions:[ Bytes_of ];
+      ~methods:
+        (Intrinsic.[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at ]
+        @ List.map (fun a -> Intrinsic.Bytes_read a) Intrinsic.accesses
+        @ List.map (fun a -> Intrinsic.Bytes_write a) Intrinsic.accesses
+        @ Intrinsic.[ Bytes_set_var false; Bytes_set_var true ])
+      ~functions:Intrinsic.[ Bytes_of; Bytes_zeros; Bytes_var_size false; Bytes_var_size true ];
     (* a set of error tags, given by name at a call, `on: Flaky | Broken`,
        which the function it's given to matches with `fail on`: never a
        value, since each function that takes one is made for each set it's

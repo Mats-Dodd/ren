@@ -1,0 +1,13 @@
+<bytes 41 79 7a 77>
+xyzw
+<bytes 78 42 43 77>
+xyzw
+<bytes 78 42 43 77>
+<bytes 78 42 43 00>
+[<bytes 78 42 43 77>, <bytes 78 42 43 77>]
+<bytes ff 42 43 77>
+124716
+564
+Err(InvalidUtf8)
+Ok("€")
+exit 0

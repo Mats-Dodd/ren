@@ -1,0 +1,4 @@
+import bench
+
+// a million records, 20 passes
+fn main() uses Console = bench.run(1_000_000, 20)

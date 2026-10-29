@@ -3,6 +3,7 @@
 
 (* Raised by a built-in function that panics, with what to say. *)
 exception Panic of string
+exception Panic_help of { msg : string; help : string }
 
 (* Raised by a built-in function that fails, with its error. *)
 exception Fail of Value.t

@@ -40,6 +40,9 @@ change here is a change in what the program computes.
   == fannkuch
   228
   Pfannkuchen(7) = 16
+  == frames
+  27482
+  1549781985402896218
   == handlers
   2997
   2997

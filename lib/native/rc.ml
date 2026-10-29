@@ -193,6 +193,8 @@ let rec erase (b : block) : block =
     | Runtime (Array_set_field (n, k, l), xs, s) ->
         Runtime (Array_set_field_taking (n, k, l), xs, s)
     | Runtime (Array_push l, xs, s) -> Runtime (Array_push_taking l, xs, s)
+    | Runtime (Bytes_store a, xs, s) -> Runtime (Bytes_store_taking a, xs, s)
+    | Runtime (Bytes_set_var k, xs, s) -> Runtime (Bytes_set_var_taking k, xs, s)
     | r -> r
   in
   match b with
@@ -724,8 +726,7 @@ let writes_slots fi (s : stmt) =
   | Set (v, _) -> Ids.mem v.id fi.slots
   | Store _ | Call_fails _ | Call_block _ | Call_handler _ -> true
   | Let (_, Call _) | Do (Call _) -> true
-  | Let (_, Runtime (Array_push_taking _, _, _))
-  | Do (Runtime (Array_push_taking _, _, _)) ->
+  | Let (_, Runtime (rt, _, _)) | Do (Runtime (rt, _, _)) when changes_cell rt ->
       true
   | _ -> false
 
@@ -1364,8 +1365,7 @@ let find_takes fi (body : block) =
         | Load _ -> true
         | Runtime (rt, _, _) -> (
             match rt with
-            | Array_push _ | Array_push_taking _ -> false
-            | _ -> true)
+            | rt -> not (changes_cell rt))
         | _ -> false)
     | Assert _ -> true
     | _ -> false

@@ -3,7 +3,8 @@
 # baseline"): `sh build.sh <out>` builds, release, each of the slices
 # benchmark's offset kernels (`logs_r`, `json_r`, `pages_r`) at 20
 # rounds and at 0, whose difference is 20 passes, with the C of each;
-# bench/native/bytes; and the Rust and Go twins of both. measure.py
+# bench/native/bytes; layer 3's kernel, bench/native/frames, at 20 passes
+# and at 0; and the Rust and Go twins of each. measure.py
 # times them, variants.py and push.py make the variants of the C that
 # take one cost out, and prof.py says where a binary's time goes.
 set -e
@@ -26,10 +27,21 @@ for parser in logs json pages; do
       "$ren" build main.ren --release --emit-c >"$out/${parser}_r-$rounds.c")
   done
 done
+# layer 3's kernel (step 2): frames at 20 passes and at 0
+for rounds in 20 0; do
+  k=$out/k/frames-$rounds
+  mkdir -p "$k"
+  cp "$native/frames/bench.ren" "$k/"
+  printf 'import bench\n\nfn main() uses Console = bench.run(1_000_000, %s)\n' "$rounds" >"$k/main.ren"
+  (cd "$k" && "$ren" build main.ren --release -o "$out/frames-$rounds" &&
+    "$ren" build main.ren --release --emit-c >"$out/frames-$rounds.c")
+done
 (cd "$native/bytes" && "$ren" build main.ren --release -o "$out/bytes" &&
   "$ren" build main.ren --release --emit-c >"$out/bytes.c")
 rustc -C opt-level=3 -C codegen-units=1 -o "$out/slices-rust" "$native/slices/rust/main.rs"
 rustc -C opt-level=3 -C codegen-units=1 -o "$out/bytes-rust" "$native/bytes/rust/main.rs"
+rustc -C opt-level=3 -C codegen-units=1 -o "$out/frames-rust" "$native/frames/rust/main.rs"
 (cd "$native/slices/go" && go build -o "$out/slices-go" main.go)
 (cd "$native/bytes/go" && go build -o "$out/bytes-go" main.go)
+(cd "$native/frames/go" && go build -o "$out/frames-go" main.go)
 echo "built in $out"

@@ -9,6 +9,9 @@ open Value
    call. *)
 exception Panic of string
 
+(* One that has a help of its own, which the panic says under it. *)
+exception Panic_help of { msg : string; help : string }
+
 (* A built-in function has failed with this error, which the call fails
    with. *)
 exception Fail of Value.t
@@ -350,6 +353,128 @@ let seeded_int state below =
   if below <= 0L then raise (Panic (not_above_0 below));
   Int64.rem (Int64.shift_right_logical state 16) below
 
+(* ---- layer 3: reads and writes at an offset (compiler.md, "Bytes
+   stage", "Layer 3: the API") ---- *)
+
+(* Panics unless [width] bytes at [at] are in [b]: computed so that a
+   huge [at] can't overflow into a small one. A byte's message is
+   `b.at(i)`'s. *)
+let room b at width =
+  let len = String.length b in
+  let len64 = Int64.of_int len in
+  if
+    Int64.compare at 0L < 0
+    || Int64.compare at (Int64.sub len64 (Int64.of_int width)) > 0
+  then
+    raise
+      (Panic
+         (if width = 1 then
+            Printf.sprintf "index %Ld is out of bounds for bytes of length %d" at
+              len
+          else
+            Printf.sprintf "%d bytes at %Ld are out of bounds for bytes of length %d"
+              width at len));
+  Int64.to_int at
+
+(* The sized type a write of [a] stores into, whose range it checks: none
+   for `i64`, which any `Int` fits. *)
+let stored_as (a : Intrinsic.access) : Sized.t option =
+  match (a.width, a.signed) with
+  | 1, false -> Some U8
+  | 1, true -> Some I8
+  | 2, false -> Some U16
+  | 2, true -> Some I16
+  | 4, false -> Some U32
+  | 4, true -> Some I32
+  | _, false -> Some U64
+  | _, true -> None
+
+(* [a]'s number at [at] in [b]. A `u64` of 2^63 or more isn't an `Int`. *)
+let read_at (a : Intrinsic.access) b at =
+  let i = room b at a.width in
+  match (a.width, a.signed, a.big) with
+  | 1, false, _ -> Int64.of_int (String.get_uint8 b i)
+  | 1, true, _ -> Int64.of_int (String.get_int8 b i)
+  | 2, false, false -> Int64.of_int (String.get_uint16_le b i)
+  | 2, false, true -> Int64.of_int (String.get_uint16_be b i)
+  | 2, true, false -> Int64.of_int (String.get_int16_le b i)
+  | 2, true, true -> Int64.of_int (String.get_int16_be b i)
+  | 4, false, big ->
+      let x = if big then String.get_int32_be b i else String.get_int32_le b i in
+      Int64.logand (Int64.of_int32 x) 0xFFFF_FFFFL
+  | 4, true, big ->
+      Int64.of_int32 (if big then String.get_int32_be b i else String.get_int32_le b i)
+  | _, signed, big ->
+      let x = if big then String.get_int64_be b i else String.get_int64_le b i in
+      if (not signed) && Int64.compare x 0L < 0 then
+        raise
+          (Panic_help
+             {
+               msg =
+                 Printf.sprintf
+                   "`%s` at %Ld read %Lu, which is more than an `Int` holds"
+                   (Intrinsic.access_name a) at x;
+               help =
+                 Printf.sprintf "read its bits as an `Int` with `i64_%s`"
+                   (if big then "be" else "le");
+             });
+      x
+
+(* [b] with [x] written at [at] as [a] says: a copy, since a string is a
+   value here. *)
+let write_at (a : Intrinsic.access) b at x =
+  (match stored_as a with
+  | Some k when not (Sized.fits k x) ->
+      raise (Panic (Sized.doesnt_fit k (Int64.to_string x)))
+  | _ -> ());
+  let i = room b at a.width in
+  let out = Bytes.of_string b in
+  (match (a.width, a.big) with
+  | 1, _ -> Bytes.set_uint8 out i (Int64.to_int (Int64.logand x 0xFFL))
+  | 2, false -> Bytes.set_uint16_le out i (Int64.to_int (Int64.logand x 0xFFFFL))
+  | 2, true -> Bytes.set_uint16_be out i (Int64.to_int (Int64.logand x 0xFFFFL))
+  | 4, false -> Bytes.set_int32_le out i (Int64.to_int32 x)
+  | 4, true -> Bytes.set_int32_be out i (Int64.to_int32 x)
+  | _, false -> Bytes.set_int64_le out i x
+  | _, true -> Bytes.set_int64_be out i x);
+  Bytes.to_string out
+
+(* The 64 bits [x] is written as, as a `VarInt` ([signed], zigzag) or a
+   `VarUInt`, which holds no negative number. *)
+let var_bits signed x =
+  if signed then Int64.logxor (Int64.shift_left x 1) (Int64.shift_right x 63)
+  else if Int64.compare x 0L < 0 then
+    raise
+      (Panic
+         (Printf.sprintf
+            "%Ld doesn't fit in a `VarUInt`, which holds 0 to 9223372036854775807" x))
+  else x
+
+(* How many bytes LEB128 writes the bits [z] in, 7 a byte: 1 to 10. *)
+let var_size z =
+  let rec go n z =
+    let z = Int64.shift_right_logical z 7 in
+    if z = 0L then n else go (n + 1) z
+  in
+  go 1 z
+
+(* [b] with [x] written at [at] as a `VarInt` or a `VarUInt`, and how
+   many bytes that took. *)
+let write_var signed b at x =
+  let z = var_bits signed x in
+  let n = var_size z in
+  let i = room b at n in
+  let out = Bytes.of_string b in
+  let rec go k z =
+    let low = Int64.to_int (Int64.logand z 0x7FL) in
+    if k = n - 1 then Bytes.set_uint8 out (i + k) low
+    else (
+      Bytes.set_uint8 out (i + k) (low lor 0x80);
+      go (k + 1) (Int64.shift_right_logical z 7))
+  in
+  go 0 z;
+  (Bytes.to_string out, n)
+
 let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
     ~made =
   match x with
@@ -587,6 +712,30 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
                        raise
                          (Panic (Printf.sprintf "%Ld isn't a byte, 0 to 255" n))
                    | _ -> bug x))
+        | _ -> bug x)
+  | Bytes_read a ->
+      pure (function [ VBytes b; VInt at ] -> VInt (read_at a b at) | _ -> bug x)
+  (* the ones that change their receiver, `inout` *)
+  | Bytes_write a -> (
+      function
+      | [ VBytes b; (VInt at as i); (VInt n as v) ] ->
+          (VUnit, [ VBytes (write_at a b at n); i; v ])
+      | _ -> bug x)
+  | Bytes_set_var signed -> (
+      function
+      | [ VBytes b; (VInt at as i); (VInt n as v) ] ->
+          let b, k = write_var signed b at n in
+          (int k, [ VBytes b; i; v ])
+      | _ -> bug x)
+  | Bytes_var_size signed ->
+      pure (function [ VInt n ] -> int (var_size (var_bits signed n)) | _ -> bug x)
+  | Bytes_zeros ->
+      pure (function
+        | [ VInt n ] ->
+            if Int64.compare n 0L < 0 then
+              raise
+                (Panic (Printf.sprintf "`Bytes.zeros(%Ld)`: a length is 0 or more" n));
+            VBytes (String.make (Int64.to_int n) '\000')
         | _ -> bug x)
   (* a value is its own here: the interpreter's slices are copies *)
   | Array_copy | Str_copy | Bytes_copy ->

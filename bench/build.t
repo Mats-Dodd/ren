@@ -158,6 +158,8 @@ Every native benchmark, at its small size:
   native/deriv/small.ren, naive: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/frames/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/frames/small.ren, naive: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, naive: the same, exit 0, objects live at exit 0
   native/inout/small.ren, perceus: the same, exit 0, objects live at exit 0
@@ -345,6 +347,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/cfold/small.ren, release: the same, exit 0, objects live at exit 0
   native/deriv/small.ren, release: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren, release: the same, exit 0, objects live at exit 0
+  native/frames/small.ren, release: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, release: the same, exit 0, objects live at exit 0
   native/inout/small.ren, release: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, release: the same, exit 0, objects live at exit 0
@@ -1508,6 +1511,8 @@ same objects alive at the end as clang's build above.
   native/deriv/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/fannkuch/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/frames/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/frames/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/inout/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0

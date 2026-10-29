@@ -1,0 +1,51 @@
+// Writes leave every other value as it was, whoever holds the bytes: a
+// `Str` they came from, a borrowed parameter's, a field's, an array's
+// element's; a function's `inout` parameter changes its caller's; and
+// writes in place, in a loop, to bytes nothing else holds. Then
+// `Str.from_utf8`, natively too, of bytes that aren't UTF-8 (an overlong
+// form) and that are.
+
+fn poke(s: Str) -> Bytes =
+  var b = s.bytes()
+  &b.set_u8(0, 65)
+  b
+
+fn stamp(inout b: Bytes, at: Int) =
+  &b.set_u16_be(at, 0x4243)
+
+type Holder = { data: Bytes, n: Int }
+
+fn main() uses Console =
+  let s = "xyz".concat("w")
+  print(poke(s))
+  print(s)
+  var b = s.bytes()
+  stamp(&b, 1)
+  print(b)
+  print(s)
+  let h = Holder { data: b, n: 1 }
+  var c = h.data
+  &c.set_u8(3, 0)
+  print(h.data)
+  print(c)
+  var arr = [b, b]
+  var d = arr[0]
+  &d.set_i8(0, -1)
+  print(arr)
+  print(d)
+  // a write loop in place, unique
+  var z = Bytes.zeros(1000)
+  for i in 0..1000
+    &z.set_u8(i, i % 256)
+  var t = 0
+  for i in 0..1000
+    t += z.u8(i)
+  print(t)
+  var n = 0
+  var at = 0
+  while at < 1000
+    at += &z.set_varuint(at, n)
+    n += 1
+  print(n)
+  print(attempt Str.from_utf8(Bytes.of([0xC0, 0x80])))
+  print(attempt Str.from_utf8(Bytes.of([0xE2, 0x82, 0xAC])))

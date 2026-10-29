@@ -1097,6 +1097,8 @@ and finish cx at step =
       let next =
         try enter ~at:t.loc { cx with site = t.site; call = t.call } t.f t.args t.ev with
         | Builtins.Panic msg -> panic (Option.value at ~default:t.loc) msg
+        | Builtins.Panic_help { msg; help } ->
+            panic ~help (Option.value at ~default:t.loc) msg
         | Panic { loc; _ } as p when loc.file = Prelude.file && at <> None ->
             raise (moved (Option.get at) p)
         | Journal.Differs differs ->
@@ -1215,6 +1217,7 @@ and installing (loc : Loc.t) f =
 and call_at cx loc f args ev =
   try apply ~loc cx f args ev with
   | Builtins.Panic msg -> panic loc msg
+  | Builtins.Panic_help { msg; help } -> panic ~help loc msg
   | Panic { loc = l; _ } as p
     when l.file = Prelude.file && loc.file <> Prelude.file ->
       (* the prelude's source can't be shown, so a panic inside it is the

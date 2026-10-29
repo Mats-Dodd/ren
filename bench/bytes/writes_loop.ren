@@ -1,0 +1,17 @@
+// A loop that reads bytes and writes them through `&`: the write copies
+// bytes another value holds, so the loop's reads after it are of the
+// copy. A release build reads a `Bytes`' length and data once before a
+// loop (hoist.ml, "the bytes a loop reads"), which a variable whose
+// address is taken mustn't have: before step 2 it read the old bytes.
+
+fn main() uses Console =
+  var b = Bytes.zeros(8)
+  let keep = b
+  var s = 0
+  for i in 0..b.len()
+    s += b.at(i)
+    &b.set_u8(i, i + 1)
+    s += b.at(i)
+  print(s)
+  print(keep)
+  print(b)

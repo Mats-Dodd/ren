@@ -154,6 +154,13 @@ let rt_sig (rt : rt) : layout list * layout =
   | Str_data -> ([ Boxed ], Ptr)
   | Bytes_get -> ([ Ptr; Int; Int ], Int)
   | Bytes_of -> ([ Boxed ], Boxed)
+  | Bytes_load _ -> ([ Boxed; Int ], Int)
+  | Bytes_store _ | Bytes_store_taking _ -> ([ Cell Boxed; Int; Int ], Unit)
+  | Bytes_set_var _ | Bytes_set_var_taking _ -> ([ Cell Boxed; Int; Int ], Int)
+  | Bytes_zeros -> ([ Int ], Boxed)
+  | Utf8_valid -> ([ Boxed ], Bool)
+  | U64_read _ -> ([ Int; Int ], Int)
+  | Var_size _ -> ([ Int ], Int)
   | Show_int -> ([ Int ], Boxed)
   | Show_float -> ([ Float ], Boxed)
   | Show_bool -> ([ Bool ], Boxed)
@@ -1219,10 +1226,10 @@ let rec calls_in (b : block) =
   List.exists
     (fun (s : stmt) ->
       (match s with
-        | Let
-            (_, (Call _ | Runtime ((Array_push _ | Array_push_taking _), _, _)))
-        | Do (Call _ | Runtime ((Array_push _ | Array_push_taking _), _, _))
-        | Call_fails _ | Call_block _ | Call_handler _ | Store _ ->
+        | Let (_, Call _) | Do (Call _) | Call_fails _ | Call_block _
+        | Call_handler _ | Store _ ->
+            true
+        | Let (_, Runtime (rt, _, _)) | Do (Runtime (rt, _, _)) when changes_cell rt ->
             true
         | _ -> false)
       || List.exists calls_in (sub_blocks s))
@@ -1328,8 +1335,7 @@ let rc_let env st (v : var) (r : rhs) =
       in
       let st =
         match (rt, xs) with
-        | (Array_push _ | Array_push_taking _), Var c :: _ ->
-            changed env st (cell_slot env st c)
+        | rt, Var c :: _ when changes_cell rt -> changed env st (cell_slot env st c)
         | _ -> st
       in
       fresh_var env st v B_owned

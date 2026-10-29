@@ -1618,7 +1618,7 @@ let site_pieces ~lines_of ~sources (s : Mem.site) : Diag.piece list =
       in
       let pieces =
         Diag.pieces_indexed ~lines_of
-          (panic_diag ~lines_of ~notes:s.notes ~sources s.loc "\000" wrap)
+          (panic_diag ~lines_of ~notes:s.notes ?help:s.help ~sources s.loc "\000" wrap)
       in
       (* the message's hole, and nothing else of the kind *)
       let split_at c (p : Diag.piece) : Diag.piece list =

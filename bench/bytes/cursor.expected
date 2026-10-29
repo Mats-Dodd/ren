@@ -1,6 +1,6 @@
 Ok("hello")
 256
-Short(15, 2)
+Err(Short(15, 2))
 11
 6
 <bytes 02 00 68 69 00 00>

@@ -187,11 +187,11 @@ let literal cx s =
       Lit n
 
 (* A site at [loc]: a [Caller] one if that's in the prelude. *)
-let new_site cx ?wrap ?(kind = Panics) ?made ?(notes = []) (loc : Loc.t) =
+let new_site cx ?wrap ?(kind = Panics) ?made ?(notes = []) ?help (loc : Loc.t) =
   let kind, wrap =
     if loc.file = Prelude.file then (Caller, None) else (kind, wrap)
   in
-  let s = { sid = cx.nsites; loc; wrap; kind; made; notes } in
+  let s = { sid = cx.nsites; loc; wrap; kind; made; notes; help } in
   cx.sites <- s :: cx.sites;
   cx.nsites <- cx.nsites + 1;
   s
@@ -2503,8 +2503,67 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   (* a `Str`'s UTF-8 is the same string, as `Bytes` *)
   | Str_bytes, _, _ -> (
       match values () with [ v ] -> v | _ -> bug "a `bytes` of no string")
+  (* the bytes are the `Str`, if they're UTF-8; otherwise the call fails
+     with `InvalidUtf8`, dropping them *)
+  | Str_from_utf8, _, _ -> (
+      match values () with
+      | [ b ] ->
+          let valid = borrowed fs "$utf8" Bool (Runtime (Utf8_valid, [ b ], None)) in
+          let invalid, () =
+            sub fs (fun () -> raise_error fs env (Scalar_ctor (tag_id cx "InvalidUtf8")))
+          in
+          emit fs (If (valid, [], invalid));
+          b
+      | _ -> bug "a `from_utf8` of no bytes")
   | Bytes_at, _, _ -> runtime ~site:(site ()) Bytes_at
   | Bytes_of, _, _ -> runtime ~site:(site ()) Bytes_of
+  (* layer 3 (compiler.md, "Bytes stage", "Layer 3: the API") *)
+  (* a `u64`'s is an `i64`'s, which must not be negative: a panic of
+     its own, whose help is to read it so *)
+  | Bytes_read ({ width = 8; signed = false; big } as acc), _, _ -> (
+      match values () with
+      | [ b; at ] ->
+          let bits =
+            borrowed fs "$bits" Int
+              (Runtime (Bytes_load { acc with signed = true }, [ b; at ], Some (site ())))
+          in
+          drop fs env b;
+          let help =
+            sprintf "read its bits as an `Int` with `i64_%s`" (if big then "be" else "le")
+          in
+          borrowed fs "$u64" Int (Runtime (U64_read big, [ bits; at ], Some (new_site cx ~help e.loc)))
+      | _ -> bug "a `u64` read of no bytes")
+  | Bytes_read acc, _, _ -> runtime ~site:(site ()) (Bytes_load acc)
+  | Bytes_zeros, _, _ -> runtime ~site:(site ()) Bytes_zeros
+  | Bytes_var_size signed, _, _ -> runtime ~site:(site ()) (Var_size signed)
+  (* a write, through the variable's cell, as `push` is: the runtime puts
+     back the bytes written, in place or a copy (ren_rt.h,
+     [ren_bytes_writable]) *)
+  | (Bytes_write _ | Bytes_set_var _), _, _ -> (
+      match args with
+      | [ Ref b; Value at; Value v ] ->
+          let m = mem_var env b in
+          let cell =
+            match m.layout with
+            | Cell _ -> Var m
+            | l -> borrowed fs ("&" ^ b.name) (Cell l) (Addr m)
+          in
+          let at = expr fs env at in
+          let v = expr fs env v in
+          let r =
+            match x with
+            | Bytes_write acc ->
+                emit fs (Do (Runtime (Bytes_store acc, [ cell; at; v ], Some (site ()))));
+                (Unit : atom)
+            | Bytes_set_var signed ->
+                owned fs env "$wrote" Int
+                  (Runtime (Bytes_set_var signed, [ cell; at; v ], Some (site ())))
+            | _ -> bug "a layer 3 write that isn't one"
+          in
+          drop fs env at;
+          drop fs env v;
+          r
+      | _ -> bug "a layer 3 write without `&`")
   | Float_of, _, _ -> runtime Float_of_int
   | Float_sqrt, _, _ ->
       runtime ~site:(new_site cx ~made:(Nan.where e.loc) e.loc) Float_sqrt

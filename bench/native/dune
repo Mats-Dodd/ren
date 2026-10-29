@@ -13,6 +13,7 @@
   (glob_files deriv/*.ren)
   (glob_files dispatch/*.ren)
   (glob_files fannkuch/*.ren)
+  (glob_files frames/*.ren)
   (glob_files handlers/*.ren)
   (glob_files inout/*.ren)
   (glob_files nbody/*.ren)

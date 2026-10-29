@@ -1,0 +1,68 @@
+// Layer 3 of formats.md (compiler.md, "Bytes stage", "Layer 3: the
+// API"): a stream of length-prefixed records, little-endian, each a
+// `u32` length, then a kind (`u8`), an id (`VarUInt`), a time (`i64`), a
+// value (`i32`) and a name (a `u8` length and its bytes). `input` writes
+// the stream with writes at an offset into `Bytes.zeros`; `decode` reads
+// it back through a cursor, a framing loop, and mixes every field into a
+// checksum. The Rust reads a `&[u8]` through a cursor of its own with
+// `from_le_bytes`, the Go a `[]byte` with `encoding/binary`.
+
+// record `i`'s id: of 1 to 6 bytes as a `VarUInt`
+fn id_of(i: Int) -> Int =
+  let bits = 7 * (1 + i % 6)
+  i * 2_654_435_761 % 1.shl(bits)
+
+// how many bytes record `i` takes after its length
+fn body_size(i: Int) -> Int = 1 + Bytes.varuint_size(id_of(i)) + 8 + 4 + 1 + i % 13
+
+// `n` records, one after another
+pub fn input(n: Int) -> Bytes =
+  var size = 0
+  for i in 0..n
+    size += 4 + body_size(i)
+  var b = Bytes.zeros(size)
+  var at = 0
+  for i in 0..n
+    let len = body_size(i)
+    &b.set_u32_le(at, len)
+    &b.set_u8(at + 4, i % 7)
+    let k = &b.set_varuint(at + 5, id_of(i))
+    &b.set_i64_le(at + 5 + k, i * 1_000_003)
+    &b.set_i32_le(at + 13 + k, i % 1000 - 500)
+    let name = i % 13
+    &b.set_u8(at + 17 + k, name)
+    for j in 0..name
+      &b.set_u8(at + 18 + k + j, (i + j) % 256)
+    at += 4 + len
+  b
+
+// one pass over the stream: each record's fields mixed into a checksum,
+// and its name's bytes added up. A record's length says where the next
+// one starts, whatever its fields took
+pub fn decode(b: Bytes) -> Int ! FormatError =
+  var c = b.cursor()
+  var h = 0
+  while c.left() > 0
+    let len = try &c.u32_le()
+    let start = c.at()
+    let kind = try &c.u8()
+    let id = try &c.varuint()
+    let time = try &c.i64_le()
+    let value = try &c.i32_le()
+    let name = try &c.u8()
+    var s = 0
+    for _ in 0..name
+      s += try &c.u8()
+    try &c.skip(start + len - c.at())
+    h = h.wrapping_mul(31).wrapping_add(kind + id % 1000 + value + s).xor(time)
+  h
+
+pub fn run(n: Int, rounds: Int) uses Console =
+  let b = input(n)
+  var x = 0
+  for _ in 0..rounds
+    match attempt decode(b)
+      Ok(h) => x = x.wrapping_add(h)
+      Err(_) => x = -1
+  print(b.len())
+  print(x)

@@ -118,6 +118,23 @@ let fields = line.trim().split(" ")        // slices of `line`, no copies
 
 A function that changes parts of an array in place takes them as places, `&xs.split_at(n) fn(&lo, &hi) => ...`, which is how a sort or a parallel loop divides its work.
 
+### Bytes at an offset, and a cursor
+
+Below formats ([formats.md](formats.md#layer-3-raw-bytes)), `Bytes` has reads and writes at an offset with the width and byte order in the name, as Go's `binary.LittleEndian` and Zig's `takeInt` do: `b.u8(at)`, `b.i16_be(at)`, `b.u32_le(at)` ... `b.i64_be(at)`, and `&b.set_u32_le(at, x)` and the rest, on a `Bytes` made with `Bytes.zeros(n)` or any other. A read or a write at an offset the program computed panics out of range, as `xs[i]` does: a bad offset is a bug. A write that doesn't fit its width panics as a store into a sized integer does. `u64_le` gives an `Int`, and panics on 2^63 or more; `i64_le` reads the same bits as a signed `Int`, which is how a 64-bit hash or checksum is read. A write copies the bytes first if anything else holds them, a slice's root or a literal included, so `Bytes` stay values. `&b.set_varuint(at, x)` and `&b.set_varint(at, x)` write LEB128 (zigzag for `VarInt`) and return how many bytes they took, which `Bytes.varuint_size(x)` says first.
+
+Reading in sequence is a cursor's, `b.cursor()`, a value: its reads, `try &c.u32_le()`, `try &c.varuint()`, `try &c.bytes(n)`, `try &c.skip(n)`, fail with a `FormatError` when the input runs out, `Short(at, need)`, and leave the cursor where it was, so a framing loop copies the cursor, tries a record, and keeps the copy only if the record was all there:
+
+```ren
+var next = c
+match attempt record(&next)
+  Ok(r) =>
+    handle(r)
+    c = next
+  Err(_) => wait_for_more()
+```
+
+A `u64` too large for an `Int`, or a `VarUInt` longer than 10 bytes, is `Malformed`. `c.at()`, `c.left()` and `c.rest()` say where it is and what's after it (compiler.md, "Bytes stage", "Layer 3: the API").
+
 ### `Time` and `Instant`
 
 Go's `time.Time` hides a monotonic reading inside a wall-clock time. The reading is lost when the value is serialized, and subtracting two times can then go silently wrong. Ren uses two types, as Rust does:

@@ -1,7 +1,7 @@
 # `python3 -I measure.py <out> <runs> [variants]`: build.sh's binaries,
 # Ren, Rust and Go interleaved, each run under /usr/bin/time -l, and the
-# medians of their cycles and instructions. For the `_r` kernels a pass
-# is (20 rounds - 0 rounds) / 20, and the spread is the 20-round runs'
+# medians of their cycles and instructions. For the `_r` kernels, and
+# layer 3's `frames`, a pass is (20 rounds - 0 rounds) / 20, and the spread is the 20-round runs'
 # least and most. [variants], comma-separated, also times variants.py's
 # binaries of the Ren kernels (`nob,noovf,push`), as `<kernel>.<variant>`
 # in <out>/var.
@@ -9,10 +9,19 @@ import os, re, statistics, subprocess, sys
 
 out, runs = sys.argv[1], int(sys.argv[2])
 variants = sys.argv[3].split(",") if len(sys.argv) > 3 else []
-kernels = ["logs_r", "json_r", "pages_r"]
+# $KERNELS, comma-separated, times only those (`frames,bytes`)
+only = os.environ.get("KERNELS", "").split(",") if os.environ.get("KERNELS") else None
+kernels = [k for k in ["logs_r", "json_r", "pages_r", "frames"] if only is None or k in only]
 cmds = {}
 for k in kernels:
     for r in ["20", "0"]:
+        if k == "frames":
+            if not os.path.exists(f"{out}/frames-{r}"):
+                continue
+            cmds[(k, "ren", r)] = [f"{out}/frames-{r}"]
+            cmds[(k, "rust", r)] = [f"{out}/frames-rust", "1000000", r]
+            cmds[(k, "go", r)] = [f"{out}/frames-go", "1000000", r]
+            continue
         cmds[(k, "ren", r)] = [f"{out}/{k}-{r}"]
         cmds[(k, "rust", r)] = [f"{out}/slices-rust", "200000", r, k]
         cmds[(k, "go", r)] = [f"{out}/slices-go", "200000", r, k]
@@ -24,7 +33,7 @@ bytes_bins = {"ren": f"{out}/bytes", "rust": f"{out}/bytes-rust", "go": f"{out}/
 for v in variants:
     bytes_bins[v] = f"{out}/var/bytes.{v}"
 for who, path in bytes_bins.items():
-    if os.path.exists(path):
+    if os.path.exists(path) and (only is None or "bytes" in only):
         cmds[("bytes", who, "all")] = [path]
 
 res = {k: ([], []) for k in cmds}

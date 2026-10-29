@@ -26,22 +26,24 @@ steps they leave checked:
   bytes/proofs_step.ren: as specified
   bytes/proofs_negative.ren: as specified
 
-Layer 3 lands in step 2. `Map` and `Set` already run in the
+Layer 3 landed in step 2. `Map` and `Set` already run in the
 interpreter, so their programs are as specified there; `x.hash()` lands
 in step 3.
 
-  $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor; do spec bytes/$f.ren; done
-  bytes/reads.ren: not yet
-  bytes/reads_panic.ren: not yet
-  bytes/reads_negative.ren: not yet
-  bytes/reads_far.ren: not yet
-  bytes/u64_panic.ren: not yet
-  bytes/writes.ren: not yet
-  bytes/writes_panic.ren: not yet
-  bytes/writes_range.ren: not yet
-  bytes/varint.ren: not yet
-  bytes/varint_panic.ren: not yet
-  bytes/cursor.ren: not yet
+  $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor writes_loop writes_alias; do spec bytes/$f.ren; done
+  bytes/reads.ren: as specified
+  bytes/reads_panic.ren: as specified
+  bytes/reads_negative.ren: as specified
+  bytes/reads_far.ren: as specified
+  bytes/u64_panic.ren: as specified
+  bytes/writes.ren: as specified
+  bytes/writes_panic.ren: as specified
+  bytes/writes_range.ren: as specified
+  bytes/varint.ren: as specified
+  bytes/varint_panic.ren: as specified
+  bytes/cursor.ren: as specified
+  bytes/writes_loop.ren: as specified
+  bytes/writes_alias.ren: as specified
   $ for f in map set map_key hash; do spec bytes/$f.ren; done
   bytes/map.ren: as specified
   bytes/set.ren: as specified
@@ -60,8 +62,8 @@ naive one, and release, under AddressSanitizer and UBSan, with no
 object alive at the end; release run by `ren run --release` too; and a
 debug build compiled by tcc, as bench/build.t checks its programs. A
 program the native build can't compile yet says so, with the first
-line of what `ren build` said. Layer 3 lands natively in step 2, `Map`,
-`Set` and `x.hash()` in step 3.
+line of what `ren build` said. Layer 3 landed natively in step 2, `Map`,
+`Set` and `x.hash()` land in step 3.
 
   $ export ASAN_OPTIONS=detect_stack_use_after_return=0:detect_leaks=0
   $ native() {
@@ -120,18 +122,85 @@ line of what `ren build` said. Layer 3 lands natively in step 2, `Map`,
   bytes/proofs_negative.ren, release: the same, exit 1, objects live at exit 1
   bytes/proofs_negative.ren, tcc: the same, exit 1, objects live at exit 1
   bytes/proofs_negative.ren, ren run --release: the same
-  $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor; do native bytes/$f.ren; done
-  bytes/reads.ren: not native yet: error: `Bytes` has no method named `u8`
-  bytes/reads_panic.ren: not native yet: error: `Bytes` has no method named `u32_le`
-  bytes/reads_negative.ren: not native yet: error: `Bytes` has no method named `u16_be`
-  bytes/reads_far.ren: not native yet: error: `Bytes` has no method named `u64_le`
-  bytes/u64_panic.ren: not native yet: error: `Bytes` has no method named `i64_le`
-  bytes/writes.ren: not native yet: error: `Bytes` has no member named `zeros`
-  bytes/writes_panic.ren: not native yet: error: `Bytes` has no member named `zeros`
-  bytes/writes_range.ren: not native yet: error: `Bytes` has no member named `zeros`
-  bytes/varint.ren: not native yet: error: `Bytes` has no member named `varint_size`
-  bytes/varint_panic.ren: not native yet: error: `Bytes` has no member named `zeros`
-  bytes/cursor.ren: not native yet: error: there's no type named `ByteCursor`
+  $ for f in reads reads_panic reads_negative reads_far u64_panic writes writes_panic writes_range varint varint_panic cursor writes_loop writes_alias; do native bytes/$f.ren; done
+  bytes/reads.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/reads.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/reads.ren, release: the same, exit 0, objects live at exit 0
+  bytes/reads.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/reads.ren, ren run --release: the same
+  bytes/reads_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/reads_panic.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/reads_panic.ren, release: the same, exit 1, objects live at exit 2
+  bytes/reads_panic.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/reads_panic.ren, ren run --release: the same
+  bytes/reads_negative.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/reads_negative.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/reads_negative.ren, release: the same, exit 1, objects live at exit 2
+  bytes/reads_negative.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/reads_negative.ren, ren run --release: the same
+  bytes/reads_far.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/reads_far.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/reads_far.ren, release: the same, exit 1, objects live at exit 2
+  bytes/reads_far.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/reads_far.ren, ren run --release: the same
+  bytes/u64_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  bytes/u64_panic.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/u64_panic.ren, release: the same, exit 1, objects live at exit 1
+  bytes/u64_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  bytes/u64_panic.ren, ren run --release: the same
+  bytes/writes.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/writes.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 4 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/writes.ren, release: the same, exit 0, objects live at exit 0
+  bytes/writes.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/writes.ren, ren run --release: the same
+  bytes/writes_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/writes_panic.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/writes_panic.ren, release: the same, exit 1, objects live at exit 2
+  bytes/writes_panic.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/writes_panic.ren, ren run --release: the same
+  bytes/writes_range.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/writes_range.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/writes_range.ren, release: the same, exit 1, objects live at exit 2
+  bytes/writes_range.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/writes_range.ren, ren run --release: the same
+  bytes/varint.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/varint.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 15 copies, 2 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/varint.ren, release: the same, exit 0, objects live at exit 0
+  bytes/varint.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/varint.ren, ren run --release: the same
+  bytes/varint_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  bytes/varint_panic.ren, naive: the same, exit 1, objects live at exit 2
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/varint_panic.ren, release: the same, exit 1, objects live at exit 2
+  bytes/varint_panic.ren, tcc: the same, exit 1, objects live at exit 2
+  bytes/varint_panic.ren, ren run --release: the same
+  bytes/cursor.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/cursor.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 30 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/cursor.ren, release: the same, exit 0, objects live at exit 0
+  bytes/cursor.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/cursor.ren, ren run --release: the same
+  bytes/writes_loop.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/writes_loop.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/writes_loop.ren, release: the same, exit 0, objects live at exit 0
+  bytes/writes_loop.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/writes_loop.ren, ren run --release: the same
+  bytes/writes_alias.ren, perceus: the same, exit 0, objects live at exit 0
+  bytes/writes_alias.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 8 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  bytes/writes_alias.ren, release: the same, exit 0, objects live at exit 0
+  bytes/writes_alias.ren, tcc: the same, exit 0, objects live at exit 0
+  bytes/writes_alias.ren, ren run --release: the same
   $ for f in map set map_key hash hash_values; do native bytes/$f.ren; done
   bytes/map.ren: not native yet: error: the associated value `Map.empty` of a generic type isn't in the native slice yet
   bytes/set.ren: not native yet: error: the associated value `Set.empty` of a generic type isn't in the native slice yet

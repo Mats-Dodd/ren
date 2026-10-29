@@ -642,7 +642,7 @@ let lint ?(structs = []) fns =
       dsites = [];
       clones = [];
       overflow =
-        { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None; notes = [] };
+        { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None; notes = []; help = None };
     }
   in
   match Mem_lint.program p with

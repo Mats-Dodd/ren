@@ -159,6 +159,9 @@ type site = {
   notes : string list;
       (** what a panic here says under where it is: a call of `Async.until`'s,
           the deadlock panic's, what waits there, as `ren run` says *)
+  help : string option;
+      (** the help a panic here has, if it has its own: a `u64_le` that read
+          2^63 or more says to read its bits with `i64_le` *)
 }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
@@ -250,6 +253,33 @@ type rt =
       (** [Bytes_at] of the bytes a [Ptr] points at, of which there are as
           many as its first [Int]: hoist.ml's, in a loop *)
   | Bytes_of  (** `Bytes.of(xs)`, which panics at an element that isn't a byte *)
+  | Bytes_load of Intrinsic.access
+      (** layer 3's read at an [Int] of `Bytes`, `b.u32_le(at)`: an unaligned
+          load, which panics at its site out of range; never a `u64`'s, which
+          is an `i64`'s and then [U64_read] *)
+  | U64_read of bool
+      (** the [Int] a `u64_be` ([true]) or `u64_le` read at the second, which
+          panics at its site, which has its own help, if it's negative: 2^63 or
+          more *)
+  | Bytes_store of Intrinsic.access
+      (** layer 3's write through a [Cell] of `Bytes`, `&b.set_u32_le(at,
+          x)`, the two [Int]s after it: panics at its site out of range or if
+          [x] doesn't fit, and otherwise puts back a copy with it written *)
+  | Bytes_store_taking of Intrinsic.access
+      (** [Bytes_store], which writes in place if the bytes are unique and an
+          owner, as an array's write does ([Array_set_taking]) *)
+  | Bytes_set_var of bool
+      (** [Bytes_store] of a `VarInt` ([true]) or a `VarUInt`: how many bytes
+          it wrote, an [Int] *)
+  | Bytes_set_var_taking of bool
+      (** [Bytes_set_var], in place if it can be, as [Bytes_store_taking] *)
+  | Bytes_zeros  (** `Bytes.zeros(n)`, which panics at its site if [n < 0] *)
+  | Utf8_valid
+      (** whether a `Bytes`' bytes are UTF-8, a [Bool]: `Str.from_utf8`'s
+          test, as OCaml's [String.is_valid_utf_8] makes it *)
+  | Var_size of bool
+      (** how many bytes a `VarInt` ([true]) or a `VarUInt` takes, which panics
+          at its site for a negative `VarUInt` *)
   | Show_int
   | Show_float
   | Show_bool
@@ -663,6 +693,10 @@ val takes : rt -> int -> bool
 val show_layout : layout -> string
 val show_var : var -> string
 val show_atom : atom -> string
+(* Whether it changes what the [Cell] it's given first holds: a push, or
+   a write of layer 3's. *)
+val changes_cell : rt -> bool
+
 val show_rt : rt -> string
 
 (* A function, as the expect tests print it: each variable with its

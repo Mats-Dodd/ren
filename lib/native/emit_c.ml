@@ -472,6 +472,24 @@ let runtime rt args site_arg =
   | Str_data -> sprintf "((void*)ren_str_data(%s))" (a 0)
   | Bytes_get -> sprintf "ren_buf_byte(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (isite ())
   | Bytes_of -> sprintf "ren_bytes_of(%s, %s)" (a 0) (site ())
+  (* layer 3's: the width, whether it's signed and whether it's `be` as
+     constants, which clang folds the runtime's switches on *)
+  | Bytes_load acc ->
+      sprintf "ren_bytes_load(%s, %s, %d, %b, %b, %s)" (a 0) (a 1) acc.width
+        acc.signed acc.big (site ())
+  | Bytes_store acc | Bytes_store_taking acc ->
+      sprintf "ren_bytes_store(%s, %s, %s, %d, %b, %b, %b, %s)" (a 0) (a 1) (a 2)
+        acc.width acc.signed acc.big
+        (match rt with Bytes_store_taking _ -> true | _ -> false)
+        (site ())
+  | Bytes_set_var signed | Bytes_set_var_taking signed ->
+      sprintf "ren_bytes_set_var(%s, %s, %s, %b, %b, %s)" (a 0) (a 1) (a 2) signed
+        (match rt with Bytes_set_var_taking _ -> true | _ -> false)
+        (site ())
+  | Bytes_zeros -> sprintf "ren_bytes_zeros(%s, %s)" (a 0) (site ())
+  | Utf8_valid -> sprintf "ren_utf8_valid(%s)" (a 0)
+  | U64_read big -> sprintf "ren_u64_read(%s, %s, %b, %s)" (a 0) (a 1) big (site ())
+  | Var_size signed -> sprintf "ren_var_size(%s, %b, %s)" (a 0) signed (site ())
   | Show_int -> sprintf "ren_show_int(%s)" (a 0)
   | Show_float -> sprintf "ren_show_float(%s, %s)" (a 0) (site ())
   | Show_bool -> sprintf "ren_show_bool(%s)" (a 0)
@@ -559,8 +577,8 @@ let runtime rt args site_arg =
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]
    after calling it. *)
 let gives_nothing = function
-  | Array_push _ | Array_push_taking _ | Console_write | Console_error
-  | Array_check | Buf_set _ | Buf_set_field _ | Buf_check | Nan_check _
+  | Array_push _ | Array_push_taking _ | Bytes_store _ | Bytes_store_taking _
+  | Console_write | Console_error | Array_check | Buf_set _ | Buf_set_field _ | Buf_check | Nan_check _
   | Nan_check_any _ | Here_set | Here_put ->
       true
   | _ -> false
@@ -1275,7 +1293,47 @@ let linkage = ref "static "
 (* With [restrict], an `inout` parameter is a `restrict` pointer: the
    only way to what it points to, which exclusivity (excl.ml) makes
    true, so C may keep what it points to in a register. *)
+(* Whether a release build has C inline [f] wherever it's called: one of
+   the prelude's small members, a cursor's read or `Zip.next`, with no
+   loop, which isn't recursive. Rust's std marks its own `#[inline]`;
+   clang's own measure leaves a function called from many places out of
+   line, and a cursor's reads are each a call, an out-parameter and a
+   status then, which was half of layer 3's kernel's time (compiler.md,
+   "Bytes stage", "Step 2, as built"). Only where C is told, so what the
+   program computes doesn't change. *)
+let small_prelude (f : fn) =
+  !is_release && f.loc.file = Prelude.file
+  &&
+  let n = ref 0 and ok = ref true in
+  Rc.iter_stmts
+    (fun s ->
+      incr n;
+      match s with
+      | Loop _ | Catch _ -> ok := false
+      (* one that makes a block, installs a handler or calls one is the
+         program's plumbing, not a member a loop calls *)
+      | Let (_, (Block_of _ | Impl _ | Install _ | Env_new _ | Method_of _ | Given _))
+      | Do (Block_of _ | Impl _ | Install _ | Env_new _ | Method_of _ | Given _)
+      | Call_handler _ | Call_block _ ->
+          ok := false
+      (* nor one that reaches the world, `print`'s path: once, at the
+         end, inlining it made the function that ran a kernel too big
+         for clang to inline the kernel, and pages_r 33% slower *)
+      | Let (_, Runtime ((Console_write | Console_error), _, _))
+      | Do (Runtime ((Console_write | Console_error), _, _)) ->
+          ok := false
+      | Let (_, Call (g, _)) | Do (Call (g, _)) when g = f.name -> ok := false
+      | Call_fails { fn = g; _ } when g = f.name -> ok := false
+      | _ -> ())
+    f.body;
+  !ok && !n <= 40
+
 let signature ~restrict (f : fn) =
+  let linkage =
+    if !linkage <> "" && small_prelude f then
+      "static REN_INLINE "
+    else !linkage
+  in
   let params =
     List.map
       (fun v ->
@@ -1285,10 +1343,10 @@ let signature ~restrict (f : fn) =
       f.params
   in
   if f.fails then
-    sprintf "%sren_obj* %s(%s)" !linkage f.name
+    sprintf "%sren_obj* %s(%s)" linkage f.name
       (String.concat ", " (params @ [ ctype f.result ^ "* ren_out" ]))
   else
-    sprintf "%s%s %s(%s)" !linkage (ctype f.result) f.name
+    sprintf "%s%s %s(%s)" linkage (ctype f.result) f.name
       (match params with [] -> "void" | ps -> String.concat ", " ps)
 
 (* ---- where the stack is checked ----

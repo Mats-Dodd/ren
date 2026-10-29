@@ -160,6 +160,9 @@ type site = {
   notes : string list;
       (** what a panic here says under where it is: a call of `Async.until`'s,
           the deadlock panic's, what waits there, as `ren run` says *)
+  help : string option;
+      (** the help a panic here has, if it has its own: a `u64_le` that read
+          2^63 or more says to read its bits with `i64_le` *)
 }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
@@ -251,6 +254,33 @@ type rt =
       (** [Bytes_at] of the bytes a [Ptr] points at, of which there are as
           many as its first [Int]: hoist.ml's, in a loop *)
   | Bytes_of  (** `Bytes.of(xs)`, which panics at an element that isn't a byte *)
+  | Bytes_load of Intrinsic.access
+      (** layer 3's read at an [Int] of `Bytes`, `b.u32_le(at)`: an unaligned
+          load, which panics at its site out of range; never a `u64`'s, which
+          is an `i64`'s and then [U64_read] *)
+  | U64_read of bool
+      (** the [Int] a `u64_be` ([true]) or `u64_le` read at the second, which
+          panics at its site, which has its own help, if it's negative: 2^63 or
+          more *)
+  | Bytes_store of Intrinsic.access
+      (** layer 3's write through a [Cell] of `Bytes`, `&b.set_u32_le(at,
+          x)`, the two [Int]s after it: panics at its site out of range or if
+          [x] doesn't fit, and otherwise puts back a copy with it written *)
+  | Bytes_store_taking of Intrinsic.access
+      (** [Bytes_store], which writes in place if the bytes are unique and an
+          owner, as an array's write does ([Array_set_taking]) *)
+  | Bytes_set_var of bool
+      (** [Bytes_store] of a `VarInt` ([true]) or a `VarUInt`: how many bytes
+          it wrote, an [Int] *)
+  | Bytes_set_var_taking of bool
+      (** [Bytes_set_var], in place if it can be, as [Bytes_store_taking] *)
+  | Bytes_zeros  (** `Bytes.zeros(n)`, which panics at its site if [n < 0] *)
+  | Utf8_valid
+      (** whether a `Bytes`' bytes are UTF-8, a [Bool]: `Str.from_utf8`'s
+          test, as OCaml's [String.is_valid_utf_8] makes it *)
+  | Var_size of bool
+      (** how many bytes a `VarInt` ([true]) or a `VarUInt` takes, which panics
+          at its site for a negative `VarUInt` *)
   | Show_int
   | Show_float
   | Show_bool
@@ -718,6 +748,14 @@ let show_sliced = function
   | Of_str -> "str"
   | Of_bytes -> "bytes"
 
+(* Whether [rt] changes what the [Cell] it's given first holds: a push,
+   or a write of layer 3's, each putting back the value it made. *)
+let changes_cell = function
+  | Array_push _ | Array_push_taking _ | Bytes_store _ | Bytes_store_taking _
+  | Bytes_set_var _ | Bytes_set_var_taking _ ->
+      true
+  | _ -> false
+
 let show_rt = function
   | Array_len -> "array-len"
   | Array_get l -> "array-get:" ^ show_layout l
@@ -754,6 +792,16 @@ let show_rt = function
   | Str_data -> "str-data"
   | Bytes_get -> "bytes-get"
   | Bytes_of -> "bytes-of"
+  | Bytes_load a -> "bytes-load:" ^ Intrinsic.access_name a
+  | Bytes_store a -> "bytes-store:" ^ Intrinsic.access_name a
+  | Bytes_store_taking a -> "bytes-store-taking:" ^ Intrinsic.access_name a
+  | Bytes_set_var signed -> if signed then "bytes-set-varint" else "bytes-set-varuint"
+  | Bytes_set_var_taking signed ->
+      if signed then "bytes-set-varint-taking" else "bytes-set-varuint-taking"
+  | Bytes_zeros -> "bytes-zeros"
+  | U64_read big -> if big then "u64-read-be" else "u64-read-le"
+  | Utf8_valid -> "utf8-valid"
+  | Var_size signed -> if signed then "varint-size" else "varuint-size"
   | Show_int -> "show-int"
   | Show_float -> "show-float"
   | Show_bool -> "show-bool"

@@ -459,7 +459,9 @@ let fn (f : fn) =
    It's sound because the loop reads the same object all through, and
    that object is alive: the variable is a parameter or a [Let], which
    nothing in the function [Set]s, so it holds one object from before
-   the loop to after it; it's used in the loop, so the reference it
+   the loop to after it (nor takes the address of, [Addr], which a write
+   through `&` puts another object in: a layer 3 write that copies the
+   bytes, since they were shared); it's used in the loop, so the reference it
    holds (or, borrowed, its caller's) is alive across it, or the loop's
    own reads would be of freed memory; and nothing writes a string's
    header once it's made. A copy made in the loop, `let y = x`, never
@@ -473,6 +475,10 @@ let bytes (f : fn) =
   Rc.iter_stmts
     (function
       | Set (v, _) | Decl v -> set := Ids.add v.id !set
+      (* a variable whose address is taken may be given another object
+         through it: a layer 3 write that copies the bytes, or a call
+         given it with `&` *)
+      | Let (_, Addr v) -> set := Ids.add v.id !set
       | Let (v, r) ->
           lets := Ids.add v.id !lets;
           (match r with

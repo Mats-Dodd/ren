@@ -25,13 +25,15 @@ fn main() uses Console =
   var stop = false
   while not stop
     var next = c
-    match attempt record(&next)
+    let read = attempt record(&next)
+    match read
       Ok(r) =>
         print(attempt Str.from_utf8(r.body))
         print(r.id)
         c = next
-      Err(e) =>
-        print(e)
+      // an error is a value only in its `Result`, so it's shown in it
+      Err(_) =>
+        print(read)
         stop = true
   print(c.at())
   print(c.left())

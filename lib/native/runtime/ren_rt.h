@@ -1158,6 +1158,211 @@ static inline float ren_narrow_f32(double x, const ren_site *site) {
   return (float)x;
 }
 
+/* What a release build marks the prelude's small functions with, so C
+   inlines them wherever they're called (emit_c.ml, [small_prelude]). */
+#define REN_INLINE inline __attribute__((always_inline))
+
+/* ---- layer 3: reads and writes at an offset (formats.md; compiler.md,
+   "Bytes stage", "Layer 3: the API") ----
+
+   Each is given its width in bytes, whether it's signed and whether it's
+   big-endian as constants the C emitter writes, so clang folds the
+   switches away: a read is a bounds check, an unaligned load (`memcpy`
+   of the width, one `ldr`) and for `be` a byte swap, as Rust's
+   `from_le_bytes` and Go's `binary.LittleEndian` are. The machine is
+   little-endian (arm64, x86-64). Out of range panics as the interpreter
+   does (builtins.ml, [room]), the message made out of line. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "the runtime's layer 3 reads assume a little-endian machine"
+#endif
+
+__attribute__((cold, noinline)) _Noreturn void
+ren_bytes_range_panic(int64_t len, int64_t at, int width, const ren_site *site);
+__attribute__((cold, noinline)) _Noreturn void
+ren_bytes_u64_panic(int64_t at, uint64_t x, bool big, const ren_site *site);
+__attribute__((cold, noinline)) _Noreturn void
+ren_varuint_panic(int64_t x, const ren_site *site);
+
+/* Panics unless [width] bytes at [at] are in [len]: [at] in 0 to [len]
+   first, so [len - at] can't overflow, and a huge [at] can't wrap round
+   to a small one. */
+static inline void ren_bytes_room(int64_t len, int64_t at, int width,
+                                  const ren_site *site) {
+  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0))
+    ren_bytes_range_panic(len, at, width, site);
+}
+
+static inline uint64_t ren_bswap(uint64_t x, int width) {
+#if defined(__GNUC__) && !defined(__TINYC__)
+  switch (width) {
+  case 2:
+    return __builtin_bswap16((uint16_t)x);
+  case 4:
+    return __builtin_bswap32((uint32_t)x);
+  default:
+    return __builtin_bswap64(x);
+  }
+#else
+  uint64_t r = 0;
+  for (int i = 0; i < width; i++)
+    r |= ((x >> (8 * i)) & 0xff) << (8 * (width - 1 - i));
+  return r;
+#endif
+}
+
+/* The number at [at] of [b]: `b.u8(at)` to `b.i64_be(at)`; a `u64`'s
+   is an `i64`'s, then [ren_u64_read]. */
+static inline int64_t ren_bytes_load(ren_obj *b, int64_t at, int width, bool sgn,
+                                     bool big, const ren_site *site) {
+  ren_bytes_room(ren_str_len(b), at, width, site);
+  const char *p = ren_str_data(b) + at;
+  switch (width) {
+  case 1: {
+    uint8_t v = (uint8_t)p[0];
+    return sgn ? (int64_t)(int8_t)v : (int64_t)v;
+  }
+  case 2: {
+    uint16_t v;
+    memcpy(&v, p, 2);
+    if (big)
+      v = (uint16_t)ren_bswap(v, 2);
+    return sgn ? (int64_t)(int16_t)v : (int64_t)v;
+  }
+  case 4: {
+    uint32_t v;
+    memcpy(&v, p, 4);
+    if (big)
+      v = (uint32_t)ren_bswap(v, 4);
+    return sgn ? (int64_t)(int32_t)v : (int64_t)v;
+  }
+  default: {
+    uint64_t v;
+    memcpy(&v, p, 8);
+    if (big)
+      v = ren_bswap(v, 8);
+    return (int64_t)v;
+  }
+  }
+}
+
+/* [x], the bits a `u64_le` (or `_be`) read at [at], which panics if
+   they're 2^63 or more, no `Int`. */
+static inline int64_t ren_u64_read(int64_t x, int64_t at, bool big,
+                                   const ren_site *site) {
+  if (__builtin_expect(x < 0, 0))
+    ren_bytes_u64_panic(at, (uint64_t)x, big, site);
+  return x;
+}
+
+/* Panics unless [x] fits a write of [width] bytes, as storing it into the
+   sized type of that width does (sized.ml): an `i64` takes any `Int`. */
+static inline void ren_bytes_fits(int64_t x, int width, bool sgn,
+                                  const ren_site *site) {
+  switch (width) {
+  case 1:
+    sgn ? (void)ren_narrow_i8(x, site) : (void)ren_narrow_u8(x, site);
+    break;
+  case 2:
+    sgn ? (void)ren_narrow_i16(x, site) : (void)ren_narrow_u16(x, site);
+    break;
+  case 4:
+    sgn ? (void)ren_narrow_i32(x, site) : (void)ren_narrow_u32(x, site);
+    break;
+  default:
+    if (!sgn)
+      (void)ren_narrow_u64(x, site);
+  }
+}
+
+/* [*cell]'s bytes, a copy of them put in the cell first unless they can
+   be written in place ([taking], and unique and an owner: a slice's
+   bytes are its root's, and a literal's, whose count is 0, are never
+   unique), so writing one leaves every other value as it was. */
+ren_obj *ren_bytes_unshare(ren_obj *b);
+static inline char *ren_bytes_writable(ren_obj **cell, bool taking) {
+  ren_obj *b = *cell;
+  if (!taking ||
+      __builtin_expect(!(ren_rc(b) == 1 && ((ren_str *)b)->root == NULL), 0))
+    *cell = b = ren_bytes_unshare(b);
+  return ((ren_str *)b)->bytes;
+}
+
+/* `&b.set_u8(at, x)` to `&b.set_i64_be(at, x)`: the value checked, then
+   the offset, as the interpreter does (builtins.ml, [write_at]). */
+static inline void ren_bytes_store(ren_obj **cell, int64_t at, int64_t x, int width,
+                                   bool sgn, bool big, bool taking,
+                                   const ren_site *site) {
+  ren_bytes_fits(x, width, sgn, site);
+  ren_bytes_room(ren_str_len(*cell), at, width, site);
+  char *p = ren_bytes_writable(cell, taking) + at;
+  uint64_t v = (uint64_t)x;
+  switch (width) {
+  case 1:
+    p[0] = (char)(uint8_t)v;
+    break;
+  case 2: {
+    uint16_t w = (uint16_t)(big ? ren_bswap(v, 2) : v);
+    memcpy(p, &w, 2);
+    break;
+  }
+  case 4: {
+    uint32_t w = (uint32_t)(big ? ren_bswap(v, 4) : v);
+    memcpy(p, &w, 4);
+    break;
+  }
+  default: {
+    uint64_t w = big ? ren_bswap(v, 8) : v;
+    memcpy(p, &w, 8);
+  }
+  }
+}
+
+/* The bits a `VarInt` ([sgn], zigzag) or a `VarUInt` of [x] is, the
+   latter panicking if [x] is negative; and how many bytes LEB128 writes
+   them in, 7 bits a byte, 1 to 10. */
+static inline uint64_t ren_var_bits(int64_t x, bool sgn, const ren_site *site) {
+  if (sgn)
+    return ((uint64_t)x << 1) ^ (uint64_t)(x >> 63);
+  if (__builtin_expect(x < 0, 0))
+    ren_varuint_panic(x, site);
+  return (uint64_t)x;
+}
+static inline int ren_var_len(uint64_t z) {
+  int n = 1;
+  while (z >= 0x80) {
+    z >>= 7;
+    n++;
+  }
+  return n;
+}
+static inline int64_t ren_var_size(int64_t x, bool sgn, const ren_site *site) {
+  return ren_var_len(ren_var_bits(x, sgn, site));
+}
+
+/* `&b.set_varuint(at, x)` and `&b.set_varint(at, x)`: how many bytes
+   they wrote. */
+static inline int64_t ren_bytes_set_var(ren_obj **cell, int64_t at, int64_t x,
+                                        bool sgn, bool taking,
+                                        const ren_site *site) {
+  uint64_t z = ren_var_bits(x, sgn, site);
+  int n = ren_var_len(z);
+  ren_bytes_room(ren_str_len(*cell), at, n, site);
+  unsigned char *p = (unsigned char *)ren_bytes_writable(cell, taking) + at;
+  for (int i = 0; i < n - 1; i++) {
+    p[i] = (unsigned char)(z | 0x80);
+    z >>= 7;
+  }
+  p[n - 1] = (unsigned char)z;
+  return n;
+}
+
+/* Whether [s]'s bytes are UTF-8: no overlong form, no surrogate, nothing
+   past U+10FFFF, as OCaml's `String.is_valid_utf_8` says. */
+bool ren_utf8_valid(ren_obj *s);
+
+/* `Bytes.zeros(n)`, panicking if [n] is negative. */
+ren_obj *ren_bytes_zeros(int64_t n, const ren_site *site);
+
 /* [a op b], wrapped, into [*r], and whether it overflowed: clang's and
    GCC's builtins, or for tcc, which has none, two's-complement tests
    that give the same answers. A sum overflowed if both operands' signs

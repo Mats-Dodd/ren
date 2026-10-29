@@ -1005,6 +1005,90 @@ ren_obj *ren_bytes_of(ren_obj *a, const ren_site *site) {
   return o;
 }
 
+void ren_bytes_range_panic(int64_t len, int64_t at, int width,
+                           const ren_site *site) {
+  if (width == 1)
+    ren_bytes_index_panic(len, at, site);
+  char msg[160];
+  snprintf(msg, sizeof msg,
+           "%d bytes at %" PRId64 " are out of bounds for bytes of length %" PRId64,
+           width, at, len);
+  ren_panic(site, msg);
+}
+
+void ren_bytes_u64_panic(int64_t at, uint64_t x, bool big, const ren_site *site) {
+  char msg[160];
+  snprintf(msg, sizeof msg,
+           "`u64_%s` at %" PRId64 " read %" PRIu64 ", which is more than an `Int` holds",
+           big ? "be" : "le", at, x);
+  ren_panic(site, msg);
+}
+
+void ren_varuint_panic(int64_t x, const ren_site *site) {
+  char msg[128];
+  snprintf(msg, sizeof msg,
+           "%" PRId64 " doesn't fit in a `VarUInt`, which holds 0 to 9223372036854775807", x);
+  ren_panic(site, msg);
+}
+
+ren_obj *ren_bytes_unshare(ren_obj *b) {
+  ren_obj *c = ren_str_of(ren_str_data(b), ren_str_len(b));
+  ren_drop(b);
+  return c;
+}
+
+bool ren_utf8_valid(ren_obj *s) {
+  const unsigned char *p = (const unsigned char *)ren_str_data(s);
+  int64_t n = ren_str_len(s), i = 0;
+  while (i < n) {
+    unsigned c = p[i];
+    if (c < 0x80) {
+      i++;
+      continue;
+    }
+    /* how many bytes follow, and the range the second is in, which rules
+       out overlong forms, surrogates and what's past U+10FFFF */
+    int more;
+    unsigned lo = 0x80, hi = 0xbf;
+    if (c >= 0xc2 && c <= 0xdf)
+      more = 1;
+    else if (c >= 0xe0 && c <= 0xef) {
+      more = 2;
+      if (c == 0xe0)
+        lo = 0xa0;
+      else if (c == 0xed)
+        hi = 0x9f;
+    } else if (c >= 0xf0 && c <= 0xf4) {
+      more = 3;
+      if (c == 0xf0)
+        lo = 0x90;
+      else if (c == 0xf4)
+        hi = 0x8f;
+    } else
+      return false;
+    if (n - i <= more)
+      return false;
+    if (p[i + 1] < lo || p[i + 1] > hi)
+      return false;
+    for (int k = 2; k <= more; k++)
+      if ((p[i + k] & 0xc0) != 0x80)
+        return false;
+    i += more + 1;
+  }
+  return true;
+}
+
+ren_obj *ren_bytes_zeros(int64_t n, const ren_site *site) {
+  if (n < 0) {
+    char msg[96];
+    snprintf(msg, sizeof msg, "`Bytes.zeros(%" PRId64 ")`: a length is 0 or more", n);
+    ren_panic(site, msg);
+  }
+  ren_obj *o = ren_alloc_str(n);
+  memset(((ren_str *)o)->bytes, 0, (size_t)n);
+  return o;
+}
+
 ren_obj *ren_show_int(int64_t n) {
   char buf[32];
   int len = snprintf(buf, sizeof buf, "%" PRId64, n);

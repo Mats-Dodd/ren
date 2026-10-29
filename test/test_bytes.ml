@@ -124,144 +124,95 @@ fn main() = ()
 (* ---- b2: layer 3 ---- *)
 
 let%expect_test "[b2] a read past the end panics with the offset, the width and the length" =
-  until "b2"
-    ~says:
-      [
-        "error: panic: 4 bytes at 5 are out of bounds for bytes of length 8";
-        "b.u32_le(5)";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console =
   let b = Bytes.of([1, 2, 3, 4, 5, 6, 7, 8])
   print(b.u32_le(5))
-|});
-  [%expect
-    {|
-    (until b2)
-    error: `Bytes` has no method named `u32_le`
-      ┌─ test.ren:3:11
+|};
+  [%expect {|
+    error: panic: 4 bytes at 5 are out of bounds for bytes of length 8
+      ┌─ test.ren:3:9
     3 │   print(b.u32_le(5))
-      │           ^^^^^^
-      help: its methods: `len`, `at`, `copy`, `split_at`
+      │         ^^^^^^^^^^^
     |}]
 
 let%expect_test "[b2] a one-byte read past the end panics as `at` does" =
-  until "b2"
-    ~says:[ "error: panic: index 8 is out of bounds for bytes of length 8" ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console =
   let b = Bytes.of([1, 2, 3, 4, 5, 6, 7, 8])
   print(b.u8(8))
-|});
-  [%expect
-    {|
-    (until b2)
-    error: `Bytes` has no method named `u8`
-      ┌─ test.ren:3:11
+|};
+  [%expect {|
+    error: panic: index 8 is out of bounds for bytes of length 8
+      ┌─ test.ren:3:9
     3 │   print(b.u8(8))
-      │           ^^
-      help: its methods: `len`, `at`, `copy`, `split_at`
+      │         ^^^^^^^
     |}]
 
 let%expect_test "[b2] `u64_le` of 2^63 or more panics, and says to read its bits with `i64_le`" =
-  until "b2"
-    ~says:
-      [
-        "error: panic: `u64_le` at 0 read 18446744073709551615, which is more than an `Int` holds";
-        "help: read its bits as an `Int` with `i64_le`";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console =
   let b = Bytes.of([255, 255, 255, 255, 255, 255, 255, 255])
   print(b.u64_le(0))
-|});
-  [%expect
-    {|
-    (until b2)
-    error: `Bytes` has no method named `u64_le`
-      ┌─ test.ren:3:11
+|};
+  [%expect {|
+    error: panic: `u64_le` at 0 read 18446744073709551615, which is more than an `Int` holds
+      ┌─ test.ren:3:9
     3 │   print(b.u64_le(0))
-      │           ^^^^^^
-      help: its methods: `len`, `at`, `copy`, `split_at`
+      │         ^^^^^^^^^^^
+      help: read its bits as an `Int` with `i64_le`
     |}]
 
 let%expect_test "[b2] a write that doesn't fit panics as a store into a sized integer does" =
-  until "b2"
-    ~says:[ "error: panic: -1 doesn't fit in a `UInt32`, which holds 0 to 4294967295" ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console =
   var b = Bytes.zeros(4)
   &b.set_u32_be(0, -1)
   print(b)
-|});
-  [%expect
-    {|
-    (until b2)
-    error: `Bytes` has no member named `zeros`
-      ┌─ test.ren:2:17
-    2 │   var b = Bytes.zeros(4)
-      │                 ^^^^^
-      help: its members: `len`, `at`, `copy`, `split_at`, `of`
+|};
+  [%expect {|
+    error: panic: -1 doesn't fit in a `UInt32`, which holds 0 to 4294967295
+      ┌─ test.ren:3:4
+    3 │   &b.set_u32_be(0, -1)
+      │    ^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[b2] a write changes a `var`, through `&`" =
-  until "b2"
-    ~says:
-      [
-        "error: `set_u8` changes `b`, so the call needs `&`";
-        "help: write `&b.set_u8(0, 1)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() uses Console =
   var b = Bytes.zeros(4)
   b.set_u8(0, 1)
   print(b)
-|});
-  [%expect
-    {|
-    (until b2)
-    error: `Bytes` has no member named `zeros`
-      ┌─ test.ren:2:17
-    2 │   var b = Bytes.zeros(4)
-      │                 ^^^^^
-      help: its members: `len`, `at`, `copy`, `split_at`, `of`
+|};
+  [%expect {|
+    error: `set_u8` changes `b`, so the call needs `&`
+      ┌─ test.ren:3:3
+    3 │   b.set_u8(0, 1)
+      │   ^^^^^^^^^^^^^^
+      = `&` shows at the call that `b` is changed
+      help: write `&b.set_u8(0, 1)`
     |}]
 
 let%expect_test "[b2] the cursor's reads fail with `FormatError`, which a caller has to handle" =
-  until "b2"
-    ~want:{|
-Ok(513)
-Err(Short(2, 1))
-2
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn two(inout c: ByteCursor) -> Int ! FormatError = try &c.u16_le()
 fn main() uses Console =
   var c = Bytes.of([1, 2, 3]).cursor()
   print(attempt two(&c))
   print(attempt two(&c))
   print(c.at())
-|});
-  [%expect
-    {|
-    (until b2)
-    error: there's no type named `ByteCursor`
-      ┌─ test.ren:1:17
-    1 │ fn two(inout c: ByteCursor) -> Int ! FormatError = try &c.u16_le()
-      │                 ^^^^^^^^^^
+|};
+  [%expect {|
+    Ok(513)
+    Err(Short(2, 1))
+    2
+    ()
     |}]
 
 (* ---- b3: `x.hash()` ---- *)

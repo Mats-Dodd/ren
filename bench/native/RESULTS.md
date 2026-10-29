@@ -127,6 +127,48 @@ cfold 0.201 / 0.203, deriv 1.83 / 1.84, dispatch 1.33 / 1.35, fannkuch
 nested 2.90 / 2.88, nqueens 1.88 / 1.90, rbtree 2.24 / 2.26, slices
 10.26 / 8.46, stack 2.58 / 2.58, vec 4.40 / 4.39; each printed the same.
 
+
+## Bytes stage, step 2 (compiler.md, "Bytes stage", "Step 2, as built")
+
+The same machine and method; load 4.3 to 5.6 (the OS's photo analysis
+was running). `frames` is the new kernel (bench/native/frames): a
+million length-prefixed little-endian records with a `VarUInt` field,
+decoded through a cursor, 20 rounds against 0, with Rust and Go twins.
+Each build of the cursor, ten or eleven runs interleaved, Mcyc a pass,
+M instructions in brackets:
+
+| build | `frames` | Rust | Go | / Rust |
+|---|---|---|---|---|
+| the cursor's room checked by a method of the cursor | 134.2 (931) | 22.2 | 51.3 | 6.0× |
+| the room checked inline in each read | 91.0 (550) | 22.2 | 51.7 | 4.1× |
+| the prelude's small functions inlined by C, `print`'s included | 43.9 (320) | 22.3 | 51.1 | 1.97× |
+| as committed, `print`'s path left out | **46.1** (320) | 22.3 | 51.4 | **2.06×** |
+
+`print`'s path inlined cost the other kernels, the same C otherwise, 11
+runs each: `pages_r` 6.1 against 4.6 Mcyc a pass (19.0 against 18.8 M
+instructions), `json_r` 97.1 against 90.6, so it's left out.
+
+As committed, 11 runs interleaved (bytes 5), medians and the 20-round
+runs' spread:
+
+| kernel | Ren | Rust | Go | Ren / Rust |
+|---|---|---|---|---|
+| `logs_r` | 34.5 (768-898) | 33.0 (655-748) | 34.9 (710-789) | 1.04× |
+| `json_r` | 87.0 (1620-2158) | 51.6 (983-1242) | 93.1 (1776-2146) | 1.69× |
+| `pages_r` | 4.39 (302-340) | 2.56 (111-125) | 4.59 (183-206) | 1.71× |
+| `frames` | 46.1 (910-1058) | 22.3 (488-529) | 51.4 (1112-1172) | 2.06× |
+| bytes, whole | 2125 (2124-2126) | 1727 (1726-1730) | 2959 (2944-2960) | 1.23× |
+
+```sh
+sh bench/native/profile/build.sh $out
+python3 -I bench/native/profile/measure.py $out 11
+KERNELS=frames python3 -I bench/native/profile/measure.py $out 11   # one kernel
+# the A/B of the inlining: build the C with --emit-c, then compile it
+# with REN_INLINE defined as `inline` and as `inline __attribute__((always_inline))`
+```
+
+The other programs with and without the inlining, release, five runs:
+`vec` 4.39 / 4.39 G cycles, `nbody` 7.14 / 7.14.
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 
 Slices are built as representation A: a slice is a header like its

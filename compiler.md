@@ -5889,6 +5889,7 @@ there; none moves.
 | `writes_panic`, `writes_range` | a value that doesn't fit, and a write past the end | 2 |
 | `varint`, `varint_panic` | `VarUInt` and `VarInt` written and read back at the edges; too long, too large and cut short; a negative `VarUInt` written | 2 |
 | `cursor` | a framing loop, `Short` leaving the cursor where it was, `Malformed` for a `u64` too large, `skip`, `bytes`, `rest`, a cursor over a slice | 2 |
+| `writes_loop`, `writes_alias` | added in step 2: writes in a loop that reads the bytes too, in place once they're unique; and a write never seen through a `Str`'s bytes, a copy kept before it, or a literal | 2 |
 | `map`, `set`, `map_key` | insertion order, a key set again keeping its place, removed and set again going last, 10,000 keys grown and removed, a map changed while a loop goes over it, keys of every kind, a `key`, the collection methods | run now; native in 3 |
 | `hash`, `hash_values` | `x.hash()` agreeing with `==`; its values, the same on two runs and natively | 3 |
 
@@ -6276,6 +6277,133 @@ pub type FormatError = ! Short(at: Int, need: Int)
   here: writes are on a `Bytes` variable. Whether `&` on a range of
   `Bytes` works is decision 17's, as it is for arrays.
 
+### Step 2, as built
+
+Layer 3 runs in the interpreter and natively, debug and release, as the
+API above says, and bench/bytes.t's eleven programs are as specified in
+every build, with no object alive at the end.
+
+**What's built in, and what's Ren.** The reads and writes at an offset,
+`Bytes.zeros` and the `VarUInt` and `VarInt` writes and sizes are
+intrinsics (intrinsic.ml's `Bytes_read`, `Bytes_write`, `Bytes_zeros`,
+`Bytes_set_var` and `Bytes_var_size`, each read or write named by its
+`access`: the width, signed or not, `le` or `be`), since their panics
+carry numbers a panic in the prelude's Ren can't make natively
+(`lib_panic` takes only a message written there). The cursor,
+`FormatError` and `b.cursor()` are the prelude's Ren (`ByteCursor`, with
+`pub type Bytes = builtin` for its one method), so the interpreter and
+native builds run the same code. The interpreter's are builtins.ml's
+"layer 3"; natively each read is Mem's `Bytes_load`, ren_rt.h's
+`ren_bytes_load`, given the width, sign and order as constants that
+clang folds: a bounds check, a `memcpy` of the width and, for `be`,
+`__builtin_bswap` (a loop of shifts under tcc). A `u64` read is an
+`i64`'s, then `U64_read`, a check of its own whose site has the help,
+so a `u64` read out of range doesn't say to read it with `i64_le`.
+
+**Writes** go through the variable's cell, as `push` does: Mem's
+`Bytes_store` and `Bytes_set_var`, which rc.ml makes `_taking` as it
+makes a push's, writing in place when the bytes are unique and an owner
+(count 1, `root` NULL) and otherwise into a copy first, which goes back
+in the cell (`ren_bytes_writable`). A literal's count is 0, so it's never
+written. Mem Lint checks the cell changes as a push's does
+(`Mem.changes_cell`). The checks run in the interpreter's order: the
+value fits, then the offset, then the copy.
+
+**Choices the spec left open.**
+
+- `Bytes.zeros(n)` with `n < 0` panics ``` `Bytes.zeros(-1)`: a length
+  is 0 or more ```.
+- A `VarUInt` or `VarInt` write with no room panics as a write of its
+  size does: `2 bytes at 9 are out of bounds for bytes of length 10`
+  for `300`.
+- `varuint_size` of a negative number panics as `set_varuint` does.
+- A `VarUInt`'s tenth byte with its top bit set is ``at most 10 bytes``
+  before it's ``2^63 or more``; reading stops there, so an eleventh
+  byte is never read.
+- A cursor's `bytes(n)` and `skip(n)` of `n < 0` panic ``a cursor's
+  `skip` of a negative count``, the prelude's message, since a panic in
+  its Ren takes only one written there.
+- **Each of a cursor's reads says it fails with all of `FormatError`,**
+  as the spec says, though a read can only be `Short` or `Malformed`:
+  so `fn record(inout c: ByteCursor) -> Record ! FormatError` checks,
+  and a framing loop reads the same at layers 2 and 3. The checker wants
+  a signature's errors exact, so the prelude's `short(at, need)` fails
+  through a `Result<Unit, ! FormatError>`, which brings the whole set.
+- `ByteCursor`'s field is `pos`, not `at`, so it doesn't share a name
+  with its method `at()`; it's opaque, so no program sees it.
+
+**`Str.from_utf8` natively.** bytes.t's `writes` and `cursor` call it,
+so it's built: Mem's `Utf8_valid`, ren_rt.c's `ren_utf8_valid`, which
+rejects what OCaml's `String.is_valid_utf_8` does (an overlong form, a
+surrogate, past U+10FFFF), and then the bytes are the `Str`, or the call
+fails with `InvalidUtf8`.
+
+**A soundness bug, found and fixed.** Step 1's hoist.ml read a `Bytes`'
+length and data before a loop when nothing `Set` the variable. A write
+through `&` doesn't `Set` it, it takes its address, and when the bytes
+are shared the write puts a copy in the variable: a loop that read
+`b.at(i)` and wrote `&b.set_u8(i, ...)` read the old bytes after the
+write (bench/bytes/writes_loop.ren: 0 in release builds, 36 in `ren
+run`). A variable whose address is taken (Mem's `Addr`) now counts as
+set there. bench/bytes/writes_alias.ren writes bytes a `Str`, a
+borrowed parameter, a field and an array's element hold, through a
+function's `inout` too, in every build.
+
+**A test corrected.** step 0's `cursor.ren` matched `Err(e) =>
+print(e)`, which the checker refuses (an error is a value only inside
+its `Result`); it prints the `Result` instead, `Err(Short(15, 2))`.
+
+**The kernel, `frames`** (bench/native/frames): a million
+length-prefixed little-endian records, each a `u32` length, a `u8`
+kind, a `VarUInt` id of 1 to 6 bytes, an `i64` time, an `i32` value and
+a name of 0 to 12 bytes, 27.5 MB, written with writes at an offset and
+decoded through a cursor 20 times; the twins hold a `&[u8]` with a
+cursor of their own over `from_le_bytes`, and a `[]byte` with
+`encoding/binary`. Measured as the `_r` kernels are (profile/build.sh and
+measure.py), Mcyc a pass:
+
+| build | Ren | M instructions | Rust | Go | Ren / Rust |
+|---|---|---|---|---|---|
+| the cursor as first written, its room checked by a method of the cursor | 134.2 | 931 | 22.2 | 51.3 | 6.0× |
+| the room checked on the cursor's numbers, inline in each read | 91.0 | 550 | 22.2 | 51.7 | 4.1× |
+| and the prelude's small functions inlined by C (below) | **43.9** | 320 | 22.3 | 51.1 | **1.97×** |
+| as committed, `print`'s path left out of that (below), 11 runs | **46.1** | 320 | 22.3 | 51.4 | **2.06×** |
+
+The last row's run, the same binaries, Mcyc a pass: logs_r 34.5 (Rust
+33.0, Go 34.9), json_r 87.0 (51.6, 93.1), pages_r 4.39 (2.56, 4.59).
+frames is 2.06× Rust, a hair past the 2× the other kernels keep, and
+1.12× faster than Go; RESULTS.md has the commands.
+
+Where the cycles went: a read of the cursor was a call of a function
+that returns a status, its value through a pointer, which clang left
+out of line, since it's called from many places; inlined, it's its two
+checks, the room left and the offset's own, the checked add of the
+cursor's position, and the cursor's record made again with its count's
+test (setting a field of an `inout` record builds the record anew,
+to_mem.ml's, which is the data stage's). **The prelude's small functions
+are inlined** in release builds (emit_c.ml, `small_prelude`): one of
+the prelude's, with no loop, not recursive, of at most 40 statements,
+making no block or handler, calling none, and not writing to the
+console, is `static REN_INLINE` (ren_rt.h: `inline
+__attribute__((always_inline))`), as Rust's std marks its own
+`#[inline]`. Only C is told, so nothing a program computes changes.
+`print`'s path is left out because inlining it was measured to hurt:
+with it, pages_r ran 6.1 Mcyc a pass against 4.6 and json_r 97.1
+against 90.6 (the same C otherwise, 11 runs each), `print` grown into
+the function that runs the kernel and clang then declining to inline
+the kernel into it. Without it, the other kernels' C changes only in
+`Console.real`'s two one-line constructors, run once, and `vec`'s
+`Array.sum`, which ran 4.39 against 4.39 G cycles (five runs each);
+`nbody` 7.14 against 7.14.
+
+What's left against Rust: its reads check the room once, and its
+position's add isn't checked (release Rust doesn't check overflow);
+Ren's read checks the room and then the offset, and its add is checked,
+and setting the cursor's position builds its record again. Those are
+what would take the last 3% to 2×: one room check a read, proved to
+cover the offset's, and a field set in place on an `inout` record (the
+data stage's).
+
 ### `Map` and `Set` natively
 
 **Meaning:** the interpreter's (table.ml), which operators.md states:
@@ -6357,6 +6485,10 @@ header, then:
 ### Where this stage may differ from foundations.md
 
 - The cursor's `at`, and the formats deferred, above.
+- Step 2 made `Str.from_utf8` native (layer 3 needed it, the spec
+  hadn't said), fixed hoist.ml's soundness bug with `&` (Step 2, as
+  built), and inlines the prelude's small functions in C, which the
+  spec's list didn't have; frames lands at 2.06× Rust, not under 2×.
 - Step 1 added fix 1b, hoisting a `Bytes`' length and data out of a
   loop, which the spec's list didn't have; widened fix 2 to any loop
   whose condition tests `i < e`; and left fix 5's remainder as `sdiv`,
@@ -6368,6 +6500,7 @@ header, then:
 |---|---|---|---|
 | 0 | "Bytes stage, step 0" | this section; the baseline (RESULTS.md, bench/native/profile/); bench/bytes/ and bench/bytes.t, test/test_bytes.ml, each marked for its step | steps 1 to 4 |
 | 1 | "Bytes stage, step 1" | `Bytes.at` inline; a `Bytes`' length and data read before a loop (hoist.ml); Core's `Step` and `Byte_at` (bounds.ml), verified by Core Lint; push of a struct inline; `%` and `/` by a constant; bounds.ml's `&` bug; bench/bytes/proofs*, test_bytes.ml's b1; every kernel within 2× (logs 1.13×, json 1.81×, pages 1.71×, bytes 1.23×) | steps 2 to 4; bytes' `sdiv` (clang 16) |
+| 2 | "Bytes stage, step 2" | layer 3: reads and writes at an offset, `Bytes.zeros`, `VarUInt`/`VarInt`, `ByteCursor` and `FormatError` in the prelude, in the interpreter and natively; `Str.from_utf8` native; hoist.ml's `&` bug; the prelude's small functions inlined in C; bench/native/frames with Rust and Go twins (Ren 46.1, Rust 22.3, Go 51.4 Mcyc a pass, 2.06×); test_bytes.ml's b2 on | frames' last 3% to 2×; steps 3 and 4; journal tests flake under load (not this step's) |
 
 ## The runtime model
 

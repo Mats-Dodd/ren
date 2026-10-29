@@ -1,6 +1,17 @@
 (* The functions built into the compiler, each named by an id (see
    intrinsic.ml). *)
 
+(* A read or a write at an offset of layer 3: its width in bytes, 1, 2,
+   4 or 8, whether it's signed, and whether it's big-endian (a byte's is
+   [false]). *)
+type access = { width : int; signed : bool; big : bool }
+
+(* Every one: `u8`, `i8`, `u16_le`, `u16_be` ... `i64_be`. *)
+val accesses : access list
+
+(* Its name as a read: `u16_le`. *)
+val access_name : access -> string
+
 (* One of them: [Array_push] is `Array.push`. *)
 type t =
   | Show
@@ -88,6 +99,13 @@ type t =
   | Bytes_len
   | Bytes_at
   | Bytes_of
+  | Bytes_read of access  (** `b.u32_le(at)`, which panics out of range *)
+  | Bytes_write of access  (** `&b.set_u32_le(at, x)` *)
+  | Bytes_zeros  (** `Bytes.zeros(n)` *)
+  | Bytes_set_var of bool
+      (** `&b.set_varint(at, x)` if [true], else `set_varuint`: how many
+          bytes it wrote *)
+  | Bytes_var_size of bool  (** `Bytes.varint_size(x)`, or `varuint_size` *)
   | Array_copy
   | Str_copy
   | Bytes_copy

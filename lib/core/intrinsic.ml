@@ -10,6 +10,32 @@
    interpreter's (builtins.ml). It's a module of its own, depending
    only on paths, so the AST can name one too. *)
 
+(* A read or a write at an offset of layer 3 (formats.md, "Layer 3: raw
+   bytes"; compiler.md, "Bytes stage", "Layer 3: the API"): its [width]
+   in bytes, 1, 2, 4 or 8, whether it's [signed], and whether its bytes
+   are the most significant first ([big], `be`) or the least (`le`). A
+   byte has no order: its [big] is [false]. *)
+type access = { width : int; signed : bool; big : bool }
+
+(* Every one, unsigned before signed, `le` before `be`, by width: what
+   `Bytes` has, `u8` to `i64_be`. *)
+let accesses =
+  List.concat_map
+    (fun width ->
+      List.concat_map
+        (fun signed ->
+          if width = 1 then [ { width; signed; big = false } ]
+          else [ { width; signed; big = false }; { width; signed; big = true } ])
+        [ false; true ])
+    [ 1; 2; 4; 8 ]
+
+(* Its name, as a read's: `u8`, `i16_le`, `u64_be`. *)
+let access_name a =
+  Printf.sprintf "%s%d%s"
+    (if a.signed then "i" else "u")
+    (a.width * 8)
+    (if a.width = 1 then "" else if a.big then "_be" else "_le")
+
 type t =
   | Show
   | Clock_now
@@ -96,6 +122,11 @@ type t =
   | Bytes_len
   | Bytes_at
   | Bytes_of
+  | Bytes_read of access
+  | Bytes_write of access
+  | Bytes_zeros
+  | Bytes_set_var of bool
+  | Bytes_var_size of bool
   | Array_copy
   | Str_copy
   | Bytes_copy
@@ -219,6 +250,13 @@ let path x =
   | Bytes_len -> member "Bytes" "len"
   | Bytes_at -> member "Bytes" "at"
   | Bytes_of -> member "Bytes" "of"
+  | Bytes_read a -> member "Bytes" (access_name a)
+  | Bytes_write a -> member "Bytes" ("set_" ^ access_name a)
+  | Bytes_zeros -> member "Bytes" "zeros"
+  (* [true] for `VarInt`, zigzag, and [false] for `VarUInt` *)
+  | Bytes_set_var signed -> member "Bytes" (if signed then "set_varint" else "set_varuint")
+  | Bytes_var_size signed ->
+      member "Bytes" (if signed then "varint_size" else "varuint_size")
   | Array_copy -> member "Array" "copy"
   | Str_copy -> member "Str" "copy"
   | Bytes_copy -> member "Bytes" "copy"
