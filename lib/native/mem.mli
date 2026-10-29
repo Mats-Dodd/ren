@@ -70,8 +70,10 @@ type layout =
           value and never allocated. With [true], a slot holds an object, and
           the struct is counted as its slots are, each its own (Koka's value
           types, Backend/C/FromCore.hs:1048, [genDupDropValue]); with [false],
-          it's never counted, and may be an array's element. Never a word, nor
-          in an object: a type whose value would be one is boxed instead *)
+          it's never counted. Either may be an array's element, kept inline,
+          which the array counts by the mask of its slots that hold objects
+          (ren_rt.h, [ren_obj]'s [objs]). Never a word, nor in an object: a
+          type whose value would be one is boxed instead *)
   | Token
       (** a reuse token: the memory of an object a [Reset] found unique, to
           build a new one in, or NULL. Never counted, and used or freed once *)

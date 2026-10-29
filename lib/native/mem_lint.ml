@@ -277,9 +277,17 @@ let rhs env (r : rhs) : layout =
       List.iter (operand env "a field's descriptor" Desc) words;
       Boxed
   | Alloc_array { elem; elems; desc } ->
-      (* an array's elements are counted as words, or never: a struct that
-         holds an object is never one *)
-      if not (wordable elem || match elem with Struct (_, c) -> not c | _ -> false)
+      (* an array's elements are words, or structs, counted by the mask
+         of their slots that hold objects (ren_rt.h, [ren_obj]'s [objs]),
+         which has room for eight: a struct that holds one has at most
+         four *)
+      if
+        not
+          (wordable elem
+          || match elem with
+             | Struct (_, false) -> true
+             | Struct (k, true) -> List.length (struct_of env k).sfields <= 8
+             | _ -> false)
       then fail env (sprintf "an array of %s" (show_layout elem));
       List.iter (operand env "an array's element" elem) elems;
       (match (elem, desc) with
@@ -328,6 +336,16 @@ let rhs env (r : rhs) : layout =
       List.iter (operand env "a descriptor's argument" Desc) xs;
       Desc
   | Runtime (r, xs, _) ->
+      (* a field written in an array's struct is a slot of it, of its
+         layout, which says whether the old one is dropped *)
+      (match r with
+      | Array_set_field (n, k, l)
+      | Array_set_field_taking (n, k, l)
+      | Buf_set_field (n, k, l) ->
+          if List.nth_opt (struct_of env n).sfields k <> Some l then
+            fail env
+              (sprintf "slot %d of struct %d written as %s" k n (show_layout l))
+      | _ -> ());
       let want, gives = rt_sig r in
       args env (show_rt r) want xs;
       gives

@@ -5,8 +5,9 @@
 // the slots. Records three deep, a tuple in an `Option`, a record of a
 // `Str` in a variant, generic ones, built, matched, read a field at a
 // time and whole, updated, kept in `var`s and arrays, and through
-// `inout` and a block. An array of values that hold an object boxes
-// their type (the second fix is for that), so `Slip` is only in one.
+// `inout` and a block. `Slip` is only in an array, which before the
+// second fix boxed its type, and now holds it inline (rows_objs.ren has
+// more of those).
 
 type P = { x: Int, y: Int }
 
@@ -45,8 +46,8 @@ type Gate =
   | Set(f: Flags)
   | Unset
 
-// only ever in an array, which boxes them (the second fix's), and so the
-// record each holds
+// only ever in an array, which holds them inline, a tag and the record's
+// two slots, the `Str` counted by the array's mask (the second fix's)
 type Note = { text: Str, n: Int }
 
 type Slip =
@@ -203,7 +204,7 @@ fn main() uses Console =
       print(c)
       print(a + b)
     None => ()
-  // kept in arrays: of scalars only, inline; of ones with objects, boxed
+  // kept in arrays, inline: of scalars only, and of ones with objects
   var ps: Array<S> = []
   for i in 0..9
     &ps.push(s(i))

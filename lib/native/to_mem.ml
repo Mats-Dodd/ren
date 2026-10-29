@@ -568,14 +568,10 @@ and plain_layout cx loc (t : Ty.ty) : layout =
   | _ when t = Ty.unit -> Unit
   | Con (p, []) when Sized.of_path p <> None -> Sized (Option.get (Sized.of_path p))
   | _ when t = Ty.str || t = bytes_ty -> Boxed
-  | Con (p, [ e ]) when p = array_path ->
-      (* an array's elements are counted as words are, or never: a struct
-         that holds an object is kept boxed instead *)
-      (if cx.release then
-         match layout cx loc e with
-         | Struct (n, true) -> raise (Demote (struct_ty cx n))
-         | _ -> ());
-      Boxed
+  (* an array holds its elements inline, a struct that holds objects
+     too, its slots counted by its mask (the data stage's second layout
+     fix, compiler.md, "The layout fixes (step 7)") *)
+  | Con (p, [ _ ]) when p = array_path -> Boxed
   | Con (p, _) when Ty.is_tuple p -> Boxed
   | Con (p, args) -> (
       match Hashtbl.find_opt cx.types p with
@@ -613,10 +609,11 @@ let slot cx loc (t : Ty.ty) =
 (* The [n]-th struct. *)
 let struct_of cx n = List.nth (List.rev cx.struct_list) n
 
-(* [l], an array's elements': counted as words are, or never, so a
-   struct that holds an object is kept boxed instead. *)
-let element cx (l : layout) =
-  match l with Struct (n, true) -> raise (Demote (struct_ty cx n)) | _ -> l
+(* [l], an array's elements': any value's, a struct that holds objects
+   too, which the array counts by its mask (ren_rt.h, [ren_obj]'s
+   [objs]; the data stage's second layout fix, compiler.md, "The layout
+   fixes (step 7)"). Before it, such a struct's type was kept boxed. *)
+let element (_ : ctx) (l : layout) = l
 
 (* [l], where a value has to be a word: a [Struct]'s type is kept boxed
    instead. *)
@@ -805,6 +802,65 @@ let floaty cx (t : Ty.ty) =
 
 (* ---- descriptors ---- *)
 
+(* Each struct that's an array's element anywhere in a value of [t], the
+   closed type a walk is given ([static_desc]), kept boxed: a walk (show,
+   `==`, hashing, ren_rt.c) reads an array's elements as words, and an
+   element kept inline is its slots. Its arguments' structs [no_struct_in]
+   boxes, and a field's, which is a word of an object, [slot] does; this
+   finds the arrays in its fields' types, which its descriptor's
+   templates name, through every type a value of it can hold, to a depth:
+   a type that nests itself in its own arguments, `Nest<T> = | N(Nest<
+   Array<T>>) | E`, holds types without end, so one more than 24 deep
+   isn't looked into (compiler.md, step 7's choices, part 2). *)
+let no_struct_elements cx loc (t : Ty.ty) =
+  let seen = Hashtbl.create 8 in
+  let rec depth (t : Ty.ty) =
+    match t with
+    | Con (_, ts) | Variant (_, _, ts) ->
+        1 + List.fold_left (fun d t -> max d (depth t)) 0 ts
+    | _ -> 1
+  in
+  let rec rep (t : Ty.ty) =
+    match Ty.erase_variants t with
+    | Con (p, args) as t -> (
+        match Hashtbl.find_opt cx.types p with
+        | Some { body = Opaque (Rep r); _ } -> rep (subst args r)
+        | _ -> t)
+    | t -> t
+  in
+  let rec go (t : Ty.ty) =
+    let t = Ty.erase_variants t in
+    if (not (Hashtbl.mem seen t)) && depth t <= 24 then (
+      Hashtbl.replace seen t ();
+      match t with
+      | Con (p, [ e ]) when p = array_path ->
+          (match rep e with
+          | Con (q, _) as e
+            when Ty.is_tuple q
+                 ||
+                 match Hashtbl.find_opt cx.types q with
+                 | Some { body = Record _ | Sum _; _ } -> true
+                 | _ -> false -> (
+              match layout cx loc e with
+              | Struct (n, _) -> raise (Demote (struct_ty cx n))
+              | _ -> ())
+          | _ -> ());
+          go e
+      | Con (p, args) -> (
+          List.iter go args;
+          let fields (fs : Iface.field list) =
+            List.iter (fun (f : Iface.field) -> go (subst args f.fty)) fs
+          in
+          match Hashtbl.find_opt cx.types p with
+          | Some { body = Record fs; _ } -> fields fs
+          | Some { body = Sum cs; _ } ->
+              List.iter (fun (c : Iface.ctor) -> fields c.cfields) cs
+          | Some { body = Opaque (Rep r); _ } -> go (subst args r)
+          | _ -> ())
+      | _ -> ())
+  in
+  if cx.release then go t
+
 (* The program's descriptor of [t], static data, by its index: a closed
    type's, whose type variables are ones inference left undecided, or,
    with [template], a field's type in a declaration, whose [Var i] is the
@@ -817,6 +873,7 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
   match Hashtbl.find_opt cx.descs (template, t) with
   | Some n -> n
   | None ->
+      if not template then no_struct_elements cx loc t;
       let arg = static_desc cx loc ~template in
       let kind, args =
         match t with
@@ -1511,6 +1568,9 @@ let rec desc fs env (d : C.desc) : atom =
         (static_desc fs.cx fs.here ~template:false
            (Errors { labels = []; tail = None }))
   | Applied (p, ds) ->
+      (* its arguments' are known where they're made; the arrays its
+         declaration names of types it knows are checked here *)
+      no_struct_elements fs.cx fs.here (Con (p, List.mapi (fun i _ -> Ty.Var i) ds));
       let args = List.map (desc fs env) ds in
       let how =
         if p = array_path then Of_array
@@ -4054,8 +4114,8 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
   }
 
 (* In a release build, a small value's type a value of which turns out
-   to need a word, a field of an object or, if it holds an object, an
-   array's element, is kept boxed, and the program compiled again: once
+   to need a word, a field of an object or an array's element that a
+   walk reads, is kept boxed, and the program compiled again: once
    for each pass that finds such types, which is once for most programs
    that have any, and never more than once for each type. Where a value
    has to be a word is its type's to decide, not its layout's. Boxing a

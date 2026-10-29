@@ -1,0 +1,274 @@
+// Data stage, step 7: arrays of small values that hold objects, kept
+// inline and counted by the mask of the slots that hold them (compiler.md,
+// "The layout fixes (step 7)", the second fix). Nothing here is shown or
+// compared whole, which would box its type: what's printed is read out
+// of the elements. Records holding `Str`s, records holding arrays, a
+// record with a flattened record of a `Str` in it, a sum of one, and
+// arrays of arrays of them: built by literals and by pushes that grow
+// the buffer, read whole and a field at a time, changed whole, a field
+// at a time (`xs[i].f = w`, an object field and a scalar one, and a
+// flattened one), through `inout` and `&xs[i].f`, in loops over `xs`,
+// `&xs`, `for i, x in` and `zip`, shared before each change so the other
+// holder keeps what it had, sliced, split, shrunk, mapped in place and
+// into a new array, and given to the prelude's generic methods.
+
+type Line = { sku: Str, qty: Int }
+
+// an array in a record, in an array
+type Bag = { name: Str, items: Array<Int> }
+
+// a flattened record of a `Str`, and a `Str` of its own: three slots
+type Inner = { tag: Str, n: Int }
+
+type Outer = { inner: Inner, label: Str }
+
+// a sum of a flattened record of a `Str`: a tag and two slots
+type Slot =
+  | Full(l: Line)
+  | Empty
+
+// a sum of a flattened record of a `Str`, an `Inner`
+type Pocket =
+  | Has(i: Inner)
+  | Bare
+
+// an array of records with a flattened record, in a record, in an array
+type Box = { name: Str, outs: Array<Outer> }
+
+fn line(i: Int) -> Line = Line { sku: "s".concat(show(i)), qty: i }
+
+fn lines(n: Int) -> Array<Line> =
+  var out: Array<Line> = []
+  for i in 0..n
+    &out.push(line(i))
+  out
+
+fn skus(xs: Array<Line>) -> Str =
+  var s = ""
+  for l in xs
+    s = s.concat(l.sku).concat(",")
+  s
+
+fn qtys(xs: Array<Line>) -> Int =
+  var t = 0
+  for i, l in xs
+    t += i * l.qty
+  t
+
+fn rename(inout xs: Array<Line>, suffix: Str) =
+  for l in &xs
+    l.sku = l.sku.concat(suffix)
+
+fn grow(inout s: Str) = s = s.concat("!")
+
+fn bump(inout i: Inner) =
+  i.n += 1
+  i.tag = i.tag.concat("^")
+
+fn outer(i: Int) -> Outer =
+  Outer { inner: Inner { tag: "t".concat(show(i)), n: i }, label: "l".concat(show(i)) }
+
+// flattened fields of elements given with `&`, changed in loops over
+// `&xs`, and arrays of them in records in arrays
+fn flat_places() uses Console =
+  var os = [outer(0), outer(1), outer(2)]
+  let os0 = os
+  grow(&os[1].inner.tag)
+  grow(&os[2].label)
+  bump(&os[0].inner)
+  for x in &os
+    x.inner.tag = x.inner.tag.concat("*")
+    x.inner.n += 10
+  for i, x in &os
+    if i == 1 then x = outer(9)
+  var t = ""
+  for x in os
+    t = t.concat(x.inner.tag).concat(x.label).concat(show(x.inner.n))
+  print(t)
+  var t0 = ""
+  for x in os0
+    t0 = t0.concat(x.inner.tag).concat(x.label)
+  print(t0)
+  var ps = [Has(Inner { tag: "a", n: 1 }), Bare, Has(Inner { tag: "b", n: 2 })]
+  for p in &ps
+    p = match p
+      Has(i) => if i.n == 1 then Bare else Has({ ..i, tag: i.tag.concat("c") })
+      Bare => Has(Inner { tag: "e", n: 0 })
+  var pt = ""
+  for p in ps
+    pt = match p
+      Has(i) => pt.concat(i.tag)
+      Bare => pt.concat("_")
+  print(pt)
+  var bs = [Box { name: "x", outs: [outer(1)] }, Box { name: "y", outs: [] }]
+  let bs0 = bs
+  &bs[1].outs.push(outer(5))
+  &bs[0].outs.push(outer(6))
+  bs[0].outs[0].inner.tag = "deep"
+  grow(&bs[0].outs[1].inner.tag)
+  for b in bs
+    for x in b.outs
+      print(b.name.concat(x.inner.tag).concat(x.label))
+  print(bs0[0].outs[0].inner.tag)
+  print(bs0[1].outs.len())
+  var gg: Array<Array<Outer>> = [[outer(1), outer(2)], [outer(3)]]
+  for r in 0..gg.len()
+    for c in 0..gg[r].len()
+      gg[r][c].inner.n *= 2
+      grow(&gg[r][c].inner.tag)
+  print(gg[0][1].inner.tag.concat(show(gg[0][1].inner.n + gg[1][0].inner.n)))
+  let empty: Array<Outer> = []
+  print(empty.map(fn(x) => x.inner).len())
+  let inners = os.map(fn(x) => x.inner)
+  print(inners[2].tag)
+
+fn slot(i: Int) -> Slot = if i % 3 == 1 then Empty else Full(line(i * 10))
+
+fn slots_text(xs: Array<Slot>) -> Str =
+  var s = ""
+  for x in xs
+    s = match x
+      Full(l) => s.concat(l.sku)
+      Empty => s.concat("_")
+  s
+
+fn main() uses Console =
+  // grown by pushes, read back
+  var ls = lines(40)
+  print(skus(ls[0..5]))
+  print(qtys(ls))
+  print(ls.len())
+  // shared, then changed: the other holder keeps what it had
+  let kept = ls
+  ls[3] = Line { sku: "three", qty: 300 }
+  ls[4].sku = "four"
+  ls[5].qty += 500
+  ls[6].sku = ls[6].sku.concat(ls[7].sku)
+  print(skus(ls[2..8]))
+  print(skus(kept[2..8]))
+  print(ls[5].qty + kept[5].qty)
+  // changed in place, unique now
+  for i in 0..ls.len()
+    ls[i].qty = ls[i].qty * 2
+    if i % 10 == 0 then ls[i].sku = "x".concat(ls[i].sku)
+  print(qtys(ls))
+  print(skus(ls[0..3]))
+  // through `inout`, and an element's field given with `&`
+  rename(&ls, "+")
+  grow(&ls[1].sku)
+  grow(&ls[1].sku)
+  print(skus(ls[0..3]))
+  print(skus(kept[0..3]))
+  // `for i, x in &xs`, and `zip`
+  for i, l in &ls
+    if i < 3 then l.qty = i
+  var z = 0
+  for (a, b) in ls.zip(kept)
+    z += a.qty - b.qty + a.sku.len()
+  print(z)
+  // slices, a split, and an array shrunk by its slice
+  let mid = ls[10..20]
+  var tail = mid[5..10]
+  tail[0].sku = "tail"
+  &tail.push(line(99))
+  print(skus(tail))
+  print(skus(mid[5..7]))
+  let own = mid[1..3].copy()
+  print(skus(own).concat(skus(mid.copy()[0..1])))
+  &ls.split_at(20) fn(&lo, &hi) =>
+    lo[0].sku = "lo"
+    hi[0].sku = "hi"
+    &hi.push(line(77))
+  print(ls[0].sku.concat(ls[20].sku).concat(ls[ls.len() - 1].sku))
+  print(ls.len())
+  while ls.len() > 3
+    ls = ls[0..ls.len() - 1]
+  print(skus(ls))
+  rename(&ls[1..3], "?")
+  print(skus(ls))
+  // mapped: in place when unique, into a new array when shared
+  var ms = lines(5)
+  ms = ms.map(fn(l) => Line { sku: l.sku.concat("m"), qty: l.qty + 1 })
+  print(skus(ms))
+  let ms2 = ms
+  let mapped = ms.map(fn(l) => Line { ..l, qty: l.qty * 3 })
+  print(qtys(mapped) + qtys(ms2))
+  print(skus(ms2))
+  let sizes = ms.map(fn(l) => l.sku.len())
+  print(sizes[4])
+  // the prelude's generic methods, specialized at `Line`
+  let big = ls.select(fn(l) => l.qty > 0)
+  print(skus(big))
+  match lines(9).find(fn(l) => l.qty == 6)
+    Some(l) => print(l.sku)
+    None => print("none")
+  print(lines(9).count(fn(l) => l.sku.len() > 1))
+  print(lines(4).reduce(0, fn(t, l) => t + l.qty))
+  for (i, l) in lines(3).with_index()
+    print(show(i).concat(l.sku))
+  // records holding arrays, in an array
+  var bags: Array<Bag> = []
+  for i in 0..4
+    &bags.push(Bag { name: "b".concat(show(i)), items: [i, i + 1] })
+  let old = bags
+  &bags[2].items.push(9)
+  bags[1].items[0] = 50
+  bags[3] = Bag { ..bags[3], name: "new" }
+  var bt = 0
+  for b in bags
+    for x in b.items
+      bt += x
+  var ot = 0
+  for b in old
+    for x in b.items
+      ot += x
+  print(bt)
+  print(ot)
+  print(bags[3].name.concat(old[3].name))
+  // a flattened record holding a `Str`, and a `Str`, in each element
+  var os: Array<Outer> = []
+  for i in 0..6
+    &os.push(Outer { inner: Inner { tag: "t".concat(show(i)), n: i }, label: "l" })
+  let os0 = os
+  os[2].inner = Inner { tag: "two", n: 20 }
+  os[3] = { ..os[3], inner: { ..os[3].inner, tag: "three" } }
+  os[4].label = "four"
+  os[5].inner.n += 50
+  var ot2 = ""
+  var on = 0
+  for o in os
+    ot2 = ot2.concat(o.inner.tag).concat(o.label)
+    on += o.inner.n
+  print(ot2)
+  print(on)
+  print(os0[2].inner.tag.concat(os0[3].inner.tag).concat(os0[4].label))
+  // a sum with a flattened record, some elements without fields
+  var ss: Array<Slot> = []
+  for i in 0..7
+    &ss.push(slot(i))
+  let ss0 = ss
+  ss[1] = Full(line(1))
+  ss[2] = Empty
+  print(slots_text(ss))
+  print(slots_text(ss0))
+  // arrays of arrays of them: rows changed in place, shared and not
+  var grid: Array<Array<Line>> = []
+  for i in 0..3
+    &grid.push(lines(i + 2))
+  let g0 = grid
+  grid[1][0] = Line { sku: "g", qty: 7 }
+  grid[2][1].sku = "h"
+  grid[2][2].qty += 40
+  &grid[0].push(line(5))
+  for r in 0..grid.len()
+    for c in 0..grid[r].len()
+      grid[r][c].qty += 1
+  var gs = ""
+  var gq = 0
+  for row in grid
+    gs = gs.concat(skus(row)).concat("|")
+    gq += qtys(row)
+  print(gs)
+  print(gq)
+  print(skus(g0[1]).concat(skus(g0[2])))
+  flat_places()

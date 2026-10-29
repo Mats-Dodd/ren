@@ -1,0 +1,26 @@
+// Data stage, step 7: a panic part way through a loop that changes an
+// array of records holding `Str`s in place, kept inline (compiler.md,
+// "The layout fixes (step 7)", the second fix), with another holder of
+// the array, a grid of them and an element read out alive. A panic
+// leaves what's alive as it is.
+
+type Line = { sku: Str, qty: Int }
+
+fn lines(n: Int) -> Array<Line> =
+  var out: Array<Line> = []
+  for i in 0..n
+    &out.push(Line { sku: "s".concat(show(i)), qty: i })
+  out
+
+fn main() uses Console =
+  var ls = lines(8)
+  let kept = ls
+  var grid = [lines(2), lines(3)]
+  grid[1][2].sku = grid[1][2].sku.concat("!")
+  let one = ls[2]
+  var by = [3, 1, 4, 1, 5]
+  for i in 0..ls.len()
+    ls[i].sku = ls[i].sku.concat("+")
+    ls[i].qty += by[i]
+    print(ls[i].sku)
+  print(one.sku.concat(kept[0].sku).concat(grid[1][2].sku))

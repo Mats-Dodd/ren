@@ -853,13 +853,16 @@ let%expect_test "Mem Lint: a struct's slot kept, the rest dropped" =
     ];
   [%expect {| ok |}]
 
+(* the data stage's second layout fix: an array keeps structs that hold
+   objects inline, counted by the mask of their slots that do, which its
+   header has a byte for *)
 let%expect_test "Mem Lint: an array of structs that hold objects" =
   let s = v 1 "s" (Struct (0, true))
   and x = v 2 "x" Boxed
   and a = v 3 "a" Boxed in
   lint ~structs:[ line ]
     [
-      fn
+      fn ~params:[ v 9 "ev" Ev ]
         [
           Let (x, alloc);
           Let (s, Make_struct [ Var x; Int 1L ]);
@@ -868,7 +871,40 @@ let%expect_test "Mem Lint: an array of structs that hold objects" =
           Return (Int 0L);
         ];
     ];
+  [%expect {| ok |}]
+
+let%expect_test "Mem Lint: an array of structs of more slots than its mask has" =
+  let wide : Mem.strukt =
+    { sfields = Boxed :: List.init 8 (fun _ : Mem.layout -> Int); skind = Product }
+  in
+  let s = v 1 "s" (Struct (0, true))
+  and x = v 2 "x" Boxed
+  and a = v 3 "a" Boxed in
+  lint ~structs:[ wide ]
+    [
+      fn
+        [
+          Let (x, alloc);
+          Let (s, Make_struct (Var x :: List.init 8 (fun _ : Mem.atom -> Int 1L)));
+          Let (a, Alloc_array { elem = Struct (0, true); elems = [ Var s ]; desc = None });
+          Drop (Var a);
+          Return (Int 0L);
+        ];
+    ];
   [%expect {| Mem Lint, in f: an array of Struct0c |}]
+
+let%expect_test "Mem Lint: a field of an array's struct written as another layout" =
+  let a = v 1 "a" Boxed and r = v 2 "r" Boxed in
+  lint ~structs:[ line ]
+    [
+      fn ~params:[ a ] ~modes:[ Owned ]
+        [
+          Let (r, Runtime (Array_set_field_taking (0, 0, Int), [ Var a; Int 0L; Int 5L ], None));
+          Drop (Var r);
+          Return (Int 0L);
+        ];
+    ];
+  [%expect {| Mem Lint, in f: slot 0 of struct 0 written as Int |}]
 
 let%expect_test "Mem Lint: a struct counted that holds no object" =
   let s = v 1 "s" (Struct (0, false)) and x = v 2 "x" Boxed in

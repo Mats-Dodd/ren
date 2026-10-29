@@ -2157,7 +2157,9 @@ until it was cut: "What was cut", in the runtime model.)
   descriptor's, a field count and a byte that masks which of the first
   eight fields hold objects. More than eight fields keep a 64-bit mask
   in a word after them, so 64 fields at most. An array's stride is in
-  its body, and the byte says whether its elements are counted. A
+  its body, and the byte says which words of an element hold objects:
+  1 for counted words, a struct's mask for structs that hold them
+  (the data stage's step 7). A
   negative count is the shared mark: by default it aborts, and under
   `-DREN_RC_SHARED` it's Lean's atomic count (`-DREN_RC_ATOMIC`
   counts everything atomically). bench/native/cores measures those
@@ -2370,7 +2372,9 @@ descriptor describes, nor, if counted, an array's element, whose
 elements the runtime counts as words or not at all: a type whose value
 would be one is boxed, as before ([Demote]). (Since the data stage's
 step 7, a small record or tuple in a small value is flattened into its
-slots instead: "Data stage", "The layout fixes (step 7)".) Boxing one
+slots instead, and an array holds a counted struct inline, counted by
+the mask of its slots that hold objects: "Data stage", "The layout
+fixes (step 7)".) Boxing one
 can make a type that held it a struct, which a later pass of compiling
 may box in turn; each boxes types none before did, so it ends. So `==`
 and `show` of a small value box its type, and so does an option of an
@@ -6599,7 +6603,12 @@ optional 101,004, for 100,000 items each.
    words. A read is a `Make_struct` of the element's slots, borrowed
    while the array lives, as `Struct_get` is; a write drops the old
    slots. Mem Lint counts an element as its slots. rows.ren should
-   allocate only its array's growth.
+   allocate only its array's growth. **Built** (step 7, part 2; its
+   choices are below): rows.ren allocates 6, where it allocated 100,006,
+   one `Line` for each element, once its last lines print an element's
+   fields, not the element, whose `show` boxed it; a read counts the
+   element again, as an array of objects' does, rather than borrowing
+   it.
 3. **The tag is a whole word.** `Tagged`'s slot 0 is an `Int`. **The
    fix**, in two parts. (a) **A byte tag:** the tag in slot 0's low
    byte, and each constructor's small scalars (`Bool`, `()`, an enum, a
@@ -6707,7 +6716,18 @@ migration, step 3's `let ... else` where it fits).
   `match_`'s `flats` and `pending`); reuse.ml (`learn`) and rc.ml
   (`dtree`, `stale`), for three counting faults the tests found;
   bench/data's layout, layout_walks, layout_panic and reuse_arms;
-  bench/native's build.sh and measure.sh.
+  bench/native's build.sh and measure.sh. Part 2, as built: to_mem.ml
+  (`plain_layout`'s `Array` case and `element`, which no longer demote),
+  emit_c.ml (`struct_mask`, and an array of counted structs' reads,
+  writes, field writes, allocation and reserve, in place and in hoisted
+  loops), ren_rt.h and ren_rt.c (`objs` the element's mask; the counted
+  structs' inline reads and writes, `ren_slots_dup` and
+  `ren_slots_drop`; `REN_ELEM_OBJS`, which freeing, copying, the shared
+  mark and a splice's copy count by; the copies' sets and pushes),
+  mem_lint.ml (an array of counted structs of at most eight slots; a
+  field written is its struct's slot, at its layout), hoist.ml (a field
+  write's struct agrees with a read's), mem.ml(i)'s `Struct`; bench/data's
+  rows_objs and rows_panic, and rows' last line.
 - **Step 8:** the review, its three lenses (the brief's), and what it
   finds; language.md's "What Ren has today" table brought up to date.
 
@@ -6950,7 +6970,8 @@ revisit if a step finds it wrong:
 | 4 | e77a8bb | variant types, `Order.Placed`, through the whole pipeline: the parser (`parse_ty`'s `TyVariant`, `Tree.Node<Int>`, and `Tree<Int>.Node` refused with its help), Resolve (the sum's name, and the three refusals: not a sum, no such variant with "did you mean", a variant not by name; and a variant type of a private sum in a public signature), Types and Ty (`TVariant` and `Variant`, unifying only with themselves, printed `Order.Placed`, every walk of a type), Infer (`as` on a by-name constructor's pattern binds its variant type; field reads, record patterns, `{ ..p, total: x }` an `Order.Placed`, `var p` and `p.total = x`; `Placed { ..p }` the sum; a pattern of a variant type's own constructor that always matches, and of another one refused; the two mismatch helps and the constructor's note; `..` from a sum, and the method refusal), Infer_reqs (`==`, `hash` and order borrowed, through the sum's `key`), Exhaust (a variant type's one constructor), the interfaces (a variant type in a `pub` signature, written `order.Order.Placed` by an importer), Core (`Of_variant`, `Con`, `PCon`, `Field` and `Update` at a `Variant`, `PAs` binding one; `describe` the sum's) and Core Lint, the interpreter (a variant type's value is its sum's; its walks, `show`, `==`, `hash`, `key` and the journal, the sum's), and Mem IR in both builds (the sum's layout, struct and descriptor; a field read at its constructor's slot; no tag test; `Of_variant` no code; an update of a small one keeps its tag); release specialization; tree-sitter's `variant_type`, its corpus (types.txt) and highlight markers, Zed's highlights; test_data.ml's s4 tests on, and four more (another module's signature, round trips and a variant type's own patterns, another variant's pattern refused, the arguments' place); bench/data/variants as specified and in `same`, `release` and `tcc_same`, with variants_small (variant types of sums kept as structs), variants_escape (stored, passed through generic functions, round-tripped) and variants_reuse beside it, whose loop of 1000 updates and conversions allocates nothing (`--stats`, both builds: 4 allocations, 1000 reuses); README's tour, language.md's "What Ren has today", operators.md's "Equality, hashing and `show`". Choices: below the table | steps 5 to 8 |
 | 5 | ed8f0f8 | the errors that teach the model, and `todo`, through the whole pipeline: `todo` a keyword (token.ml, the lexer, the parser's `primary`, Ast's `Todo`), Resolve (one of `let ... else`'s leaves), Infer (a fresh type variable), lowering (the intrinsic `Lib_panic`, "reached a `todo`", at the `todo`, so Core, Core Lint and the interpreter see a call they already know), and Mem IR in both builds (a `Lib_panic` in the program's code is said where it's written, not at the function's site, so native and `ren run` print the same); `$start` calls a `main` that never gives a value, `fn main<T>() -> T`, at `Unit`, which natively was Mem Lint's "`$start` isn't what the program says it is"; Diag's `code` and `code_at`, lines a help writes; `field_access`'s sum case (Infer_msg.field_of_sum): "`Shape` is a sum type; only `Ring` has `r`" with the `match` to paste, its variants in one arm with `\|` when the field has one type, an arm each otherwise; "every variant of `Shape` has `id`, but a sum type has no fields" with the hoisting help, or, at different types, the `match`; Exhaust's arms to paste, up to three and an arm for the rest, values' `_` or errors' `fail _`, by name where a variant is, after their sum where a record type shadows a bare constructor (Infer_msg.braced_ctor), at the column of the match's arms; tree-sitter's `todo`, the corpus (statements.txt) and the highlight markers, Zed's keyword highlight; test_data.ml's s5 tests on, and thirteen more: a positional variant's label, a field at different types, no variant, a generic sum's hoist, more missing than shown, nested, the shadowed constructor, values and errors, `Err`'s tags, a `todo` body and `main`, `todo` not a name, the arms of nine programs pasted back in after their last arm, and the `match` of three field errors pasted in for the read, each of which then checks; every "missing:" error's help in test_exhaust, test_errors, test_modules, test_tasks, test_collections and examples.t promoted, each new line pasteable; bench/data/todo_panic as specified and in `same`, `release` and `tcc_same`, and `fn main() = todo` in build.t; errors.md's `match` section and the README's tour show the printed arms; language.md's "What Ren has today". Choices: below the table | steps 6 to 8 |
 | 6 | 8c7c65c | descriptions: an operation called on a description only when its handler is stateless, through the pipeline: Infer's `Calls_op` gains the receiver as written and the call a `with` would make, its arguments as written; Lower records each method call (Core.program's `method_calls`, by its `With`'s location, from `Lower.program` and `Lower.made`); a new link-time pass, lib/lower/stateless.ml (`Stateless.check`), run by `Driver.link` after the modules are linked, so `ren run`, `ren test` and `ren build` refuse (not `ren check`): a handler is stateful if its body makes a cell (a `var`) or its instance has a `finally`; a method call on a description made where it's installed, or held by a local never changed and only installed, may be only that handler's; any other may be any kept handler's (refined from the specification's per-dependency rule: "Where the data stage may differ"); the error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method" ("which has a `finally`"), at the operation's name, with its note and the help that writes the `with`; the interpreter and native builds unchanged, each program that still compiles running the same; test_data.ml's s6 tests on (the refusals through `run_error`; the last accept's program had a dropped `Area.area()`, now `let _ =`), and seven more: a stateful handler bound and only installed beside stored stateless calls, one called where it's made, a local that's assigned, one passed, returned, stored and wrapped, a handler of another module kept there, and `ren check` not seeing it; test_descriptions.ml's stateful method call a refusal, its `with` half its own accept test, its `Shape` a `Codec` (numbers kept); test_deps.ml's handler of several called as a method through `id(...)`, now a stateless `fixed_rates`, with the `counting_rates` one a refusal; bench/10d/methods.ren, review_deps.ren and dispatch_mix.ren's calls that may reach a handler with state written as `with`s, their outputs and every site's lowering unchanged; the renames: bench/10d/shapes.ren's `Shape` a `Codec`, dispatch.ren's `Shape` and `Expr` `Codec` and `Pipe`, dispatch_mix's `Area`, `Size` and `Label` `Codec`, `Width` and `Name`, build.t's `--explain-dispatch` listings redone, bench/native/dispatch's `ShapeK` `CodecK` (gen.py and bench.ren; the twins byte for byte as they were, checksums the same, the release C the same but for handlers' names, so RESULTS.md's numbers stand, as it now says); bench/data/shapes in `same`, `release` and `tcc_same`; deps.md's example a library's routes, with the rule, its error and that `ren check` doesn't report it; handlers.md's "Called as a method"; README's handlers section; bench/native/README.md; language.md's "What Ren has today". Choices: below the table | steps 7 and 8 |
-| 7 (part 1) | this commit | the before measurements of all three faults, the kernels and bench/native's suite at 8c7c65c (bench/native/RESULTS.md, "Data stage: layout", with the commands and the machine), and the first fix: a small record or tuple in a small value flattened into its slots, the budget counted in slots (to_mem.ml: `small`'s places and `Flat`, `small_of`, `struct_shape`, `flat_var`, `flat_slots`, `within`, a pattern's `flats` and `pending`), so nested.ren allocates 4, not 66,671, and a copy with 100 times its items runs in 17 ms, not 64; three faults of boxed values' counting the tests found, fixed (reuse.ml's sizes known by path, a heap overflow; rc.ml's slot nested once, and a changing variable's views); bench/data's layout, layout_walks, layout_panic and reuse_arms, and the three kernels, in build.t's loops and a release naive one; build.sh's dispatch kernels, which step 6's rename broke, and measure.sh's peak memory on Linux | the second fix (an array of counted structs inline) and the third (byte tags and niches), each measured; rows.ren's and optional.ren's last lines `show` the value, which boxes its type and hides the fix (step 7's choices); the milestone kernel against Rust; `if c then None else p` in debug builds (step 7's choices) |
+| 7 (part 1) | d86b474 | the before measurements of all three faults, the kernels and bench/native's suite at 8c7c65c (bench/native/RESULTS.md, "Data stage: layout", with the commands and the machine), and the first fix: a small record or tuple in a small value flattened into its slots, the budget counted in slots (to_mem.ml: `small`'s places and `Flat`, `small_of`, `struct_shape`, `flat_var`, `flat_slots`, `within`, a pattern's `flats` and `pending`), so nested.ren allocates 4, not 66,671, and a copy with 100 times its items runs in 17 ms, not 64; three faults of boxed values' counting the tests found, fixed (reuse.ml's sizes known by path, a heap overflow; rc.ml's slot nested once, and a changing variable's views); bench/data's layout, layout_walks, layout_panic and reuse_arms, and the three kernels, in build.t's loops and a release naive one; build.sh's dispatch kernels, which step 6's rename broke, and measure.sh's peak memory on Linux | the second fix (an array of counted structs inline) and the third (byte tags and niches), each measured; rows.ren's and optional.ren's last lines `show` the value, which boxes its type and hides the fix (step 7's choices); the milestone kernel against Rust; `if c then None else p` in debug builds (step 7's choices) |
+| 7 (part 2) | this commit | the second fix: an array of small values that hold objects keeps them inline, counted by the mask of their slots that hold objects, which the array's header keeps in its `objs` byte (1 for counted words, as before), instead of boxing their type program-wide: to_mem.ml's `plain_layout` and `element` no longer demote; ren_rt.h's and ren_rt.c's arrays count by the mask (`REN_ELEM_OBJS` for freeing, copying, the shared mark, splices and joins; `ren_slots_dup` and `ren_slots_drop`; inline reads, writes, field writes and pushes of counted structs, and their hoisted loops' buffer macros); emit_c.ml's `struct_mask` and each operation's C; Mem Lint (arrays of counted structs of at most eight slots, a field written at its slot's layout) and hoist.ml (a field write's struct agrees with a read's); and a fault the suite found: a walk reads an array's elements as words, so a small type that's an array's element anywhere in a walked value is boxed (`no_struct_elements`, for each closed type's descriptor and each built at run time past the specialization budget), which `show` of a record holding an array of uncounted structs crashed on at d86b474 too (build.t's walked_arrays). rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4 (a copy with 100 times the items 187 ms, not 446, 162 MB, not 402); of the suite only slices' C changes in substance, 96 million allocations, not 164 million, 0.88× the time, its `json` kernel 0.78× (RESULTS.md, "Data stage: layout"); rows.ren's last line prints the element's fields; bench/data's rows_objs and rows_panic in build.t's loops and the release naive one, layout_walks' arrays in a walked record, test_native's Mem Lint tests of arrays of counted structs. Choices: below the table | the third fix (byte tags and niches), measured; optional.ren's last line `show`s the value, which boxes its type and hides the fix; the milestone kernel against Rust; borrowed reads of an array's struct, and swap-out of one's objects (step 7's choices, part 2); `if c then None else p` in debug builds (part 1's choices) |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7451,6 +7472,106 @@ where the sections above are silent:
   names, `shapes2(...)`, so it stopped there: it calls `codecsK` under
   the kernels' names now. **measure.sh's `memory` part** used BSD
   time's `-l`; on Linux it uses GNU time's `-v`, still in bytes.
+
+Step 7's choices, part 2 (the second fix: an array of counted structs
+inline), where the sections above are silent:
+
+- **The header's `objs` byte is the element's mask.** It has room: a
+  struct that holds an object is a small value's, at most four slots
+  (`small`'s budget), and the byte has eight bits. For an array of
+  words it's 1 or 0 as before, which is the mask of a one-word element,
+  so one rule counts every array: freeing it, copying it, the shared
+  mark's walk and a splice's or a join's copy go through
+  `REN_ELEM_OBJS` (ren_rt.c), each element's word if the stride is 1,
+  else each slot the mask has; a slice's header copies its root's byte.
+  An array of uncounted structs, a copied record of many scalars,
+  keeps 0. Mem Lint refuses an array of a counted struct of more than
+  eight slots, which nothing makes.
+- **A read counts the element again**, the slots its mask has, as
+  reading an array of objects counts the object again, rather than
+  borrowing it while the array lives as the plan said: `Array_get`,
+  `Buf_get` and the rest then have one rule for every layout in
+  Perceus, borrow.ml and Mem Lint (the result is owned), and a struct
+  read whole that dies is freed keeping its parts, as any counted
+  struct is. A borrowed read would save a dup and a drop for each of an
+  element's objects a loop reads; that's left for later, with the
+  measurements to say whether it matters.
+- **The C** (emit_c.ml, ren_rt.h): the compiler knows the mask, so each
+  inline function takes it as a constant and its loop over the mask
+  unrolls: a read, `ren_array_slots_dup_k`; a write in place,
+  `ren_array_set_slots_taking_ko`, which drops the old element's
+  objects; a field write in place, `ren_array_set_field_taking_o` for a
+  field that holds an object, which drops the old one; and their
+  buffers' in a hoisted loop, `ren_buf_slots_dup`, `ren_buf_set_slots_o`
+  and `ren_buf_set_field_o`. What's out of line, the copying set, push
+  and field write and a push that grows, counts by the array's own
+  byte. A push of a struct whose size the compiler knows is inline
+  where the array is unique and has room
+  (`ren_array_push_slots_taking_k`), its words stores: the out-of-line
+  push copied them with a `memcpy` of the array's stride, which made
+  slices' `pages` kernel 7% slower than at d86b474 on fewer
+  instructions. An array of uncounted structs compiles as before but
+  for that push and the mask, 0, given to `ren_alloc_array_n` and
+  `ren_array_reserve`.
+- **Swap-out stays for objects and words** (swap.ml): a struct element
+  changed and written back is read, counted again, and written, the old
+  one's objects dropped, which copies no array; `xs[i].f = w` writes
+  only the field, as before, and a row of an array of arrays, an
+  object, is still moved out (`grid[i][j].sku = "h"`). Taking an
+  element's objects out would save the count of the ones changed.
+- **hoist.ml** agrees an array's element layout across a loop by the
+  struct's number where one side is a field write, which says which
+  struct but not whether it's counted. **Mem Lint** checks that a field
+  written in an array's struct is that slot, at its layout, which says
+  whether the old one is dropped.
+- **The walks still box.** `show`, `==` and hashing are given a word, so
+  a small value's type is still boxed wherever one is walked (step 10's
+  rule), an array of them included (`print(ls)` boxes `Line`, which then
+  goes in the array as a pointer, as before). Teaching the walks to read
+  a struct by its address isn't contained: the descriptors, the walks'
+  signatures, generic code that takes a word and the debug build would
+  each change. So rows.ren's last line prints an element's fields,
+  `bb` and `4`, not the element (rows.expected says so), as nested.ren's
+  did in part 1.
+- **A walk reads an array's elements as words, so a small type that's
+  an array's element anywhere in a walked value is boxed**
+  (`no_struct_elements`, to_mem.ml), with objects or without. Its
+  arguments' structs were boxed already (`no_struct_in`), and a field's,
+  which is a word of an object (`slot`), but not an array's element
+  named in a field's type: `show` of a record holding an `Array<P>`,
+  `P = { x: Int, y: Int }`, read each `P`'s first slot as a pointer and
+  crashed, natively in release builds, at d86b474 too; with counted
+  structs inline it was bench/data/update.ren's and variants_escape's
+  `show`s, which the suite found. So when the descriptor of a closed type
+  is made, every type a value of it can hold is looked through, its
+  fields' types with its arguments, and an array's element that's a
+  struct is boxed; and when one is built at run time, in a generic
+  function past the specialization budget, so is each array its
+  declaration names of a type it knows (build.t's walked_arrays, which
+  crashed at d86b474 too). A type that nests itself in its own arguments,
+  `Nest<T> = | N(Nest<Array<T>>) | E`, holds types without end, so the
+  look stops at types more than 24 deep: an array of structs deeper than
+  that in such a type, walked, would be read wrong, which no program
+  here has (known, low).
+- **Not native, so not here:** `sort` (`Array.sort` isn't in the native
+  slice, so neither is `sort_by`), and `pop`, which the prelude doesn't
+  have; rows_objs shrinks an array by slicing it.
+- **Measured against d86b474** (RESULTS.md, "Data stage: layout"):
+  rows.ren allocates 6, not 100,006, in 3.5 ms, not 6.4, and a copy
+  with 100 times its items runs in 187 ms, not 446, at 162 MB, not 402.
+  Of bench/native's programs and kernels, whose C was compared before
+  and after, only slices (its tokens, an `Int` and a slice or two
+  slices, in the `json` and `pages` kernels' arrays) and, in the mask
+  alone, nbody compile to different C: slices allocates 96 million
+  objects, not 164 million, and runs 0.88× as long, its `json` kernel
+  0.78×.
+- **The naive release build of rows.ren under the sanitizers** (build.t's
+  `release_naive`) copies the array at each push, as the naive counting
+  does, and takes 120 s where it took 94 at d86b474 (this machine,
+  with a test run beside it): a memcpy of two words and the mask's
+  `ren_dup`s an element, where each element was one pointer whose
+  object was counted. A test's time only; the debug naive build, as
+  before, 141 s against 156.
 
 ## The runtime model
 

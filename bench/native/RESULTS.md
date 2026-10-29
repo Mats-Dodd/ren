@@ -80,6 +80,52 @@ twins' are; peak memory is the same to 0.1 MB for every Ren build.
 | nested | perceus | 1.754 ± 0.237 | 1.543 ± 0.096 | 0.88× |
 | dispatch interp | perceus | 0.117 ± 0.031 | 0.110 ± 0.032 | 0.93× |
 
+**The second fix: an array of small values that hold objects keeps them
+inline,** counted by the mask of their slots that hold objects, which
+the array's header keeps in its `objs` byte, instead of boxing their
+type program-wide. Against d86b474, the first fix's commit, in one
+hyperfine run of both binaries each (`-N`; 200 runs for rows, 20 for
+the copy of it with 100 times the items, built from rows.ren by
+changing its count), release:
+
+| kernel | allocations, d86b474 | after | peak RSS, d86b474 | after | time (ms), d86b474 | after |
+|---|---|---|---|---|---|---|
+| rows | 100,006 | **6** | 6.1 MB | 3.8 MB | 6.41 ± 0.90 | **3.50 ± 1.51** |
+| rows, 100 times the items | 10,000,006 | **6** | 402 MB | 162 MB | 445.6 ± 35.9 | **186.7 ± 29.1** |
+
+rows.ren's last line printed `ls[4]`, whose `show` boxes `Line`
+whatever the layout (100,006 allocations at d86b474 and after); it
+prints the element's fields now, `bb` and `4` (compiler.md, step 7's
+choices). What's left is the array and its growth: 17 doublings,
+`Line` two words inline, `{ sku, qty }`, the `Str` counted by the mask
+`0b01`.
+
+**The suite, second fix.** Of its programs and kernels, only `slices`
+compiles to different C, and `nbody` in one argument, the mask 0 of an
+array of uncounted structs: slices' `json` and `pages` tokens, an `Int`
+and a slice or two slices, are inline in their arrays now. Each against
+d86b474 in one hyperfine run (`-N --warmup 2`, 10 runs, 40 for the
+pages kernels, whose runs vary most), release, the same output:
+
+| program | allocations, d86b474 | after | peak RSS MB, d86b474 | after | time (s), d86b474 | after | after / before |
+|---|---|---|---|---|---|---|---|
+| slices (main.ren) | 164,220,000 | 96,149,400 | 381.6 | 305.6 | 6.701 ± 0.200 | 5.881 ± 0.280 | 0.88× |
+| slices, `json` kernel | 127,999,826 | 63,999,926 | 245.0 | 193.6 | 3.384 ± 0.133 | 2.644 ± 0.084 | 0.78× |
+| slices, `pages` kernel | 12,220,125 | 8,149,425 | 149.5 | 149.5 | 0.371 ± 0.053 | 0.342 ± 0.048 | 0.92× |
+| slices, `json_r` | 26 | 26 | 108.7 | 108.7 | 1.900 ± 0.127 | 1.652 ± 0.071 | 0.87× |
+| slices, `pages_r` | 8,025 | 8,025 | 149.5 | 149.3 | 0.259 ± 0.045 | 0.248 ± 0.031 | 0.96× |
+| nbody | 12 | 12 | 3.5 | 3.5 | 3.869 ± 0.329 | 3.678 ± 0.241 | 0.95× |
+
+The offsets kernels, `json_r` and `pages_r`, and nbody run the same
+code as before in their loops (their C differs in functions they don't
+call, or in the mask alone), so their ratios are this machine's noise.
+A first build pushed a struct's words through an out-of-line call that
+copied them with a `memcpy` of the stride the array keeps, and `pages`
+ran 7% slower than at d86b474 on 3% fewer instructions (cachegrind):
+the push of a struct whose size the compiler knows is inline now
+(`ren_array_push_slots_taking_k`), its words stores, and `pages` is
+0.92×. The rest of the suite is the same C as at d86b474.
+
 **How.** `$S` is a scratch folder, `ren` the compiler at each commit
 copied there before building the next:
 
@@ -93,6 +139,12 @@ copied there before building the next:
     ren build --release --stats nested.ren -o nested-stats && ./nested-stats
     /usr/bin/time -v ./nested        # peak RSS
     hyperfine -N --warmup 5 --runs 200 -n before $S/before/nested -n after $S/after/nested
+    # the second fix: rows the same way; which programs' C changed, from
+    # the C of every program and kernel build.sh builds, both countings,
+    # emitted by each compiler (`ren build main.ren --release --emit-c`,
+    # the part after `---- the program ----`) and compared; then each
+    # program whose C changed timed against d86b474 in one run
+    hyperfine -N --warmup 2 --runs 10 -n before $S/before/slices -n after $S/after/slices
 
 measure.sh's whole run took 67 minutes here. build.sh stopped at the
 dispatch kernels at 8c7c65c (step 6 renamed `shapesK` to `codecsK`), and

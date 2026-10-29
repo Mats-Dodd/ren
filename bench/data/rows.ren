@@ -1,7 +1,9 @@
 // Data stage, step 7: the second layout fault (language.md §2, "Layout
 // fixes"). An array of small records that hold a `Str` boxes `Line`
 // program-wide, one allocation an element; kept inline, scanned by
-// the mask the type already has, the array holds them.
+// the mask the type already has, the array holds them. Its last lines
+// print an element's fields, not the element: `show` of a `Line` would
+// box it (compiler.md, step 7's choices).
 
 type Line = { sku: Str, qty: Int }
 
@@ -14,5 +16,6 @@ fn main() uses Console =
   for l in ls
     t += l.qty * l.sku.len()
   print(t)
-  print(ls[4])
+  print(ls[4].sku)
+  print(ls[4].qty)
   print(ls.len())

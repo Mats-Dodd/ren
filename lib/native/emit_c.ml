@@ -257,6 +257,15 @@ let tag (s : site) =
 let structs : strukt array ref = ref [||]
 let struct_words n = max 1 (List.length !structs.(n).sfields)
 
+(* The mask of the [n]-th struct's slots that hold objects, bit [i] for
+   slot [i]: an array of them keeps it in its header's [objs] (ren_rt.h,
+   [ren_obj]), and counts its elements by it. *)
+let struct_mask n =
+  List.fold_left
+    (fun (m, i) l -> ((if is_object l then m lor (1 lsl i) else m), i + 1))
+    (0, 0) !structs.(n).sfields
+  |> fst
+
 (* The slots of a value [x] of a counted struct that hold objects, but
    those in [kept]: what counting it counts (Koka's [genDupDropValue],
    Backend/C/FromCore.hs:1048). A slot of a constructor without a field
@@ -324,9 +333,17 @@ let runtime rt args site_arg =
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
   (* an array of structs: each element its words, a stride the C knows *)
-  | Array_get (Struct (n, _)) ->
+  | Array_get (Struct (n, false)) ->
       sprintf "(*(ren_struct_%d*)ren_array_slots_k(%s, %s, %d, %s))" n (a 0)
         (a 1) (struct_words n) (isite ())
+  (* of structs that hold objects: an element counted again, and the old
+     one's objects dropped where it's changed in place *)
+  | Array_get (Struct (n, true)) ->
+      sprintf "(*(ren_struct_%d*)ren_array_slots_dup_k(%s, %s, %d, %d, %s))" n
+        (a 0) (a 1) (struct_words n) (struct_mask n) (isite ())
+  | Array_set_taking (Struct (n, true)) ->
+      sprintf "ren_array_set_slots_taking_ko(%s, %s, %s.s, %d, %d, %s)" (a 0)
+        (a 1) (a 2) (struct_words n) (struct_mask n) (isite ())
   | Array_set (Struct _) ->
       sprintf "ren_array_set_slots(%s, %s, %s.s, %s)" (a 0) (a 1) (a 2)
         (isite ())
@@ -335,8 +352,9 @@ let runtime rt args site_arg =
   | Array_set_taking (Struct (n, _)) ->
       sprintf "ren_array_set_slots_taking_k(%s, %s, %s.s, %d, %s)" (a 0) (a 1)
         (a 2) (struct_words n) (isite ())
-  | Array_push_taking (Struct _) ->
-      sprintf "ren_array_push_slots_taking(%s, %s.s)" (a 0) (a 1)
+  | Array_push_taking (Struct (n, _)) ->
+      sprintf "ren_array_push_slots_taking_k(%s, %s.s, %d)" (a 0) (a 1)
+        (struct_words n)
   (* an array of a sized type's elements, at its width: read and written
      in place directly, and copied, which is rarer, through the words *)
   | Array_get (Sized k) | Array_take (Sized k) ->
@@ -393,8 +411,10 @@ let runtime rt args site_arg =
         (struct_words n)
         (to_val (List.nth args 2))
         (isite ())
-  | Array_set_field_taking (n, k, _) ->
-      sprintf "ren_array_set_field_taking(%s, %s, %d, %d, %s, %s)" (a 0) (a 1) k
+  | Array_set_field_taking (n, k, l) ->
+      sprintf "ren_array_set_field_taking%s(%s, %s, %d, %d, %s, %s)"
+        (if is_object l then "_o" else "")
+        (a 0) (a 1) k
         (struct_words n)
         (to_val (List.nth args 2))
         (isite ())
@@ -402,9 +422,15 @@ let runtime rt args site_arg =
   | Array_data -> sprintf "((void*)ren_elems(%s))" (a 0)
   (* a buffer hoist.ml found: never of [Word]s, so whether its elements
      are counted is the layout's *)
-  | Buf_get (Struct (n, _)) ->
+  | Buf_get (Struct (n, false)) ->
       sprintf "(*(ren_struct_%d*)ren_buf_slots(%s, %s, %s, %d, %s))" n (a 0)
         (a 1) (a 2) (struct_words n) (isite ())
+  | Buf_get (Struct (n, true)) ->
+      sprintf "(*(ren_struct_%d*)ren_buf_slots_dup(%s, %s, %s, %d, %d, %s))" n
+        (a 0) (a 1) (a 2) (struct_words n) (struct_mask n) (isite ())
+  | Buf_set (Struct (n, true)) ->
+      sprintf "ren_buf_set_slots_o(%s, %s, %s, %s.s, %d, %d, %s)" (a 0) (a 1)
+        (a 2) (a 3) (struct_words n) (struct_mask n) (isite ())
   | Buf_get (Sized k) ->
       sprintf "ren_buf_get_n(%s, %s, %s, %s, %s)" (sized_ctype k) (a 0) (a 1)
         (a 2) (isite ())
@@ -423,9 +449,10 @@ let runtime rt args site_arg =
         (a 2)
         (to_val (List.nth args 3))
         (isite ())
-  | Buf_set_field (n, k, _) ->
-      sprintf "ren_buf_set_field(%s, %s, %s, %d, %d, %s, %s)" (a 0) (a 1) (a 2)
-        k (struct_words n)
+  | Buf_set_field (n, k, l) ->
+      sprintf "ren_buf_set_field%s(%s, %s, %s, %d, %d, %s, %s)"
+        (if is_object l then "_o" else "")
+        (a 0) (a 1) (a 2) k (struct_words n)
         (to_val (List.nth args 3))
         (isite ())
   | Buf_take l ->
@@ -433,7 +460,8 @@ let runtime rt args site_arg =
         (sprintf "ren_buf_take_o(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (isite ()))
   | Buf_check -> sprintf "ren_buf_check(%s, %s, %s)" (a 0) (a 1) (site ())
   | Array_reserve (Struct (n, _)) ->
-      sprintf "ren_array_reserve(%s, false, %d)" (a 0) (struct_words n)
+      sprintf "ren_array_reserve(%s, %d, %d)" (a 0) (struct_mask n)
+        (struct_words n)
   | Array_reserve (Word _) -> sprintf "ren_array_reserve_d(%s, %s)" (a 0) (a 1)
   | Array_reserve (Sized k) ->
       sprintf "ren_array_reserve_k(%s, %s)" (a 0) (sized_kind k)
@@ -914,8 +942,8 @@ let rec stmt o d (s : stmt) =
       match elem with
       | Struct (n, _) ->
           line
-            (sprintf "ren_obj* %s = ren_alloc_array_n(%d, %d);" (var v)
-               (List.length elems) (struct_words n));
+            (sprintf "ren_obj* %s = ren_alloc_array_n(%d, %d, %d);" (var v)
+               (List.length elems) (struct_words n) (struct_mask n));
           List.iteri
             (fun i x ->
               line
