@@ -496,9 +496,10 @@ happen, with nothing to annotate.
 - **`release` lets go for one call.** `try release next.get(id)`: the
   instance is let go of while that call runs, and taken back after it,
   queueing like any caller. It's the one place state can change under
-  an operation, so it's written there, and two checks come with it:
-  `sim` switches tasks at every `release`, and a value read from state
-  before a `release` and used to write state after it is a warning. A
+  an operation, so it's written there, and `sim` switches tasks at every
+  `release`, so a value read from state before a `release` and used to
+  write state after it is a lost update a seed finds. There's no warning:
+  Ren has none (language.md). A
   circuit breaker needs it (without it, every call queues behind the
   slow one it exists to cut off), and so does a cache that shouldn't
   make hits wait behind misses. Releasing after an operation's last use
@@ -1016,17 +1017,19 @@ try Docs.at(id) fn() => Doc.edit(op)
 
 **`striped`: map-reduce over fixed stripes.**
 
-- `striped(n, h)` keeps n instances of h. An operation whose first
-  parameter has a `key` goes to one stripe by it (`by: Key`, the
-  default). `striped(h, by: Worker)` gives each worker a stripe and
-  sends an operation to the caller's; it takes no n.
+- `striped(h, n: Int = 16, by: Key)` keeps n instances of h. An
+  operation whose first parameter has a `key` goes to one stripe by it
+  (`by: Key`, the default). `by: Worker` gives each worker a stripe and
+  sends an operation to the caller's; giving it `n` is an error.
 - An operation with no key runs on every stripe. If it returns `()`,
   that's all; if it returns a value, the results are folded with
   `merge:`, left to right in stripe order: `Sum`, `Max`, `Min`,
   `Concat`, or `Custom(m)`, where m describes a stateless handler for
   `Merge<D>`, a dependency the compiler derives with one operation per
   keyless operation that returns a value (`fn(a, b) => ...` shorthand
-  for its arms).
+  for its arms). `merge:` has no default: a `striped` without one, over
+  a dependency with a keyless operation that returns a value, is a
+  compile error.
 - The fold needs no algebraic law, since its order is fixed, and it
   isn't an atomic snapshot: stripes are visited one at a time.
 - **The split law.** Under `by: Worker` which stripe an operation lands
@@ -1308,8 +1311,7 @@ and 32-bit references as the default.
    for a task that reaches a handler installed inside its scope, and
    `Async.beside` and `Async.background` (decision 7), replacing the
    built rule that cancelled such tasks when the `with` ended;
-   `release` on one call, with `sim` switching at it and the stale-read
-   warning (decision 10); `Proc.run(cmd, kill: Tree | Child)`, `Tree`
+   `release` on one call, with `sim` switching at it (decision 10); `Proc.run(cmd, kill: Tree | Child)`, `Tree`
    by default. They land in item 6.
 5. **Data** ([language.md](language.md) §2, §3 and §6), first, because
    it breaks programs and every week of new code makes that dearer.
@@ -1330,7 +1332,7 @@ and 32-bit references as the default.
    each step ([language.md](language.md) §5 and §8). 11a's follow-ups:
    the compile error for a task that reaches a handler installed inside
    its scope, `Async.beside` and `Async.background`, `release` with
-   `sim` switching at it and the stale-read warning, and
+   `sim` switching at it, and
    `Proc.run(kill:)`. `striped` and `actors` as decision 18 says, as
    dependencies, with `post`, `evict: Lru`, `sim`'s chaos eviction and
    the journal's incarnations; `sync.keyed` goes. Interpreter first, as

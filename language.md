@@ -345,7 +345,8 @@ Error for a missing field: "this pattern doesn't name `h`; add `h`, or
 
 **Calls have one by-name form: a parameter with a default.** It's
 given by name or left out, and the others are positional, so each
-call has one spelling: `Async.map(xs, max: 8)`, `b.cursor(from: base)`
+call has one spelling. A default is a literal or a variant with no
+fields (`kill: Kill = Tree`, `evict: Evict = Lru`): `Async.map(xs, max: 8)`, `b.cursor(from: base)`
 (compiler.md, "Parameters with defaults"). `retry(5, on: Declined)`'s
 `on:` is the one parameter of `Tags`, written the same way.
 
@@ -1320,8 +1321,8 @@ library, as §2 says a rule should be:
 
 ```ren
 actors(doc, max: 50_000, evict: Lru)              // or Lfu
-striped(16, sessions(ttl), merge: Concat)          // Sum, Max, Min, Concat
-striped(16, books(), merge: Custom(book_merge()))  // the rare kind the menu lacks
+striped(sessions(ttl), merge: Concat)              // Sum, Max, Min, Concat
+striped(books(), n: 64, merge: Custom(book_merge()))  // the rare kind the menu lacks
 ```
 
 `Custom` holds a description, a stateless handler for `Merge<Books>`, a
@@ -1340,7 +1341,7 @@ handler mem_sessions(ttl: Duration) for Sessions =
   expire(now) =>                              // sweeps one column, `last_seen`
     all.select(fn(s) => now - s.last_seen > ttl).map(fn(s) => s.id)
 
-with striped(16, mem_sessions(ttl), merge: Concat) in serve()
+with striped(mem_sessions(ttl), merge: Concat) in serve()
 ```
 
 Each stripe sweeps its own columns, `touch(id, ...)` goes to one
