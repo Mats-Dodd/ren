@@ -32,7 +32,13 @@ type 'l found_ =
   | Installs_handler of 'l list
       (** a link that describes a handler of these dependencies, all of which it
           installs *)
-  | Calls_op of { key : 'l; from : Path.t; op : string }
+  | Calls_op of {
+      key : 'l;
+      from : Path.t;
+      op : string;
+      recv : string;
+      call : string;
+    }
       (** at the [d.op] of [d.op(...)]: an operation called as a method of a
           description, which installs it for the call, as [key], implementing
           [from] (foundations.md, decision 3) *)

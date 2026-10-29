@@ -7,16 +7,16 @@
 fn lcg(s: Int) -> Int = s *% 6364136223846793005 +% 1442695040888963407
 fn bits(s: Int) -> Int = s.shr(33).bit_and(2147483647)
 
-dep Shape2 =
-  area: fn() -> Int
+dep Codec2 =
+  cost: fn() -> Int
 
-handler s2_0(a: Int) for Shape2 =
-  area() => (((a * a + 1) * a + 2) * a + 3)
-handler s2_1(a: Int, b: Int) for Shape2 =
-  area() => (((a + b * 2) * a + 3) * b + 4)
+handler c2_0(a: Int) for Codec2 =
+  cost() => (((a * a + 1) * a + 2) * a + 3)
+handler c2_1(a: Int, b: Int) for Codec2 =
+  cost() => (((a + b * 2) * a + 3) * b + 4)
 
-fn shapes2(n: Int, rounds: Int) -> Int =
-  var xs: Array<Shape2> = []
+fn codecs2(n: Int, rounds: Int) -> Int =
+  var xs: Array<Codec2> = []
   var s = 2
   for _ in 0..n
     s = lcg(s)
@@ -25,30 +25,30 @@ fn shapes2(n: Int, rounds: Int) -> Int =
     let a = r % 64 + 1
     let b = r.shr(6) % 64 + 1
     let c = r.shr(12) % 64 + 1
-    let x: Shape2 =
-      if kind == 0 then s2_0(a)
-      else s2_1(a, b)
+    let x: Codec2 =
+      if kind == 0 then c2_0(a)
+      else c2_1(a, b)
     &xs.push(x)
   var sum = 0
   for _ in 0..rounds
     for x in xs
-      sum += x.area()
+      sum += x.cost()
   sum
 
-dep Shape4 =
-  area: fn() -> Int
+dep Codec4 =
+  cost: fn() -> Int
 
-handler s4_0(a: Int) for Shape4 =
-  area() => (((a * a + 1) * a + 2) * a + 3)
-handler s4_1(a: Int, b: Int) for Shape4 =
-  area() => (((a + b * 2) * a + 3) * b + 4)
-handler s4_2(a: Int, b: Int, c: Int) for Shape4 =
-  area() => (((a * 3 - 3) * c + 4) * a + 5)
-handler s4_3(a: Int) for Shape4 =
-  area() => ((((a + 4) * a) * a + 5) * a + 6)
+handler c4_0(a: Int) for Codec4 =
+  cost() => (((a * a + 1) * a + 2) * a + 3)
+handler c4_1(a: Int, b: Int) for Codec4 =
+  cost() => (((a + b * 2) * a + 3) * b + 4)
+handler c4_2(a: Int, b: Int, c: Int) for Codec4 =
+  cost() => (((a * 3 - 3) * c + 4) * a + 5)
+handler c4_3(a: Int) for Codec4 =
+  cost() => ((((a + 4) * a) * a + 5) * a + 6)
 
-fn shapes4(n: Int, rounds: Int) -> Int =
-  var xs: Array<Shape4> = []
+fn codecs4(n: Int, rounds: Int) -> Int =
+  var xs: Array<Codec4> = []
   var s = 4
   for _ in 0..n
     s = lcg(s)
@@ -57,40 +57,40 @@ fn shapes4(n: Int, rounds: Int) -> Int =
     let a = r % 64 + 1
     let b = r.shr(6) % 64 + 1
     let c = r.shr(12) % 64 + 1
-    let x: Shape4 =
-      if kind == 0 then s4_0(a)
-      else if kind == 1 then s4_1(a, b)
-      else if kind == 2 then s4_2(a, b, c)
-      else s4_3(a)
+    let x: Codec4 =
+      if kind == 0 then c4_0(a)
+      else if kind == 1 then c4_1(a, b)
+      else if kind == 2 then c4_2(a, b, c)
+      else c4_3(a)
     &xs.push(x)
   var sum = 0
   for _ in 0..rounds
     for x in xs
-      sum += x.area()
+      sum += x.cost()
   sum
 
-dep Shape8 =
-  area: fn() -> Int
+dep Codec8 =
+  cost: fn() -> Int
 
-handler s8_0(a: Int) for Shape8 =
-  area() => (((a * a + 1) * a + 2) * a + 3)
-handler s8_1(a: Int, b: Int) for Shape8 =
-  area() => (((a + b * 2) * a + 3) * b + 4)
-handler s8_2(a: Int, b: Int, c: Int) for Shape8 =
-  area() => (((a * 3 - 3) * c + 4) * a + 5)
-handler s8_3(a: Int) for Shape8 =
-  area() => ((((a + 4) * a) * a + 5) * a + 6)
-handler s8_4(a: Int, b: Int) for Shape8 =
-  area() => (((a * b + 5) + a * 6) * b + 7)
-handler s8_5(a: Int, b: Int, c: Int) for Shape8 =
-  area() => (((a + b * 6) + c * 7) * a + 8)
-handler s8_6(a: Int) for Shape8 =
-  area() => (((a * 3 - 7) + a * 8) * a + 9)
-handler s8_7(a: Int, b: Int) for Shape8 =
-  area() => ((((a + 8) * b) + a * 9) * b + 10)
+handler c8_0(a: Int) for Codec8 =
+  cost() => (((a * a + 1) * a + 2) * a + 3)
+handler c8_1(a: Int, b: Int) for Codec8 =
+  cost() => (((a + b * 2) * a + 3) * b + 4)
+handler c8_2(a: Int, b: Int, c: Int) for Codec8 =
+  cost() => (((a * 3 - 3) * c + 4) * a + 5)
+handler c8_3(a: Int) for Codec8 =
+  cost() => ((((a + 4) * a) * a + 5) * a + 6)
+handler c8_4(a: Int, b: Int) for Codec8 =
+  cost() => (((a * b + 5) + a * 6) * b + 7)
+handler c8_5(a: Int, b: Int, c: Int) for Codec8 =
+  cost() => (((a + b * 6) + c * 7) * a + 8)
+handler c8_6(a: Int) for Codec8 =
+  cost() => (((a * 3 - 7) + a * 8) * a + 9)
+handler c8_7(a: Int, b: Int) for Codec8 =
+  cost() => ((((a + 8) * b) + a * 9) * b + 10)
 
-fn shapes8(n: Int, rounds: Int) -> Int =
-  var xs: Array<Shape8> = []
+fn codecs8(n: Int, rounds: Int) -> Int =
+  var xs: Array<Codec8> = []
   var s = 8
   for _ in 0..n
     s = lcg(s)
@@ -99,92 +99,92 @@ fn shapes8(n: Int, rounds: Int) -> Int =
     let a = r % 64 + 1
     let b = r.shr(6) % 64 + 1
     let c = r.shr(12) % 64 + 1
-    let x: Shape8 =
-      if kind == 0 then s8_0(a)
-      else if kind == 1 then s8_1(a, b)
-      else if kind == 2 then s8_2(a, b, c)
-      else if kind == 3 then s8_3(a)
-      else if kind == 4 then s8_4(a, b)
-      else if kind == 5 then s8_5(a, b, c)
-      else if kind == 6 then s8_6(a)
-      else s8_7(a, b)
+    let x: Codec8 =
+      if kind == 0 then c8_0(a)
+      else if kind == 1 then c8_1(a, b)
+      else if kind == 2 then c8_2(a, b, c)
+      else if kind == 3 then c8_3(a)
+      else if kind == 4 then c8_4(a, b)
+      else if kind == 5 then c8_5(a, b, c)
+      else if kind == 6 then c8_6(a)
+      else c8_7(a, b)
     &xs.push(x)
   var sum = 0
   for _ in 0..rounds
     for x in xs
-      sum += x.area()
+      sum += x.cost()
   sum
 
-dep Shape32 =
-  area: fn() -> Int
+dep Codec32 =
+  cost: fn() -> Int
 
-handler s32_0(a: Int) for Shape32 =
-  area() => (((a * a + 1) * a + 2) * a + 3)
-handler s32_1(a: Int, b: Int) for Shape32 =
-  area() => (((a + b * 2) * a + 3) * b + 4)
-handler s32_2(a: Int, b: Int, c: Int) for Shape32 =
-  area() => (((a * 3 - 3) * c + 4) * a + 5)
-handler s32_3(a: Int) for Shape32 =
-  area() => ((((a + 4) * a) * a + 5) * a + 6)
-handler s32_4(a: Int, b: Int) for Shape32 =
-  area() => (((a * b + 5) + a * 6) * b + 7)
-handler s32_5(a: Int, b: Int, c: Int) for Shape32 =
-  area() => (((a + b * 6) + c * 7) * a + 8)
-handler s32_6(a: Int) for Shape32 =
-  area() => (((a * 3 - 7) + a * 8) * a + 9)
-handler s32_7(a: Int, b: Int) for Shape32 =
-  area() => ((((a + 8) * b) + a * 9) * b + 10)
-handler s32_8(a: Int, b: Int, c: Int) for Shape32 =
-  area() => (((a * b + 9) * 3 - 10) * a + 11)
-handler s32_9(a: Int) for Shape32 =
-  area() => (((a + a * 10) * 3 - 11) * a + 12)
-handler s32_10(a: Int, b: Int) for Shape32 =
-  area() => (((a * 3 - 11) * 3 - 12) * b + 13)
-handler s32_11(a: Int, b: Int, c: Int) for Shape32 =
-  area() => ((((a + 12) * b) * 3 - 13) * a + 14)
-handler s32_12(a: Int) for Shape32 =
-  area() => ((((a * a + 13) + 14) * a) * a + 15)
-handler s32_13(a: Int, b: Int) for Shape32 =
-  area() => ((((a + b * 14) + 15) * a) * b + 16)
-handler s32_14(a: Int, b: Int, c: Int) for Shape32 =
-  area() => ((((a * 3 - 15) + 16) * c) * a + 17)
-handler s32_15(a: Int) for Shape32 =
-  area() => (((((a + 16) * a) + 17) * a) * a + 18)
-handler s32_16(a: Int, b: Int) for Shape32 =
-  area() => (((a * b + 17) * a + 18) + b * 19)
-handler s32_17(a: Int, b: Int, c: Int) for Shape32 =
-  area() => (((a + b * 18) * c + 19) + a * 20)
-handler s32_18(a: Int) for Shape32 =
-  area() => (((a * 3 - 19) * a + 20) + a * 21)
-handler s32_19(a: Int, b: Int) for Shape32 =
-  area() => ((((a + 20) * b) * a + 21) + b * 22)
-handler s32_20(a: Int, b: Int, c: Int) for Shape32 =
-  area() => (((a * b + 21) + c * 22) + a * 23)
-handler s32_21(a: Int) for Shape32 =
-  area() => (((a + a * 22) + a * 23) + a * 24)
-handler s32_22(a: Int, b: Int) for Shape32 =
-  area() => (((a * 3 - 23) + a * 24) + b * 25)
-handler s32_23(a: Int, b: Int, c: Int) for Shape32 =
-  area() => ((((a + 24) * b) + c * 25) + a * 26)
-handler s32_24(a: Int) for Shape32 =
-  area() => (((a * a + 25) * 3 - 26) + a * 27)
-handler s32_25(a: Int, b: Int) for Shape32 =
-  area() => (((a + b * 26) * 3 - 27) + b * 28)
-handler s32_26(a: Int, b: Int, c: Int) for Shape32 =
-  area() => (((a * 3 - 27) * 3 - 28) + a * 29)
-handler s32_27(a: Int) for Shape32 =
-  area() => ((((a + 28) * a) * 3 - 29) + a * 30)
-handler s32_28(a: Int, b: Int) for Shape32 =
-  area() => ((((a * b + 29) + 30) * a) + b * 31)
-handler s32_29(a: Int, b: Int, c: Int) for Shape32 =
-  area() => ((((a + b * 30) + 31) * c) + a * 32)
-handler s32_30(a: Int) for Shape32 =
-  area() => ((((a * 3 - 31) + 32) * a) + a * 33)
-handler s32_31(a: Int, b: Int) for Shape32 =
-  area() => (((((a + 32) * b) + 33) * a) + b * 34)
+handler c32_0(a: Int) for Codec32 =
+  cost() => (((a * a + 1) * a + 2) * a + 3)
+handler c32_1(a: Int, b: Int) for Codec32 =
+  cost() => (((a + b * 2) * a + 3) * b + 4)
+handler c32_2(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => (((a * 3 - 3) * c + 4) * a + 5)
+handler c32_3(a: Int) for Codec32 =
+  cost() => ((((a + 4) * a) * a + 5) * a + 6)
+handler c32_4(a: Int, b: Int) for Codec32 =
+  cost() => (((a * b + 5) + a * 6) * b + 7)
+handler c32_5(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => (((a + b * 6) + c * 7) * a + 8)
+handler c32_6(a: Int) for Codec32 =
+  cost() => (((a * 3 - 7) + a * 8) * a + 9)
+handler c32_7(a: Int, b: Int) for Codec32 =
+  cost() => ((((a + 8) * b) + a * 9) * b + 10)
+handler c32_8(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => (((a * b + 9) * 3 - 10) * a + 11)
+handler c32_9(a: Int) for Codec32 =
+  cost() => (((a + a * 10) * 3 - 11) * a + 12)
+handler c32_10(a: Int, b: Int) for Codec32 =
+  cost() => (((a * 3 - 11) * 3 - 12) * b + 13)
+handler c32_11(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => ((((a + 12) * b) * 3 - 13) * a + 14)
+handler c32_12(a: Int) for Codec32 =
+  cost() => ((((a * a + 13) + 14) * a) * a + 15)
+handler c32_13(a: Int, b: Int) for Codec32 =
+  cost() => ((((a + b * 14) + 15) * a) * b + 16)
+handler c32_14(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => ((((a * 3 - 15) + 16) * c) * a + 17)
+handler c32_15(a: Int) for Codec32 =
+  cost() => (((((a + 16) * a) + 17) * a) * a + 18)
+handler c32_16(a: Int, b: Int) for Codec32 =
+  cost() => (((a * b + 17) * a + 18) + b * 19)
+handler c32_17(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => (((a + b * 18) * c + 19) + a * 20)
+handler c32_18(a: Int) for Codec32 =
+  cost() => (((a * 3 - 19) * a + 20) + a * 21)
+handler c32_19(a: Int, b: Int) for Codec32 =
+  cost() => ((((a + 20) * b) * a + 21) + b * 22)
+handler c32_20(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => (((a * b + 21) + c * 22) + a * 23)
+handler c32_21(a: Int) for Codec32 =
+  cost() => (((a + a * 22) + a * 23) + a * 24)
+handler c32_22(a: Int, b: Int) for Codec32 =
+  cost() => (((a * 3 - 23) + a * 24) + b * 25)
+handler c32_23(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => ((((a + 24) * b) + c * 25) + a * 26)
+handler c32_24(a: Int) for Codec32 =
+  cost() => (((a * a + 25) * 3 - 26) + a * 27)
+handler c32_25(a: Int, b: Int) for Codec32 =
+  cost() => (((a + b * 26) * 3 - 27) + b * 28)
+handler c32_26(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => (((a * 3 - 27) * 3 - 28) + a * 29)
+handler c32_27(a: Int) for Codec32 =
+  cost() => ((((a + 28) * a) * 3 - 29) + a * 30)
+handler c32_28(a: Int, b: Int) for Codec32 =
+  cost() => ((((a * b + 29) + 30) * a) + b * 31)
+handler c32_29(a: Int, b: Int, c: Int) for Codec32 =
+  cost() => ((((a + b * 30) + 31) * c) + a * 32)
+handler c32_30(a: Int) for Codec32 =
+  cost() => ((((a * 3 - 31) + 32) * a) + a * 33)
+handler c32_31(a: Int, b: Int) for Codec32 =
+  cost() => (((((a + 32) * b) + 33) * a) + b * 34)
 
-fn shapes32(n: Int, rounds: Int) -> Int =
-  var xs: Array<Shape32> = []
+fn codecs32(n: Int, rounds: Int) -> Int =
+  var xs: Array<Codec32> = []
   var s = 32
   for _ in 0..n
     s = lcg(s)
@@ -193,44 +193,44 @@ fn shapes32(n: Int, rounds: Int) -> Int =
     let a = r % 64 + 1
     let b = r.shr(6) % 64 + 1
     let c = r.shr(12) % 64 + 1
-    let x: Shape32 =
-      if kind == 0 then s32_0(a)
-      else if kind == 1 then s32_1(a, b)
-      else if kind == 2 then s32_2(a, b, c)
-      else if kind == 3 then s32_3(a)
-      else if kind == 4 then s32_4(a, b)
-      else if kind == 5 then s32_5(a, b, c)
-      else if kind == 6 then s32_6(a)
-      else if kind == 7 then s32_7(a, b)
-      else if kind == 8 then s32_8(a, b, c)
-      else if kind == 9 then s32_9(a)
-      else if kind == 10 then s32_10(a, b)
-      else if kind == 11 then s32_11(a, b, c)
-      else if kind == 12 then s32_12(a)
-      else if kind == 13 then s32_13(a, b)
-      else if kind == 14 then s32_14(a, b, c)
-      else if kind == 15 then s32_15(a)
-      else if kind == 16 then s32_16(a, b)
-      else if kind == 17 then s32_17(a, b, c)
-      else if kind == 18 then s32_18(a)
-      else if kind == 19 then s32_19(a, b)
-      else if kind == 20 then s32_20(a, b, c)
-      else if kind == 21 then s32_21(a)
-      else if kind == 22 then s32_22(a, b)
-      else if kind == 23 then s32_23(a, b, c)
-      else if kind == 24 then s32_24(a)
-      else if kind == 25 then s32_25(a, b)
-      else if kind == 26 then s32_26(a, b, c)
-      else if kind == 27 then s32_27(a)
-      else if kind == 28 then s32_28(a, b)
-      else if kind == 29 then s32_29(a, b, c)
-      else if kind == 30 then s32_30(a)
-      else s32_31(a, b)
+    let x: Codec32 =
+      if kind == 0 then c32_0(a)
+      else if kind == 1 then c32_1(a, b)
+      else if kind == 2 then c32_2(a, b, c)
+      else if kind == 3 then c32_3(a)
+      else if kind == 4 then c32_4(a, b)
+      else if kind == 5 then c32_5(a, b, c)
+      else if kind == 6 then c32_6(a)
+      else if kind == 7 then c32_7(a, b)
+      else if kind == 8 then c32_8(a, b, c)
+      else if kind == 9 then c32_9(a)
+      else if kind == 10 then c32_10(a, b)
+      else if kind == 11 then c32_11(a, b, c)
+      else if kind == 12 then c32_12(a)
+      else if kind == 13 then c32_13(a, b)
+      else if kind == 14 then c32_14(a, b, c)
+      else if kind == 15 then c32_15(a)
+      else if kind == 16 then c32_16(a, b)
+      else if kind == 17 then c32_17(a, b, c)
+      else if kind == 18 then c32_18(a)
+      else if kind == 19 then c32_19(a, b)
+      else if kind == 20 then c32_20(a, b, c)
+      else if kind == 21 then c32_21(a)
+      else if kind == 22 then c32_22(a, b)
+      else if kind == 23 then c32_23(a, b, c)
+      else if kind == 24 then c32_24(a)
+      else if kind == 25 then c32_25(a, b)
+      else if kind == 26 then c32_26(a, b, c)
+      else if kind == 27 then c32_27(a)
+      else if kind == 28 then c32_28(a, b)
+      else if kind == 29 then c32_29(a, b, c)
+      else if kind == 30 then c32_30(a)
+      else c32_31(a, b)
     &xs.push(x)
   var sum = 0
   for _ in 0..rounds
     for x in xs
-      sum += x.area()
+      sum += x.cost()
   sum
 
 dep Db =
@@ -652,10 +652,10 @@ fn interp(evals: Int) -> Int =
 
 pub fn run(rounds: Int) uses Console =
   let n = if rounds >= 100 then 65536 else 1000
-  print(shapes2(n, rounds))
-  print(shapes4(n, rounds))
-  print(shapes8(n, rounds))
-  print(shapes32(n, rounds))
+  print(codecs2(n, rounds))
+  print(codecs4(n, rounds))
+  print(codecs8(n, rounds))
+  print(codecs32(n, rounds))
   print(db(rounds, n * rounds * 16))
   print(router(n, rounds))
   print(interp(rounds * (n / 256)))

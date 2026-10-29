@@ -610,29 +610,39 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
           let r, inferred, _ =
             List.find (fun ((r : Resolve.t), _, _) -> r.home = p.home) all
           in
-          let fn, more =
+          let fn, more, calls =
             Lower.made ~types:(Hashtbl.find_opt types) r inferred req
           in
-          Hashtbl.replace extra p.home
-            (fn :: Option.value ~default:[] (Hashtbl.find_opt extra p.home));
+          let fns, calls' =
+            Option.value ~default:([], []) (Hashtbl.find_opt extra p.home)
+          in
+          Hashtbl.replace extra p.home (fn :: fns, calls @ calls');
           make (more @ rest))
   in
   make (List.concat_map (fun (_, _, (_, reqs)) -> reqs) all);
-  link_lowered ?lint
-    ~imports:
-      ([ Prelude.intrinsics ]
-      :: List.map (fun _ -> [ whole ]) std
-      @ List.map (fun c -> c.reachable) modules)
-    (List.map
-       (fun (_, _, ((core : Core.program), _)) ->
-         {
-           core with
-           fns =
-             core.fns
-             @ List.rev
-                 (Option.value ~default:[] (Hashtbl.find_opt extra core.home));
-         })
-       all)
+  let linked =
+    link_lowered ?lint
+      ~imports:
+        ([ Prelude.intrinsics ]
+        :: List.map (fun _ -> [ whole ]) std
+        @ List.map (fun c -> c.reachable) modules)
+      (List.map
+         (fun (_, _, ((core : Core.program), _)) ->
+           let fns, calls =
+             Option.value ~default:([], []) (Hashtbl.find_opt extra core.home)
+           in
+           {
+             core with
+             fns = core.fns @ List.rev fns;
+             method_calls = core.method_calls @ calls;
+           })
+         all)
+  in
+  (* which handlers a description may be is the whole program's to say,
+     so a method call on one of a handler with state is refused here
+     (stateless.ml), before anything runs or builds *)
+  pass "stateless" (fun () -> Stateless.check linked);
+  linked
 
 let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
 

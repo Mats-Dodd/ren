@@ -157,6 +157,7 @@ let lint_evidence body =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }))
 
 (* deps.md's handler of two dependencies sharing one state, and a function
@@ -3186,6 +3187,31 @@ let%expect_test "an operation read from a value holding a handler of several" =
   run
     (rates
    ^ {|
+handler fixed_rates(rate: Int) for Rates, RateCalls =
+  usd_to(_) => rate
+  count() => 0
+
+fn id(x) = x
+
+fn main() uses Console =
+  let h = id(fixed_rates(3))
+  print(h.usd_to(1))
+|}
+    );
+  [%expect
+    {|
+    3
+    ()
+    |}]
+
+let%expect_test "an operation of a handler of several that keeps state isn't called as a method" =
+  (* `counting_rates` counts its calls, so a call as a method, which would
+     start it fresh, is refused (compiler.md, "Data stage",
+     "Descriptions (step 6)"), the help naming the dependency the
+     operation was found in *)
+  run
+    (rates
+   ^ {|
 fn id(x) = x
 
 fn main() uses Console =
@@ -3195,8 +3221,12 @@ fn main() uses Console =
     );
   [%expect
     {|
-    3
-    ()
+    error: `h` may be a description of `counting_rates`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:20:11
+    20 │   print(h.usd_to(1))
+       │           ^^^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with h in Rates.usd_to(1)`
     |}]
 
 let%expect_test "a handler of several, then said to be something else" =

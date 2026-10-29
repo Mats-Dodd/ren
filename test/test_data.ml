@@ -2212,16 +2212,8 @@ let%expect_test "[s6 reject] a stateful handler's description isn't called as a 
   (* language.md's trap: each call started `counter` fresh, so it printed
      1 and 1. The check is the linked program's (compiler.md, "Data
      stage", step 6), so it's `ren run`'s *)
-  until "s6"
-    ~says:
-      [
-        "error: `c` may be a description of `counter`, which keeps state, so \
-         it isn't called as a method";
-        "help: install it: `with c in Area.area()`";
-      ]
-    (fun () ->
-      run
-        {|
+  run_error
+    {|
 dep Area =
   area: fn() -> Int
 
@@ -2235,25 +2227,26 @@ fn main() uses Console =
   let c: Area = counter()
   print(c.area())
   print(c.area())
-|});
+|};
   [%expect {|
-    (until s6)
-    1
-    1
-    ()
+    error: `c` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:12:11
+    12 │   print(c.area())
+       │           ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with c in Area.area()`
+
+    error: `c` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:13:11
+    13 │   print(c.area())
+       │           ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with c in Area.area()`
     |}]
 
 let%expect_test "[s6 reject] a handler with a `finally` isn't called as a method" =
-  until "s6"
-    ~says:
-      [
-        "error: `l` may be a description of `logged`, which has a `finally`, \
-         so it isn't called as a method";
-        "help: install it: `with l in Area.area()`";
-      ]
-    (fun () ->
-      run
-        {|
+  run_error
+    {|
 dep Area =
   area: fn() -> Int
 
@@ -2266,27 +2259,21 @@ handler logged() for Area uses Console =
 fn main() uses Console =
   let l: Area uses Console = logged()
   print(l.area())
-|});
+|};
   [%expect {|
-    (until s6)
-    done
-    1
-    ()
+    error: `l` may be a description of `logged`, which has a `finally`, so it isn't called as a method
+       ┌─ test.ren:12:11
+    12 │   print(l.area())
+       │           ^^^^
+       = a call as a method makes a fresh instance, so its `finally` would run at the end of each call
+       help: install it: `with l in Area.area()`
     |}]
 
 let%expect_test "[s6 reject] any handler a description may be counts" =
   (* the closed world: a stored `Area` may be any handler of `Area` whose
      description the program makes as a value *)
-  until "s6"
-    ~says:
-      [
-        "error: `a` may be a description of `counter`, which keeps state, so \
-         it isn't called as a method";
-        "help: install it: `with a in Area.area()`";
-      ]
-    (fun () ->
-      run
-        {|
+  run_error
+    {|
 dep Area =
   area: fn() -> Int
 
@@ -2307,11 +2294,14 @@ fn total(xs: Array<Area>) -> Int =
 
 fn main() uses Console =
   print(total([square(2), counter()]))
-|});
+|};
   [%expect {|
-    (until s6)
-    5
-    ()
+    error: `a` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:16:12
+    16 │     t += a.area()
+       │            ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with a in Area.area()`
     |}]
 
 let%expect_test "[s6 accept] a stateless handler is still called as a method" =
@@ -2359,16 +2349,194 @@ fn main() uses Console =
     t += a.area()
   print(t)
   with counter() in
-    Area.area()
+    let _ = Area.area()
     print(Area.area())
 |};
   [%expect {|
-    error: `area` returns `Int`, and this throws it away
-       ┌─ test.ren:20:5
-    20 │     Area.area()
-       │     ^^^^^^^^^^^
-       help: use it, or write `let _ = ...` if you mean to drop it
+    13
+    2
+    ()
     |}]
+
+let area_handlers =
+  {|
+dep Area =
+  area: fn() -> Int
+
+handler square(s: Int) for Area =
+  area() => s * s
+
+handler counter() for Area =
+  var n = 0
+  area() =>
+    n += 1
+    n
+|}
+
+let%expect_test "[s6 accept] a stateful handler bound to a local and only installed" =
+  (* `c` is never assigned, and only installed, so the description it
+     holds reaches those `with`s alone, and the stored ones called as
+     methods can't be it (compiler.md, "Data stage", "Descriptions (step
+     6)") *)
+  run
+    (area_handlers
+   ^ {|
+fn main() uses Console =
+  let c = counter()
+  let d = c
+  with d in
+    print(Area.area())
+    print(Area.area())
+  let xs: Array<Area> = [square(2), square(3)]
+  print(xs.map(fn(a) => a.area()))
+  print(square(4).area())
+|});
+  [%expect {|
+    1
+    2
+    [4, 9]
+    16
+    ()
+    |}]
+
+let%expect_test "[s6 reject] a description called as a method where it's made" =
+  run_error (area_handlers ^ {|
+fn main() uses Console =
+  print(counter().area())
+|});
+  [%expect {|
+    error: `counter()` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:14:19
+    14 │   print(counter().area())
+       │                   ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with counter() in Area.area()`
+    |}]
+
+let%expect_test "[s6 reject] a local that's assigned may hold any description" =
+  run_error
+    (area_handlers
+   ^ {|
+fn main() uses Console =
+  var a = square(2)
+  a = counter()
+  print(a.area())
+|});
+  [%expect {|
+    error: `a` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:16:11
+    16 │   print(a.area())
+       │           ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with a in Area.area()`
+    |}]
+
+let%expect_test "[s6 reject] a description passed, returned or stored is kept" =
+  (* each makes `counter`'s a description that may reach the calls whose
+     receivers come from somewhere else: the parameter, the result, the
+     field and the handler's own *)
+  run_error
+    (area_handlers
+   ^ {|
+type Box = { a: Area }
+
+handler twice(inner: Area) for Area =
+  area() => 2 * inner.area()
+
+fn go(a: Area) -> Int = a.area()
+
+fn made() -> Area = counter()
+
+fn main() uses Console =
+  print(go(counter()))
+  print(made().area())
+  let b = Box { a: counter() }
+  print(b.a.area())
+  with twice(counter()) in
+    print(Area.area())
+|});
+  [%expect {|
+    error: `inner` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:16:23
+    16 │   area() => 2 * inner.area()
+       │                       ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with inner in Area.area()`
+
+    error: `a` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:18:27
+    18 │ fn go(a: Area) -> Int = a.area()
+       │                           ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with a in Area.area()`
+
+    error: `made()` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:24:16
+    24 │   print(made().area())
+       │                ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with made() in Area.area()`
+
+    error: `b.a` may be a description of `counter`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:26:13
+    26 │   print(b.a.area())
+       │             ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with b.a in Area.area()`
+    |}]
+
+let%expect_test "[s6 reject] a handler of another module, kept there" =
+  (* the closed world: `shapes` stores `counter`'s description, and the
+     program's call can be given it *)
+  run_files
+    [
+      ( "main.ren",
+        {|
+import shapes
+
+fn main() uses Console =
+  for a in shapes.all()
+    print(a.area())
+|} );
+      ( "shapes.ren",
+        {|
+pub dep Area =
+  area: fn() -> Int
+
+handler square(s: Int) for Area =
+  area() => s * s
+
+handler counter() for Area =
+  var n = 0
+  area() =>
+    n += 1
+    n
+
+pub fn all() -> Array<Area> = [square(2), counter()]
+|} );
+    ];
+  [%expect {|
+    error: `a` may be a description of `shapes.counter`, which keeps state, so it isn't called as a method
+      ┌─ main.ren:5:13
+    5 │     print(a.area())
+      │             ^^^^
+      = a call as a method makes a fresh instance, so its state would start again at each call
+      help: install it: `with a in shapes.Area.area()`
+    |}]
+
+let%expect_test "[s6 accept] `ren check` of one module doesn't see it" =
+  (* which handlers a description may be is the linked program's to say,
+     so only `ren run`, `ren test` and `ren build` refuse it *)
+  ignore
+    (Ren.Driver.check ~file
+       (area_handlers
+      ^ {|
+fn main() uses Console =
+  let c: Area = counter()
+  print(c.area())
+|}));
+  print_endline "checks";
+  [%expect {| checks |}]
 
 (* ---- the program of language.md's "A program, end to end", without
    `|>` and wirings: domain types by name, a policy that's data, an

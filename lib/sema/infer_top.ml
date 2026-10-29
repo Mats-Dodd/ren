@@ -1558,7 +1558,7 @@ let canonical env so_far (f : fn_def) =
       (function
         | Installs { key; from } -> Installs { key = label key; from }
         | Installs_handler ls -> Installs_handler (List.map label ls)
-        | Calls_op { key; from; op } -> Calls_op { key = label key; from; op }
+        | Calls_op c -> Calls_op { c with key = label c.key }
         | Inline_op o -> Inline_op o
         | Block { name; given } -> Block { name; given = List.map label given }
         | Field_of p -> Field_of p

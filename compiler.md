@@ -3286,7 +3286,9 @@ ends, since that's what `with d in` means. Decision 3 names only
 stateless handlers; a description's type doesn't say whether its
 handler keeps state, so the type can't refuse the others, and this is
 their meaning rather than a check that can't be made where the
-description is used. A dependency's members and operations never share
+description is used. (Since the data stage's step 6 that call is
+refused, on the linked program: "Data stage", "Descriptions (step 6)".)
+A dependency's members and operations never share
 a name, so `d.x` is one or the other; an operation read without being
 called, `d.op`, stays an error.
 
@@ -6898,12 +6900,23 @@ revisit if a step finds it wrong:
   type. In parens, a label on one field only documents it.
 - **A labelled one-field construction is an error,** `Flat(off: m)`,
   with the fix-it `Flat(m)`: one spelling per variant.
-- **The stateless-only rule is checked on the linked program,** per
-  dependency, against every handler whose description is kept, since a
-  description's type doesn't say whether its handler keeps state: a
-  dependency that has one stateful handler kept as a value refuses
-  every method call on its descriptions. `ren check` of one module
-  doesn't see it; `ren run`, `ren test` and `ren build` do.
+- **The stateless-only rule is checked on the linked program,** since a
+  description's type doesn't say whether its handler keeps state, and
+  **step 6 refined it** from per dependency to per call: a description
+  installed where it's made, `counter().area()`, or held by a local
+  never assigned or passed with `&` and only ever installed (`let c =
+  counter()`, then `c.area()` or `with c in ...`), reaches only those
+  `with`s, so a method call on it is refused only if that handler keeps
+  state; any other method call, on a description stored, passed,
+  returned or captured, may be any *kept* handler's, and is refused if
+  one of its dependency's kept handlers keeps state, as the
+  specification said for every call. So a stateful handler that's never
+  kept, installed by `with` or bound and only installed, leaves the
+  calls on its dependency's stored descriptions alone. It's sound
+  because every description is made by calling a handler's function, or
+  by an inline handler, which has no state, and one not kept reaches
+  only the `with`s the walk saw it reach (stateless.ml). `ren check` of
+  one module doesn't see it; `ren run`, `ren test` and `ren build` do.
 - **Stateful means a `var` or a `finally`,** decision 3's list less the
   two its types already refuse; a `let` among a handler's state is
   stateless, though native code installs it for a call, which means the
@@ -6923,7 +6936,8 @@ revisit if a step finds it wrong:
 | 2 | e180921 | the language change, by-name variants, through the whole pipeline: the parser (`parse_ctor_decl`'s braces and one positional field, labelled or not; `Shape.Rect { ... }` and `Shape.Rect { .. }`; `..` refused in parentheses), Resolve (`braces_name`, the record-or-constructor refusal; a by-name constructor refused where a binding pattern must always match), Infer (`infer_con_named`, `con_pattern`, `ctor_shape` down to arity, the by-name and by-position refusals with their fix-its, an update into a by-name constructor), Exhaust (`Rect { .. }`), lowering (to `Con` and `PCon`, so Core, Core Lint, the interpreter and Mem IR are unchanged), `show` in the interpreter, its `assert` diff, the journal, and natively (`ren_ctor_info.fields`); tree-sitter's `variant`, `constructor_expression` and `constructor_pattern` with fields, the corpus (variants.txt, and types.txt's declaration moved), Zed's highlights; test_data.ml's s2 tests on, bench/data/byname in `same`, `release` and `tcc_same` (and `shapes` and `interp` now as specified) ; and the migration, every site of the inventory moved to the new forms, 318 of its 324: bench/ 100 (packed, review_lists, review_values, sized, trmc, trmc_panic, values), bench/native 103 (binary-trees, blocks, cfold, deriv, nested, nqueens, rbtree; their Rust and Go twins and checksums unchanged), bench/build.t's heredocs 12, examples/ 17 (bank 7, `Sent { amount: t.amount, to: t.to }`; shop 3, vm 4, infer.ren and plans.ren 3), test/ 81 (test_native 38, test_eval 12, test_blocks 10, test_deps 10 with 6 printed, test_resolve 4 with 1 printed, test_infer 3, test_modules 2, test_ops 1, test_syntax 1), the corpus 2 (types.txt, expressions.txt), the docs 3 (README.md's `Pro(5)`, errors.md's `Sent` and `Received`) and their prose (README.md, bench/native/README.md, the Native slice's trmc paragraph); the outputs promoted, each diff only `show`'s braces, the step's error texts and the bank's line numbers. Left as they are, 6: formats.md's `Query(sql: CStr)`, a format's `case`; test_infer.ml's `Pro(seat: 5)` and `Pt(x: 1, 2)` and their printed copies, now tests of the errors that replace theirs; test_modules.ml's printed `Full(row: Row)`, a declaration of one field. Choices: below the table | steps 3 to 8 |
 | 3 | b885fcd | or-patterns anywhere a pattern goes, nested, `as`, and `let PATTERN = e else LEAVE`, through the whole pipeline: the parser (`parse_pattern`'s alternatives, `as` and grouping; `let` and `for` taking any pattern and a block's parameter one that starts with `(`, `{` or a capital; the `let ... else` statement; `if let` refused with its help; `as` after `fail` patterns refused), Resolve (one message for a name only some alternatives bind, `fail` ones too; `leaves`; the `else` resolved before the pattern binds), Infer (`bind_pattern`'s `POr`, through `alternatives`, which `bind_fail` shares, with the new message; `PAs`; the `else` checked against the rest of the block's type), Exhaust (`Or` spaces, each alternative checked useful, the patterns of a `let`, a `for` and a block's parameter checked to always match, and a `let ... else`'s to not), lowering (`let ... else` a `Match` of two arms, `PAs`), Core's `PAs` and Core Lint, the interpreter, and Mem IR in both builds (`PAs` the subject itself; an or-pattern that binds names gives each alternative its own variables and its own join, which Perceus needs, and a pattern's variable found by id); tree-sitter's `or_pattern` for any patterns, `as_pattern`, `parenthesized_pattern`, `let_else`, patterns in a `let`, a `for` and a block's parameter, the corpus (patterns.txt) and the highlight markers, Zed's highlights; test_data.ml's s3 tests on, the end-to-end program among them; bench/data/orpat as specified and in `same`, `release` and `tcc_same`, with bench/data/orpat_strs beside it (or-patterns binding counted values); the bank's `worth_retrying` in two arms with or-patterns; README's tour, language.md's "What Ren has today". The parser's `binding_pattern`, `irrefutable` and `might_not_match` are gone, and so is Resolve's refusal of a by-name constructor in a binding position: Exhaust decides. Choices: below the table | steps 4 to 8 |
 | 4 | e77a8bb | variant types, `Order.Placed`, through the whole pipeline: the parser (`parse_ty`'s `TyVariant`, `Tree.Node<Int>`, and `Tree<Int>.Node` refused with its help), Resolve (the sum's name, and the three refusals: not a sum, no such variant with "did you mean", a variant not by name; and a variant type of a private sum in a public signature), Types and Ty (`TVariant` and `Variant`, unifying only with themselves, printed `Order.Placed`, every walk of a type), Infer (`as` on a by-name constructor's pattern binds its variant type; field reads, record patterns, `{ ..p, total: x }` an `Order.Placed`, `var p` and `p.total = x`; `Placed { ..p }` the sum; a pattern of a variant type's own constructor that always matches, and of another one refused; the two mismatch helps and the constructor's note; `..` from a sum, and the method refusal), Infer_reqs (`==`, `hash` and order borrowed, through the sum's `key`), Exhaust (a variant type's one constructor), the interfaces (a variant type in a `pub` signature, written `order.Order.Placed` by an importer), Core (`Of_variant`, `Con`, `PCon`, `Field` and `Update` at a `Variant`, `PAs` binding one; `describe` the sum's) and Core Lint, the interpreter (a variant type's value is its sum's; its walks, `show`, `==`, `hash`, `key` and the journal, the sum's), and Mem IR in both builds (the sum's layout, struct and descriptor; a field read at its constructor's slot; no tag test; `Of_variant` no code; an update of a small one keeps its tag); release specialization; tree-sitter's `variant_type`, its corpus (types.txt) and highlight markers, Zed's highlights; test_data.ml's s4 tests on, and four more (another module's signature, round trips and a variant type's own patterns, another variant's pattern refused, the arguments' place); bench/data/variants as specified and in `same`, `release` and `tcc_same`, with variants_small (variant types of sums kept as structs), variants_escape (stored, passed through generic functions, round-tripped) and variants_reuse beside it, whose loop of 1000 updates and conversions allocates nothing (`--stats`, both builds: 4 allocations, 1000 reuses); README's tour, language.md's "What Ren has today", operators.md's "Equality, hashing and `show`". Choices: below the table | steps 5 to 8 |
-| 5 | this commit | the errors that teach the model, and `todo`, through the whole pipeline: `todo` a keyword (token.ml, the lexer, the parser's `primary`, Ast's `Todo`), Resolve (one of `let ... else`'s leaves), Infer (a fresh type variable), lowering (the intrinsic `Lib_panic`, "reached a `todo`", at the `todo`, so Core, Core Lint and the interpreter see a call they already know), and Mem IR in both builds (a `Lib_panic` in the program's code is said where it's written, not at the function's site, so native and `ren run` print the same); `$start` calls a `main` that never gives a value, `fn main<T>() -> T`, at `Unit`, which natively was Mem Lint's "`$start` isn't what the program says it is"; Diag's `code` and `code_at`, lines a help writes; `field_access`'s sum case (Infer_msg.field_of_sum): "`Shape` is a sum type; only `Ring` has `r`" with the `match` to paste, its variants in one arm with `\|` when the field has one type, an arm each otherwise; "every variant of `Shape` has `id`, but a sum type has no fields" with the hoisting help, or, at different types, the `match`; Exhaust's arms to paste, up to three and an arm for the rest, values' `_` or errors' `fail _`, by name where a variant is, after their sum where a record type shadows a bare constructor (Infer_msg.braced_ctor), at the column of the match's arms; tree-sitter's `todo`, the corpus (statements.txt) and the highlight markers, Zed's keyword highlight; test_data.ml's s5 tests on, and thirteen more: a positional variant's label, a field at different types, no variant, a generic sum's hoist, more missing than shown, nested, the shadowed constructor, values and errors, `Err`'s tags, a `todo` body and `main`, `todo` not a name, the arms of nine programs pasted back in after their last arm, and the `match` of three field errors pasted in for the read, each of which then checks; every "missing:" error's help in test_exhaust, test_errors, test_modules, test_tasks, test_collections and examples.t promoted, each new line pasteable; bench/data/todo_panic as specified and in `same`, `release` and `tcc_same`, and `fn main() = todo` in build.t; errors.md's `match` section and the README's tour show the printed arms; language.md's "What Ren has today". Choices: below the table | steps 6 to 8 |
+| 5 | ed8f0f8 | the errors that teach the model, and `todo`, through the whole pipeline: `todo` a keyword (token.ml, the lexer, the parser's `primary`, Ast's `Todo`), Resolve (one of `let ... else`'s leaves), Infer (a fresh type variable), lowering (the intrinsic `Lib_panic`, "reached a `todo`", at the `todo`, so Core, Core Lint and the interpreter see a call they already know), and Mem IR in both builds (a `Lib_panic` in the program's code is said where it's written, not at the function's site, so native and `ren run` print the same); `$start` calls a `main` that never gives a value, `fn main<T>() -> T`, at `Unit`, which natively was Mem Lint's "`$start` isn't what the program says it is"; Diag's `code` and `code_at`, lines a help writes; `field_access`'s sum case (Infer_msg.field_of_sum): "`Shape` is a sum type; only `Ring` has `r`" with the `match` to paste, its variants in one arm with `\|` when the field has one type, an arm each otherwise; "every variant of `Shape` has `id`, but a sum type has no fields" with the hoisting help, or, at different types, the `match`; Exhaust's arms to paste, up to three and an arm for the rest, values' `_` or errors' `fail _`, by name where a variant is, after their sum where a record type shadows a bare constructor (Infer_msg.braced_ctor), at the column of the match's arms; tree-sitter's `todo`, the corpus (statements.txt) and the highlight markers, Zed's keyword highlight; test_data.ml's s5 tests on, and thirteen more: a positional variant's label, a field at different types, no variant, a generic sum's hoist, more missing than shown, nested, the shadowed constructor, values and errors, `Err`'s tags, a `todo` body and `main`, `todo` not a name, the arms of nine programs pasted back in after their last arm, and the `match` of three field errors pasted in for the read, each of which then checks; every "missing:" error's help in test_exhaust, test_errors, test_modules, test_tasks, test_collections and examples.t promoted, each new line pasteable; bench/data/todo_panic as specified and in `same`, `release` and `tcc_same`, and `fn main() = todo` in build.t; errors.md's `match` section and the README's tour show the printed arms; language.md's "What Ren has today". Choices: below the table | steps 6 to 8 |
+| 6 | this commit | descriptions: an operation called on a description only when its handler is stateless, through the pipeline: Infer's `Calls_op` gains the receiver as written and the call a `with` would make, its arguments as written; Lower records each method call (Core.program's `method_calls`, by its `With`'s location, from `Lower.program` and `Lower.made`); a new link-time pass, lib/lower/stateless.ml (`Stateless.check`), run by `Driver.link` after the modules are linked, so `ren run`, `ren test` and `ren build` refuse (not `ren check`): a handler is stateful if its body makes a cell (a `var`) or its instance has a `finally`; a method call on a description made where it's installed, or held by a local never changed and only installed, may be only that handler's; any other may be any kept handler's (refined from the specification's per-dependency rule: "Where the data stage may differ"); the error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method" ("which has a `finally`"), at the operation's name, with its note and the help that writes the `with`; the interpreter and native builds unchanged, each program that still compiles running the same; test_data.ml's s6 tests on (the refusals through `run_error`; the last accept's program had a dropped `Area.area()`, now `let _ =`), and seven more: a stateful handler bound and only installed beside stored stateless calls, one called where it's made, a local that's assigned, one passed, returned, stored and wrapped, a handler of another module kept there, and `ren check` not seeing it; test_descriptions.ml's stateful method call a refusal, its `with` half its own accept test, its `Shape` a `Codec` (numbers kept); test_deps.ml's handler of several called as a method through `id(...)`, now a stateless `fixed_rates`, with the `counting_rates` one a refusal; bench/10d/methods.ren, review_deps.ren and dispatch_mix.ren's calls that may reach a handler with state written as `with`s, their outputs and every site's lowering unchanged; the renames: bench/10d/shapes.ren's `Shape` a `Codec`, dispatch.ren's `Shape` and `Expr` `Codec` and `Pipe`, dispatch_mix's `Area`, `Size` and `Label` `Codec`, `Width` and `Name`, build.t's `--explain-dispatch` listings redone, bench/native/dispatch's `ShapeK` `CodecK` (gen.py and bench.ren; the twins byte for byte as they were, checksums the same, the release C the same but for handlers' names, so RESULTS.md's numbers stand, as it now says); bench/data/shapes in `same`, `release` and `tcc_same`; deps.md's example a library's routes, with the rule, its error and that `ren check` doesn't report it; handlers.md's "Called as a method"; README's handlers section; bench/native/README.md; language.md's "What Ren has today". Choices: below the table | steps 7 and 8 |
 
 Step 1's choices, where the sections above are silent:
 
@@ -7253,6 +7267,67 @@ Step 5's choices, where the sections above are silent:
   at the call, where before it was said at the function's site; in the
   prelude and the standard library it's still said at the program's
   call that reached it.
+
+Step 6's choices, where the sections above are silent:
+
+- **The rule is per call, not per dependency** (the specification's
+  version, refined; "Where the data stage may differ"). The
+  specification's rule refuses `xs[0].area()` on an array of `square`s
+  because a `counter` is installed by `let c = counter()` then `with c
+  in` elsewhere, or called once as `counter().area()`; the walk follows
+  a description from where it's made through `let`s, which costs one
+  pass over Core, so it refuses only where the call may reach the
+  stateful one. A finer analysis, through arrays, records, calls and
+  results (a flow analysis of the closed world), would refuse less
+  still; it wasn't needed by any program here, and the dispatch
+  analysis is no narrower than the dependency (10d's "Dispatch (step
+  4)"), so there was nothing to share.
+- **What's followed:** a `With`'s or `With_handler`'s item that's a
+  call of a handler's function (possibly `Narrowed`), and a `Let` of
+  one, or of a copy of such a local, whose variable no `Assign` and no
+  `&` argument anywhere in the function names, and every use of which,
+  inside blocks too, is a `With`'s item or another such `let`. Anything
+  else keeps the handler, the function itself used without a call
+  included.
+- **One wording for both:** "`c` may be a description of `counter`" even
+  when it can only be that one, as the specification's tests have it.
+  The handler is named as its module would write it, `counter`, or
+  `shapes.counter` from another module; when several kept handlers of
+  the dependency keep state, the first in the program's order (the
+  prelude, the standard library, then the modules as linked) is named.
+- **A `finally`'s note** is "a call as a method makes a fresh instance,
+  so its `finally` would run at the end of each call"; a handler with
+  both a `var` and a `finally` is said to keep state.
+- **The error points at the operation's name,** `c.area()`'s `area`, as
+  the other two method refusals do (`method_fails`, `method_over`).
+  Each call is refused once, and every refused call is reported.
+- **The help's `with` writes the arguments as written,** `with t in
+  Tally.add(x + i)`, where each can be shown, and `(...)` otherwise, so
+  it pastes. Its arguments are then evaluated inside the `with`, where
+  the method call evaluated them before installing; for a stateless
+  argument that's the same, and the help is a suggestion to read.
+- **Method calls are found by their `With`'s location,** which no
+  written `with` shares, rather than a new field on Core's `With`, so
+  every pass that matches a `With` is unchanged; Lower records them
+  with each module (`method_calls`), and with each function made for a
+  request, which the driver adds to its module's.
+- **The pass runs in `Driver.link`,** so `ren types` with Core Lint on
+  (the tests') sees it too; `ren check` and `ren types` from the
+  command line, which don't link, don't.
+- **dispatch_mix keeps every site's lowering:** its calls that may reach
+  `o_seen` or `t_count` are `with o in Op.run(acc)`, its argument a
+  local, which a native build lowers as the method call it was (10d's
+  "Dispatch (step 4)"); `total`'s `t.add(x + i)` became `let y = x + i`
+  then `with t in Tally.add(y)` for that reason, and its listing still
+  copies the loop for each handler, 35 statements a copy.
+- **test_deps.ml's "an operation read from a value holding a handler of
+  several"** kept what it tests, the lookup through `id(...)`, with a
+  stateless handler of the same two dependencies; the stateful one's
+  call is a refusal beside it, its help showing the dependency the
+  operation was found in.
+- **bench/native/dispatch's kernels keep their names,** `shapesK`, in
+  the twins, measure.sh and RESULTS.md; only Ren's code says codecs
+  (`codecsK`, `CodecK`, `cK_i`, `cost`).
 
 ## The runtime model
 

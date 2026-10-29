@@ -25,7 +25,7 @@ val made :
   Resolve.t ->
   Infer.t ->
   request ->
-  Core.fn_def * request list
+  Core.fn_def * request list * Core.method_call list
 
 (* The path of the function made for a request: `recorder$Clock`. *)
 val made_path : request -> Path.t

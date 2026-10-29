@@ -283,6 +283,7 @@ Tested against the compiler on 2026-10-28:
 | Exhaustiveness | very good: lists the missing patterns, says guarded arms don't count, flags unreachable arms. Since step 5: the help prints the missing arms as code to paste, `Some(Closed) => todo`, at the arms' column; the editor's code action is later |
 | `todo` | none. Since step 5: a keyword, an expression of any type that panics where it's reached, "reached a `todo`", in `ren run` and natively; it leaves a `let ... else` |
 | One constructor name in two types | resolved by the expected type, else "write `A.Open`" |
+| A stateful handler called as a method | starts fresh at each call, so language.md's `counter()` prints `1`, `1`. Since step 6: an error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method", whose help writes the `with`, checked on the linked program by `ren run`, `ren test` and `ren build` (not `ren check` of one module); a stateless one is still called as a method |
 | Records | nominal: same-shaped records don't mix |
 
 The core is right. What's missing is convenience, and two layout rules

@@ -34,6 +34,14 @@ handlers; interp's `eval` calls through the tag too, recursion through
 didn't move: handlers, blocks, rbtree, deriv, nbody and stack are within
 1% in cycles.
 
+Since the data stage's step 6 (compiler.md, "Data stage", "Descriptions
+(step 6)"), Ren's side of the shapesK kernels is codecs, `dep Codec2 =
+cost: fn() -> Int` and so on, since a program that owns every shape
+writes the ADT; the kernels keep their names here, in measure.sh and in
+the twins. Only names changed: the release build's C is the same but
+for its handlers' names, the checksums are the same, so these numbers
+stand (checked on a Linux cloud container, against ed8f0f8).
+
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 
 Slices are built as representation A: a slice is a header like its

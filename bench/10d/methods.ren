@@ -1,7 +1,8 @@
 // Stage 10d, step 3: what bench/10d/shapes.ren and router.ren leave
 // out, checked native against `ren run`: an inline handler in a generic
 // function, one kept in a record, what one captures copied, and a
-// handler with state called as a method, which starts fresh each call.
+// handler with state, which each `with` starts fresh: since the data
+// stage's step 6, it isn't called as a method.
 
 dep Route =
   handle: fn(path: Str) -> Str
@@ -35,8 +36,10 @@ fn main() uses Console =
   let c = Calc { name: "double", op: handler fn(a, b) => (a + b) * 2 }
   print(c.op.apply(2, 3))
   let k = counter()
-  print(k.get())
-  print(k.get())
+  with k in
+    print(Get.get())
+  with k in
+    print(Get.get())
   with k in
     print(Get.get())
     print(Get.get())

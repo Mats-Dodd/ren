@@ -1923,8 +1923,18 @@ and desc_method env cx (e : expr) (f : expr) (r : expr) (m : ident) (i : impl)
             (fun t a -> unify_at env r.loc ~found:a ~expected:t)
             l.payload d.dargs;
         Hashtbl.replace cx.nodes f.node (TFun (ps, ret, errs, uses));
+        (* the call a `with` would make, its arguments as written if
+           each can be shown, for Stateless's help *)
+        let call =
+          match List.map env.source args with
+          | written when List.for_all Option.is_some written ->
+              sprintf "%s.%s(%s)" shown m.name
+                (String.concat ", " (List.filter_map Fun.id written))
+          | _ -> call
+        in
         Hashtbl.replace cx.found f.node
-          (Calls_op { key = dep_of d; from = d.dpath; op = m.name });
+          (Calls_op
+             { key = dep_of d; from = d.dpath; op = m.name; recv; call });
         let needs = copy_needs env ~loc:e.loc ~what:Installing i.needs in
         apply env cx e ~name:(Some m.name) f (TFun (ps, ret, errs, needs)) args
     | _ -> refuse (op_of_value ~names:env.names ~recv m d.dpath [])

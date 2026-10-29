@@ -495,6 +495,18 @@ type fn_def = {
           knows any (compiler.md, "Specialization") *)
 }
 
+(* A method call on a description, `c.area()` (compiler.md, "Data
+   stage", "Descriptions"): lowered as the [With] that installs [c] for
+   the call, at [mloc], so it's recorded beside, for Stateless, which
+   refuses one that may reach a handler with state. *)
+type method_call = {
+  mdep : Path.t;  (** the dependency whose operation it calls *)
+  mrecv : string;  (** the receiver, as written, `c` *)
+  mcall : string;  (** the call as the help writes it, `Area.area()` *)
+  mloc : Loc.t;  (** the [With]'s *)
+  mop : Loc.t;  (** the operation's name, where the error points *)
+}
+
 (* A module, lowered. [types] are the types it declares. *)
 type program = {
   home : string;
@@ -519,6 +531,8 @@ type program = {
           a requirement, `add` or `zero`, by the type and the requirement, each
           with the member that gives it: an operator that takes one of the type
           and gives one, or a value of the type (Infer_reqs) *)
+  method_calls : method_call list;
+      (** each method call on a description in its functions, in no order *)
 }
 
 (* ---- building ---- *)

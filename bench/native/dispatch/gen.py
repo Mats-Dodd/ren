@@ -7,17 +7,25 @@ the three compute the same thing to the last digit.
 The kernels are research/dispatch.md's (foundations.md, decision 4),
 over descriptions of handlers chosen at run time:
 
-  shapesK  an array of 65,536 shapes of K kinds (2, 4, 8, 32), shuffled,
-           each kind's area a different three steps over 1 to 3 Ints it
-           captured; the sum of the areas, `rounds` times (a)
+  shapesK  an array of 65,536 codecs of K kinds (2, 4, 8, 32), shuffled,
+           each kind's cost a different three steps over 1 to 3 Ints it
+           captured; the sum of the costs, `rounds` times (a)
   db       a handler of 4 chosen from data, `get` called in a loop over
-           1,024 keys, 16 calls a round for each shape the others make (b)
+           1,024 keys, 16 calls a round for each codec the others make (b)
   router   50 routes, each an inline handler capturing two Ints, a
            stream of as many requests as shapes over them, `rounds` times (c)
   interp   an expression tree of 8 kinds of node, 1,210 nodes, a handler
            each, evaluated 256 times a round (d)
 
-Ren's are descriptions called as methods. Rust's are each written twice,
+Ren's are descriptions called as methods, of things a library would
+keep and its users add kinds to: since the data stage (language.md §6)
+the shapes research/dispatch.md's first kernel names are Ren's codecs,
+`dep Codec2 = cost: fn() -> Int` and so on, in `codecsK`, since a
+program that owns every shape writes the ADT (bench/data/shapes.ren).
+The kernel keeps its name, `shapesK`, in the twins, measure.sh and
+RESULTS.md, and its arithmetic and checksums. `interp`'s `Node` stays a
+description: it's the `dyn` side of the data stage's comparison with
+the ADT (bench/data/interp.ren). Rust's are each written twice,
 as `dyn` trait objects (`Box<dyn Fn>` for the router) and as an enum
 with a `match`; Go's as an interface. The twins take the rounds as
 their first argument, then a kernel, then for Rust `dyn` or `enum`;
@@ -40,7 +48,8 @@ def nwords(i):
 
 
 def shape_expr(i, lang):
-    """Kind i's area: three steps chosen by i's base-4 digits."""
+    """Kind i's cost (the twins' area): three steps chosen by i's base-4
+    digits."""
     vs = VARS[: nwords(i)]
     x = "a"
     for j in range(3):
@@ -119,13 +128,13 @@ fn lcg(s: Int) -> Int = s *% 6364136223846793005 +% 1442695040888963407
 fn bits(s: Int) -> Int = s.shr(33).bit_and(2147483647)
 """
     )
-    # (a) shapes
+    # (a) shapes, Ren's codecs
     for K in KS:
-        out.append(f"dep Shape{K} =\n  area: fn() -> Int\n")
+        out.append(f"dep Codec{K} =\n  cost: fn() -> Int\n")
         for i in range(K):
             params = ", ".join(f"{v}: Int" for v in VARS[: nwords(i)])
             out.append(
-                f"handler s{K}_{i}({params}) for Shape{K} =\n  area() => {shape_expr(i, 'ren')}"
+                f"handler c{K}_{i}({params}) for Codec{K} =\n  cost() => {shape_expr(i, 'ren')}"
             )
         out.append("")
         lines = []
@@ -133,12 +142,12 @@ fn bits(s: Int) -> Int = s.shr(33).bit_and(2147483647)
             args = ", ".join(VARS[: nwords(i)])
             kw = "if" if i == 0 else "else if"
             if i < K - 1:
-                lines.append(f"      {kw} kind == {i} then s{K}_{i}({args})")
+                lines.append(f"      {kw} kind == {i} then c{K}_{i}({args})")
             else:
-                lines.append(f"      else s{K}_{i}({args})")
+                lines.append(f"      else c{K}_{i}({args})")
         out.append(
-            f"""fn shapes{K}(n: Int, rounds: Int) -> Int =
-  var xs: Array<Shape{K}> = []
+            f"""fn codecs{K}(n: Int, rounds: Int) -> Int =
+  var xs: Array<Codec{K}> = []
   var s = {K}
   for _ in 0..n
     s = lcg(s)
@@ -147,13 +156,13 @@ fn bits(s: Int) -> Int = s.shr(33).bit_and(2147483647)
     let a = r % 64 + 1
     let b = r.shr(6) % 64 + 1
     let c = r.shr(12) % 64 + 1
-    let x: Shape{K} =
+    let x: Codec{K} =
 """ + "\n".join(lines) + f"""
     &xs.push(x)
   var sum = 0
   for _ in 0..rounds
     for x in xs
-      sum += x.area()
+      sum += x.cost()
   sum
 """
         )
@@ -291,7 +300,7 @@ fn interp(evals: Int) -> Int =
         """pub fn run(rounds: Int) uses Console =
   let n = if rounds >= 100 then 65536 else 1000
 """
-        + "".join(f"  print(shapes{K}(n, rounds))\n" for K in KS)
+        + "".join(f"  print(codecs{K}(n, rounds))\n" for K in KS)
         + """  print(db(rounds, n * rounds * 16))
   print(router(n, rounds))
   print(interp(rounds * (n / 256)))

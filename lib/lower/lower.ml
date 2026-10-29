@@ -180,6 +180,8 @@ type cx = {
       (** what's added to each block's name in a function made for a request,
           so that each copy's blocks have names of their own *)
   requests : request list ref;  (** what it uses that's made for a request *)
+  calls : C.method_call list ref;
+      (** each method call on a description it has (Core.program) *)
   types : Path.t -> Iface.type_decl option;
       (** every type of the program, by path, which a dependency's operations
           are found in *)
@@ -1790,7 +1792,8 @@ and call cx ?(changed = false) (e : expr) f args =
       tags_call cx ~changed e f p args
   | Field (r, _) -> (
       match ((node cx f.node).found, args) with
-      | Some (Calls_op { key; from; op }), _ -> desc_method cx e r key from op args
+      | Some (Calls_op { key; from; op; recv; call }), _ ->
+          desc_method cx e f r ~key ~from ~op ~written:recv ~shown:call args
       | Some (Method_of p), [ n; body ]
         when changed
              && List.mem (Prelude.find p)
@@ -1841,8 +1844,11 @@ and given_tags cx (v : expr) =
 
 (* `d.op(args)`, [e]: `with d in Dep.op(args)`, the description [r] and
    the arguments evaluated first, in order, outside (foundations.md,
-   decision 3). [key] is what it's installed as, implementing [from]. *)
-and desc_method cx (e : expr) (r : expr) key from op args =
+   decision 3). [key] is what it's installed as, implementing [from].
+   It's recorded in [calls], with [written], [r] as written, and [shown],
+   the call as a `with` would make it, for Stateless (stateless.ml). *)
+and desc_method cx (e : expr) (f : expr) (r : expr) ~key ~from ~op ~written ~shown
+    args =
   let k = key_of_label cx key in
   let hold_r, recv = hold ~local:true cx "desc" (expr cx r) in
   let binds, values =
@@ -1859,6 +1865,10 @@ and desc_method cx (e : expr) (r : expr) key from op args =
     | _ -> bug "a method call that isn't a call"
   in
   let ev = evidence cx and outer = cx.ev in
+  let mop = match f.kind with Field (_, m) -> m.loc | _ -> e.loc in
+  cx.calls :=
+    { C.mdep = from; mrecv = written; mcall = shown; mloc = e.loc; mop }
+    :: !(cx.calls);
   let body =
     mk
       (Dep_call
@@ -2694,8 +2704,9 @@ let max_binder (f : fn_def) =
   !m
 
 (* [f], lowered; or made for [made], what a use of it asked for. What
-   it uses that's made for a request, it adds to [requests]. *)
-let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
+   it uses that's made for a request, it adds to [requests], and each
+   method call on a description it has, to [calls]. *)
+let fn_def ~home ~types ~requests ~calls ?made (inferred : Infer.t) (f : fn_def) :
     C.fn_def =
   let path = Ast.fn_path home f in
   let scheme = Path.Map.find path inferred.schemes in
@@ -2764,6 +2775,7 @@ let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
       tags;
       suffix;
       requests;
+      calls;
       types;
       opaque = inferred.opaque;
       vars = Hashtbl.create 16;
@@ -2868,12 +2880,12 @@ let ops (types : Iface.type_decl list) =
     types
 
 let program ~types (r : Resolve.t) (inferred : Infer.t) =
-  let requests = ref [] in
+  let requests = ref [] and calls = ref [] in
   let fns =
     List.filter_map
       (fun f ->
         if made_for_requests inferred (Ast.fn_path r.home f) f then None
-        else Some (fn_def ~home:r.home ~types ~requests inferred f))
+        else Some (fn_def ~home:r.home ~types ~requests ~calls inferred f))
       (Ast.functions r.prog)
   in
   (* the indices its loops keep in bounds, marked so (bounds.ml) *)
@@ -2888,22 +2900,23 @@ let program ~types (r : Resolve.t) (inferred : Infer.t) =
        shows = shows r.types fns;
        keys = keys r.types fns;
        ops = ops r.types;
+       method_calls = !calls;
      }
       : C.program),
     List.rev !requests )
 
 (* The function [req] asks for, made in the module that declares the
-   function it's made of, [r], and what it uses that's made for a request
-   in turn. *)
+   function it's made of, [r], what it uses that's made for a request in
+   turn, and the method calls on descriptions it has (Core.program). *)
 let made ~types (r : Resolve.t) (inferred : Infer.t) req =
   let p = match req with Any_for (p, _) | Tags_for (p, _) -> p in
   match
     List.find_opt (fun f -> Ast.fn_path r.home f = p) (Ast.functions r.prog)
   with
   | Some f ->
-      let requests = ref [] in
-      let fn = fn_def ~home:r.home ~types ~requests ~made:req inferred f in
-      (Bounds.mark fn, List.rev !requests)
+      let requests = ref [] and calls = ref [] in
+      let fn = fn_def ~home:r.home ~types ~requests ~calls ~made:req inferred f in
+      (Bounds.mark fn, List.rev !requests, !calls)
   | None -> bug ("a request of `" ^ Path.local p ^ "`, which isn't there")
 
 (* ---- starting ---- *)

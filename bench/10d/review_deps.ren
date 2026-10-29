@@ -2,8 +2,9 @@
 // dependencies, `retry` and `over any` adversarially, checked native
 // against `ren run`. A description changed in a loop (not copied per
 // handler), through a record and an array; `uses` as an upper bound with
-// a handler that keeps state called as a method; arguments evaluated
-// before the call; a generic dependency at three types and two aliases;
+// a handler that keeps state, which `with` installs, since the data
+// stage's step 6 refuses it as a method, and so every `Api` is installed;
+// arguments evaluated before the call; a generic dependency at three types and two aliases;
 // `retry` nested, with `n` 0 and an error set; `over any` stacked.
 
 dep Op =
@@ -103,16 +104,16 @@ fn descriptions() uses Console =
   let routes: Array<(Api uses Clock, Console, Db)> = [health(), users("a".concat("b")), timed(), counted(), make(0), make(3)]
   with fake_db(2), Clock.frozen(Time.epoch) in
     for r in routes
-      print(r.handle(5))
+      print(with r in Api.handle(5))
     var cap = 1
     let h: Api = handler fn(x) => show(x + cap)
     cap = 100
-    print(h.handle(1))
+    print(with h in Api.handle(1))
     var i = 0
     let r2 = routes[1]
-    print(r2.handle(next_id(&i)))
-    print(routes[3].handle(next_id(&i)))
-    print(make(next_id(&i)).handle(next_id(&i)))
+    print(with r2 in Api.handle(next_id(&i)))
+    print(with routes[3] in Api.handle(next_id(&i)))
+    print(with make(next_id(&i)) in Api.handle(next_id(&i)))
 
 dep Box<T> =
   get: fn() -> T

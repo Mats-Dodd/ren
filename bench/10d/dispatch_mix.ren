@@ -1,12 +1,15 @@
 // Stage 10d, step 4: what bench/10d/dispatch.ren leaves out, checked
 // native against `ren run`. A set with state in it (`Op`: six handlers,
-// one keeping state, which a call installs, so the table has no method
-// for it; `Tally`: three, one keeping state, the loop over it copied
-// for each, the stateful copy installing); a dependency whose tags are
-// code installed with `with` (`Area`, found back from its code); a
-// handler of two dependencies (`Size` and `Label`, two handlers and
-// one); a loop copied inside another, over a description the outer one
-// gives it; and descriptions held in a record and an array.
+// one keeping state, which a `with` of one call installs, so the table
+// has no method for it; `Tally`: three, one keeping state, the loop over
+// it copied for each, the stateful copy installing); since the data
+// stage's step 6, a handler with state isn't called as a method, so
+// these two's calls are written `with o in Op.run(x)`, which is the same
+// call. A dependency whose tags are code installed with `with` (`Codec`,
+// found back from its code); a handler of two dependencies (`Width` and
+// `Name`, two handlers and one); a loop copied inside another, over a
+// description the outer one gives it; and descriptions held in a record
+// and an array.
 
 dep Op =
   run: fn(x: Int) -> Int
@@ -21,7 +24,7 @@ handler o_neg() for Op =
   run(x) => 0 - x
 handler o_id() for Op =
   run(x) => x
-// each call of it as a method starts it fresh, so `seen` is 1
+// each `with` starts it fresh, so `seen` is 1
 handler o_seen(k: Int) for Op =
   var seen = 0
   run(x) =>
@@ -41,52 +44,54 @@ handler t_count() for Tally =
     n += 1
     x + n
 
-dep Area =
-  area: fn() -> Int
+// what each codec a library knows costs a block
+dep Codec =
+  cost: fn() -> Int
 
-handler a_sq(s: Int) for Area =
-  area() => s * s
-handler a_rect(w: Int, h: Int) for Area =
-  area() => w * h
-handler a_tri(b: Int, h: Int) for Area =
-  area() => b * h / 2
-handler a_line(n: Int) for Area =
-  area() => n
-handler a_zero() for Area =
-  area() => 0
+handler c_rle(s: Int) for Codec =
+  cost() => s * s
+handler c_lz(w: Int, h: Int) for Codec =
+  cost() => w * h
+handler c_huff(b: Int, h: Int) for Codec =
+  cost() => b * h / 2
+handler c_raw(n: Int) for Codec =
+  cost() => n
+handler c_none() for Codec =
+  cost() => 0
 
-dep Size =
-  size: fn() -> Int
+dep Width =
+  width: fn() -> Int
 
-dep Label =
-  label: fn() -> Str
+dep Name =
+  name: fn() -> Str
 
-handler boxed(n: Int) for Size, Label =
-  size() => n * 10
-  label() => "box"
-handler small() for Size =
-  size() => 1
+handler boxed(n: Int) for Width, Name =
+  width() => n * 10
+  name() => "box"
+handler small() for Width =
+  width() => 1
 
 type Pair = { left: Op, right: Op }
 
 fn total(t: Tally, n: Int) -> Int =
   var x = 0
   for i in 0..n
-    x = t.add(x + i) % 100003
+    let y = x + i
+    x = (with t in Tally.add(y)) % 100003
   x
 
-fn both(a: Area) -> Int = with a in Area.area() + Area.area()
+fn both(c: Codec) -> Int = with c in Codec.cost() + Codec.cost()
 
 fn main() uses Console =
   let ops: Array<Op> = [o_add(3), o_sub(2), o_mul(7), o_neg(), o_id(), o_seen(5)]
   var acc = 1
   for o in ops
-    acc = o.run(acc)
+    acc = with o in Op.run(acc)
   print(acc)
   var inner = 0
   for o in ops
     for i in 0..4
-      inner += o.run(i)
+      inner += with o in Op.run(i)
   print(inner)
   // a loop in a loop: each `t` doesn't change in the inner one, which
   // is copied for each handler it can be
@@ -94,20 +99,21 @@ fn main() uses Console =
   var nested = 0
   for t in ts
     for i in 0..4
-      nested += t.add(i)
+      nested += with t in Tally.add(i)
   print(nested)
   print(total(t_twice(), 50))
   print(total(t_plus(9), 50))
   print(total(t_count(), 50))
-  let areas: Array<Area> = [a_sq(4), a_rect(2, 3), a_tri(5, 4), a_line(7), a_zero()]
+  let codecs: Array<Codec> = [c_rle(4), c_lz(2, 3), c_huff(5, 4), c_raw(7), c_none()]
   var sum = 0
-  for a in areas
-    sum += a.area() + both(a)
+  for c in codecs
+    sum += c.cost() + both(c)
   print(sum)
   let b = boxed(4)
-  print(b.size())
-  print(b.label())
-  let sizes: Array<Size> = [boxed(2), small()]
-  print(sizes.map(fn(s) => s.size()))
+  print(b.width())
+  print(b.name())
+  let widths: Array<Width> = [boxed(2), small()]
+  print(widths.map(fn(w) => w.width()))
   let p = Pair { left: o_mul(3), right: o_seen(1) }
-  print(p.left.run(p.right.run(10)))
+  let r = with p.right in Op.run(10)
+  print(with p.left in Op.run(r))
