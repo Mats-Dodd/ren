@@ -343,6 +343,12 @@ bank's `Sent(t.amount, t.to)`; that's what the design phase is for.
 Error for a missing field: "this pattern doesn't name `h`; add `h`, or
 `..` for the rest".
 
+**Calls have one by-name form: a parameter with a default.** It's
+given by name or left out, and the others are positional, so each
+call has one spelling: `Async.map(xs, max: 8)`, `b.cursor(from: base)`
+(compiler.md, "Parameters with defaults"). `retry(5, on: Declined)`'s
+`on:` is the one parameter of `Tags`, written the same way.
+
 ### Or-patterns and `as`
 
 ```ren

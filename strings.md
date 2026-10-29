@@ -100,10 +100,8 @@ match attempt frame(&c)
   the buffer with `at` works while the base is 0, which every test
   uses, and reads the wrong bytes once it isn't.
 
-`from:` needs labelled call arguments, which language.md doesn't have
-yet; stdlib.md already writes `retry(5, on: Declined)`, so that
-decision is owed anyway. If strings ship first, the spelling is
-`b.cursor_from(n)`.
+`from` is a parameter with a default, `from: Int = 0`, so it's given by
+name ([language.md](language.md#positional-for-one-field-by-name-for-several)).
 
 **Why not offsets in the root.** formats.md promised that `at` was "the
 offset in the whole buffer", the file's or the socket's, because a
