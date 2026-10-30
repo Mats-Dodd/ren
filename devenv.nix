@@ -13,6 +13,10 @@ in {
 
   # REN_CC would override TinyCC for debug builds too. Leave it unset;
   # the Clang wrapper supplies cc, including SDK/libc and sanitizer paths.
+  # --clean deliberately drops personal shell state, including HOME.
+  env.npm_config_cache = "${config.devenv.state}/npm";
+  env.XDG_CACHE_HOME = "${config.devenv.state}/cache";
+  env.XDG_CONFIG_HOME = "${config.devenv.state}/config";
   env.LC_ALL = if pkgs.stdenv.hostPlatform.isDarwin then "en_US.UTF-8" else "C.UTF-8";
   env.REN_TCC = "${lib.getBin tinycc}/bin/tcc";
 
@@ -35,6 +39,9 @@ in {
   '';
 
   profiles.benchmarks.module = {
+    env.GOCACHE = "${config.devenv.state}/go-build";
+    env.GOPATH = "${config.devenv.state}/go";
+    env.CARGO_HOME = "${config.devenv.state}/cargo";
     scripts.ren-check-bench.exec = ''
       exec bash "${config.devenv.root}/tools/check-benchmark-toolchain.sh"
     '';

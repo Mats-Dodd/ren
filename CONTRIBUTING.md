@@ -19,7 +19,8 @@ ren-check
 The bootstrap script installs the locked devenv CLI into `.devenv-cli`,
 without changing your global Nix profile. The first shell builds/downloads
 the pinned tools; later shells reuse the Nix store. CI also caches the
-store separately for each architecture and toolchain revision. No personal opam switch
+store separately for each architecture and toolchain revision. npm, Cargo,
+and Go caches live under the ignored `.devenv` directory. No personal opam switch
 or Homebrew compiler is needed. Run from a fresh checkout when switching
 from an existing opam build, or run `dune clean` inside the new environment.
 
