@@ -25,7 +25,7 @@ def run(cmd):
 
 for s in sets:
     cmds = {}
-    for form in ["chain", "match"]:
+    for form in ["chain", "match", "index"]:
         if os.path.exists(f"{out}/{s}-{form}-{R}"):
             cmds["ren-" + form] = ([f"{out}/{s}-{form}-{R}"], [f"{out}/{s}-{form}-0"])
     cmds["rust"] = ([f"{out}/keywords-rust", s, str(N), str(R)], [f"{out}/keywords-rust", s, str(N), "0"])

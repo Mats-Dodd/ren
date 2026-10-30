@@ -17,23 +17,24 @@ pub type Justfile = opaque { recipes: Array<Recipe> }
     for line in text.split("\n")
       number += 1
       let t = line.trim()
-      if t == "" || t.starts_with("#") then ()
-      else if line.starts_with(" ") || line.starts_with("\t") then
-        if recipes.len() == 0 then fail BadLine(number)
-        &recipes[recipes.len() - 1].lines.push(t)
-      else
-        let colon = t.index(":") orelse fail BadLine(number)
-        let name = t[0..colon].trim()
-        if name == "" then fail BadLine(number)
-        if recipes.any(fn(r) => r.name == name) then fail DuplicateRecipe(name)
-        // the dependencies, up to a comment, between spaces or tabs
-        let rest = t[colon + 1..t.byte_len()]
-        let end = rest.index("#").unwrap_or(rest.byte_len())
-        var deps: Array<Str> = []
-        for word in rest[0..end].split(" ")
-          for d in word.split("\t")
-            if d != "" then &deps.push(d)
-        &recipes.push(Recipe { name: name, deps: deps, lines: [] })
+      match (t, line)
+        ("", _) | ("#" .., _) => ()
+        (_, " " .. | "\t" ..) =>
+          if recipes.len() == 0 then fail BadLine(number)
+          &recipes[recipes.len() - 1].lines.push(t)
+        _ =>
+          let colon = t.index(":") orelse fail BadLine(number)
+          let name = t[0..colon].trim()
+          if name == "" then fail BadLine(number)
+          if recipes.any(fn(r) => r.name == name) then fail DuplicateRecipe(name)
+          // the dependencies, up to a comment, between spaces or tabs
+          let rest = t[colon + 1..t.byte_len()]
+          let end = rest.index("#").unwrap_or(rest.byte_len())
+          var deps: Array<Str> = []
+          for word in rest[0..end].split(" ")
+            for d in word.split("\t")
+              if d != "" then &deps.push(d)
+          &recipes.push(Recipe { name: name, deps: deps, lines: [] })
     Justfile { recipes: recipes }
 
   // every recipe, in the order they're written

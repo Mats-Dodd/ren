@@ -11731,7 +11731,8 @@ Chosen in step 2, as built:
 | 1 | 5f9409d | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
 | 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
 | 2 | 81579bf | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
-| 3 | this commit | the perfect hash: lib/native/phash.ml (gen_fixed.ml's generator with the six fixes, the 64-bit mix, the length switch, the C of a lookup); Mem's `Str_lookup`; emit_c.ml's lookups, numbered by their keys and written before the functions, and a static copy in each debug unit that uses one; to_mem.ml's switch on a string subject's literals, each branch knowing its literal (`keyed`, `can_be`); ren_rt.h's compares per build and the page check; test/test_phash.ml, the fuzz in OCaml and in C four ways, no disagreement, and the same tables twice; the keyword kernel's `one` set; RESULTS.md's numbers: the `match` 1.4× to 2.7× faster than Rust's on every set of two keys or more, 3.8× to 9.8× the chain (9× to 25× less the loop), a one-literal arm 5.5 ns against the chain's 7.1 | steps 4 and 5; NEON measured on arm64; a hashed column of a tuple's |
+| 3 | 3f5b8fe | the perfect hash: lib/native/phash.ml (gen_fixed.ml's generator with the six fixes, the 64-bit mix, the length switch, the C of a lookup); Mem's `Str_lookup`; emit_c.ml's lookups, numbered by their keys and written before the functions, and a static copy in each debug unit that uses one; to_mem.ml's switch on a string subject's literals, each branch knowing its literal (`keyed`, `can_be`); ren_rt.h's compares per build and the page check; test/test_phash.ml, the fuzz in OCaml and in C four ways, no disagreement, and the same tables twice; the keyword kernel's `one` set; RESULTS.md's numbers: the `match` 1.4× to 2.7× faster than Rust's on every set of two keys or more, 3.8× to 9.8× the chain (9× to 25× less the loop), a one-literal arm 5.5 ns against the chain's 7.1 | steps 4 and 5; NEON measured on arm64; a hashed column of a tuple's |
+| 4 | this commit | `keys.index(s)`: to_mem.ml's `call` lowers it, in a release build, on an array literal of string literals or a `let` of one, as `index_match`, the string `match` step 3 hashes, and a `let` only hashed `index`es read isn't made (`only_indexed`); examples/just's recipe choice and line classification as `match`es on lists and strings, its tests unchanged; stdlib.md's `index`; the keyword kernel's `index` form, at the `match`'s speed (RESULTS.md) | step 5 |
 
 ## Patterns stage
 
@@ -12150,6 +12151,41 @@ allocated for them.
   hand (`apt install gcc-aarch64-linux-gnu qemu-user-static`).
 - **The numbers** are bench/native/RESULTS.md's "Step 3: the perfect
   hash".
+
+### Step 4, as built: `keys.index(s)`, and using it
+
+- **The lowering** is in to_mem.ml's `call`, in a release build: a call
+  of the prelude's `Array.index`, or of a copy of it (`is_array_index`
+  follows a copy's `origin`), whose receiver is an array literal of
+  string literals, written there or a local a `let` bound to one
+  (`literal_keys`), and whose argument is a `Str`, is lowered as
+  `index_match`: the Core `match` of the argument with an arm for each
+  key, the first time it's written, giving `Some` of that index, and
+  `_ => None`. That's a string `match`, so with two keys or more it's
+  the lookup and switch of step 3, and a key list a `match` has too
+  shares its tables. A `let` of such a literal whose every use is a
+  hashed `index` (`only_indexed`) isn't made at all, so the lookup
+  allocates nothing.
+- **Debug builds** call the method as written. `ren run --release` runs
+  the specialized Core, which still calls it: the rewrite is the native
+  lowering's, so the interpreter is the meaning it's checked against
+  (bench/patterns.t's index.ren, every build, and the keyword kernel's
+  `run_index`, whose sums are the chain's).
+- **Not a top-level `let`,** which Ren doesn't have yet (`keys.index(s)`,
+  above).
+- **examples/just:** `main` finds the recipe to run with a `match` on
+  the args and the recipes, `([named, ..], _)`, `([], [first, ..])`,
+  `([], [])`, where it tested `args.len()` and indexed; `Justfile.parse`
+  classifies a line with a `match` on the trimmed line and the line,
+  `("", _) | ("#" .., _)` for blank and comment lines, `(_, " " .. |
+  "\t" ..)` for an indented one, where it chained `starts_with`. Its 21
+  tests pass unchanged, and bench/tasks.t's runs of it print what they
+  did. The just isn't native (it starts tasks), so its code size is the
+  lexer kernel's (step 3).
+- **stdlib.md** says when `index` is hashed.
+- **The numbers:** the keyword kernel's `<set>_index` form, a `let` of
+  the keys then `keys.index(s)`, runs at the `match`'s speed, 5.6 to 9.1
+  ns against 5.3 to 8.3 (RESULTS.md, "Step 4").
 
 ### Where this stage may differ
 

@@ -46,6 +46,9 @@ def ren(with_match=True):
             for i, k in enumerate(ks):
                 out.append(f"    {q(k)} => {i}\n")
             out.append("    _ => -1\n\n")
+            out.append(f"fn {s}_index(s: Str) -> Int =\n")
+            out.append(f"  let keys = [{', '.join(q(k) for k in ks)}]\n")
+            out.append("  match keys.index(s)\n    Some(i) => i\n    None => -1\n\n")
     out.append("""// the next number of the LCG every twin shares
 fn next(x: Int) -> Int = (x * 1103515245 + 12345) % 2147483648
 
@@ -75,7 +78,7 @@ fn queries(keys: Array<Str>, n: Int) -> Array<Str> =
     out.append("  else -1\n\n")
     # one loop per set and form, so the classifier is called directly
     for s in SETS:
-        for form in ["chain", "match"] if with_match else ["chain"]:
+        for form in ["chain", "match", "index"] if with_match else ["chain"]:
             out.append(f"""fn rounds_{s}_{form}(qs: Array<Str>, rounds: Int) -> Int =
   var t = 0
   for _ in 0..rounds
@@ -93,9 +96,18 @@ pub fn run(set: Str, hashed: Bool, n: Int, rounds: Int) uses Console =
     for i, s in enumerate(SETS):
         m = f"rounds_{s}_match(qs, rounds)" if with_match else f"rounds_{s}_chain(qs, rounds)"
         out.append(f"  {'if' if i == 0 else 'else if'} set == {q(s)} then t = if hashed then {m} else rounds_{s}_chain(qs, rounds)\n")
-    out.append("""  print(t)
-
-// every set, both forms, which must agree with each other
+    out.append("  print(t)\n\n")
+    if with_match:
+        out.append("""// the same, by `keys.index(s)` on the set's keys, a literal bound by a
+// `let`, which a release build hashes too
+pub fn run_index(set: Str, n: Int, rounds: Int) uses Console =
+  let qs = queries(keys(set), n)
+  var t = 0
+""")
+        for i, s in enumerate(SETS):
+            out.append(f"  {'if' if i == 0 else 'else if'} set == {q(s)} then t = rounds_{s}_index(qs, rounds)\n")
+        out.append("  print(t)\n\n")
+    out.append("""// every set, both forms, which must agree with each other
 pub fn check(n: Int) uses Console =
 """)
     out.append("  for set in [" + ", ".join(q(s) for s in SETS) + "]\n")
@@ -107,6 +119,9 @@ pub fn check(n: Int) uses Console =
       b += classify(set, true, q) + 1
     print(set + " " + show(a) + " " + show(b))
 """)
+    if with_match:
+        out.append("  for set in [" + ", ".join(q(s) for s in SETS) + "]\n")
+        out.append("    run_index(set, n, 1)\n")
     return "".join(out)
 
 

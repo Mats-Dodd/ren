@@ -148,4 +148,4 @@ same lookup in a release build; a debug build calls the method:
 
   $ hashed patterns/index.ren
   patterns/index.ren, debug: not hashed yet
-  patterns/index.ren, release: not hashed yet
+  patterns/index.ren, release: hashed, 2 lookups

@@ -1954,3 +1954,28 @@ compare. ns per lookup, median (least to most):
   the assembly) and run under qemu on test_phash.ml's 44,783 queries,
   each at the end of a page with a guard page after it: it agrees with
   the two-word form on every one (compiler.md, "Step 3, as built").
+
+### Step 4: `keys.index(s)` on a constant
+
+The kernel's third form, `<set>_index`: `let keys = [...]` then `match
+keys.index(s)`, `Some(i) => i`, `None => -1`, which a release build
+lowers to the same lookup as the `match` (compiler.md, "Step 4, as
+built"), its array never made. Same machine and method, a later run of
+all three forms and the twins (`R=200 sh build.sh <out>`; `R=200
+python3 -I measure.py <out> 11`), ns per lookup, median (least to
+most):
+
+| set | Ren chain | Ren `match` | Ren `keys.index` | Rust `match` | Go `switch` |
+|---|---:|---:|---:|---:|---:|
+| renkw | 66.3 (63.1 to 67.9) | 8.0 (7.1 to 11.1) | 7.5 (7.2 to 10.1) | 20.3 (18.8 to 24.6) | 28.5 (27.2 to 30.8) |
+| jsreserved | 80.8 (77.0 to 85.3) | 7.8 (7.5 to 11.2) | 7.9 (7.1 to 9.9) | 22.9 (21.1 to 25.3) | 27.9 (26.2 to 30.0) |
+| methods | 26.7 (25.7 to 29.3) | 6.9 (6.1 to 9.3) | 6.9 (6.4 to 8.8) | 17.0 (15.7 to 18.6) | 16.0 (15.5 to 17.3) |
+| headers | 27.8 (26.2 to 30.9) | 7.5 (6.8 to 8.5) | 9.1 (7.9 to 10.4) | 12.8 (11.7 to 14.5) | 14.8 (13.8 to 17.0) |
+| json24 | 30.9 (28.7 to 31.8) | 8.3 (7.6 to 10.8) | 7.9 (7.3 to 9.4) | 12.7 (10.7 to 14.3) | 12.7 (11.6 to 14.3) |
+| one | 7.4 (6.8 to 9.3) | 5.3 (5.0 to 6.8) | 5.6 (5.4 to 7.4) | 2.2 (1.9 to 3.2) | 3.2 (3.0 to 4.1) |
+
+`keys.index` runs at the `match`'s speed, within the spread on every
+set but headers, where it's 1.6 ns slower (ranges 7.9 to 10.4 against
+6.8 to 8.5): the `Option` it makes and the `match` on it, which the
+direct `match` doesn't have. This run repeats step 3's within its
+spread.

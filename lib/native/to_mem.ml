@@ -1828,6 +1828,80 @@ let rec calm (e : C.expr) =
 
 let is_index (e : C.expr) = match e.kind with Local _ | Int _ -> true | _ -> false
 
+(* ---- `keys.index(s)` on a constant (compiler.md, "Patterns stage") ----
+
+   A release build's `keys.index(s)`, where [keys] is an array literal
+   of string literals, written there or bound by a `let`, is the `match`
+   of [s] with an arm for each key, `Some` of its first index, and `None`
+   for the rest: a string `match`, which the perfect hash looks up. A
+   `let` of an array is never changed (a `var` is a cell), so its keys
+   are the literal's wherever it's used. *)
+
+(* The keys of the array literals of string literals each `let` of the
+   function being lowered binds, by the variable. *)
+let literal_keys : (int, string list) Hashtbl.t = Hashtbl.create 8
+
+let literal_strs (e : C.expr) =
+  match e.kind with
+  | Array xs ->
+      let strs = List.filter_map (fun (x : C.expr) -> match x.kind with Str s -> Some s | _ -> None) xs in
+      if List.length strs = List.length xs then Some strs else None
+  | _ -> None
+
+(* Whether every use of [v] in [e] is as the receiver of a call that
+   [hashed] says is a hashed `index`: then a release build never reads
+   it, and its array isn't made. *)
+let rec only_indexed hashed (v : C.var) (e : C.expr) =
+  match e.kind with
+  | Local u -> u.id <> v.id
+  | Call (f, (Value { kind = Local u; _ } :: rest as args), _) when u.id = v.id ->
+      hashed f args && List.for_all (function C.Value a -> only_indexed hashed v a | Ref u -> u.id <> v.id) rest
+  | Call (f, args, _) ->
+      only_indexed hashed v f
+      && List.for_all (function C.Value a -> only_indexed hashed v a | Ref u -> u.id <> v.id) args
+  | Assign (u, a) -> u.id <> v.id && only_indexed hashed v a
+  | _ -> List.for_all (only_indexed hashed v) (C.children e)
+
+(* Whether [p] is the prelude's `Array.index`, or a copy of it. *)
+let index_path = Path.member (Path.prelude "Array") "index"
+
+let rec is_array_index fns (p : Path.t) =
+  p = index_path
+  ||
+  match Hashtbl.find_opt fns p with
+  | Some ({ origin = Copy q; _ } : C.fn_def) -> is_array_index fns q
+  | _ -> false
+
+(* Whether a call of [f] with [args] is a hashed `keys.index(s)`, given
+   its keys are a literal's. *)
+let hashed_index cx (f : C.expr) (args : C.arg list) =
+  match (f.kind, args) with
+  | Global (p, _, _, _), [ _; Value s ] -> s.ty = Ty.str && is_array_index cx.fns p
+  | _ -> false
+
+(* The `match` that's `keys.index(s)`, of type [e]'s. *)
+let index_match (e : C.expr) keys (s : C.expr) : C.expr =
+  let mk kind ty : C.expr = { kind; ty; loc = e.loc } in
+  let option = Path.prelude "Option" in
+  let firsts =
+    List.fold_left (fun acc k -> if List.mem k acc then acc else acc @ [ k ]) [] keys
+  in
+  let index k =
+    let rec go i = function x :: rest -> if x = k then i else go (i + 1) rest | [] -> 0 in
+    go 0 keys
+  in
+  let arm pkind body : C.arm = { pat = { pkind; pty = Ty.str; ploc = e.loc }; guard = None; body } in
+  mk
+    (Match
+       ( s,
+         List.map
+           (fun k ->
+             arm (PStr k)
+               (mk (Con (option, "Some", [ mk (Int (Int64.of_int (index k))) Ty.int ])) e.ty))
+           firsts
+         @ [ arm PWild (mk (Con (option, "None", [])) e.ty) ] ))
+    e.ty
+
 let rec same (a : C.expr) (b : C.expr) =
   match (a.kind, b.kind) with
   | Local x, Local y -> x.id = y.id
@@ -1892,7 +1966,15 @@ and expr_at fs env (e : C.expr) : atom =
      of what it covers *)
   | Covered { body; result; after } ->
       expr fs env { e with kind = Let (result, body, after) }
+  | Let (v, value, body)
+    when fs.cx.release && v.ty = Ty.array Ty.str && literal_strs value <> None
+         && only_indexed (hashed_index fs.cx) v body ->
+      (* keys only a hashed `index` reads, which reads them here, so
+         their array isn't made (see [index_match]) *)
+      Hashtbl.replace literal_keys v.id (Option.get (literal_strs value));
+      expr fs env body
   | Let (v, value, body) ->
+      Option.iter (Hashtbl.replace literal_keys v.id) (literal_strs value);
       let x = expr fs env value in
       let m = fresh fs v.name (lay v.ty) in
       emit fs (Let (m, Atom x));
@@ -2822,6 +2904,18 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
 and call fs env (e : C.expr) (f : C.expr) args ev =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
+  let keys (a : C.arg) =
+    match a with
+    | Value { kind = Local v; ty; _ } when ty = Ty.array Ty.str ->
+        Hashtbl.find_opt literal_keys v.id
+    | Value a -> literal_strs a
+    | Ref _ -> None
+  in
+  match (f.kind, args) with
+  | Global (p, _, _, _), [ recv; Value s ]
+    when cx.release && s.ty = Ty.str && is_array_index cx.fns p && keys recv <> None ->
+      expr fs env (index_match e (Option.get (keys recv)) s)
+  | _ ->
   match f.kind with
   | Global (p, _, _, _) when starts_tasks cx.fns p ->
       (* said before its blocks are compiled, which hold a `Scope` *)
@@ -4656,6 +4750,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
    parameters first, a descriptor for each of its type variables and one
    for each of its requirements, then its evidence. *)
 let fn cx here (f : C.fn_def) : Mem.fn =
+  Hashtbl.reset literal_keys;
   with_words cx (List.length f.tys) (fun () ->
       let fs =
         {
