@@ -88,12 +88,12 @@ type t =
   | Set_remove
   | Set_includes
   | Set_len
-  | Str_len
+  | Str_byte_len
   | Str_index
   | Str_split
   | Str_trim
   | Str_starts_with
-  | Str_concat
+  | Str_add
   | Str_bytes
   | Str_from_utf8
   | Str_from_utf8_lossy
@@ -138,7 +138,14 @@ type t =
   | Float_round
   | Float_truncate
   | Float_sqrt
-  | Str_lower
+  | Str_ascii_lower
+  | Bytes_ascii_lower
+  | Bytes_add
+  | Str_char_floor
+  | Str_char_ceil
+  | Str_code
+  | Str_of_code
+  | Array_join
   | Hash
       (** `x.hash()`, the derived hash a program can call: unseeded, the same
           on every run *)

@@ -32,6 +32,10 @@
         "named": true
       },
       {
+        "type": "character",
+        "named": true
+      },
+      {
         "type": "constructor_expression",
         "named": true
       },
@@ -147,6 +151,10 @@
       },
       {
         "type": "boolean",
+        "named": true
+      },
+      {
+        "type": "character",
         "named": true
       },
       {
@@ -490,6 +498,10 @@
             "named": true
           },
           {
+            "type": "character",
+            "named": true
+          },
+          {
             "type": "constructor_expression",
             "named": true
           },
@@ -623,6 +635,10 @@
           },
           {
             "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -826,6 +842,10 @@
             "named": true
           },
           {
+            "type": "character",
+            "named": true
+          },
+          {
             "type": "constructor_expression",
             "named": true
           },
@@ -1002,6 +1022,10 @@
           },
           {
             "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -1561,6 +1585,10 @@
           },
           {
             "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -2472,6 +2500,10 @@
             "named": true
           },
           {
+            "type": "character",
+            "named": true
+          },
+          {
             "type": "constructor_expression",
             "named": true
           },
@@ -2573,6 +2605,46 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "interpolation",
+    "named": true,
+    "fields": {
+      "expression": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "named": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "=",
+            "named": false
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "interpolation_end",
+          "named": true
+        },
+        {
+          "type": "interpolation_start",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -2713,6 +2785,10 @@
           },
           {
             "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -2901,6 +2977,10 @@
           },
           {
             "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -3239,6 +3319,10 @@
         "types": [
           {
             "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -3623,6 +3707,10 @@
             "named": true
           },
           {
+            "type": "character",
+            "named": true
+          },
+          {
             "type": "constructor_expression",
             "named": true
           },
@@ -3808,6 +3896,10 @@
         {
           "type": "escape_sequence",
           "named": true
+        },
+        {
+          "type": "interpolation",
+          "named": true
         }
       ]
     }
@@ -3924,6 +4016,10 @@
           },
           {
             "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -4318,6 +4414,10 @@
           },
           {
             "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
             "named": true
           },
           {
@@ -4824,6 +4924,10 @@
     "named": true
   },
   {
+    "type": "character",
+    "named": true
+  },
+  {
     "type": "comment",
     "named": true
   },
@@ -4897,6 +5001,14 @@
   },
   {
     "type": "inout",
+    "named": true
+  },
+  {
+    "type": "interpolation_end",
+    "named": true
+  },
+  {
+    "type": "interpolation_start",
     "named": true
   },
   {

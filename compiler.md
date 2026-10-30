@@ -3565,7 +3565,7 @@ whatever its name binds. In the arm:
   foundations' `call.result`: the value `call.forward()` gives, or
   `attempt call.forward()`'s `Result` of it. `show(call.args)` writes
   the arguments as a call does, in parentheses, `("b", 3)`, `()` for
-  none, so `call.name.concat(show(call.args))` is the journal's call.
+  none, so `call.name + show(call.args)` is the journal's call.
 - `call` is only used through, as `next` is: it can't be kept, passed
   or returned. `next` isn't there: `call.forward()` is.
 - The arm's value is the operation's result, and it fails with at most
@@ -5746,6 +5746,92 @@ replays byte for byte but its last line (examples/just.t), each error is
 a refusal test, and a failure in a task says its path. The docs: async.md
 says what this step fixed; the README's 11a row says done; runtime-io.md's
 11a row says what was built of it.
+
+### Step 2, as built
+
+**The lexer** (lexer.ml, `lex_string`) finds a hole's end before it lexes
+it: from `\{` to its matching `}` on the string's line, counting braces
+and skipping the strings in it (with their own holes) and character
+literals. The string's text before the first hole is a `STR_HEAD`, the
+hole's code is then lexed as any code is, inside a bracket so it has no
+layout, and the text after it is a `STR_MID` or `STR_TAIL`; a string
+with no hole is a `STR` as before. Nothing about the lexer's
+`continues()` or the line continuation changed. A character literal is
+an `INT` of its code point, with `\n`, `\t`, `\\` and `\'`; since nothing
+after the lexer can tell `'é'` from `233`, the lexer keeps where each
+literal is and how it's written in `Ast.char_literals` (forgetting a
+file's when it reads the file again), which the checker's `stored`
+reads to refuse a non-ASCII one in a `UInt8`, and `Ast.source` reads to
+show it as written.
+
+**The AST** has `Interp of piece list`, each a `Lit` of text or a `Hole`
+of an expression. Resolve, inference (each hole inferred, the result a
+`Str`), Mut, Exhaust, the block and escape walks of infer_top.ml (a hole
+is `show`'s argument, so a block there is `show(x)`'s error) and Excl
+(one constructor added to the list it walks the children of) see it.
+**Lower** makes it `show` of each hole, a `Str` hole as it is, joined by
+`Str.add` left to right; an empty text piece is dropped. Native builds
+and the interpreter need nothing of their own for it.
+
+**The names.** `Str_len`, `Str_concat` and `Str_lower` became
+`Str_byte_len`, `Str_add` (the method `+` finds) and `Str_ascii_lower`;
+`Bytes_add`, `Bytes_ascii_lower`, `Str_char_floor`, `Str_char_ceil`,
+`Str_code`, `Str_of_code` and `Array_join` are new intrinsics. Natively
+`+` is `ren_str_concat`, a copy, as `concat` was (step 3 makes it in
+place), and the new ones are ren_rt.c's `ren_char_bound`, `ren_str_code`,
+`ren_str_of_code` and `ren_strs_join`. `is_empty` and `chars` are the
+prelude's, written in Ren under `pub type Str = builtin`: `chars()` is a
+`Chars { s, pos }`, whose `next` gives `s[pos..s.char_ceil(pos + 1)]`, a
+slice that never cuts. `Bytes.cursor(from: Int = 0)` keeps `base`, and
+`at()`, `Short`'s and `Malformed`'s `at` add it. `len` and `lower` on a
+`Str`, `a.concat(b)` and `Str.concat(a, b)` (in Resolve) and `s[i]` are
+errors worded as strings.md and the section above word them; a help of
+several lines is split by Diag, its continuation under its text and a
+`help: ` line a help of its own. `Bytes.add` being built in, lower.ml's
+`ops` skips a built-in member, which isn't a function of the program's.
+
+**Panics with a help the running program writes.** A cut character's
+help has numbers only the panic knows and the receiver's name only the
+source knows. Builtins raise `Panic_help` with `\002` for the receiver;
+eval.ml gives the panic the receiver's location (`Panic`'s new `recv`,
+the operand's or the call's first argument's), and the driver puts in
+its text. Natively the site's help is `"\001"` and its `recv` the
+operand's location; the driver makes that line a `Diag.Help_hole` with
+the receiver's text, which emit_c.ml writes as piece 7, and
+`ren_panic_help` prints it, the `\002`s replaced, only if the runtime
+gave a help (an out-of-bounds slice at the same site has none). So
+`ren run` and every build print the same bytes, which strs.t compares.
+
+**Moved,** with the compiler's errors as the list (every bench program,
+every example and test built, `ren core` over every file): `.concat(x)`
+became ` + x` by a script that keeps precedence (a call on the result
+gets parentheses), `.lower()` `.ascii_lower()`, and each `len` the
+checker refused on a `Str` `byte_len` at the position it named. That's
+53 programs under bench/ (native/maps, nbody and stack among the
+kernels), examples/just's justfile.ren, the programs in journal.t,
+just.t and net.t, and editors/'s highlight test; in test/, only
+the lines with a renamed name (and the printed Core, `Str.add`, and
+members lists, which the renames force); README, deps.md, handlers.md,
+stdlib.md (a paragraph, "Text: sizes, characters and building") and one
+line here. invalid_utf8.ren and test_strs.ml's s1 are back to step 2's
+names. test_operators.ml's `"a" + "b"` and `sum` of `Str`s now say what
+they say with `+` defined.
+
+**Tree-sitter** has `interpolation`, with `interpolation_start` and
+`interpolation_end` nodes (named, so the brackets' `}` isn't captured
+twice) and an optional `=`, inside `string`, and `character` wherever a
+number literal is, in code, patterns and defaults; corpus strings.txt;
+Zed's highlights mark a hole `@embedded` and its braces
+`@punctuation.special`, and a character literal `@string.special`, with
+assertions in markers.ren.
+
+**The tests.** s2 is on, every test written plainly, and no `until
+"s2"` is left. test_strs_names.ml holds the choices above. strs.t's
+step 2 programs, append, append_count, append_report, slices_kept and
+slices_count among them, are as specified and the same natively in
+every build (Perceus and naive debug and release under the sanitizers,
+tcc, `ren run --release`), with no object alive at the end but in the
+panics, which leave their program's as `ren run` does.
 
 ### Progress log
 
@@ -9490,6 +9576,24 @@ Choices where strings.md, decision 17 and the brief are silent:
   20 prefixes a kind in `dune test`, 3,000 by hand.
 - `Str.from_utf8_lossy` of valid bytes is those bytes, counted again,
   not a copy.
+- Step 2: a character literal that isn't closed, or holds an escape it
+  doesn't have, is an error of the lexer's ("this character literal isn't
+  closed", "`\r` isn't an escape" with its escapes as the help).
+  `\{e=}` with anything but a name or a path before the `=` is "only a
+  name or a path can come before `=` in a hole", help "write the text
+  before it yourself"; an `=` that ends `==`, `!=`, `<=` or `>=` isn't
+  one. The text written is the path as written, trimmed, then `=`.
+- Step 2: a help that names the receiver names it as the source writes
+  it when that's a name or a path (`line`, `self.name`), else `s`, in
+  `ren run` and natively alike; for a `split_at` it's the place split.
+- Step 2: `'é'` is refused only in a `UInt8`; in an `Int8` or a wider
+  sized type it's checked as any number is.
+- Step 2: `+` with one of the module's own opaque types on its right,
+  `"<" + self` in a member of an `opaque Str`, takes what it's
+  represented as, as an argument does, so the many `show`s written with
+  `concat` move to `+` unchanged.
+- Step 2: an interpolated string whose hole is a `Str` uses it as it is,
+  without `show` (the same value), and a string of one hole is that value.
 
 ### Step 1, as built
 
@@ -9612,6 +9716,7 @@ RESULTS.md, "Bytes stage, part two, step 1").
 | step | commit | what's done | what's left |
 |---|---|---|---|
 | 1 | "Bytes stage, part two, step 1: the boundary" | the NEON block validator and its scalar path, the rescan; `InvalidUtf8(at, incomplete)` in every use; `from_utf8_lossy`; test/utf8/'s differential test, natively and under qemu-aarch64, 0 disagreements; invalid_utf8 and s1 on; scalar path 21×, 1.23× and 2.3× the old loop on ASCII, CJK and mixed (x86_64) | the NEON GB/s targets, the owner's to time on the M4 Max |
+| 2 | "Bytes stage, part two, step 2: the API" | `'a'`, interpolation with `\{x=}`, `ascii_lower`, `byte_len`, `is_empty`, the `len`/`s[i]`/`lower`/`concat` errors, `+` and `+=` (copying), `char_floor`/`char_ceil` and the cut panic's help natively, `chars`, `code`, `of_code`, `join`, `cursor(from:)`; tree-sitter and Zed; every program moved; s2 on | in-place `+=` (step 3); excl.ml got one constructor in its list of nodes to walk, the only touch of the services stage's files beyond the shared ones |
 
 ## Services stage
 

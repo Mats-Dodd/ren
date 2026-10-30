@@ -30,7 +30,7 @@ fn area(s: Shape) -> Int =
 
 fn shout(n: Label.Named) -> Label.Named =
   var m = n
-  m.text = m.text.concat("!")
+  m.text = m.text + "!"
   m
 
 fn main() uses Console =

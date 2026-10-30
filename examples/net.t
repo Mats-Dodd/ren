@@ -13,7 +13,7 @@ if that was "slow", on the port it's given:
   > fn handle(c: Conn) ! NetError uses Net, Clock, Console =
   >   let req = try Net.read(c, 100)
   >   match attempt Str.from_utf8(req)
-  >     Ok(text) => Console.error("got ".concat(text))
+  >     Ok(text) => Console.error("got " + text)
   >     Err(_) => Console.error("got bytes")
   >   if req == "slow".bytes() then Clock.sleep(Duration.seconds(1))
   >   try Net.write(c, req)

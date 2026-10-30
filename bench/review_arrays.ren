@@ -82,7 +82,7 @@ fn strs(row: Array<Str>) -> Array<Str> ! Bad(at: Int) =
   var out: Array<Str> = []
   for x in row
     if x == "bad" then fail Bad(out.len())
-    &out.push(x.concat("!"))
+    &out.push(x + "!")
   out
 
 fn main_s1() uses Console =
@@ -110,7 +110,7 @@ fn main_s2() uses Console =
   g[1][0] += g[1][1] * g[0][1]
   print(g)
   var s = [["a", "b"], ["c"]]
-  s[0][1] = s[0][0].concat(s[1][0]).concat(s[0][1])
+  s[0][1] = s[0][0] + s[1][0] + s[0][1]
   print(s)
   var r = [[[1]], [[2, 3]]]
   r[1][0][1] = r[1][0][0] + r[0][0][0] + r[1][0].len() + r.len()

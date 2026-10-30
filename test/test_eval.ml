@@ -519,7 +519,7 @@ let%expect_test "a string's length, slices and search, in bytes" =
     {|
 fn main() =
   let s = "héllo, wörld"
-  print(s.len())
+  print(s.byte_len())
   print(s[0..3])
   print(s[8..14])
   print(s[4..4] == "")
@@ -583,6 +583,7 @@ fn main() = "né"[0..2]
       ┌─ test.ren:1:13
     1 │ fn main() = "né"[0..2]
       │             ^^^^^^^^^^^
+      help: to cut at most 2 bytes, end at `s.char_floor(2)`
     |}];
   run {|
 fn main() = "né"[2..3]
@@ -593,6 +594,7 @@ fn main() = "né"[2..3]
       ┌─ test.ren:1:13
     1 │ fn main() = "né"[2..3]
       │             ^^^^^^^^^^^
+      help: to start where a character does, use `s.char_floor(2)` or `s.char_ceil(2)`
     |}]
 
 let%expect_test "split, trim, starts_with and concat" =
@@ -608,7 +610,7 @@ fn main() =
   print("héllo".starts_with("hé"))
   print("héllo".starts_with("e"))
   print("".starts_with(""))
-  "wör".concat("ld").concat("")
+  "wör" + "ld" + ""
 |};
   [%expect
     {|

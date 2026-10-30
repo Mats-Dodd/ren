@@ -6,8 +6,6 @@
 // character the end cuts off; `Str.from_utf8_lossy` writes one U+FFFD for
 // each maximal invalid subpart (OCaml's decoder's count). Each class says
 // how many inputs it tried, and the first that came out wrong, if any.
-// It's written with today's names, `concat`, `show` and `len`, so that it
-// runs at step 1; step 2 moves it to `+`, interpolation and `byte_len`.
 
 type Case = { bad: Array<Int>, cut: Bool, subparts: Int }
 
@@ -60,14 +58,14 @@ fn text(xs: Array<Int>) -> Str =
 fn fffd(n: Int) -> Str =
   var out = ""
   for _ in 0..n
-    out = out.concat("�")
+    out += Str.of_code(0xFFFD)
   out
 
 fn bytes_of(xs: Array<Int>) -> Str =
   var out = ""
   for i, x in xs
-    if i > 0 then out = out.concat(" ")
-    out = out.concat(show(x))
+    if i > 0 then out += " "
+    out += show(x)
   out
 
 // tries each of `cases` at each offset, and says how many it tried
@@ -84,17 +82,17 @@ fn class(name: Str, cases: Array<Case>) uses Console =
           let incomplete = c.cut && t == 0
           let said = match attempt Str.from_utf8(b)
             Ok(_) => "valid"
-            Err(InvalidUtf8(at, inc)) => "at ".concat(show(at)).concat(", incomplete ").concat(show(inc))
-          let want = "at ".concat(show(k)).concat(", incomplete ").concat(show(incomplete))
+            Err(InvalidUtf8(at, inc)) => "at \{at}, incomplete \{inc}"
+          let want = "at \{k}, incomplete \{incomplete}"
           let lossy = Str.from_utf8_lossy(b)
-          let fixed = text(before).concat(fffd(c.subparts)).concat(text(after))
+          let fixed = text(before) + fffd(c.subparts) + text(after)
           tried += 1
-          if wrong == "" && (said != want || lossy != fixed) then
-            wrong = "[".concat(bytes_of(c.bad)).concat("] at ").concat(show(k)).concat(", wide ").concat(show(wide)).concat(", ").concat(show(t)).concat(" after: ").concat(said).concat(", lossy ").concat(show(lossy == fixed))
-  if wrong == "" then
-    print(name.concat(": ").concat(show(tried)).concat(" inputs, each as specified"))
+          if wrong.is_empty() && (said != want || lossy != fixed) then
+            wrong = "[\{bytes_of(c.bad)}] at \{k}, wide \{wide}, \{t} after: \{said}, lossy \{lossy == fixed}"
+  if wrong.is_empty() then
+    print("\{name}: \{tried} inputs, each as specified")
   else
-    print(name.concat(": ").concat(show(tried)).concat(" inputs; the first wrong: ").concat(wrong))
+    print("\{name}: \{tried} inputs; the first wrong: \{wrong}")
 
 fn bad(xs: Array<Int>, subparts: Int) -> Case = Case { bad: xs, cut: false, subparts: subparts }
 fn cut(xs: Array<Int>) -> Case = Case { bad: xs, cut: true, subparts: 1 }
@@ -109,9 +107,9 @@ fn main() uses Console =
         let b = Bytes.of(joined(filler(k, wide), edge, ascii(3)))
         valid += 1
         match attempt Str.from_utf8(b)
-          Ok(s) => if s != Str.from_utf8_lossy(b) || s.len() != b.len() then refused += 1
+          Ok(s) => if s != Str.from_utf8_lossy(b) || s.byte_len() != b.len() then refused += 1
           Err(_) => refused += 1
-  print("valid: ".concat(show(valid)).concat(" inputs, ").concat(show(refused)).concat(" refused"))
+  print("valid: \{valid} inputs, \{refused} refused")
   class("overlong, 2 bytes", [bad([0xC0, 0x80], 2), bad([0xC1, 0xBF], 2)])
   class("overlong, 3 bytes", [bad([0xE0, 0x80, 0xAF], 3), bad([0xE0, 0x9F, 0xBF], 3)])
   class("overlong, 4 bytes", [bad([0xF0, 0x80, 0x80, 0xAF], 4), bad([0xF0, 0x8F, 0xBF, 0xBF], 4)])
@@ -127,5 +125,5 @@ fn main() uses Console =
   print(attempt Str.from_utf8(Bytes.of([0xFF])))
   print(attempt Str.from_utf8(Bytes.of([0x61, 0xED, 0xA0, 0x80])))
   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xF0, 0x80, 0x80, 0x62, 0xE2, 0x82, 0x63, 0xF0, 0x9F, 0x98])))
-  print(Str.from_utf8_lossy(Bytes.of([0xEF, 0xBB, 0xBF, 0x6F, 0x6B])).len())
+  print(Str.from_utf8_lossy(Bytes.of([0xEF, 0xBB, 0xBF, 0x6F, 0x6B])).byte_len())
   print(attempt Str.from_utf8(Bytes.of([])))

@@ -377,6 +377,29 @@ pub type Set<T> = builtin
   pub fn drop(self, n: Int) -> Set<T> = Set.of(self.members().drop(n))
   pub fn reverse(self) -> Set<T> = Set.of(self.members().reverse())
 
+// ---- strings (strings.md) ----
+//
+// A `Str` is UTF-8, and its positions and lengths are in bytes. Most of
+// its members are built in; these are written here.
+
+pub type Str = builtin
+  // whether it has no bytes, which is whether it has no characters
+  pub fn is_empty(self) -> Bool = self.byte_len() == 0
+  // its characters, each a one-code-point `Str`, a slice of it: a cursor
+  // (streams.md, "Data: cursors you keep")
+  pub fn chars(self) -> Chars = Chars { s: self, pos: 0 }
+
+// the characters of `s` from `pos`, each a slice of `s` one code point
+// long: what `s.chars()` gives
+pub type Chars = opaque { s: Str, pos: Int }
+  pub fn next(inout self) -> Option<Str> =
+    let i = self.pos
+    if i >= self.s.byte_len() then None
+    else
+      let j = self.s.char_ceil(i + 1)
+      self.pos = j
+      Some(self.s[i..j])
+
 // ---- bytes: layer 3 of formats.md (compiler.md, "Bytes stage", "Layer
 // 3: the API") ----
 //
@@ -393,8 +416,10 @@ pub type FormatError =
   ! Short(at: Int, need: Int) | Malformed(at: Int, path: Str, why: Str) | UnknownTag(at: Int, tag: Int)
 
 pub type Bytes = builtin
-  // a cursor at the start of these bytes, to read them in sequence
-  pub fn cursor(self) -> ByteCursor = ByteCursor { b: self, pos: 0 }
+  // a cursor at the start of these bytes, to read them in sequence. Every
+  // `at` it reports counts from `from`, where these bytes start in their
+  // stream or file (strings.md, "Positions")
+  pub fn cursor(self, from: Int = 0) -> ByteCursor = ByteCursor { b: self, pos: 0, base: from }
 
 // the 64 bits of `x` as the number they are unsigned, written out: `x`
 // if it isn't negative, else 2^64 + `x`, whose last digit is found by
@@ -403,7 +428,7 @@ fn show_unsigned(x: Int) -> Str =
   if x >= 0 then show(x)
   else
     let q = x.shr(1).bit_and(9_223_372_036_854_775_807) / 5
-    show(q).concat(show(x.wrapping_sub(q.wrapping_mul(10))))
+    show(q) + show(x.wrapping_sub(q.wrapping_mul(10)))
 
 // fails with `Short(at, need)`, as a `FormatError`, all of it: each of a
 // cursor's reads says it can fail with any, as layer 2's do, so a
@@ -412,101 +437,103 @@ fn short(at: Int, need: Int) ! FormatError =
   let e: Result<Unit, ! FormatError> = Err(Short(at, need))
   try e
 
-// fails unless `n` bytes are left at `at` of `len`: of a cursor's
-// numbers, not the cursor, which a call would count once more
-fn room(len: Int, at: Int, n: Int) ! FormatError =
-  if len - at < n then try short(at, n - (len - at)) else ()
+// fails unless `n` bytes are left at `at` of `len`, which is said at
+// `base + at`: of a cursor's numbers, not the cursor, which a call would
+// count once more
+fn room(base: Int, len: Int, at: Int, n: Int) ! FormatError =
+  if len - at < n then try short(base + at, n - (len - at)) else ()
 
 // bytes read in sequence from `pos`: what `b.cursor()` gives. It's a
 // value, so a copy of one tries a record, and the cursor stays where it
 // was if the record isn't all there yet. A read that fails moves it
 // nowhere: `Short(at, need)` says where the read began and how many
-// more bytes it needs
-pub type ByteCursor = opaque { b: Bytes, pos: Int }
-  // where it is, in the bytes it was made from
-  pub fn at(self) -> Int = self.pos
+// more bytes it needs. Each `at` it reports, and `at()`, counts from
+// `base`, the `from` it was made with
+pub type ByteCursor = opaque { b: Bytes, pos: Int, base: Int }
+  // where it is: in the bytes it was made from, counting from `base`
+  pub fn at(self) -> Int = self.base + self.pos
   // how many bytes are after it
   pub fn left(self) -> Int = self.b.len() - self.pos
   // those bytes, a slice
   pub fn rest(self) -> Bytes = self.b[self.pos..self.b.len()]
   pub fn u8(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 1 then try short(at, at + 1 - self.b.len()) else ()
+    if self.b.len() - at < 1 then try short(self.base + at, at + 1 - self.b.len()) else ()
     self.pos = at + 1
     self.b.u8(at)
   pub fn i8(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 1 then try short(at, at + 1 - self.b.len()) else ()
+    if self.b.len() - at < 1 then try short(self.base + at, at + 1 - self.b.len()) else ()
     self.pos = at + 1
     self.b.i8(at)
   pub fn u16_le(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    if self.b.len() - at < 2 then try short(self.base + at, at + 2 - self.b.len()) else ()
     self.pos = at + 2
     self.b.u16_le(at)
   pub fn u16_be(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    if self.b.len() - at < 2 then try short(self.base + at, at + 2 - self.b.len()) else ()
     self.pos = at + 2
     self.b.u16_be(at)
   pub fn i16_le(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    if self.b.len() - at < 2 then try short(self.base + at, at + 2 - self.b.len()) else ()
     self.pos = at + 2
     self.b.i16_le(at)
   pub fn i16_be(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 2 then try short(at, at + 2 - self.b.len()) else ()
+    if self.b.len() - at < 2 then try short(self.base + at, at + 2 - self.b.len()) else ()
     self.pos = at + 2
     self.b.i16_be(at)
   pub fn u32_le(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    if self.b.len() - at < 4 then try short(self.base + at, at + 4 - self.b.len()) else ()
     self.pos = at + 4
     self.b.u32_le(at)
   pub fn u32_be(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    if self.b.len() - at < 4 then try short(self.base + at, at + 4 - self.b.len()) else ()
     self.pos = at + 4
     self.b.u32_be(at)
   pub fn i32_le(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    if self.b.len() - at < 4 then try short(self.base + at, at + 4 - self.b.len()) else ()
     self.pos = at + 4
     self.b.i32_le(at)
   pub fn i32_be(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 4 then try short(at, at + 4 - self.b.len()) else ()
+    if self.b.len() - at < 4 then try short(self.base + at, at + 4 - self.b.len()) else ()
     self.pos = at + 4
     self.b.i32_be(at)
   // a `u64` of 2^63 or more isn't an `Int`: `Malformed`, which reading
   // its bits with `i64_le` doesn't fail with
   pub fn u64_le(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    if self.b.len() - at < 8 then try short(self.base + at, at + 8 - self.b.len()) else ()
     let x = self.b.i64_le(at)
     if x < 0 then
-      fail Malformed(at, "", show_unsigned(x).concat(" is more than an `Int` holds"))
+      fail Malformed(self.base + at, "", show_unsigned(x) + " is more than an `Int` holds")
     else
       self.pos = at + 8
       x
   pub fn u64_be(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    if self.b.len() - at < 8 then try short(self.base + at, at + 8 - self.b.len()) else ()
     let x = self.b.i64_be(at)
     if x < 0 then
-      fail Malformed(at, "", show_unsigned(x).concat(" is more than an `Int` holds"))
+      fail Malformed(self.base + at, "", show_unsigned(x) + " is more than an `Int` holds")
     else
       self.pos = at + 8
       x
   pub fn i64_le(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    if self.b.len() - at < 8 then try short(self.base + at, at + 8 - self.b.len()) else ()
     self.pos = at + 8
     self.b.i64_le(at)
   pub fn i64_be(inout self) -> Int ! FormatError =
     let at = self.pos
-    if self.b.len() - at < 8 then try short(at, at + 8 - self.b.len()) else ()
+    if self.b.len() - at < 8 then try short(self.base + at, at + 8 - self.b.len()) else ()
     self.pos = at + 8
     self.b.i64_be(at)
   // a `VarUInt`, LEB128: 7 bits a byte, least first, the top bit set on
@@ -532,14 +559,14 @@ pub type ByteCursor = opaque { b: Bytes, pos: Int }
     var shift = 0
     var more = true
     while more
-      if i >= n then try short(self.pos, 1) else ()
+      if i >= n then try short(self.base + self.pos, 1) else ()
       let v = self.b.u8(i)
       if shift == 63 then
-        if v >= 128 then fail Malformed(self.pos, "", "a `VarUInt` is at most 10 bytes")
+        if v >= 128 then fail Malformed(self.base + self.pos, "", "a `VarUInt` is at most 10 bytes")
         else if signed && v > 1 then
-          fail Malformed(self.pos, "", "a `VarInt` of more than 64 bits is more than an `Int` holds")
+          fail Malformed(self.base + self.pos, "", "a `VarInt` of more than 64 bits is more than an `Int` holds")
         else if not signed && v > 0 then
-          fail Malformed(self.pos, "", "a `VarUInt` of 2^63 or more is more than an `Int` holds")
+          fail Malformed(self.base + self.pos, "", "a `VarUInt` of 2^63 or more is more than an `Int` holds")
         else ()
       else ()
       z = z.bit_or(v.bit_and(127).shl(shift))
@@ -551,14 +578,14 @@ pub type ByteCursor = opaque { b: Bytes, pos: Int }
   // the next `n` bytes, a slice
   pub fn bytes(inout self, n: Int) -> Bytes ! FormatError =
     if n < 0 then lib_panic("a cursor's `bytes` of a negative count") else ()
-    try room(self.b.len(), self.pos, n)
+    try room(self.base, self.b.len(), self.pos, n)
     let s = self.b[self.pos..self.pos + n]
     self.pos += n
     s
   // past the next `n` bytes
   pub fn skip(inout self, n: Int) ! FormatError =
     if n < 0 then lib_panic("a cursor's `skip` of a negative count") else ()
-    try room(self.b.len(), self.pos, n)
+    try room(self.base, self.b.len(), self.pos, n)
     self.pos += n
 
 // ---- time ----
@@ -606,8 +633,8 @@ pub type Path = opaque Str
     else
       // a path that ends in `/` has an empty last part
       let parts = self.split("/")
-      if parts[parts.len() - 1] == "" then self.concat(name)
-      else self.concat("/").concat(name)
+      if parts[parts.len() - 1] == "" then self + name
+      else self + "/" + name
   pub fn show(self) -> Str = self
 
 // ---- the built-in dependencies (deps.md, "Built in") ----
@@ -1259,8 +1286,10 @@ let scheme (x : Intrinsic.t) =
   | Set_len -> fn [ read (set k) ] int
   (* A `Str` is UTF-8, always, and `Bytes` are any bytes at all
      (builtins.ml, "strings and bytes"). *)
-  (* fn(self: Str) -> Int, in bytes *)
-  | Str_len -> fn [ read str ] int
+  (* fn(self: Str) -> Int, in bytes: a `Str` has no `len`, since a
+     reader can't tell bytes from characters (strings.md, "Length and
+     indexing") *)
+  | Str_byte_len -> fn [ read str ] int
   (* fn(self: Str, s: Str) -> Option<Int>: where [s] first starts *)
   | Str_index ->
       fn [ read str; read str ] (Con (Path.prelude "Option", [ int ]))
@@ -1271,8 +1300,23 @@ let scheme (x : Intrinsic.t) =
   | Str_trim -> fn [ read str ] str
   (* fn(self: Str, prefix: Str) -> Bool *)
   | Str_starts_with -> fn [ read str; read str ] bool
-  (* fn(self: Str, s: Str) -> Str: this, then [s] *)
-  | Str_concat -> fn [ read str; read str ] str
+  (* fn(self: Str, s: Str) -> Str: this, then [s], which `+` is, and
+     `+=` (strings.md, "Building strings"); and the same for `Bytes` *)
+  | Str_add -> fn [ read str; read str ] str
+  | Bytes_add -> fn [ read bytes; read bytes ] bytes
+  (* fn(self: Str, i: Int) -> Int: the last character boundary at or
+     before [i], and the first at or after it, panicking if [i] isn't 0
+     to the length (strings.md, "Cutting a character") *)
+  | Str_char_floor | Str_char_ceil -> fn [ read str; read int ] int
+  (* fn(self: Str) -> Int: the code point of a string of one, panicking
+     on any other (strings.md, "Characters") *)
+  | Str_code -> fn [ read str ] int
+  (* fn(n: Int) -> Str: the string of the one code point [n], panicking
+     if it isn't a Unicode scalar value *)
+  | Str_of_code -> fn [ read int ] str
+  (* fn(self: Array<Str>, sep: Str) -> Str: the strings, with [sep]
+     between each two *)
+  | Array_join -> fn [ read (array str); read str ] str
   (* fn(self: Str) -> Bytes: its UTF-8 *)
   | Str_bytes -> fn [ read str ] bytes
   (* fn(b: Bytes) -> Str ! InvalidUtf8(at: Int, incomplete: Bool): where
@@ -1352,8 +1396,11 @@ let scheme (x : Intrinsic.t) =
   | Float_round | Float_truncate -> fn [ read float ] int
   (* fn(self: Float) -> Float *)
   | Float_sqrt -> fn [ read float ] float
-  (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z` *)
-  | Str_lower -> fn [ read str ] str
+  (* fn(self: Str) -> Str, with `A` to `Z` made `a` to `z`, and nothing
+     else: ASCII only, so the same in every release (strings.md, "The
+     `unicode` module"); and the same for `Bytes` *)
+  | Str_ascii_lower -> fn [ read str ] str
+  | Bytes_ascii_lower -> fn [ read bytes ] bytes
   (* fn<T has hash>(self: T) -> Int: `x.hash()`, the derived hash, with no
      seed, so the same on every run and in every build (walk.ml,
      [fixed_hash]) *)
@@ -1512,14 +1559,15 @@ let reaches (x : Intrinsic.t) =
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
-  | Array_len | Array_push | Str_len | Str_index | Str_split
-  | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8 | Str_from_utf8_lossy
+  | Array_len | Array_push | Str_byte_len | Str_index | Str_split
+  | Str_trim | Str_starts_with | Str_add | Str_bytes | Str_from_utf8 | Str_from_utf8_lossy
   | Bytes_len | Bytes_at | Bytes_of | Array_copy | Str_copy | Bytes_copy
   | Bytes_read _ | Bytes_write _ | Bytes_zeros | Bytes_set_var _ | Bytes_var_size _
   | Array_split_at | Str_split_at | Bytes_split_at | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
   | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
-  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_lower | Hash ->
+  | Float_of | Float_round | Float_truncate | Float_sqrt | Str_ascii_lower | Bytes_ascii_lower | Bytes_add | Str_char_floor
+  | Str_char_ceil | Str_code | Str_of_code | Array_join | Hash ->
       None
 
 (* Who can call it. Any program can, unless only the prelude's own
@@ -1679,25 +1727,28 @@ let types =
   @ List.map (fun k -> t (Sized.name k)) Sized.all
   @ [
     t "Array" ~arity:1
-      ~methods:[ Array_len; Array_push; Array_sort; Array_copy; Array_split_at ];
+      ~methods:[ Array_len; Array_push; Array_sort; Array_copy; Array_split_at; Array_join ];
     t "Str"
       ~methods:
         [
-          Str_len;
+          Str_byte_len;
           Str_index;
           Str_split;
           Str_trim;
           Str_starts_with;
-          Str_concat;
+          Str_add;
           Str_bytes;
-          Str_lower;
+          Str_ascii_lower;
           Str_copy;
           Str_split_at;
+          Str_char_floor;
+          Str_char_ceil;
+          Str_code;
         ]
-      ~functions:[ Str_from_utf8; Str_from_utf8_lossy ];
+      ~functions:[ Str_from_utf8; Str_from_utf8_lossy; Str_of_code ];
     t "Bytes"
       ~methods:
-        (Intrinsic.[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at ]
+        (Intrinsic.[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at; Bytes_add; Bytes_ascii_lower ]
         @ List.map (fun a -> Intrinsic.Bytes_read a) Intrinsic.accesses
         @ List.map (fun a -> Intrinsic.Bytes_write a) Intrinsic.accesses
         @ Intrinsic.[ Bytes_set_var false; Bytes_set_var true ])

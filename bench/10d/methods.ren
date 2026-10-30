@@ -7,7 +7,7 @@
 dep Route =
   handle: fn(path: Str) -> Str
 
-fn page(body: Str) -> Route = handler fn(path) => path.concat(": ").concat(body)
+fn page(body: Str) -> Route = handler fn(path) => path + ": " + body
 
 dep Get =
   get: fn() -> Int
@@ -27,7 +27,7 @@ handler counter() for Get =
 
 fn main() uses Console =
   var body = "first"
-  let r: Route = handler fn(path) => path.concat(" ").concat(body)
+  let r: Route = handler fn(path) => path + " " + body
   body = "second"
   let routes: Array<Route> = [page("x"), handler fn(p) => p, r]
   print(routes.map(fn(x) => x.handle("/c")))

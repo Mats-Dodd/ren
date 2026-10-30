@@ -197,9 +197,9 @@ over. Its state comes first, as any handler's, then one arm, `call =>
 ```ren
 handler logged() over any uses Console =
   call =>
-    Console.write("> ".concat(call.name).concat(show(call.args)))
+    Console.write("> \{call.name}\{call.args}")
     let r = attempt call.forward()
-    Console.write("< ".concat(show(r)))
+    Console.write("< \{r}")
     try r
 
 with logged() over mem_users() in

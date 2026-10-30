@@ -649,7 +649,7 @@ dep Web =
   get: fn(url: Str) -> Str
 
 handler fake_web() for Web =
-  get(url) => "fake ".concat(url)
+  get(url) => "fake " + url
 
 fn with_fake_web(body: fn() uses Web) = with fake_web() in try body()
 
@@ -805,7 +805,7 @@ dep Web =
   get: fn(url: Str) -> Str
 
 handler fake_web() for Web =
-  get(url) => "fake ".concat(url)
+  get(url) => "fake " + url
 
 fn ask(f: fn(Str) -> Str uses Web) -> Str = with fake_web() in try f("a")
 
@@ -825,7 +825,7 @@ dep Web =
   get: fn(url: Str) -> Str
 
 handler fake_web() for Web =
-  get(url) => "fake ".concat(url)
+  get(url) => "fake " + url
 
 fn with_fake_web(body: fn() uses Web) = with fake_web() in try body()
 
@@ -848,7 +848,7 @@ dep Web =
   get: fn(url: Str) -> Str
 
 handler fake_web() for Web =
-  get(url) => "fake ".concat(url)
+  get(url) => "fake " + url
 
 fn with_fake_web(body: fn() uses Web) = with fake_web() in try body()
 fn pass_on(body: fn()) = try with_fake_web(body)

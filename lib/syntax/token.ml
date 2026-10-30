@@ -60,6 +60,12 @@ type t =
       (float[@printer fun fmt f -> Format.pp_print_string fmt (show_float f)])
       (** a `Float` literal, [1.5] *)
   | STR of string  (** a string literal's contents, its escapes undone *)
+  | STR_HEAD of string
+      (** an interpolated string's text before its first hole: the hole's
+          tokens come next, then a [STR_MID] or a [STR_TAIL] (lexer.ml,
+          [lex_string]) *)
+  | STR_MID of string  (** its text between two holes *)
+  | STR_TAIL of string  (** its text after its last hole *)
   | IDENT of string
   (* keywords *)
   | FN
@@ -165,6 +171,15 @@ let to_string = function
   | INT n -> Int64.to_string n
   | FLOAT f -> show_float f
   | STR s -> show_str s
+  | STR_HEAD s ->
+      let q = show_str s in
+      String.sub q 0 (String.length q - 1) ^ "\\{"
+  | STR_MID s ->
+      let q = show_str s in
+      "}" ^ String.sub q 1 (String.length q - 2) ^ "\\{"
+  | STR_TAIL s ->
+      let q = show_str s in
+      "}" ^ String.sub q 1 (String.length q - 1)
   | IDENT s -> s
   | FN -> "fn"
   | PUB -> "pub"

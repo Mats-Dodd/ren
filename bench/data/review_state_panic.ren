@@ -8,7 +8,7 @@ dep Area =
 handler logged(name: Option<Str>) for Area uses Console =
   let Some(n) = name else todo
   finally(r) =>
-    print("finally ".concat(n))
+    print("finally " + n)
     try r
   area() => n
 

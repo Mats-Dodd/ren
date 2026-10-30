@@ -218,7 +218,7 @@ answers what `main` reads from it, and what `main` shows has to be what
 the recording showed. A change to what's shown fails with the two as a
 diff:
 
-  $ cp -rL just t1 && perl -pi -e 's/Console.error\(line\)/Console.error("> ".concat(line))/' t1/main.ren
+  $ cp -rL just t1 && perl -pi -e 's/Console.error\(line\)/Console.error("> " + line)/' t1/main.ren
   $ REN_NO_TIMINGS=1 ren test t1/main.ren --only recorded --seed 1
   main.ren
     ✗ a recorded run of build replays

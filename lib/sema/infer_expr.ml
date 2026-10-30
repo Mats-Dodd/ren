@@ -140,6 +140,16 @@ let stored env cx why (e : expr) t k =
       | _ -> ());
       let written = Option.value (env.source e) ~default:"" in
       (match e.kind with
+      (* a character literal, `'é'`, whose code point fits a byte but isn't
+         one: a `UInt8` is a byte (strings.md, "Characters") *)
+      | Int n
+        when k = Sized.U8 && Hashtbl.mem Ast.char_literals e.loc
+             && Int64.compare n 127L > 0 ->
+          let b = Buffer.create 4 in
+          Buffer.add_utf_8_uchar b (Uchar.of_int (Int64.to_int n));
+          report env
+            (char_not_byte e.loc ~written:(Hashtbl.find Ast.char_literals e.loc)
+               ~n:(Buffer.length b))
       | Int n when (not (Sized.is_float k)) && not (Sized.fits k n) ->
           report env (literal_doesnt_fit e.loc k ~written)
       | Unop (Neg, { kind = Int n; _ }, _)
@@ -650,6 +660,11 @@ and synth env cx (e : expr) : ty =
   | Float _ -> float
   | Bool _ -> bool
   | Str _ -> str
+  | Interp ps ->
+      (* each hole is shown, whatever its type (infer_top.ml refuses a
+         block there, as `show`'s argument) *)
+      List.iter (fun h -> ignore (infer env cx h)) (Ast.holes ps);
+      str
   | Unit -> unit
   | Var x -> lookup env cx ~node:e.node e.loc x
   | Named (_, a) -> infer env cx a
@@ -762,6 +777,12 @@ and synth env cx (e : expr) : ty =
              (operators.md, "`Map` and `Set`") *)
           ignore (infer env cx i);
           report env (map_indexed e.loc ~map:(env.source a) ~key:(env.source i));
+          TError
+      | TCon (p, []) when p = Path.prelude "Str" ->
+          (* a byte would invite character arithmetic done in bytes
+             (strings.md, "Length and indexing") *)
+          ignore (infer env cx i);
+          report env (str_indexed e.loc ~recv:(env.source a));
           TError
       | _ ->
           let elem = fresh_var env.st in
@@ -1537,6 +1558,21 @@ and operator env cx (e : expr) ~onode ~meth ~name (a : expr) ta b =
                   op_method env cx e ~onode a ta (Some (b, tb)) path
               | None -> TError)
           | _ when numeric_takes (Some tb) -> builtin ()
+          (* one of the module's own opaque types on the right, `"<" +
+             self` in a member of an `opaque Str`: what it's represented
+             as, if the left side's type takes that, as an argument is *)
+          | TCon (q, _)
+            when Hashtbl.mem env.st.reps q
+                 && (match reveal env.st tb with
+                    | TCon (r, _) -> taking r <> None
+                    | _ -> false) -> (
+              match reveal env.st tb with
+              | TCon (r, _) -> (
+                  match taking r with
+                  | Some (path, _) ->
+                      op_method env cx e ~onode a ta (Some (b, tb)) path
+                  | None -> TError)
+              | _ -> TError)
           | TCon _ ->
               no_taking ();
               TError
@@ -1940,6 +1976,13 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
           let shown = show (printer env) tr in
           (match td.body with
           | Dep ops -> report env (op_of_value ~names:env.names ?recv:(env.source r) m p ops)
+          (* the names strings.md took away, each with what replaced it *)
+          | _ when p = Path.prelude "Str" && m.name = "len" ->
+              report env (str_len m.loc ~recv:(env.source r))
+          | _ when p = Path.prelude "Str" && m.name = "lower" ->
+              report env (str_lower m.loc)
+          | _ when p = Path.prelude "Str" && m.name = "concat" ->
+              report env (str_concat m.loc)
           | _
             when Infer_reqs.numeric env p <> None
                  && List.mem_assoc m.name numeric_operators ->

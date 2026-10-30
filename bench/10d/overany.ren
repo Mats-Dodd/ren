@@ -32,9 +32,9 @@ handler mem_store() for Store =
 // what it gave
 handler logged() over any uses Console =
   call =>
-    Console.write("> ".concat(call.name).concat(show(call.args)))
+    Console.write("> " + call.name + show(call.args))
     let r = attempt call.forward()
-    Console.write("< ".concat(show(r)))
+    Console.write("< " + show(r))
     try r
 
 // every `every`th call fails with `Down`, which every operation of what

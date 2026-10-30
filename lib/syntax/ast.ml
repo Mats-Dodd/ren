@@ -240,6 +240,11 @@ and ('v, 'b, 't) expr_kind =
   | Float of float  (** [1.5]: a literal's spelling says its type *)
   | Bool of bool
   | Str of string  (** ["Ren"], its escapes undone *)
+  | Interp of ('v, 'b, 't) piece list
+      (** an interpolated string, the text and holes of `"jobs/\{job}"` in
+          order: each hole goes through its type's `show`, and the pieces are
+          joined with `+`, left to right (lower.ml; strings.md, "Building
+          strings") *)
   | Unit  (** [()] *)
   | Var of 'v
       (** a local variable, a top-level function, or a member written after its
@@ -391,6 +396,10 @@ and ('v, 'b, 't) expr_kind =
   | Tag_set of 't errors
       (** [Flaky | Broken], the tags a `Tags` argument is given: tag names,
           without payloads, or named error sets. Only ever a [Named]'s value *)
+
+(* A piece of an interpolated string: text, its escapes undone, or a
+   hole's expression. *)
+and ('v, 'b, 't) piece = Lit of string | Hole of ('v, 'b, 't) expr
 
 (* What an update builds, when it's written: the record type named, or a
    by-name constructor, [Placed { ..draft, id }], which builds its sum. *)
@@ -682,6 +691,16 @@ let changed_receiver (e : ('v, 'b, 't) expr) =
 let with_links items =
   List.concat_map (fun i -> List.map (fun l -> l.link) i.chain) items
 
+(* The character literals, `'é'`, by where each is, as each is written:
+   an [Int] to everything after the lexer (lexer.ml, [lex_char]), but a
+   non-ASCII one can't be stored in a `UInt8` (Infer_expr.stored), and
+   code shown in a help is shown as written ([source]). The lexer forgets
+   a file's when it reads the file again. *)
+let char_literals : (Loc.t, string) Hashtbl.t = Hashtbl.create 16
+
+(* The holes' expressions among an interpolated string's pieces. *)
+let holes ps = List.filter_map (function Hole e -> Some e | Lit _ -> None) ps
+
 (* The expressions directly inside [e], in source order: a statement's
    value (and a `let ... else`'s `else`), a guard and an arm's body, a
    handler's state and arms too. *)
@@ -695,6 +714,7 @@ let children (e : ('v, 'b, 't) expr) =
   | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
   | Piped ->
       []
+  | Interp ps -> holes ps
   | Unop (_, a, _)
   | Field (a, _)
   | Ref a
@@ -1045,6 +1065,10 @@ let rec show_expr (e : expr) =
   | Float f -> show_float f
   | Bool b -> string_of_bool b
   | Str s -> show_str s
+  | Interp ps ->
+      parens
+        ("interp"
+        :: List.map (function Lit t -> show_str t | Hole e -> show_expr e) ps)
   | Unit -> "()"
   | Var (Bare x) -> x
   | Var (Item (t, f)) -> show_tyname t ^ "." ^ f.name
@@ -1386,10 +1410,21 @@ let source ~type_name ~value_name (e : Resolved.expr) =
      once, at the top *)
   let rec go (e : Resolved.expr) =
     match e.kind with
+    | Int _ when Hashtbl.mem char_literals e.loc -> Hashtbl.find char_literals e.loc
     | Int n -> Int64.to_string n
     | Float f -> show_float f
     | Bool b -> string_of_bool b
     | Str s -> show_str s
+    | Interp ps ->
+        (* each piece's text as it's written, without its quotes *)
+        let text t =
+          let q = show_str t in
+          String.sub q 1 (String.length q - 2)
+        in
+        "\""
+        ^ String.concat ""
+            (List.map (function Lit t -> text t | Hole e -> "\\{" ^ go e ^ "}") ps)
+        ^ "\""
     | Unit -> "()"
     | Todo -> "todo"
     | Var (Local b) -> b.ident.name

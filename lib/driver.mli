@@ -199,6 +199,11 @@ val render_error : sources:(string -> string option) -> exn -> string option
    `n +% 1`, or [None] if they can't be shown. *)
 val wrap_help : sources:(string -> string option) -> Eval.wrap -> string option
 
+(* A panic's help with each `\002` in it the receiver at the location,
+   as it's written, or `s` (Eval.Panic). *)
+val recv_help :
+  lines_of:(string -> string array option) -> Loc.t option -> string -> string
+
 (* ---- `ren build` (compiler.md, "Native slice") ---- *)
 
 (* The program, as Mem IR (mem.ml): its modules linked, and what `$start`

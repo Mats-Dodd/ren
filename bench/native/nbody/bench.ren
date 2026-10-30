@@ -93,10 +93,10 @@ fn nine_places(x: Float) -> Str =
   let n = (x * 1000000000.0).round()
   let a = if n < 0 then -n else n
   var frac = show(a % 1000000000)
-  while frac.len() < 9
-    frac = "0".concat(frac)
-  let whole = show(a / 1000000000).concat(".").concat(frac)
-  if n < 0 then "-".concat(whole) else whole
+  while frac.byte_len() < 9
+    frac = "0" + frac
+  let whole = show(a / 1000000000) + "." + frac
+  if n < 0 then "-" + whole else whole
 
 pub fn run(n: Int) uses Console =
   var bodies = system()

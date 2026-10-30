@@ -892,7 +892,7 @@ let rec walk cx (e : expr) =
         state;
       List.iter (fun (a : handler_arm) -> body arm a.arm_impl) arms
   | Unop _ | Binop _ | If _ | Con _ | Con_named _ | Record _ | Update _
-  | Match _ | Array _
+  | Match _ | Array _ | Interp _
   | Tuple _
   | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _
   | Named _ | Tag_set _ | Pipe _ ->

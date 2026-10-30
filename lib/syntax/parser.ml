@@ -1814,6 +1814,23 @@ and parse_primary p =
   | STR s ->
       advance p;
       mk (Str s) start p
+  | STR_HEAD s ->
+      (* an interpolated string: its text, then each hole's expression and
+         the text after it (lexer.ml, [lex_string]) *)
+      advance p;
+      let rec pieces acc =
+        let e = parse_expr p in
+        match peek p with
+        | STR_MID t ->
+            advance p;
+            pieces (Lit t :: Hole e :: acc)
+        | STR_TAIL t ->
+            advance p;
+            List.rev (Lit t :: Hole e :: acc)
+        | _ -> fail_expected p "the `}` that ends the hole"
+      in
+      let ps = pieces [ Lit s ] in
+      mk (Interp ps) start p
   | TRUE ->
       advance p;
       mk (Bool true) start p

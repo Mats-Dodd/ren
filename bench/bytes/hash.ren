@@ -8,7 +8,7 @@ type Point = { x: Int, y: Int }
 
 pub type Email = opaque Str
   pub fn of(s: Str) -> Email = s
-  pub fn key(self) -> Str = self.lower()
+  pub fn key(self) -> Str = self.ascii_lower()
 
 fn main() uses Console =
   print(42.hash() == 42.hash())

@@ -21,13 +21,13 @@ fn either(c: Bool, p: Option<Str>, q: Option<Str>) -> Option<Str> =
 
 fn main() uses Console =
   for c in [false, true]
-    match pick(c, Some("a".concat("!")))
+    match pick(c, Some("a" + "!"))
       Some(s) => print(s)
       None => print("none")
-    match plan(c, Pro("b".concat("!")))
+    match plan(c, Pro("b" + "!"))
       Pro(n) => print(n)
       Free => print("free")
-    match either(c, Some("p".concat("!")), Some("q".concat("!")))
+    match either(c, Some("p" + "!"), Some("q" + "!"))
       Some(s) => print(s)
       None => print("none")
     match either(c, None, None)

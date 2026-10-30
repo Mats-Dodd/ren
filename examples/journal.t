@@ -203,7 +203,7 @@ under the call that made it:
   > 
   > fn main() uses Console =
   >   with console_names() in
-  >     Console.write("hello ".concat(Names.name(1)))
+  >     Console.write("hello " + Names.name(1))
   > END
   $ REN_NO_TIMINGS=1 ren run --trace greet.ren
   1
@@ -341,7 +341,7 @@ tenth of a second apart, so the order they end in is the same each run;
   >   Clock.sleep(Duration.ms(r.takes))
   >   let code = try Proc.run("sh", ["-c", r.line])
   >   if code != 0 then fail Failed(r.line)
-  >   print("ran ".concat(r.line))
+  >   print("ran " + r.line)
   > 
   > fn main() ! ProcError | Failed(line: Str) uses Proc, Console, Clock, Async, Os =
   >   let slow = Os.args().len() > 0

@@ -99,7 +99,7 @@ fn line(i: Int, names: Array<Str>) -> Item =
 
 fn price(it: Item) -> Item =
   match it
-    Draft(l) => Priced { l, total: l.qty * l.sku.len() }
+    Draft(l) => Priced { l, total: l.qty * l.sku.byte_len() }
     Priced { .. } as p => Priced { ..p, total: p.total + 1 }
     Void => Void
 
@@ -111,7 +111,7 @@ fn sku(it: Item) -> Str =
 fn bump(inout r: R) =
   r.q.p.x += 1
   r.q = { ..r.q, z: r.q.z + 10 }
-  r.w = r.w.concat("+")
+  r.w = r.w + "+"
 
 fn swap<T>(m: Maybe<T>) -> Maybe<T> =
   match m
@@ -168,14 +168,14 @@ fn main() uses Console =
     match it
       Priced { total: n, .. } => total += n
       _ => ()
-    skus = skus.concat(sku(it))
+    skus = skus + sku(it)
   print(total)
   print(skus)
   // one object, flattened
   var tg = Named(Name { s: "a" })
   for i in 0..4
     tg = match tg
-      Named(n) => if i == 3 then Anon else Named(Name { s: n.s.concat("b") })
+      Named(n) => if i == 3 then Anon else Named(Name { s: n.s + "b" })
       Anon => Anon
   match tg
     Named(n) => print(n.s)
@@ -226,9 +226,9 @@ fn main() uses Console =
   for sl in slips
     match sl
       Written(nt) =>
-        w = w.concat(nt.text)
+        w = w + nt.text
         wn += nt.n
-      Blank => w = w.concat("-")
+      Blank => w = w + "-"
   print(w)
   print(wn)
   // packed scalars, flattened, read and changed through the outer value

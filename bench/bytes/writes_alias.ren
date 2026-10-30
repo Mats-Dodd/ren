@@ -16,7 +16,7 @@ fn stamp(inout b: Bytes, at: Int) =
 type Holder = { data: Bytes, n: Int }
 
 fn main() uses Console =
-  let s = "xyz".concat("w")
+  let s = "xyz" + "w"
   print(poke(s))
   print(s)
   var b = s.bytes()

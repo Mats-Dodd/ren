@@ -692,7 +692,7 @@ in a hoisted loop panics as it would anywhere:
   > 
   > fn shout(inout ss: Array<Str>) =
   >   for i in 0..ss.len()
-  >     ss[i] = ss[i].concat("!")
+  >     ss[i] = ss[i] + "!"
   > 
   > fn poke(inout a: Array<Int>, i: Int) =
   >   a[i] = a[i] * 2
@@ -713,7 +713,7 @@ in a hoisted loop panics as it would anywhere:
   >   var ss = ["a", "b"]
   >   let old = ss
   >   shout(&ss)
-  >   Console.write(old[0].concat(ss[0]).concat(ss[1]))
+  >   Console.write(old[0] + ss[0] + ss[1])
   >   var p = [1, 2, 3]
   >   for i in 0..p.len()
   >     p[i] = p[i] + 1

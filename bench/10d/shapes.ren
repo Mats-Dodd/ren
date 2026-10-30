@@ -63,7 +63,7 @@ fn main() uses Console =
   let offers = [
     Offer { name: "tea", price: flat(300) },
     Offer { name: "cake", price: surge(450) },
-    Offer { name: "jam", price: handler fn(item) => item.len() * 100 },
+    Offer { name: "jam", price: handler fn(item) => item.byte_len() * 100 },
   ]
   with Clock.frozen(Time.epoch) in
     print(quote(offers, "x"))

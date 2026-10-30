@@ -27,8 +27,8 @@ pub type Justfile = opaque { recipes: Array<Recipe> }
         if name == "" then fail BadLine(number)
         if recipes.any(fn(r) => r.name == name) then fail DuplicateRecipe(name)
         // the dependencies, up to a comment, between spaces or tabs
-        let rest = t[colon + 1..t.len()]
-        let end = rest.index("#").unwrap_or(rest.len())
+        let rest = t[colon + 1..t.byte_len()]
+        let end = rest.index("#").unwrap_or(rest.byte_len())
         var deps: Array<Str> = []
         for word in rest[0..end].split(" ")
           for d in word.split("\t")

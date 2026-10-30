@@ -190,6 +190,7 @@ let rec walk cx (e : expr) =
   | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Todo | Tag_set _ | Piped
     ->
       ()
+  | Interp ps -> List.iter (walk cx) (Ast.holes ps)
   | Named (_, a) -> walk cx a
   | Pipe { subject; step } ->
       (* the subject is a value the step's call is given, as a `let`'s *)

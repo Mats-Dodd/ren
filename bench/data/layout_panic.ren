@@ -11,10 +11,10 @@ type Item =
 
 fn main() uses Console =
   let names = ["tea", "jam"]
-  let kept = Draft(Line { sku: "kept".concat("!"), qty: 1 })
+  let kept = Draft(Line { sku: "kept" + "!", qty: 1 })
   var n = 0
   for i in 0..5
-    let it = if i == 4 then Void else Draft(Line { sku: names[i % 2].concat("?"), qty: i })
+    let it = if i == 4 then Void else Draft(Line { sku: names[i % 2] + "?", qty: i })
     match it
       Draft(l) =>
         n += l.qty

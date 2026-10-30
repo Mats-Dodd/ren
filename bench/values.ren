@@ -39,7 +39,7 @@ type Tally = { label: Str, count: Int }
 fn find(xs: Array<Str>, s: Str) -> Option<Str> =
   var found = None
   for x in xs
-    if x == s then found = Some(x.concat("!"))
+    if x == s then found = Some(x + "!")
   found
 
 fn twice(o: Option<Option<Int>>) -> Int =
@@ -53,25 +53,25 @@ type Parsed =
   | Bad(why: Str)
 
 fn parse(s: Str) -> Parsed =
-  if s.len() > 3 then Bad(s.concat(" is too long")) else Good(s.len())
+  if s.byte_len() > 3 then Bad(s + " is too long") else Good(s.byte_len())
 
 fn check(s: Str) -> Int ! TooLong(n: Int) =
-  if s.len() > 3 then fail TooLong(s.len()) else s.len()
+  if s.byte_len() > 3 then fail TooLong(s.byte_len()) else s.byte_len()
 
 fn area(s: Shape) -> Int =
   match s
     Circle(r) => 3 * r * r
     Rect { w, h } => w * h
-    Named { name: n, sides: k } => n.len() * k
+    Named { name: n, sides: k } => n.byte_len() * k
     Blank => 0
 
-fn subtotal(l: Line) -> Int = l.qty * l.cents + l.item.len()
+fn subtotal(l: Line) -> Int = l.qty * l.cents + l.item.byte_len()
 
 fn pick(xs: Array<Str>, i: Int) -> (Str, Int) = (xs[i % xs.len()], i)
 
 fn bump(inout l: Line, by: Int) =
   l.qty += by
-  l.item = l.item.concat("+")
+  l.item = l.item + "+"
 
 fn swap(p: Pair) -> Pair = Pair { a: p.b, b: p.a }
 
@@ -88,7 +88,7 @@ fn main() uses Console =
   for s in ["pear", "kiwi"]
     match find(names, s)
       Some(x) => print(x)
-      None => print("no ".concat(s))
+      None => print("no " + s)
   print(find(names, "fig").is_some())
   print(twice(Some(Some(3))) + twice(Some(None)) + twice(None))
   // a result, and a sum of shared slots
@@ -118,7 +118,7 @@ fn main() uses Console =
   for i in 0..10
     let l = Line { item: names[i % 3], qty: i, cents: 7 }
     let (s, k) = pick(names, i)
-    sum += subtotal(l) + s.len() + k
+    sum += subtotal(l) + s.byte_len() + k
   print(sum)
   var l = Line { item: "plum", qty: 1, cents: 5 }
   let before = l
@@ -129,10 +129,10 @@ fn main() uses Console =
   print(l.item)
   // a block that captures one and changes it
   var m = Line { item: "lime", qty: 2, cents: 3 }
-  let n = apply(m, fn(x) => x.qty * x.cents + x.item.len())
+  let n = apply(m, fn(x) => x.qty * x.cents + x.item.byte_len())
   for i in 0..3
-    m = Line { item: m.item.concat(names[i]), qty: m.qty + i, cents: m.cents }
-  names.each(fn(s) => m = Line { item: s, qty: m.qty + s.len(), cents: m.cents })
+    m = Line { item: m.item + names[i], qty: m.qty + i, cents: m.cents }
+  names.each(fn(s) => m = Line { item: s, qty: m.qty + s.byte_len(), cents: m.cents })
   print(n + subtotal(m))
   var p = Pair { a: "left", b: "right" }
   for _ in 0..3
@@ -140,11 +140,11 @@ fn main() uses Console =
   print(p.a)
   // an associated value
   let t = Tally.empty()
-  print(t.label.len() + t.count)
+  print(t.label.byte_len() + t.count)
   // a field of a boxed record, and one shown
   let h = Holder { line: ("deep", true), n: 3 }
   let (w, c) = h.line
-  print(w.len() + h.n)
+  print(w.byte_len() + h.n)
   print(c)
   print(("shown", 1, false))
   print(length(Cons { head: "a", tail: Cons { head: "b", tail: Nil } }))

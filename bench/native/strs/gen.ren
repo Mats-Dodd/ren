@@ -73,12 +73,12 @@ fn hex() -> Str = "0123456789abcdef"
 fn word(ws: Array<Str>, inout s: Int) -> Str = ws[below(&s, 64)]
 
 // [w] with its first letter, `a` to `z`, made a capital
-fn capital(w: Str) -> Str = upper()[w.bytes().at(0) - 97].concat(w[1..w.len()])
+fn capital(w: Str) -> Str = upper()[w.bytes().at(0) - 97] + w[1..w.byte_len()]
 
 fn pad(x: Int, width: Int) -> Str =
   var t = show(x)
-  while t.len() < width
-    t = "0".concat(t)
+  while t.byte_len() < width
+    t = "0" + t
   t
 
 // [x]'s 64 bits as 16 hex digits
@@ -86,7 +86,7 @@ fn hex16(x: Int) -> Str =
   var t = ""
   for k in 0..16
     let d = ushr(x, 60 - 4 * k).bit_and(15)
-    t = t.concat(hex()[d..d + 1])
+    t = t + hex()[d..d + 1]
   t
 
 // one to three words joined by `_`, a number after one in five
@@ -94,9 +94,9 @@ fn ident(ws: Array<Str>, inout s: Int) -> Str =
   let parts = 1 + below(&s, 3)
   var o = ""
   for i in 0..parts
-    if i > 0 then o = o.concat("_")
-    o = o.concat(word(ws, &s))
-  if chance(&s, 20) then o = o.concat(show(below(&s, 100)))
+    if i > 0 then o = o + "_"
+    o = o + word(ws, &s)
+  if chance(&s, 20) then o = o + show(below(&s, 100))
   o
 
 // a key from the mixed distribution: short identifiers, dotted metric
@@ -107,14 +107,14 @@ fn key(ws: Array<Str>, inout s: Int, kind: Int) -> Str =
     let w = word(ws, &s)
     let a = ident(ws, &s)
     let b = ident(ws, &s)
-    w.concat(".").concat(a).concat(".").concat(b)
+    w + "." + a + "." + b
   else
     let v = 1 + below(&s, 2)
     let w = word(ws, &s)
     let id = below(&s, 1000000)
     let a = ident(ws, &s)
     let page = below(&s, 50)
-    "https://api.example.com/v".concat(show(v)).concat("/").concat(w).concat("/").concat(show(id)).concat("/").concat(a).concat("?page=").concat(show(page))
+    "https://api.example.com/v" + show(v) + "/" + w + "/" + show(id) + "/" + a + "?page=" + show(page)
 
 // ---- the files ----
 
@@ -136,26 +136,26 @@ pub fn tok(n: Int) -> Str =
       let k = ident(ws, &s)
       let x = below(&s, 100000)
       let a = ident(ws, &s)
-      put_str(&b, &at, "let ".concat(a).concat(" = ").concat(f).concat("(").concat(k).concat(", ").concat(show(x)).concat(") + ").concat(a).concat(";\n"))
+      put_str(&b, &at, "let " + a + " = " + f + "(" + k + ", " + show(x) + ") + " + a + ";\n")
       toks += 12
     else if form == 1 then
       let a = ident(ws, &s)
       let f = ident(ws, &s)
       let x = below(&s, 1000)
       let k = ident(ws, &s)
-      put_str(&b, &at, "if ".concat(a).concat(".").concat(f).concat(" >= ").concat(show(x)).concat(" {\n  return ").concat(k).concat(";\n}\n"))
+      put_str(&b, &at, "if " + a + "." + f + " >= " + show(x) + " {\n  return " + k + ";\n}\n")
       toks += 11
     else if form == 2 then
       let a = ident(ws, &s)
       let l = lits[below(&s, 5)]
-      put_str(&b, &at, a.concat(" += \"").concat(l).concat("\";\n"))
+      put_str(&b, &at, a + " += \"" + l + "\";\n")
       toks += 4
     else
       let w = keywords()[below(&s, 10)]
       let a = ident(ws, &s)
       let f = ident(ws, &s)
       let k = ident(ws, &s)
-      put_str(&b, &at, w.concat(" ").concat(a).concat(" = ").concat(f).concat(" -> ").concat(k).concat(";\n"))
+      put_str(&b, &at, w + " " + a + " = " + f + " -> " + k + ";\n")
       toks += 6
   finish(b, at)
 
@@ -198,18 +198,18 @@ pub fn rows(cities: Int, rows: Int) -> Str =
     var a = ""
     let n = 2 + below(&s, 4)
     for j in 0..n
-      a = a.concat(syllables()[below(&s, 28)])
-      if j == 1 && chance(&s, 40) then a = a.concat(" ")
+      a = a + syllables()[below(&s, 28)]
+      if j == 1 && chance(&s, 40) then a = a + " "
     a = capital(a)
-    if chance(&s, 5) then a = a.concat(" é")
-    &cs.push(a.concat(show(i % 7)))
+    if chance(&s, 5) then a = a + " é"
+    &cs.push(a + show(i % 7))
   var b = Bytes.zeros(0)
   var at = 0
   for _ in 0..rows
     let c = cs[below(&s, cities)]
     let d = ws[below(&s, 20)]
     let x = below(&s, 100000)
-    put_str(&b, &at, c.concat(",").concat(d).concat(",").concat(show(x)).concat("\n"))
+    put_str(&b, &at, c + "," + d + "," + show(x) + "\n")
   finish(b, at)
 
 // logs.txt: [lines] log lines
@@ -226,11 +226,11 @@ pub fn logs(lines: Int) -> Str =
     let l = if r < 85 then 0 else if r < 95 then 1 else if r < 99 then 2 else 3
     let pk = below(&s, 5)
     let path =
-      if pk == 0 then "/v1/users/".concat(show(below(&s, 100000))).concat("/orders")
-      else if pk == 1 then "/v2/items/".concat(show(below(&s, 1000000)))
+      if pk == 0 then "/v1/users/" + show(below(&s, 100000)) + "/orders"
+      else if pk == 1 then "/v2/items/" + show(below(&s, 1000000))
       else if pk == 2 then "/health"
-      else if pk == 3 then "/v1/search?q=".concat(word(ws, &s))
-      else "/v1/users/".concat(show(below(&s, 100000)))
+      else if pk == 3 then "/v1/search?q=" + word(ws, &s)
+      else "/v1/users/" + show(below(&s, 100000))
     let status = if chance(&s, 2) then 500 else if chance(&s, 5) then 404 else 200
     let mm = below(&s, 60)
     let ss = below(&s, 60)
@@ -239,9 +239,9 @@ pub fn logs(lines: Int) -> Str =
     let m = methods[below(&s, 4)]
     let dur = 1 + below(&s, 2000)
     let req = next(&s)
-    put_str(&b, &at, "2026-10-29T09:".concat(pad(mm, 2)).concat(":").concat(pad(ss, 2)).concat(".").concat(pad(ms, 3)).concat("Z "))
-    put_str(&b, &at, levels[l].concat(" ").concat(svc).concat(" ").concat(m).concat(" ").concat(path).concat(" "))
-    put_str(&b, &at, show(status).concat(" ").concat(show(dur)).concat("ms req_id=").concat(hex16(req)).concat("\n"))
+    put_str(&b, &at, "2026-10-29T09:" + pad(mm, 2) + ":" + pad(ss, 2) + "." + pad(ms, 3) + "Z ")
+    put_str(&b, &at, levels[l] + " " + svc + " " + m + " " + path + " ")
+    put_str(&b, &at, show(status) + " " + show(dur) + "ms req_id=" + hex16(req) + "\n")
   finish(b, at)
 
 // people.csv: [n] people, each an id, a name, an email, a score and 0 to
@@ -254,15 +254,15 @@ pub fn people(n: Int) -> Str =
   for i in 0..n
     let w1 = word(ws, &s)
     let w2 = word(ws, &s)
-    var name = capital(w1.concat(" ").concat(w2))
-    if chance(&s, 3) then name = name.concat(" \"jr\"")
-    if chance(&s, 5) then name = name.concat(" Muñoz")
+    var name = capital(w1 + " " + w2)
+    if chance(&s, 3) then name = name + " \"jr\""
+    if chance(&s, 5) then name = name + " Muñoz"
     let e1 = word(ws, &s)
     let e2 = word(ws, &s)
     let e3 = below(&s, 1000)
     let score = below(&s, 1000000)
-    put_str(&b, &at, show(i).concat("\t").concat(name).concat("\t").concat(e1).concat(".").concat(e2).concat(show(e3)))
-    put_str(&b, &at, "@example.com\t".concat(show(score)).concat("\t"))
+    put_str(&b, &at, show(i) + "\t" + name + "\t" + e1 + "." + e2 + show(e3))
+    put_str(&b, &at, "@example.com\t" + show(score) + "\t")
     let tags = below(&s, 4)
     for t in 0..tags
       if t > 0 then put(&b, &at, 59)

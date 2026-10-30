@@ -30,6 +30,11 @@ static void ren_repeat(int c, uint64_t n) {
 }
 
 _Noreturn void ren_panic(const ren_site *site, const char *msg) {
+  ren_panic_help(site, msg, NULL);
+}
+
+_Noreturn void ren_panic_help(const ren_site *site, const char *msg,
+                              const char *help) {
   fflush(stdout);
   const unsigned char *p = site->ops;
   for (;;) {
@@ -56,6 +61,21 @@ _Noreturn void ren_panic(const ren_site *site, const char *msg) {
       uint64_t i = ren_site_num(&p);
       uint64_t n = ren_site_num(&p);
       fwrite(t + i, 1, n, stderr);
+      break;
+    }
+    case 7: {
+      uint64_t n = ren_site_num(&p);
+      const char *recv = ren_texts[ren_site_num(&p)];
+      if (help) {
+        ren_repeat(' ', n);
+        fputs(" help: ", stderr);
+        for (const char *h = help; *h; h++)
+          if (*h == '\002')
+            fputs(recv, stderr);
+          else
+            fputc(*h, stderr);
+        fputc('\n', stderr);
+      }
       break;
     }
     default:
@@ -755,17 +775,27 @@ static bool ren_boundary(ren_obj *s, int64_t i) {
    [to] are the range said, which a `split_at`'s is 0 to [j]. */
 static void ren_chars_check(ren_obj *s, int64_t i, int64_t j,
                             const ren_site *site) {
-  char msg[160];
+  /* the help names `char_floor` on the string as it's written, a 0x02,
+     as the interpreter's does (builtins.ml, [check_chars]) */
+  char msg[160], help[200];
   if (!ren_boundary(s, i)) {
     snprintf(msg, sizeof msg,
              "slice %" PRId64 " to %" PRId64 " starts inside a character", i,
              j);
-    ren_panic(site, msg);
+    snprintf(help, sizeof help,
+             "to start where a character does, use `\002.char_floor(%" PRId64
+             ")` or `\002.char_ceil(%" PRId64 ")`",
+             i, i);
+    ren_panic_help(site, msg, help);
   }
   if (!ren_boundary(s, j)) {
     snprintf(msg, sizeof msg,
              "slice %" PRId64 " to %" PRId64 " ends inside a character", i, j);
-    ren_panic(site, msg);
+    snprintf(help, sizeof help,
+             "to cut at most %" PRId64 " bytes, end at `\002.char_floor(%" PRId64
+             ")`",
+             j - i, j);
+    ren_panic_help(site, msg, help);
   }
 }
 
@@ -1023,6 +1053,107 @@ ren_obj *ren_str_trim(ren_obj *s) {
   while (j > i && ren_trimmed(d[j - 1]))
     j--;
   return ren_str_part(s, i, j);
+}
+
+int64_t ren_char_bound(ren_obj *s, int64_t i, bool ceil, const ren_site *site) {
+  int64_t n = ren_str_len(s);
+  if (i < 0 || i > n) {
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "`%s` %" PRId64 " is out of bounds for a string of length %" PRId64,
+             ceil ? "char_ceil" : "char_floor", i, n);
+    ren_panic(site, msg);
+  }
+  while (!ren_boundary(s, i))
+    i += ceil ? 1 : -1;
+  return i;
+}
+
+int64_t ren_str_code(ren_obj *s, const ren_site *site) {
+  int64_t n = ren_str_len(s);
+  const unsigned char *d = (const unsigned char *)ren_str_data(s);
+  if (n == 0)
+    ren_panic(site, "`code()` takes one code point, and this string is empty");
+  /* a `Str` is UTF-8, so its first byte says how long its first
+     character is */
+  int64_t w = d[0] < 0x80 ? 1 : d[0] < 0xE0 ? 2 : d[0] < 0xF0 ? 3 : 4;
+  if (w != n) {
+    int64_t k = 0;
+    for (int64_t i = 0; i < n; i++)
+      k += (d[i] & 0xC0) != 0x80;
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "`code()` takes one code point, and this string has %" PRId64, k);
+    /* the help's `(` is written \x28: build.t looks for a block's call,
+       which is `.code` and a `(`, in the C a build makes */
+    ren_panic_help(site, msg,
+                   "for each code point: `for c in \002.chars()`, and `c.code\x28)`");
+  }
+  switch (w) {
+  case 1:
+    return d[0];
+  case 2:
+    return ((int64_t)(d[0] & 0x1F) << 6) | (d[1] & 0x3F);
+  case 3:
+    return ((int64_t)(d[0] & 0x0F) << 12) | ((int64_t)(d[1] & 0x3F) << 6) |
+           (d[2] & 0x3F);
+  default:
+    return ((int64_t)(d[0] & 0x07) << 18) | ((int64_t)(d[1] & 0x3F) << 12) |
+           ((int64_t)(d[2] & 0x3F) << 6) | (d[3] & 0x3F);
+  }
+}
+
+ren_obj *ren_str_of_code(int64_t n, const ren_site *site) {
+  if (n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF)) {
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "`Str.of_code(%" PRId64 ")` isn't a Unicode scalar value", n);
+    ren_panic_help(site, msg,
+                   "a scalar value is 0 to 0x10FFFF, but not 0xD800 to 0xDFFF, "
+                   "the surrogates");
+  }
+  char b[4];
+  int64_t w;
+  if (n < 0x80) {
+    b[0] = (char)n;
+    w = 1;
+  } else if (n < 0x800) {
+    b[0] = (char)(0xC0 | (n >> 6));
+    b[1] = (char)(0x80 | (n & 0x3F));
+    w = 2;
+  } else if (n < 0x10000) {
+    b[0] = (char)(0xE0 | (n >> 12));
+    b[1] = (char)(0x80 | ((n >> 6) & 0x3F));
+    b[2] = (char)(0x80 | (n & 0x3F));
+    w = 3;
+  } else {
+    b[0] = (char)(0xF0 | (n >> 18));
+    b[1] = (char)(0x80 | ((n >> 12) & 0x3F));
+    b[2] = (char)(0x80 | ((n >> 6) & 0x3F));
+    b[3] = (char)(0x80 | (n & 0x3F));
+    w = 4;
+  }
+  return ren_str_of(b, w);
+}
+
+ren_obj *ren_strs_join(ren_obj *xs, ren_obj *sep) {
+  int64_t n = ren_array_len(xs), m = ren_str_len(sep);
+  ren_val *e = ren_elems(xs);
+  int64_t len = n > 0 ? (n - 1) * m : 0;
+  for (int64_t i = 0; i < n; i++)
+    len += ren_str_len(e[i].o);
+  ren_obj *o = ren_alloc_str(len);
+  char *to = ((ren_str *)o)->bytes;
+  for (int64_t i = 0; i < n; i++) {
+    if (i > 0) {
+      memcpy(to, ren_str_data(sep), (size_t)m);
+      to += m;
+    }
+    int64_t k = ren_str_len(e[i].o);
+    memcpy(to, ren_str_data(e[i].o), (size_t)k);
+    to += k;
+  }
+  return o;
 }
 
 ren_obj *ren_str_lower(ren_obj *s) {

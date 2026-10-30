@@ -234,7 +234,7 @@ handler health() for Route =
   handle(_) => "ok"
 
 handler greet(name: Str) for Route =
-  handle(path) => "hello ".concat(name).concat(" at ").concat(path)
+  handle(path) => "hello \{name} at \{path}"
 
 fn answers(routes: Array<Route>, path: Str) -> Array<Str> =
   routes.map(fn(r) => r.handle(path))
@@ -894,7 +894,7 @@ error: `with` can't tell what `c` installs
   a record, an error, and the sides of a failed `assert` too, even if it
   hides how two values differ. Inside it, `show(self)` shows only what
   `self` is represented as, so it doesn't call itself: `pub fn show(self)
-  -> Str = show(self).concat("c")` shows `2c`. A `show` that fails, uses
+  -> Str = show(self) + "c"` shows `2c`. A `show` that fails, uses
   a dependency or takes more than `self` isn't used.
 - **An error that ends `main` or a test is shown through its tags'
   types too,** `error: Frozen(AccountId(3))`, so a `Path` in one is

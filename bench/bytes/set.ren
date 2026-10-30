@@ -46,7 +46,7 @@ fn main() uses Console =
   let pts = Set.of([Point { x: 1, y: 2 }, Point { x: 1, y: 2 }, Point { x: 0, y: 0 }])
   print(pts)
   print(Set.of(["a", "b"]) == Set.of(["b", "a"]))
-  print(s.map(fn(x) => x.len()))
+  print(s.map(fn(x) => x.byte_len()))
   print(s.select(fn(x) => x != "c"))
   print(s.sort())
   print(Set.of([3, 1, 2]).sum())

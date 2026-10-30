@@ -25,7 +25,7 @@ let%expect_test "a generic function is copied for each type it's used at" =
 fn twice<T>(x: T, f: fn(T) -> T) -> T = try f(try f(x))
 fn main() uses Console =
   print(twice(1, fn(n) => n + 1))
-  print(twice("a", fn(s) => s.concat("b")))
+  print(twice("a", fn(s) => s + "b"))
 |};
   [%expect
     {|
@@ -38,10 +38,10 @@ fn main() uses Console =
         (call ev/1 print
           (call ev/1 twice "a"
             (lambda (s/4) (captures ev/1) ev/5 (extend ev/1)
-              (call ev/5 Str.concat s/4 "b"))))))
+              (call ev/5 Str.add s/4 "b"))))))
     (fn $start () ev/1
       (with ev/2 (extend ev/1 Console Console.real) (call ev/2 main$1)))
-    (fn main$1#2 (s/1) ev/2 (call ev/2 Str.concat s/1 "b"))
+    (fn main$1#2 (s/1) ev/2 (call ev/2 Str.add s/1 "b"))
     (fn main$1#1 (n/1) ev/2 (+ n/1 1))
     (fn main$1 () ev/1
       (seq (call ev/1 print$2 (call ev/1 twice$2 1))

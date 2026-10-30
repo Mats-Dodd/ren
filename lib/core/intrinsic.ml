@@ -111,12 +111,12 @@ type t =
   | Set_remove
   | Set_includes
   | Set_len
-  | Str_len
+  | Str_byte_len
   | Str_index
   | Str_split
   | Str_trim
   | Str_starts_with
-  | Str_concat
+  | Str_add
   | Str_bytes
   | Str_from_utf8
   | Str_from_utf8_lossy
@@ -159,7 +159,14 @@ type t =
   | Float_round
   | Float_truncate
   | Float_sqrt
-  | Str_lower
+  | Str_ascii_lower
+  | Bytes_ascii_lower
+  | Bytes_add
+  | Str_char_floor
+  | Str_char_ceil
+  | Str_code
+  | Str_of_code
+  | Array_join
   | Hash
 
 (* Its path in the prelude (path.ml): a function's, [show], or a built-in
@@ -241,12 +248,12 @@ let path x =
   | Set_remove -> member "Set" "remove"
   | Set_includes -> member "Set" "includes"
   | Set_len -> member "Set" "len"
-  | Str_len -> member "Str" "len"
+  | Str_byte_len -> member "Str" "byte_len"
   | Str_index -> member "Str" "index"
   | Str_split -> member "Str" "split"
   | Str_trim -> member "Str" "trim"
   | Str_starts_with -> member "Str" "starts_with"
-  | Str_concat -> member "Str" "concat"
+  | Str_add -> member "Str" "add"
   | Str_bytes -> member "Str" "bytes"
   | Str_from_utf8 -> member "Str" "from_utf8"
   | Str_from_utf8_lossy -> member "Str" "from_utf8_lossy"
@@ -291,7 +298,14 @@ let path x =
   | Float_round -> member "Float" "round"
   | Float_truncate -> member "Float" "truncate"
   | Float_sqrt -> member "Float" "sqrt"
-  | Str_lower -> member "Str" "lower"
+  | Str_ascii_lower -> member "Str" "ascii_lower"
+  | Bytes_ascii_lower -> member "Bytes" "ascii_lower"
+  | Bytes_add -> member "Bytes" "add"
+  | Str_char_floor -> member "Str" "char_floor"
+  | Str_char_ceil -> member "Str" "char_ceil"
+  | Str_code -> member "Str" "code"
+  | Str_of_code -> member "Str" "of_code"
+  | Array_join -> member "Array" "join"
   (* `x.hash()` on a value of any type with `hash`, which the checker finds
      for a type with no `hash` of its own (compiler.md, "Bytes stage") *)
   | Hash -> fn "hash_of"

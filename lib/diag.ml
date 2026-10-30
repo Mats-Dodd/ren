@@ -144,6 +144,10 @@ type piece =
       (** the [n] bytes from [i] of a [Shared] text: an operand, as the source
           writes it *)
   | Hole
+  | Help_hole of int * string
+      (** a help only the running program knows, if it has one: [n] spaces,
+          ` help: ` and the help, in which each `\002` is the string, the
+          receiver as the source writes it (driver.ml, [site_pieces]) *)
 
 (* The text [pieces] stand for, with [hole] in the [Hole]. *)
 let expand ?(hole = "") pieces =
@@ -155,7 +159,8 @@ let expand ?(hole = "") pieces =
       | Marks (c, n) -> Buffer.add_string b (String.make n c)
       | Num n -> Buffer.add_string b (string_of_int n)
       | Slice (s, i, n) -> Buffer.add_string b (String.sub s i n)
-      | Hole -> Buffer.add_string b hole)
+      | Hole -> Buffer.add_string b hole
+      | Help_hole _ -> ())
     pieces;
   Buffer.contents b
 
@@ -281,10 +286,17 @@ let pieces_indexed ~(lines_of : string -> string array option) (d : t) =
       pad ();
       add (Text (" = " ^ n ^ "\n")))
     d.notes;
+  (* a help of several lines: a line that starts `help: ` is a help of
+     its own, and any other goes on with the one above, under its text *)
   Option.iter
     (fun h ->
-      pad ();
-      add (Text (" help: " ^ h ^ "\n")))
+      List.iteri
+        (fun i l ->
+          pad ();
+          if i = 0 then add (Text (" help: " ^ l ^ "\n"))
+          else if String.starts_with ~prefix:"help: " l then add (Text (" " ^ l ^ "\n"))
+          else add (Text ("       " ^ l ^ "\n")))
+        (String.split_on_char '\n' h))
     d.help;
   (* the help's code, four spaces in from `help:`, or at the column it's
      to be pasted at *)

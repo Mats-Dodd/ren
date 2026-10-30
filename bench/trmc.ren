@@ -60,7 +60,7 @@ fn append(a: Words, b: Words) -> Words =
 
 fn join(ws: Words) -> Str =
   match ws
-    More { word: w, rest: r } => w.concat(join(r))
+    More { word: w, rest: r } => w + join(r)
     Done => ""
 
 fn tree(d: Int, k: Int) -> Tree =

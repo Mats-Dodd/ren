@@ -104,6 +104,10 @@ and block = { indent : int; mutable listing : bool }
 
 let tokenize ~file (src : string) : (Token.t * Loc.t) array =
   let len = String.length src in
+  (* this file's character literals are the ones read now *)
+  Hashtbl.filter_map_inplace
+    (fun (l : Loc.t) w -> if l.file = file then None else Some w)
+    Ast.char_literals;
   (* Mutable lexer state. [bol] is the index where the current line begins,
      so the column of index [i] is [i - bol + 1]. *)
   let i = ref 0 and line = ref 1 and bol = ref 0 in
@@ -246,10 +250,42 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
   in
 
   (* A string literal, `"Ren\n"`: its contents, with each escape undone.
-     It ends on the line it starts on; `\n` writes a line break. *)
-  let lex_string start =
+     It ends on the line it starts on; `\n` writes a line break.
+
+     A hole, `"jobs/\{job}"`, holds an expression (strings.md, "Building
+     strings"; compiler.md, "Bytes stage, part two", "The API"). The
+     string's text before the first hole is a [STR_HEAD], the hole's
+     tokens follow, then the text up to the next hole, a [STR_MID], and
+     after the last, a [STR_TAIL]; a string with no hole is a [STR]. A
+     hole's expression is found first, to its matching `}`, counting
+     braces and skipping the strings and character literals in it, on
+     the string's line, and then lexed as any code is, in brackets, so
+     a string in it may have holes of its own. `\\{` is a backslash and
+     a brace, and a brace alone is text. `\{x=}` is `x=\{x}`, for a name
+     or a path. *)
+  (* [lex_token], below, which a hole's code is lexed with *)
+  let lex_token_ref = ref (fun (_ : char) (_ : Loc.pos) -> ()) in
+  (* whether [s] is a name, or names with `.` between them, `u.name` *)
+  let is_path s =
+    s <> ""
+    && List.for_all
+         (fun w -> w <> "" && is_ident_start w.[0] && String.for_all is_ident_char w)
+         (String.split_on_char '.' s)
+  in
+  let rec lex_string start =
     incr i;
     let b = Buffer.create 16 in
+    (* whether a hole has been lexed yet: the next text is a [STR_MID],
+       not a [STR_HEAD] *)
+    let holes = ref false in
+    (* this string's text so far, checked: a `Str` is always UTF-8 *)
+    let text () =
+      let t = Buffer.contents b in
+      if not (String.is_valid_utf_8 t) then
+        error ~help:"save the file as UTF-8" start "this string isn't UTF-8";
+      Buffer.clear b;
+      t
+    in
     let rec go () =
       if !i >= len || peek 0 = '\n' then
         error
@@ -258,6 +294,9 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       else
         match peek 0 with
         | '"' -> incr i
+        | '\\' when peek 1 = '{' ->
+            hole ();
+            go ()
         | '\\' -> (
             let esc = pos () in
             incr i;
@@ -281,12 +320,168 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
             Buffer.add_char b c;
             incr i;
             go ()
+    (* the hole at [!i], its `\{`: the text before it, then its tokens *)
+    and hole () =
+      let at = pos () in
+      let from = !i + 2 in
+      let stop =
+        match hole_end from with
+        | Some k -> k
+        | None ->
+            i := from;
+            error at "this hole has no `}`"
+      in
+      let inside = String.sub src from (stop - from) in
+      let code = String.trim inside in
+      if code = "" then (
+        i := stop + 1;
+        error
+          ~help:"a brace is written `{`, and a backslash and a brace `\\\\{`"
+          at "an empty hole: `\\{}` holds an expression");
+      (* `\{x=}` is `x=\{x}`: the `=` isn't `==`'s, `!=`'s, `<=`'s or `>=`'s *)
+      let n = String.length code in
+      let named =
+        code.[n - 1] = '='
+        && (n = 1 || not (String.contains "=!<>" code.[n - 2]))
+      in
+      let until =
+        if not named then stop
+        else
+          let path = String.trim (String.sub code 0 (n - 1)) in
+          if not (is_path path) then (
+            i := stop + 1;
+            error
+              ~help:"write the text before it yourself: `\"sum=\\{a + b}\"`"
+              at "only a name or a path can come before `=` in a hole");
+          Buffer.add_string b (path ^ "=");
+          (* the hole's code ends at its `=` *)
+          from + String.rindex inside '='
+      in
+      emit (if !holes then STR_MID (text ()) else STR_HEAD (text ())) start;
+      holes := true;
+      i := from;
+      frames := Bracket :: !frames;
+      let rec tokens () =
+        while !i < until && peek 0 = ' ' do
+          incr i
+        done;
+        if !i < until then (
+          !lex_token_ref (peek 0) (pos ());
+          tokens ())
+      in
+      tokens ();
+      (* the hole's own bracket: those inside it are balanced *)
+      close_bracket (pos ());
+      i := stop + 1
     in
     go ();
-    (* a `Str` is always UTF-8 *)
-    if not (String.is_valid_utf_8 (Buffer.contents b)) then
-      error ~help:"save the file as UTF-8" start "this string isn't UTF-8";
-    emit (STR (Buffer.contents b)) start
+    let t = text () in
+    emit (if !holes then STR_TAIL t else STR t) start
+
+  (* Where the hole whose code starts at [j] ends, its `}`, if it ends on
+     its line: braces counted, strings and character literals skipped. *)
+  and hole_end j =
+    let rec go p depth =
+      if p >= len || src.[p] = '\n' then None
+      else
+        match src.[p] with
+        | '"' -> Option.bind (string_end (p + 1)) (fun q -> go q depth)
+        | '\'' -> Option.bind (char_end (p + 1)) (fun q -> go q depth)
+        | '{' -> go (p + 1) (depth + 1)
+        | '}' -> if depth = 0 then Some p else go (p + 1) (depth - 1)
+        | _ -> go (p + 1) depth
+    in
+    go j 0
+
+  (* Just past the string whose text starts at [p], with the holes in it,
+     if it ends on its line. *)
+  and string_end p =
+    if p >= len || src.[p] = '\n' then None
+    else
+      match src.[p] with
+      | '"' -> Some (p + 1)
+      | '\\' when p + 1 < len && src.[p + 1] = '{' ->
+          Option.bind (hole_end (p + 2)) (fun k -> string_end (k + 1))
+      | '\\' -> string_end (p + 2)
+      | _ -> string_end (p + 1)
+
+  (* Just past the character literal whose text starts at [p]. *)
+  and char_end p =
+    if p >= len || src.[p] = '\n' then None
+    else
+      match src.[p] with
+      | '\'' -> Some (p + 1)
+      | '\\' -> char_end (p + 2)
+      | _ -> char_end (p + 1)
+
+  (* A character literal, `'a'`: an `Int`, its code point (strings.md,
+     "Characters"), with the escapes `\n`, `\t`, `\\` and `\'`. Whether
+     one is stored where a byte is, as a non-ASCII one can't be, is the
+     checker's, which finds it by its spelling (infer_expr.ml,
+     [stored]). *)
+  and lex_char start =
+    let s0 = !i in
+    incr i;
+    let b = Buffer.create 4 in
+    let rec go () =
+      if !i >= len || peek 0 = '\n' then
+        error ~help:"close it with `'` on this line" start
+          "this character literal isn't closed"
+      else
+        match peek 0 with
+        | '\'' -> incr i
+        | '\\' -> (
+            let esc = pos () in
+            incr i;
+            match peek 0 with
+            | ('n' | 't' | '\\' | '\'') as c ->
+                incr i;
+                Buffer.add_char b (match c with 'n' -> '\n' | 't' -> '\t' | c -> c);
+                go ()
+            | c ->
+                if c <> '\n' && !i < len then incr i;
+                error
+                  ~help:
+                    "the escapes in a character literal are `\\n`, `\\t`, \
+                     `\\'` and `\\\\`"
+                  esc
+                  (if c = '\n' || !i >= len then
+                     "a `\\` at the end of a line escapes nothing"
+                   else Printf.sprintf "`\\%c` isn't an escape" c))
+        | c ->
+            Buffer.add_char b c;
+            incr i;
+            go ()
+    in
+    go ();
+    let t = Buffer.contents b in
+    if not (String.is_valid_utf_8 t) then
+      error ~help:"save the file as UTF-8" start
+        "this character literal isn't UTF-8";
+    (* its code points *)
+    let rec points k acc =
+      if k >= String.length t then List.rev acc
+      else
+        let d = String.get_utf_8_uchar t k in
+        points (k + Uchar.utf_decode_length d) (Uchar.utf_decode_uchar d :: acc)
+    in
+    match points 0 [] with
+    | [ u ] ->
+        emit (INT (Int64.of_int (Uchar.to_int u))) start;
+        Hashtbl.replace Ast.char_literals (snd (List.hd !toks)) (String.sub src s0 (!i - s0))
+    | [] ->
+        error ~help:"a character literal holds one code point, `'a'`" start
+          "an empty character literal"
+    | us ->
+        error
+          ~help:
+            (Printf.sprintf "text is written in double quotes: `%s`"
+               (Token.show_str t))
+          start
+          (Printf.sprintf
+             "`%s` holds %d code points; a character literal holds one"
+             (String.sub src s0 (!i - s0))
+             (List.length us))
   in
 
   (* A number in hex, `0x82F6_3B78`, or binary, `0b1010` (foundations.md,
@@ -406,6 +601,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
         | None, Some n when n = Int64.min_int -> emit (INT n) start
         | _ -> error start "this number is too big to fit in an `Int`")
     else if c = '"' then lex_string start
+    else if c = '\'' then lex_char start
     else if is_ident_start c then (
       let s = !i in
       while is_ident_char (peek 0) do
@@ -480,6 +676,7 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
           error start (Printf.sprintf "unexpected character `%c`" c)
   in
 
+  lex_token_ref := lex_token;
   while !i < len do
     let c = src.[!i] in
     let start = pos () in

@@ -936,7 +936,7 @@ let%expect_test "a test's outputs are compared task by task" =
   in_folder
     [
       ( "main.ren",
-        String.concat "print(name.concat(\"!\"))" (split_on "print(name)" sleepers)
+        String.concat "print(name + (\"!\"))" (split_on "print(name)" sleepers)
       );
       ("run.journal", swapped);
     ]
@@ -1066,8 +1066,8 @@ fn nap(name: Str, ms: Int) uses Console, Clock, Async =
   let r = attempt Async.timeout(Duration.ms(200)) fn() =>
     Clock.sleep(Duration.ms(ms))
   match r
-    Ok(_) => print(name.concat(" in time"))
-    Err(_) => print(name.concat(" late"))
+    Ok(_) => print(name + " in time")
+    Err(_) => print(name + " late")
 
 fn fails(ms: Int) ! Broke uses Clock =
   Clock.sleep(Duration.ms(ms))

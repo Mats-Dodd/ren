@@ -30,7 +30,7 @@ fn up(n: Int) -> L<Int> = if n == 0 then Nil else Cons { h: n, t: up(n - 1) }
 fn strs(l: L<P>) -> Str =
   match l
     Nil => ""
-    Cons { h: p, t } => p.a.concat(show(p.n)).concat(strs(t))
+    Cons { h: p, t } => p.a + show(p.n) + strs(t)
 fn grow(t: Tr, k: Int) -> Tr =
   match t
     Lf => Nd { l: Lf, v: k, r: Lf }

@@ -25,7 +25,7 @@ fn pow2(k: Int) -> Int =
   p
 
 fn show_depth(what: Str, depth: Int, check: Int) uses Console =
-  Console.write(what.concat(" of depth ").concat(show(depth)).concat("\t check: ").concat(show(check)))
+  Console.write(what + " of depth " + show(depth) + "\t check: " + show(check))
 
 pub fn run(n: Int) uses Console =
   let min_depth = 4
@@ -39,6 +39,6 @@ pub fn run(n: Int) uses Console =
     var total = 0
     for _ in 0..iterations
       total += check(make(depth))
-    show_depth(show(iterations).concat("\t trees"), depth, total)
+    show_depth(show(iterations) + "\t trees", depth, total)
     depth += 2
   show_depth("long lived tree", max_depth, check(long))

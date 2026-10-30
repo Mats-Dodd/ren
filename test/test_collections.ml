@@ -312,12 +312,12 @@ let%expect_test "a lambda's parameter takes a tuple apart" =
 fn main() uses Console =
   let m = Map.of([("a", 1), ("b", 2), ("c", 3)])
   print(m.select(fn((_, v)) => v > 1))
-  print(m.map(fn((k, v)) => k.concat(show(v))))
+  print(m.map(fn((k, v)) => k + show(v)))
   print(m.any(fn((k, v)) => k == "c" && v == 3))
   print(m.sort_by(fn((_, v)) => -v))
   let ps = [(1, ("x", true)), (2, ("y", false))]
   print(ps.select(fn((_, (_, b))) => b))
-  print(ps.map(fn((n, (s, _)): (Int, (Str, Bool))) => s.concat(show(n))))
+  print(ps.map(fn((n, (s, _)): (Int, (Str, Bool))) => s + show(n)))
   let add = fn((a, b)) => a + b
   print(add((1, 2)))
   let f = fn((a, b), c) => a * b + c
@@ -538,7 +538,7 @@ fn main() uses Console =
   print((xs.index(1), xs.index(7)))
   print((xs.any(fn(x) => x > 8), xs.all(fn(x) => x > 1), xs.count(fn(x) => x == 1)))
   print(xs.includes(9))
-  print(xs.reduce("", fn(s, x) => s.concat(show(x))))
+  print(xs.reduce("", fn(s, x) => s + show(x)))
   print((xs.sum(), [1.5, 2.5].sum(), [Duration.ms(5), Duration.ms(6)].sum()))
   print((xs.min(), xs.max(), [0].take(0).min()))
   print((xs.sort(), xs))
@@ -646,7 +646,7 @@ fn main() uses Console =
   print((m.includes("a"), m.len()))
   print((m.keys(), m.values()))
   for (k, v) in m
-    print(k.concat(show(v)))
+    print(k + show(v))
   &m.remove("b")
   &m.remove("z")
   print(m)
@@ -685,7 +685,7 @@ let%expect_test
     {|
 type Email = opaque Str
   pub fn of(s: Str) -> Email = s
-  fn key(self) -> Str = self.lower()
+  fn key(self) -> Str = self.ascii_lower()
 
 type Account = { owner: Email, n: Int }
 
@@ -1152,7 +1152,7 @@ let%expect_test "a `Set`, a `Map` and `uniq` keep the first of equal keys" =
   run
     {|
 type E = opaque Str
-  fn key(self) -> Str = self.lower()
+  fn key(self) -> Str = self.ascii_lower()
   pub fn of(s: Str) -> E = s
 
 fn main() =
@@ -1325,7 +1325,7 @@ let%expect_test "a failed `assert` pairs two maps' keys by `==`" =
   run_error
     {|
 type Email = opaque Str
-  fn key(self) -> Str = self.lower()
+  fn key(self) -> Str = self.ascii_lower()
   pub fn of(s: Str) -> Email = s
 
 fn main() =
@@ -1345,7 +1345,7 @@ fn main() =
   run_error
     {|
 type Email = opaque Str
-  fn key(self) -> Str = self.lower()
+  fn key(self) -> Str = self.ascii_lower()
   pub fn of(s: Str) -> Email = s
 
 fn main() =

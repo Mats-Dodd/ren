@@ -198,11 +198,12 @@ let literal cx s =
       Lit n
 
 (* A site at [loc]: a [Caller] one if that's in the prelude. *)
-let new_site cx ?wrap ?(kind = Panics) ?made ?(notes = []) ?help (loc : Loc.t) =
+let new_site cx ?wrap ?(kind = Panics) ?made ?(notes = []) ?help ?recv
+    (loc : Loc.t) =
   let kind, wrap =
     if loc.file = Prelude.file then (Caller, None) else (kind, wrap)
   in
-  let s = { sid = cx.nsites; loc; wrap; kind; made; notes; help } in
+  let s = { sid = cx.nsites; loc; wrap; kind; made; notes; help; recv } in
   cx.sites <- s :: cx.sites;
   cx.nsites <- cx.nsites + 1;
   s
@@ -2506,10 +2507,16 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
   | C.Slice how, a :: rest ->
       let x = expr fs env a in
       let ys = List.map (expr fs env) rest in
+      (* a `Str`'s cut panics with a help the binary writes, naming the
+         string as it's written (ren_rt.c, [ren_chars_check]) *)
+      let cut () =
+        if a.ty = Ty.str then new_site cx ~help:"\001" ~recv:a.loc e.loc
+        else site ()
+      in
       let part, at =
         match how with
-        | Range -> (Range, Some (site ()))
-        | Before -> (Before, Some (site ()))
+        | Range -> (Range, Some (cut ()))
+        | Before -> (Before, Some (cut ()))
         | After -> (After, None)
       in
       let r =
@@ -3057,8 +3064,8 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
           drop fs env y;
           Unit
       | _ -> bug "a `push` without `&`")
-  | Str_len, _, _ -> runtime Str_len
-  | Str_concat, _, _ -> runtime Str_concat
+  | Str_byte_len, _, _ -> runtime Str_len
+  | (Str_add | Bytes_add), _, _ -> runtime Str_concat
   | Str_split, _, _ -> runtime ~site:(site ()) Str_split
   | Str_trim, _, _ -> runtime Str_trim
   | Array_copy, _, _ -> runtime (Copied Of_array_elems)
@@ -3280,7 +3287,16 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
           List.iter (drop fs env) [ xs; d ];
           r
       | _ -> bug "a `sort` of no array")
-  | Str_lower, _, _ -> runtime Str_lower
+  | (Str_ascii_lower | Bytes_ascii_lower), _, _ -> runtime Str_lower
+  (* strings.md's characters: each panics as the interpreter does, a help
+     the binary writes naming the receiver, if it has one *)
+  | Str_char_floor, _, _ -> runtime ~site:(site ()) (Char_bound false)
+  | Str_char_ceil, _, _ -> runtime ~site:(site ()) (Char_bound true)
+  | Str_code, _, _ ->
+      let recv = match args with C.Value r :: _ -> Some r.loc | _ -> None in
+      runtime ~site:(new_site cx ~help:"\001" ?recv e.loc) Str_code
+  | Str_of_code, _, _ -> runtime ~site:(new_site cx ~help:"\001" e.loc) Str_of_code
+  | Array_join, _, _ -> runtime Str_join
   | Float_of, _, _ -> runtime Float_of_int
   | Float_sqrt, _, _ ->
       runtime ~site:(new_site cx ~made:(Nan.where e.loc) e.loc) Float_sqrt

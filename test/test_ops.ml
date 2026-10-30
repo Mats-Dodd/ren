@@ -1207,7 +1207,7 @@ fn main() = [Int.foo, Array.foo]
       ┌─ test.ren:1:29
     1 │ fn main() = [Int.foo, Array.foo]
       │                             ^^^
-      help: its members: `len`, `push`, `sort`, `copy`, `split_at`, `get`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `each`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `take`, `drop`, `reverse`
+      help: its members: `len`, `push`, `sort`, `copy`, `split_at`, `join`, `get`, `first`, `last`, `map`, `flat_map`, `select`, `reject`, `find`, `index`, `any`, `all`, `count`, `includes`, `each`, `reduce`, `sum`, `min`, `max`, `min_by`, `max_by`, `sort_by`, `group_by`, `partition`, `tally`, `uniq`, `zip`, `with_index`, `take`, `drop`, `reverse`
     |}]
 
 let%expect_test "a value of the wrong type, in a cycle of values" =

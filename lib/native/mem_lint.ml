@@ -205,6 +205,10 @@ let rt_sig (rt : rt) : layout list * layout =
   | Hash_fixed -> ([ Desc; Word 0 ], Int)
   | Array_sort _ -> ([ Boxed; Desc ], Boxed)
   | Str_lower -> ([ Boxed ], Boxed)
+  | Char_bound _ -> ([ Boxed; Int ], Int)
+  | Str_code -> ([ Boxed ], Int)
+  | Str_of_code -> ([ Int ], Boxed)
+  | Str_join -> ([ Boxed; Boxed ], Boxed)
   | Panic_str -> ([ Boxed ], Unit)
 
 let args env what (want : layout list) xs =

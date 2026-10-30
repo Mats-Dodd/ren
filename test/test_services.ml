@@ -471,7 +471,7 @@ let%expect_test "[s1 reject] a mismatched subject that the step doesn't take any
   (* the "takes second" line only when another parameter's type matches *)
   check_error
     {|
-fn twice(s: Str) -> Str = s.concat(s)
+fn twice(s: Str) -> Str = s + s
 fn main() -> Str =
   let n = 3
   n |> twice
@@ -610,15 +610,15 @@ dep Users =
   name: fn(id: Int) -> Str ! DbDown
 
 handler mem_db() for Db =
-  get(id) => "ann".concat(show(id))
+  get(id) => "ann" + show(id)
 
 handler pg_db(url: Str) for Db uses Console =
   get(id) =>
-    print("pg ".concat(url))
-    "pg".concat(show(id))
+    print("pg " + url)
+    "pg" + show(id)
 
 handler console_audit() for Audit uses Console =
-  note(s) => print("audit: ".concat(s))
+  note(s) => print("audit: " + s)
 
 handler db_users() for Users uses Db, Audit =
   name(id) =>
@@ -672,7 +672,7 @@ handler counted() for Count uses Db, Console =
   var n = 0
   hit() =>
     n += 1
-    print("counted ".concat(show(n)))
+    print("counted " + show(n))
     try Db.get(n)
 
 wiring live provides Users = mem_db(), console_audit(), db_users()
@@ -1228,7 +1228,7 @@ dep Ticks =
 handler ticks() for Ticks uses Console =
   var n = 0
   finally(r) =>
-    print("ticks: ".concat(show(n)))
+    print("ticks: " + show(n))
     try r
   tick() => n += 1
 |}
@@ -1579,8 +1579,8 @@ handler front() for Front uses Next =
 fn main() uses Console, Async =
   with next(), front() in
     Async.scope fn(s) =>
-      s.spawn fn() => print("slow ".concat(show(Front.ask(1))))
-      s.spawn fn() => print("fast ".concat(show(Front.ask(2))))
+      s.spawn fn() => print("slow " + show(Front.ask(1)))
+      s.spawn fn() => print("fast " + show(Front.ask(2)))
 |});
   [%expect {|
     (until s4)
@@ -2266,18 +2266,18 @@ handler src() for Src uses Console =
   var n = 0
   pull() =>
     n += 1
-    print("pulled ".concat(show(n)))
+    print("pulled " + show(n))
     if n > 2 then None else Some(n)
 
 fn main() uses Console, Async =
   with src() in
-    Async.each(fn() => Src.pull(), max: 1) fn(x) => print("ran ".concat(show(x)))
+    Async.each(fn() => Src.pull(), max: 1) fn(x) => print("ran " + show(x))
 |});
   [%expect {|
     (until s5)
     error: expected `Array<_>`, found `fn() -> Option<Int>`
        ┌─ test.ren:13:16
-    13 │     Async.each(fn() => Src.pull(), max: 1) fn(x) => print("ran ".concat(show(x)))
+    13 │     Async.each(fn() => Src.pull(), max: 1) fn(x) => print("ran " + show(x))
        │                ^^^^^^^^^^^^^^^^^^
        help: use `Async.map` to keep the results, or end the block with `()`
     |}]
@@ -2939,9 +2939,9 @@ dep Doc =
 
 handler doc(id: DocId) for Doc uses Store, Console =
   var text = try Store.load(id)
-  finally(_) => print("evicted ".concat(show(id)))
+  finally(_) => print("evicted " + show(id))
   edit(s) =>
-    text = text.concat(s)
+    text = text + s
     try Store.save(id, text)
   text() => text
 
@@ -3208,15 +3208,15 @@ handler doc(id: DocId) for Doc =
   var text = ""
   set(s) => text = s
   text() => text
-  append(s) => text = text.concat(s)
+  append(s) => text = text + s
 
 dep Docs = Actors<DocId, Doc>
 
 test "two appends by read-then-write both land" =
   with actors(doc) as Docs in
     Async.scope fn(s) =>
-      s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text().concat("a"))
-      s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text().concat("b"))
+      s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text() + "a")
+      s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text() + "b")
     Docs.at(DocId(1)) fn() => assert Doc.text().bytes().len() == 2
 
 test "two appends by one operation both land" =
@@ -3248,13 +3248,13 @@ test "two appends by one operation both land" =
 
     error: `Docs` has no member named `at`
        ┌─ test.ren:19:28
-    19 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text().concat("a"))
+    19 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text() + "a")
        │                            ^^
        help: declare it under `type Docs`
 
     error: `Docs` has no member named `at`
        ┌─ test.ren:20:28
-    20 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text().concat("b"))
+    20 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text() + "b")
        │                            ^^
        help: declare it under `type Docs`
 
@@ -3314,7 +3314,7 @@ dep Doc =
 
 handler doc(id: DocId) for Doc =
   var text = ""
-  append(s) => text = text.concat(s)
+  append(s) => text = text + s
   text() => text
 
 dep Docs = Actors<DocId, Doc>
@@ -3820,7 +3820,7 @@ dep Log =
 dep Logs = Actors<Key, Log>
 handler log(k: Key) for Log =
   var text = ""
-  put(s) => text = text.concat(s)
+  put(s) => text = text + s
   all() => text
 
 fn main() uses Console, Random =
@@ -3858,7 +3858,7 @@ dep Log =
 dep Logs = Actors<Key, Log>
 handler log(k: Key) for Log =
   var text = ""
-  put(s) => text = text.concat(s)
+  put(s) => text = text + s
   all() => text
 
 fn main() uses Console, Random =
@@ -3891,7 +3891,7 @@ dep Log =
 dep Logs = Actors<Key, Log>
 handler log(k: Key) for Log =
   var text = ""
-  put(s) => text = text.concat(s)
+  put(s) => text = text + s
   all() => text
 
 test "posts arrive in the order posted" =
@@ -3965,8 +3965,8 @@ dep Log =
   put: fn(s: Str)
 dep Logs = Actors<Key, Log>
 handler log(k: Key) for Log uses Console =
-  finally(_) => print("done ".concat(show(k)))
-  put(s) => print("got ".concat(s))
+  finally(_) => print("done " + show(k))
+  put(s) => print("got " + s)
 
 fn main() uses Console, Random =
   with actors(log) as Logs in
@@ -3997,7 +3997,7 @@ dep Peer =
 dep Peers = Actors<Key, Peer>
 handler peer(k: Key) for Peer uses Peers, Console =
   ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
-  pong(from) => print("pong from ".concat(show(from)))
+  pong(from) => print("pong from " + show(from))
 
 fn main() uses Console, Random =
   with actors(peer) as Peers in

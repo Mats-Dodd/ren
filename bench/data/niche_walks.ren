@@ -35,11 +35,11 @@ type Slot =
   | Hole
 
 fn main() uses Console =
-  let it = Some(Item { name: "tea".concat("!"), price: 3 })
+  let it = Some(Item { name: "tea" + "!", price: 3 })
   print(it)
   print(it == Some(Item { name: "tea!", price: 3 }))
   print(it == None)
-  let plans = [Free, Pro { name: "p".concat("q"), seats: 2 }, Lapsed, Trial]
+  let plans = [Free, Pro { name: "p" + "q", seats: 2 }, Lapsed, Trial]
   print(plans)
   print(plans[1] == Pro { name: "pq", seats: 2 })
   print(plans[0] == plans[3])
@@ -50,16 +50,16 @@ fn main() uses Console =
   print(cells)
   print(cells[1] == Floor { lit: false, depth: -7, glyph: 200 })
   print(cells[1] == Floor { lit: true, depth: -7, glyph: 200 })
-  let pr = Pair { a: Some("x".concat("y")), b: None }
+  let pr = Pair { a: Some("x" + "y"), b: None }
   let po: Option<Pair> = Some(Pair { ..pr, b: Some([4, 5]) })
   match po
-    Some(Pair { a: Some(s), b: Some(xs) }) => print(s.len() + xs[1])
+    Some(Pair { a: Some(s), b: Some(xs) }) => print(s.byte_len() + xs[1])
     _ => print(-1)
   match pr
     Pair { a: Some(s), b: None } => print(s)
     _ => print("?")
   print(po)
-  let oo: Array<Option<Option<Str>>> = [None, Some(None), Some(Some("deep".concat("er")))]
+  let oo: Array<Option<Option<Str>>> = [None, Some(None), Some(Some("deep" + "er"))]
   for o in oo
     match o
       None => print("none")
@@ -69,7 +69,7 @@ fn main() uses Console =
   print(oo[0] == oo[1])
   print(oo[1] == Some(None))
   print(Plain)
-  let shown = [Some(Plain), None, Some(Fancy("f".concat("!"))), Some(Odd)]
+  let shown = [Some(Plain), None, Some(Fancy("f" + "!")), Some(Odd)]
   for o in shown
     match o
       Some(Plain) | Some(Odd) => print("plain or odd")

@@ -546,6 +546,25 @@ and expr_of cx (e : expr) : C.expr =
   | Float f -> here (Float f)
   | Bool b -> here (Bool b)
   | Str s -> here (Str s)
+  | Interp ps -> (
+      (* each hole through its type's `show`, a `Str` being itself, and the
+         pieces joined by `+`, left to right, so the first is copied and
+         the rest appended (compiler.md, "Bytes stage, part two", "The
+         API") *)
+      let parts =
+        List.filter_map
+          (function
+            | Ast.Lit "" -> None
+            | Lit t -> Some (mk (Str t) Ty.str e.loc)
+            | Hole h ->
+                let x = expr cx h in
+                Some (if x.ty = Ty.str then x else shown cx x h.loc))
+          ps
+      in
+      match parts with
+      | [] -> here (Str "")
+      | first :: rest ->
+          List.fold_left (fun a b -> str_add cx a b e.loc) first rest)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
   | Var (Global p) when (node cx e.node).found = None ->
@@ -1741,6 +1760,20 @@ and todo cx loc t =
   let msg = mk (Str "reached a `todo`") Ty.str loc in
   mk (Call (f, [ C.Value msg ], cx.ev)) t loc
 
+(* `show(x)`, of [x]'s type: a hole's (above, [Interp]). *)
+and shown cx (x : C.expr) loc =
+  let a : Ty.args = { tys = [ x.ty ]; rows = [ Ty.closed; Ty.closed ] } in
+  let fty = Ty.apply a (Prelude.scheme Show).ty in
+  let f = mk (Intrinsic (Show, a, descs cx a, [])) fty loc in
+  mk (Call (f, [ C.Value x ], cx.ev)) Ty.str loc
+
+(* [a + b], of two strings: `Str.add`, as the operator is. *)
+and str_add cx (a : C.expr) (b : C.expr) loc =
+  let n : Ty.args = { tys = []; rows = [ Ty.closed; Ty.closed ] } in
+  let fty = Ty.apply n (Prelude.scheme Str_add).ty in
+  let f = mk (Intrinsic (Str_add, n, [], [])) fty loc in
+  mk (Call (f, [ C.Value a; C.Value b ], cx.ev)) Ty.str loc
+
 and call cx ?(changed = false) (e : expr) f args =
   (* a call that gives a default by name, or leaves it out: its arguments
      in order, each left out its literal (Infer.Args) *)
@@ -1943,8 +1976,9 @@ and split_at cx (e : expr) (r : expr) n body =
   let hold_b, body = hold cx "body" (expr cx body) in
   let whole = temp cx "whole" self in
   let lo = temp cx "lo" self and hi = temp cx "hi" self in
+  (* the place as it's written, which a cut character's help names *)
   let half which args =
-    mk (Prim (Slice which, local whole loc :: n :: args)) self loc
+    mk (Prim (Slice which, local whole r.loc :: n :: args)) self loc
   in
   let call = mk (Call (body, [ Ref lo; Ref hi ], cx.ev)) ty loc in
   let back =
@@ -2662,6 +2696,7 @@ let max_binder (f : fn_def) =
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
     | Piped ->
         ()
+    | Interp ps -> List.iter go (Ast.holes ps)
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
@@ -2908,7 +2943,11 @@ let ops (types : Iface.type_decl list) =
     (fun (d : Iface.type_decl) ->
       List.filter_map
         (fun req ->
-          Option.map (fun (m, _) -> ((d.path, req), m)) (Iface.provider d req))
+          match Iface.provider d req with
+          (* a built-in member, `Bytes.add`, isn't a function of the
+             program's *)
+          | Some (m, _) when Prelude.find m = None -> Some ((d.path, req), m)
+          | _ -> None)
         Iface.requirements)
     types
 

@@ -111,6 +111,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
     | Piped ->
         ()
+    | Interp ps -> go (Ast.holes ps)
     | Named (_, a) -> expr a
     | Pipe { subject; step } -> go [ subject; step ]
     | Unop (_, a, _)
@@ -1879,6 +1880,14 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
     | Piped ->
         ()
+    | Interp ps ->
+        (* each hole is given to `show`, whose `T` can't be a block *)
+        List.iter
+          (fun (h : expr) ->
+            if has_fun (ty h.node) then
+              generic := (h.loc, Infer_msg.generic_block h.loc ~tvar:None) :: !generic;
+            walk Arg h)
+          (Ast.holes ps)
     | Named (_, a) -> walk pos a
     | Pipe { subject; step } ->
         (* the subject is the step's call's first argument, which [Piped]

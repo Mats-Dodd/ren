@@ -34,20 +34,20 @@ need step 2's `+=` and interpolation, and whose meaning steps 3 and 4
 don't change:
 
   $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp; do spec strs/$f.ren; done
-  strs/api.ren: not yet
-  strs/api_cut_panic.ren: not yet
-  strs/api_cut_start_panic.ren: not yet
-  strs/api_code_panic.ren: not yet
-  strs/api_code_empty_panic.ren: not yet
-  strs/api_of_code_panic.ren: not yet
-  strs/api_floor_panic.ren: not yet
-  strs/interp.ren: not yet
+  strs/api.ren: as specified
+  strs/api_cut_panic.ren: as specified
+  strs/api_cut_start_panic.ren: as specified
+  strs/api_code_panic.ren: as specified
+  strs/api_code_empty_panic.ren: as specified
+  strs/api_of_code_panic.ren: as specified
+  strs/api_floor_panic.ren: as specified
+  strs/interp.ren: as specified
   $ for f in append append_count append_report slices_kept slices_count; do spec strs/$f.ren; done
-  strs/append.ren: not yet
-  strs/append_count.ren: not yet
-  strs/append_report.ren: not yet
-  strs/slices_kept.ren: not yet
-  strs/slices_count.ren: not yet
+  strs/append.ren: as specified
+  strs/append_count.ren: as specified
+  strs/append_report.ren: as specified
+  strs/slices_kept.ren: as specified
+  strs/slices_count.ren: as specified
 
 Step 5, the rest of the API:
 
@@ -97,27 +97,92 @@ line of what `ren build` said.
   $ native strs/invalid_utf8.ren
   strs/invalid_utf8.ren, perceus: the same, exit 0, objects live at exit 0
   strs/invalid_utf8.ren, naive: the same, exit 0, objects live at exit 0
-  ren specialized: 13 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  ren specialized: 14 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
   strs/invalid_utf8.ren, release: the same, exit 0, objects live at exit 0
   strs/invalid_utf8.ren, tcc: the same, exit 0, objects live at exit 0
   strs/invalid_utf8.ren, ren run --release: the same
   $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp; do native strs/$f.ren; done
-  strs/api.ren: not native yet: error: unexpected character `'`
-  strs/api_cut_panic.ren: not native yet: error: `Str` has no method named `char_floor`
-  strs/api_cut_start_panic.ren: not native yet: error: `Str` has no method named `char_ceil`
-  strs/api_code_panic.ren: not native yet: error: `Str` has no method named `code`
-  strs/api_code_empty_panic.ren: not native yet: error: `Str` has no method named `code`
-  strs/api_of_code_panic.ren: not native yet: error: `Str` has no member named `of_code`
-  strs/api_floor_panic.ren: not native yet: error: `Str` has no method named `char_floor`
-  strs/interp.ren: not native yet: error: `\{` isn't an escape
+  strs/api.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/api.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 19 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api.ren, release: the same, exit 0, objects live at exit 0
+  strs/api.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/api.ren, ren run --release: the same
+  strs/api_cut_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/api_cut_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api_cut_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/api_cut_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/api_cut_panic.ren, ren run --release: the same
+  strs/api_cut_start_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/api_cut_start_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api_cut_start_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/api_cut_start_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/api_cut_start_panic.ren, ren run --release: the same
+  strs/api_code_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/api_code_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api_code_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/api_code_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/api_code_panic.ren, ren run --release: the same
+  strs/api_code_empty_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/api_code_empty_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api_code_empty_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/api_code_empty_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/api_code_empty_panic.ren, ren run --release: the same
+  strs/api_of_code_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/api_of_code_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api_of_code_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/api_of_code_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/api_of_code_panic.ren, ren run --release: the same
+  strs/api_floor_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/api_floor_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/api_floor_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/api_floor_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/api_floor_panic.ren, ren run --release: the same
+  strs/interp.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/interp.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/interp.ren, release: the same, exit 0, objects live at exit 0
+  strs/interp.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/interp.ren, ren run --release: the same
   $ for f in append append_count append_report slices_kept slices_count; do native strs/$f.ren; done
-  strs/append.ren: not native yet: error: `Str` has no `+`
-  strs/append_count.ren: not native yet: error: `Str` has no `+`
-  strs/append_report.ren: not native yet: error: `Str` has no `+`
-  strs/slices_kept.ren: not native yet: error: `\{` isn't an escape
-  strs/slices_count.ren: not native yet: error: unexpected character `'`
+  strs/append.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/append.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 10 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/append.ren, release: the same, exit 0, objects live at exit 0
+  strs/append.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/append.ren, ren run --release: the same
+  strs/append_count.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/append_count.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/append_count.ren, release: the same, exit 0, objects live at exit 0
+  strs/append_count.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/append_count.ren, ren run --release: the same
+  strs/append_report.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/append_report.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/append_report.ren, release: the same, exit 0, objects live at exit 0
+  strs/append_report.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/append_report.ren, ren run --release: the same
+  strs/slices_kept.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/slices_kept.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 13 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/slices_kept.ren, release: the same, exit 0, objects live at exit 0
+  strs/slices_kept.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/slices_kept.ren, ren run --release: the same
+  strs/slices_count.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/slices_count.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/slices_count.ren, release: the same, exit 0, objects live at exit 0
+  strs/slices_count.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/slices_count.ren, ren run --release: the same
   $ native strs/rest.ren
-  strs/rest.ren: not native yet: error: `\{` isn't an escape
+  strs/rest.ren: not native yet: error: `Str` has no method named `includes`
 
 What a build allocates (`--stats`), which `ren run` can't show. Step 3:
 20,000 appends to a string nothing else holds, and to `Bytes`, grow
@@ -134,13 +199,13 @@ object (representation A).
   >    fi; rm -f count.bin build.err)
   > }
   $ objects --debug --stats append_count.ren
-  not native yet: error: `Str` has no `+`
+  200 objects or more
   $ objects --release --stats append_count.ren
-  not native yet: error: `Str` has no `+`
+  200 objects or more
   $ objects --release --stats slices_count.ren
-  not native yet: error: unexpected character `'`
+  200 objects or more
   $ objects --debug --stats slices_count.ren
-  not native yet: error: unexpected character `'`
+  200 objects or more
 
 The report (step 3): a debug build of append_report.ren says, once, at
 a normal exit, that its first loop's `+=` copied a string something
@@ -154,5 +219,15 @@ has no report.
   >    else echo "$b:"; env -u REN_NOTES ./report.bin; echo "exit $?"; echo "$b, REN_NOTES=0:"; ./report.bin > /dev/null
   >    fi
   >  done; rm -f report.bin build.err)
-  debug: not native yet: error: `Str` has no `+`
-  release: not native yet: error: `Str` has no `+`
+  debug:
+  101
+  100
+  101
+  exit 0
+  debug, REN_NOTES=0:
+  release:
+  101
+  100
+  101
+  exit 0
+  release, REN_NOTES=0:

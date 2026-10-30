@@ -19,7 +19,7 @@ pub handler doc(id: DocId) for Doc =
   var text = ""
   text() => text
   set(t) => text = t
-  add(s) => text = text.concat(s)
+  add(s) => text = text + s
 
 pub dep Docs = Actors<DocId, Doc>
 
@@ -28,7 +28,7 @@ pub dep Docs = Actors<DocId, Doc>
 pub fn append(id: DocId, s: Str) uses Docs =
   Docs.at(id) fn() =>
     let t = Doc.text()
-    Doc.set(t.concat(s))
+    Doc.set(t + s)
 
 test "two sessions' edits both land" =
   with actors(doc) as Docs in

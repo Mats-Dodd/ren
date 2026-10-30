@@ -11,7 +11,7 @@
 type Item = { name: Str, tags: Array<Str>, qty: Int }
 type Pair = { a: Item, b: Int }
 
-fn weigh(it: Item) -> Int = it.name.len() + it.tags.len() + it.qty
+fn weigh(it: Item) -> Int = it.name.byte_len() + it.tags.len() + it.qty
 
 // recursion through a borrowed parameter
 fn deep(it: Item, n: Int) -> Int = if n == 0 then weigh(it) else deep(it, n - 1) + 1
@@ -20,10 +20,10 @@ fn deep(it: Item, n: Int) -> Int = if n == 0 then weigh(it) else deep(it, n - 1)
 fn take_name(n: Int) -> Int =
   var total = 0
   for i in 0..n
-    let it = Item { name: "x".concat(show(i)), tags: ["a"], qty: i }
+    let it = Item { name: "x" + show(i), tags: ["a"], qty: i }
     let nm = it.name
     total += weigh(it)
-    total += nm.len()
+    total += nm.byte_len()
   total
 
 // loop-carried: must stay on the heap
@@ -31,7 +31,7 @@ fn carried(n: Int) -> Int =
   var prev = Item { name: "p", tags: [], qty: 0 }
   var total = 0
   for i in 0..n
-    let cur = Item { name: "c".concat(show(i)), tags: [], qty: i }
+    let cur = Item { name: "c" + show(i), tags: [], qty: i }
     total += weigh(prev) + weigh(cur)
     prev = cur
   total
@@ -40,9 +40,9 @@ fn carried(n: Int) -> Int =
 fn opt(n: Int) -> Int =
   var t = 0
   for i in 0..n
-    let o = if i % 3 == 0 then Some("s".concat(show(i))) else None
+    let o = if i % 3 == 0 then Some("s" + show(i)) else None
     match o
-      Some(s) => t += s.len()
+      Some(s) => t += s.byte_len()
       None => t += 1
   t
 
@@ -53,7 +53,7 @@ fn checked(it: Item) -> Int ! TooBig(n: Int) =
 fn errs(n: Int) -> Int ! TooBig(n: Int) =
   var t = 0
   for i in 0..n
-    let it = Item { name: "e".concat(show(i)), tags: ["q", "r"], qty: i }
+    let it = Item { name: "e" + show(i), tags: ["q", "r"], qty: i }
     t += try checked(it)
   t
 
@@ -87,31 +87,31 @@ fn main() uses Console =
 fn pick(i: Int) -> Option<Str> =
   if i % 4 == 0 then None
   else if i % 4 == 1 then Some("one")
-  else Some("n".concat(show(i)))
+  else Some("n" + show(i))
 
 fn picks(n: Int) -> Int =
   var t = 0
   for i in 0..n
     match pick(i)
-      Some(s) => t += s.len()
+      Some(s) => t += s.byte_len()
       None => t += 100
   t
 
 fn safe_div(a: Int, b: Int) -> (Str, Int) ! DivZero =
-  if b == 0 then fail DivZero else ("q".concat(show(a)), a / b)
+  if b == 0 then fail DivZero else ("q" + show(a), a / b)
 
 fn divs(n: Int) -> Int ! DivZero =
   var t = 0
   for i in 1..n
     let (s, q) = try safe_div(n, i)
-    t += s.len() + q
+    t += s.byte_len() + q
   t
 
 fn divz(n: Int) -> Int ! DivZero =
   var t = 0
   for i in 0..n
     let (s, q) = try safe_div(n, 5 - i)
-    t += s.len() + q
+    t += s.byte_len() + q
   t
 
 type Wide = {
@@ -119,14 +119,14 @@ type Wide = {
   f5: Int, f6: Int, f7: Int, f8: Str, f9: Array<Str>
 }
 
-fn wide_len(w: Wide) -> Int = w.f0 + w.f7 + w.f8.len() + w.f9.len()
+fn wide_len(w: Wide) -> Int = w.f0 + w.f7 + w.f8.byte_len() + w.f9.len()
 
 fn wides(n: Int) -> Int =
   var t = 0
   for i in 0..n
     let w = Wide {
       f0: i, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7,
-      f8: "w".concat(show(i)), f9: ["a", "b"]
+      f8: "w" + show(i), f9: ["a", "b"]
     }
     t += wide_len(w)
   t
@@ -134,7 +134,7 @@ fn wides(n: Int) -> Int =
 fn remake(n: Int) -> Array<Item> =
   var out: Array<Item> = []
   for i in 0..n
-    let it = Item { name: "r".concat(show(i)), tags: [], qty: i }
+    let it = Item { name: "r" + show(i), tags: [], qty: i }
     let w = weigh(it)
     &out.push(Item { name: "s", tags: [], qty: w })
   out
@@ -143,5 +143,5 @@ fn tally(names: Array<Str>, n: Int) -> Int =
   var t = 0
   for i in 0..n
     let it = Item { name: names[i % names.len()], tags: [], qty: i }
-    t += it.name.len() + it.qty
+    t += it.name.byte_len() + it.qty
   t

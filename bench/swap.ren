@@ -76,7 +76,7 @@ fn main() uses Console =
     accs[i % 2].hits += i
   print(accs[0].hits * 10 + accs[1].hits)
   print(before[1].hits)
-  print(accs[1].name.concat(before[0].name))
+  print(accs[1].name + before[0].name)
   var cells = [[Cell { label: "x", n: 1 }], [Cell { label: "y", n: 2 }, Cell { label: "z", n: 3 }]]
   for i in 0..4
     cells[1][i % 2].n = cells[1][i % 2].n * 2 + i
@@ -91,8 +91,8 @@ fn main() uses Console =
   let mapped = h.map(fn(row) => row.map(fn(x) => x * 2))
   print(total(mapped) - total(other))
   var words = [["a", "b"], ["c"]]
-  words = words.map(fn(ws) => ws.map(fn(w) => w.concat(w)))
-  print(words[0][1].concat(words[1][0]))
+  words = words.map(fn(ws) => ws.map(fn(w) => w + w))
+  print(words[0][1] + words[1][0])
   // a block that fails part way through `map`
   let mixed = [[1, 2], [3, -4], [5]]
   match attempt mixed.map(negatives)
@@ -103,6 +103,6 @@ fn main() uses Console =
     Err(Negative(x)) => print(x)
   print(total(mixed))
   // a generic loop, of strings and of numbers
-  let ss = each_through(["p", "q"], fn(w) => w.concat("!"))
-  print(ss[0].concat(ss[1]))
+  let ss = each_through(["p", "q"], fn(w) => w + "!")
+  print(ss[0] + ss[1])
   print(total([each_through([1, 2, 3], fn(x) => x * x)]))

@@ -605,10 +605,10 @@ dep Greeter =
   greet: fn(name: Str) -> Str
 
 handler plain() for Greeter =
-  greet(name) => "hi ".concat(name)
+  greet(name) => "hi " + name
 
 handler timed() for Greeter uses Clock =
-  greet(name) => name.concat(" at ").concat(show(Clock.now()))
+  greet(name) => name + " at " + show(Clock.now())
 
 fn main() uses Console =
   let gs: Array<(Greeter uses Clock)> = [plain(), timed()]
@@ -687,11 +687,11 @@ let%expect_test "[s3 accept] an inline handler copies what it captures" =
 dep Route =
   handle: fn(path: Str) -> Str
 
-fn page(body: Str) -> Route = handler fn(path) => path.concat(": ").concat(body)
+fn page(body: Str) -> Route = handler fn(path) => path + ": " + body
 
 fn main() uses Console =
   var body = "first"
-  let r: Route = handler fn(path) => path.concat(" ").concat(body)
+  let r: Route = handler fn(path) => path + " " + body
   body = "second"
   print(r.handle("/a"))
   print(page("hello").handle("/b"))
@@ -1059,9 +1059,9 @@ let%expect_test "[s5 accept] one logger over any dependency" =
        ^ {|
 handler logged() over any uses Console =
   call =>
-    Console.write("> ".concat(call.name).concat(show(call.args)))
+    Console.write("> " + call.name + show(call.args))
     let r = attempt call.forward()
-    Console.write("< ".concat(show(r)))
+    Console.write("< " + show(r))
     try r
 
 fn main() uses Console =
@@ -1155,7 +1155,7 @@ handler counts() for Tally =
 
 handler logged() over any uses Console =
   call =>
-    Console.write(call.name.concat(show(call.args)))
+    Console.write(call.name + show(call.args))
     try call.forward()
 
 fn main() uses Console =
@@ -1537,7 +1537,7 @@ handler mem_chan<T>() for Chan<T> =
 
 handler logged() over any uses Console =
   call =>
-    Console.write(call.name.concat(show(call.args)))
+    Console.write(call.name + show(call.args))
     try call.forward()
 
 fn go<T>(x: T) uses Chan<T>, Console =
@@ -1761,7 +1761,7 @@ fn main() uses Console =
   let s = "héllo, wörld"
   print(s[0..6])
   print(s[8..14])
-  print(s[8..14].len())
+  print(s[8..14].byte_len())
   print(s[0..1] == "h")
   print(s.split(", "))
   print(s.copy() == s)
@@ -1823,6 +1823,7 @@ fn main() uses Console =
       ┌─ test.ren:3:9
     3 │   print(s[0..2])
       │         ^^^^^^^
+      help: to cut at most 2 bytes, end at `s.char_floor(2)`
     |}];
   run
     {|

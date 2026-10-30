@@ -269,6 +269,9 @@ typedef struct {
      4 n        the number [n]: a line or a column
      5          the message
      6 t i n    the [n] bytes from [i] of text [t]: code an operand is
+     7 n t      the help the panic writes, if it writes one: [n] spaces,
+                ` help: `, and the help, with text [t], the receiver as
+                the source writes it, for each 0x02 in it
 
    A file's name and each of its lines are one text, which every panic in
    them shares: a panic costs a few bytes, not the line it's on (60% of a
@@ -304,6 +307,11 @@ extern ren_stats_t ren_stats;
    with exit code 1, as `ren run` does. Values still held are leaked
    (foundations.md, decision 8). */
 _Noreturn void ren_panic(const ren_site *site, const char *msg);
+
+/* The same, with a help of its own, which a site's piece 7 prints: a cut
+   character's names `char_floor` on the string as it's written. */
+_Noreturn void ren_panic_help(const ren_site *site, const char *msg,
+                              const char *help);
 
 /* The same, with the message a `Str`, [s]: a failed `assert` of the
    prelude's, which shows the values it's about. */
@@ -1161,8 +1169,25 @@ ren_obj *ren_str_join(ren_obj *a, ren_obj *b);
 ren_obj *ren_str_split(ren_obj *s, ren_obj *sep, const ren_site *site);
 ren_obj *ren_str_trim(ren_obj *s);
 
-/* `s.lower()`: a new string, each ASCII letter of [s] lower case. */
+/* `s.ascii_lower()`: a new string, each ASCII letter of [s] lower case;
+   `Bytes`' too. */
 ren_obj *ren_str_lower(ren_obj *s);
+
+/* `s.char_floor(i)`, the last character boundary at or before [i], or
+   `s.char_ceil(i)` if [ceil], the first at or after it, panicking as the
+   interpreter does (builtins.ml, [char_bound]) if [i] isn't 0 to the
+   length. */
+int64_t ren_char_bound(ren_obj *s, int64_t i, bool ceil, const ren_site *site);
+
+/* A `code` call on [c]: the code point of a string of one, panicking on any other
+   (builtins.ml, [code]); and `Str.of_code(n)`, the string of the code
+   point [n], panicking unless it's a Unicode scalar value. */
+int64_t ren_str_code(ren_obj *s, const ren_site *site);
+ren_obj *ren_str_of_code(int64_t n, const ren_site *site);
+
+/* `xs.join(sep)`: the strings of the array [xs], [sep] between each two,
+   a new string. */
+ren_obj *ren_strs_join(ren_obj *xs, ren_obj *sep);
 
 /* `copy()`: [a] with a buffer of its own, counted again if it already
    has one (an owner), else a copy of its range. */

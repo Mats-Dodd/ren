@@ -171,7 +171,11 @@ type site = {
           the deadlock panic's, what waits there, as `ren run` says *)
   help : string option;
       (** the help a panic here has, if it has its own: a `u64_le` that read
-          2^63 or more says to read its bits with `i64_le` *)
+          2^63 or more says to read its bits with `i64_le`. ["\001"] is one
+          the running program writes, if it writes one: a cut character's,
+          which names the receiver at [recv] as it's written, for each `\002`
+          in it (ren_rt.h, [ren_panic_help]) *)
+  recv : Loc.t option;
 }
 type cmp = Lt | Le | Gt | Ge | Eq | Ne
 
@@ -340,7 +344,18 @@ type rt =
       (** `xs.sort()`, of an array and its elements' descriptor: a new array,
           sorted stably through the descriptor, which panics at its site
           saying the string if it compares a NaN *)
-  | Str_lower  (** `s.lower()`, its ASCII letters made lower case *)
+  | Str_lower
+      (** `s.ascii_lower()`, its ASCII letters made lower case; `Bytes`' too *)
+  | Char_bound of bool
+      (** `s.char_floor(i)`, or `s.char_ceil(i)` if [true]: an [Int], which
+          panics at its site if [i] is out of bounds *)
+  | Str_code
+      (** `c.code()`: an [Int], which panics at its site unless [c] is one code
+          point *)
+  | Str_of_code
+      (** `Str.of_code(n)`: a new `Str`, which panics at its site unless [n] is
+          a Unicode scalar value *)
+  | Str_join  (** `xs.join(sep)`: of an `Array<Str>` and a `Str`, a new `Str` *)
   | Panic_str
       (** panic at its site with this [Str]: a failed `assert` of the
           prelude's, whose message shows values ([assert_message]) *)

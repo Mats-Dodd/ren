@@ -7,7 +7,7 @@
 
 type Line = { item: Str, qty: Int, cents: Int }
 
-fn subtotal(l: Line) -> Int = l.qty * l.cents + l.item.len()
+fn subtotal(l: Line) -> Int = l.qty * l.cents + l.item.byte_len()
 
 // a temporary record, built and used up in a loop
 pub fn records(items: Array<Str>, n: Int) -> Int =
@@ -35,7 +35,7 @@ pub fn tuples(items: Array<Str>, n: Int) -> Int =
   var sum = 0
   for i in 0..n
     let (s, k) = pick(items, i)
-    sum = (sum + s.len() + k) % 1_000_000_007
+    sum = (sum + s.byte_len() + k) % 1_000_000_007
   sum
 
 fn with_line(l: Line, f: fn(Line) -> Int) -> Int = try f(l)
@@ -46,7 +46,7 @@ pub fn blocks(items: Array<Str>, n: Int) -> Int =
   let markup = 3
   for i in 0..n
     let l = Line { item: items[i % items.len()], qty: i % 5, cents: i % 11 }
-    sum = (sum + with_line(l, fn(x) => x.qty * x.cents * markup + x.item.len())) % 1_000_000_007
+    sum = (sum + with_line(l, fn(x) => x.qty * x.cents * markup + x.item.byte_len())) % 1_000_000_007
   sum
 
 pub fn items() -> Array<Str> = ["apple", "pear", "fig", "quince"]

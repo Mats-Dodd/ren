@@ -59,4 +59,4 @@ pub fn run(n: Int) uses Console =
       r += 1
     perm_count += 1
   print(checksum)
-  Console.write("Pfannkuchen(".concat(show(n)).concat(") = ").concat(show(max_flips)))
+  Console.write("Pfannkuchen(" + show(n) + ") = " + show(max_flips))

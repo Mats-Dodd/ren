@@ -21,20 +21,20 @@ handler sized(s: Shape, name: Option<Str>) for Area ! NoName | NotRect uses Cons
   let Rect { w, h } = s else
     print("not a rect")
     fail NotRect
-  let (a, b) = (w * h, n.concat("!"))
-  area() => b.concat(show(a))
+  let (a, b) = (w * h, n + "!")
+  area() => b + show(a)
 
 handler logged(name: Option<Str>) for Area uses Console =
   let Some(n) = name else todo
   finally(r) =>
-    print("finally ".concat(n))
+    print("finally " + n)
     try r
   area() => n
 
 handler at(p: Pt, q: (Str, Int)) for Area =
   let { x, y } = p
   let (s, n) = q
-  area() => s.concat(show(x + y + n))
+  area() => s + show(x + y + n)
 
 dep Store<T> =
   get: fn() -> T

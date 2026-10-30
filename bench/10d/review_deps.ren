@@ -75,10 +75,10 @@ handler health() for Api =
   handle(x) => "ok"
 
 handler users(prefix: Str) for Api uses Db =
-  handle(x) => prefix.concat(show(Db.q(x)))
+  handle(x) => prefix + show(Db.q(x))
 
 handler timed() for Api uses Clock, Db =
-  handle(x) => show(Clock.now()).concat(show(Db.q(x)))
+  handle(x) => show(Clock.now()) + show(Db.q(x))
 
 handler counted() for Api uses Console =
   var n = 0
@@ -93,15 +93,15 @@ handler counted() for Api uses Console =
 fn make(i: Int) -> (Api uses Db) =
   if i == 0 then health()
   else
-    let p = "u".concat(show(i))
-    handler fn(x) => p.concat(show(Db.q(x + i)))
+    let p = "u" + show(i)
+    handler fn(x) => p + show(Db.q(x + i))
 
 fn next_id(inout i: Int) -> Int =
   i += 1
   i
 
 fn descriptions() uses Console =
-  let routes: Array<(Api uses Clock, Console, Db)> = [health(), users("a".concat("b")), timed(), counted(), make(0), make(3)]
+  let routes: Array<(Api uses Clock, Console, Db)> = [health(), users("a" + "b"), timed(), counted(), make(0), make(3)]
   with fake_db(2), Clock.frozen(Time.epoch) in
     for r in routes
       print(with r in Api.handle(5))
@@ -146,7 +146,7 @@ fn generic_twice<T>(x: T) -> T uses Box<T> =
   Box.get()
 
 fn generic() uses Console =
-  with cell(1), cell("s".concat("t")), cell([1, 2]) in
+  with cell(1), cell("s" + "t"), cell([1, 2]) in
     print(swap(10, "u"))
     let i: Int = Box.get()
     let s: Str = Box.get()
@@ -158,7 +158,7 @@ fn generic() uses Console =
   with cell(5) as Ints, cell(6) as Other, cell(7) in
     Ints.set(Other.get() + Box.get())
     print(Ints.get())
-  with loud() over cell(Some("v".concat("w"))) in
+  with loud() over cell(Some("v" + "w")) in
     let o: Option<Str> = Box.get()
     print(o)
   let ds: Array<Box<Int>> = [cell(1), cell(2)]
@@ -205,7 +205,7 @@ fn retries() uses Console =
   print(i)
   var names: Array<Str> = []
   let r5 = attempt retry(4, on: B) fn() =>
-    &names.push("try".concat(show(names.len())))
+    &names.push("try" + show(names.len()))
     try step(5)
   print(r5)
   print(names)
@@ -219,15 +219,15 @@ handler counts() for Tally =
   var c = 0
   change(k, d) => c = c + k * d
   get(k) => c + k
-  name(s, xs) => s.concat(xs[0])
+  name(s, xs) => s + xs[0]
 
 handler logged(tag: Str) over any uses Console =
   var n = 0
   call =>
     n += 1
-    Console.write(tag.concat(call.name).concat(show(call.args)))
+    Console.write(tag + call.name + show(call.args))
     let r = call.forward()
-    Console.write(tag.concat(show(n)).concat(show(r)))
+    Console.write(tag + show(n) + show(r))
     print(r == r)
     r
 
@@ -235,7 +235,7 @@ fn any() uses Console =
   with logged("a ") over logged("b ") over counts() in
     Tally.change(1, 5)
     print(Tally.get(1))
-    print(Tally.name("x".concat("y"), ["z".concat("w")]))
+    print(Tally.name("x" + "y", ["z" + "w"]))
   with logged("c ") over Clock.frozen(Time.epoch) in
     print(Clock.now())
 

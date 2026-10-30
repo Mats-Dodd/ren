@@ -4,7 +4,7 @@
 
 pub type Email = opaque Str
   pub fn of(s: Str) -> Email = s
-  pub fn key(self) -> Str = self.lower()
+  pub fn key(self) -> Str = self.ascii_lower()
   pub fn text(self) -> Str = self
 
 fn main() uses Console =
@@ -14,7 +14,7 @@ fn main() uses Console =
   &m.set(Email.of("ann@example.com"), 3)
   print(m.len())
   for (e, n) in m
-    print(e.text().concat(" ").concat(show(n)))
+    print(e.text() + " " + show(n))
   print(m.get(Email.of("ANN@EXAMPLE.COM")))
   &m.remove(Email.of("BOB@example.com"))
   print(m.len())

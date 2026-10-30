@@ -15,7 +15,7 @@ type Plan =
 fn bump(q: Plan.Pro, by: Int) -> Plan.Pro = { ..q, seats: q.seats + by }
 
 fn main() uses Console =
-  var p: Plan = Pro { name: "team".concat("!"), seats: 0 }
+  var p: Plan = Pro { name: "team" + "!", seats: 0 }
   for i in 0..1000
     p = match p
       Pro { .. } as q => Pro { ..bump(q, i) }

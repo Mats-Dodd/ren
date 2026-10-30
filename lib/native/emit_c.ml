@@ -634,6 +634,13 @@ let runtime rt args site_arg =
   | Array_sort what ->
       sprintf "ren_array_sort(%s, %s, %s, %s)" (a 0) (a 1) (c_string what) (site ())
   | Str_lower -> sprintf "ren_str_lower(%s)" (a 0)
+  | Char_bound ceil ->
+      sprintf "ren_char_bound(%s, %s, %s, %s)" (a 0) (a 1)
+        (if ceil then "true" else "false")
+        (site ())
+  | Str_code -> sprintf "ren_str_code(%s, %s)" (a 0) (site ())
+  | Str_of_code -> sprintf "ren_str_of_code(%s, %s)" (a 0) (site ())
+  | Str_join -> sprintf "ren_strs_join(%s, %s)" (a 0) (a 1)
   | Panic_str -> sprintf "ren_panic_str(%s, %s)" (site ()) (a 0)
   | New_desc _ -> bug "a descriptor built outside a Let"
 
@@ -1734,6 +1741,10 @@ let sites add ~(site_pieces : site -> Diag.piece list) (all : site list) =
             op 4;
             leb b n
         | Hole -> op 5
+        | Help_hole (n, recv) ->
+            op 7;
+            leb b n;
+            leb b (text recv)
         | Slice (s, i, n) ->
             op 6;
             leb b (text s);

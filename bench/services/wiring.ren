@@ -17,13 +17,13 @@ handler mem_db(prefix: Str) for Db uses Console =
   finally(r) =>
     print("db closed")
     try r
-  get(id) => prefix.concat(show(id))
+  get(id) => prefix + show(id)
 
 handler console_audit() for Audit uses Console =
   finally(r) =>
     print("audit closed")
     try r
-  note(s) => print("audit: ".concat(s))
+  note(s) => print("audit: " + s)
 
 handler db_users() for Users uses Db, Audit =
   name(id) =>

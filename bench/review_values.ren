@@ -33,33 +33,33 @@ fn mk(i: Int) -> Mix =
     _ => D
 fn desc(m: Mix) -> Str =
   match m
-    Mix.A { s, n } => s.concat("a").concat(show(n))
-    Mix.B { n, s } => show(n).concat("b").concat(s)
+    Mix.A { s, n } => s + "a" + show(n)
+    Mix.B { n, s } => show(n) + "b" + s
     C(k) => show(k)
     D => "d"
 fn edit(inout p: Pair) =
-  p.a = p.a.concat(p.b)
+  p.a = p.a + p.b
 fn sum(t: Node) -> Str =
   match t
     Leaf => ""
-    N { l, p, r } => sum(l).concat(p.a).concat(sum(r))
+    N { l, p, r } => sum(l) + p.a + sum(r)
 
 fn main_v1() uses Console =
   var p = Pair { a: "x", b: "y" }
   let a = p.a
   p.a = "z"
-  print(a.concat(p.a))
+  print(a + p.a)
   let q = p
   p = swap(p)
-  print(q.a.concat(p.a))
+  print(q.a + p.a)
   edit(&p)
-  print(p.a.concat(q.a))
+  print(p.a + q.a)
   var ms: Array<Mix> = []
   for i in 0..9
     &ms.push(mk(i))
   var out = ""
   for m in ms
-    out = out.concat(desc(m))
+    out = out + desc(m)
   print(out)
   let oo: Option<Option<Str>> = Some(Some("deep"))
   match oo
@@ -73,7 +73,7 @@ fn main_v1() uses Console =
     match r
       Ok(s) => print(s)
       Err(Odd(n)) => print(n)
-  let f = fn(x: Pair) => x.a.concat(p.b)
+  let f = fn(x: Pair) => x.a + p.b
   print(f(q))
   var t = Leaf
   for i in 0..3
@@ -83,12 +83,12 @@ fn main_v1() uses Console =
   print(show(q))
   let tup = (p, 3, q)
   let (x1, n1, x2) = tup
-  print(x1.a.concat(x2.b).concat(show(n1)))
+  print(x1.a + x2.b + show(n1))
   var opt: Option<Pair> = None
   for i in 0..3
     opt = match opt
       None => Some(Pair { a: show(i), b: "o" })
-      Some(pp) => Some(Pair { a: pp.a.concat(show(i)), b: pp.b })
+      Some(pp) => Some(Pair { a: pp.a + show(i), b: pp.b })
   match opt
     Some(pp) => print(pp.a)
     None => print("none")

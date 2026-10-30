@@ -26,11 +26,11 @@ fn both(inout a: Int, inout b: Int, f: fn(&Int, &Int)) = try f(&a, &b)
 fn fields(line: Str) -> Array<Str> =
   var out: Array<Str> = []
   var start = 0
-  for i in 0..line.len()
+  for i in 0..line.byte_len()
     if line[i..i + 1] == ";" then
       &out.push(line[start..i])
       start = i + 1
-  &out.push(line[start..line.len()])
+  &out.push(line[start..line.byte_len()])
   out
 
 dep Tally =
@@ -105,7 +105,7 @@ fn main() uses Console =
   let s = "héllo, wörld"
   print(s[0..6])
   print(s[8..14])
-  print(s[8..14].len())
+  print(s[8..14].byte_len())
   print(s[0..1] == "h")
   print(fields("a=1;bb=22;c=3"))
-  print(fields("a=1;bb=22;c=3")[1].len())
+  print(fields("a=1;bb=22;c=3")[1].byte_len())

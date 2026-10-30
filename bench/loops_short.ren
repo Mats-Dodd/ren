@@ -4,7 +4,7 @@
 
 fn join(inout xs: Array<Str>, by: Array<Str>) =
   for i, x in &xs
-    x = x.concat(by[i])
+    x = x + by[i]
 
 fn main() uses Console =
   var xs = ["a", "b", "c"]

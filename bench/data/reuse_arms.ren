@@ -23,7 +23,7 @@ type R = { q: Q, w: Str }
 
 fn price(it: Item) -> Item =
   match it
-    Draft(l) => Priced { l, total: l.qty * l.sku.len() }
+    Draft(l) => Priced { l, total: l.qty * l.sku.byte_len() }
     Priced { .. } as p => Priced { ..p, total: p.total + 1 }
     Void => Void
 
@@ -35,7 +35,7 @@ fn unprice(it: Item) -> Item =
 fn main() uses Console =
   var t = 0
   for i in 0..6
-    var it = if i % 3 == 2 then Void else Draft(Line { sku: "ab".concat("c"), qty: i })
+    var it = if i % 3 == 2 then Void else Draft(Line { sku: "ab" + "c", qty: i })
     it = price(it)
     it = price(it)
     it = unprice(it)

@@ -1,0 +1,136 @@
+================================================================================
+interpolation: a hole holds any expression
+================================================================================
+
+fn f() = "jobs/\{job}: \{n * 2} of \{u.name.ascii_lower()}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (string
+      (interpolation
+        (interpolation_start)
+        (identifier)
+        (interpolation_end))
+      (interpolation
+        (interpolation_start)
+        (binary_expression
+          (identifier)
+          (number))
+        (interpolation_end))
+      (interpolation
+        (interpolation_start)
+        (method_call_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (identifier)
+          (arguments))
+        (interpolation_end)))))
+
+================================================================================
+interpolation: a string with holes in a hole, braces and an `if`
+================================================================================
+
+fn f() = "a \{"b \{"c"} d"} \{if n > 20 then "big" else "small"} \{[1, 2]}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (string
+      (interpolation
+        (interpolation_start)
+        (string
+          (interpolation
+            (interpolation_start)
+            (string)
+            (interpolation_end)))
+        (interpolation_end))
+      (interpolation
+        (interpolation_start)
+        (if_expression
+          (binary_expression
+            (identifier)
+            (number))
+          (string)
+          (string))
+        (interpolation_end))
+      (interpolation
+        (interpolation_start)
+        (array_expression
+          (number)
+          (number))
+        (interpolation_end)))))
+
+================================================================================
+interpolation: `\\{` and plain braces are text, and `\{x=}` names its value
+================================================================================
+
+fn f() = "\\{job} is not a hole, {job} is text, \{job=}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (string
+      (escape_sequence)
+      (interpolation
+        (interpolation_start)
+        (identifier)
+        (interpolation_end)))))
+
+================================================================================
+character literals: an Int, in code and in patterns
+================================================================================
+
+fn f(b: Bytes) -> Int =
+  let tag: UInt8 = 'Q'
+  match b.u8(0)
+    '"' => 'é'
+    '\'' => '\n'
+    _ => '😀'
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (character))
+      (match_expression
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (number)))
+        (match_arm
+          (character)
+          (character))
+        (match_arm
+          (character)
+          (character))
+        (match_arm
+          (wildcard)
+          (character))))))

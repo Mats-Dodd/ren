@@ -1563,14 +1563,47 @@ let wrap_help_in ~lines_of (w : Eval.wrap) =
    panics to render splits once. *)
 let wrap_help ~sources w = wrap_help_in ~lines_of:(Diag.indexed sources) w
 
+(* What a help calls the receiver at [recv], as it's written: its name,
+   or a path, `self.name`; or `s`, where it isn't one (compiler.md, "Bytes
+   stage, part two", "Errors and panics"). *)
+let receiver_in ~lines_of (recv : Loc.t) =
+  let name s =
+    s <> ""
+    && List.for_all
+         (fun w ->
+           w <> ""
+           && (match w.[0] with 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false)
+           && String.for_all
+                (function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false)
+                w)
+         (String.split_on_char '.' s)
+  in
+  match lines_of recv.file with
+  | Some lines when recv.start.line = recv.stop.line -> (
+      let line = Diag.line lines recv.start.line in
+      let from = recv.start.col - 1 and n = recv.stop.col - recv.start.col in
+      if from >= 0 && n > 0 && from + n <= String.length line then
+        match String.sub line from n with t when name t -> t | _ -> "s"
+      else "s")
+  | _ -> "s"
+
+(* [help] with each `\002` in it the receiver at [recv], as it's
+   written (Eval.Panic). *)
+let recv_help ~lines_of recv help =
+  match recv with
+  | Some l when String.contains help '\002' ->
+      let r = receiver_in ~lines_of l in
+      String.concat r (String.split_on_char '\002' help)
+  | _ -> help
+
 (* A panic, as `ren run` reports it. *)
-let panic_diag ?lines_of ?(notes = []) ?help ~sources loc msg wrap =
+let panic_diag ?lines_of ?(notes = []) ?help ?recv ~sources loc msg wrap =
   let lines_of =
     match lines_of with Some f -> f | None -> Diag.indexed sources
   in
   let help =
     match help with
-    | Some _ -> help
+    | Some h -> Some (recv_help ~lines_of recv h)
     | None -> Option.bind wrap (wrap_help_in ~lines_of)
   in
   Diag.make ~notes ?help loc ("panic: " ^ msg)
@@ -1590,8 +1623,8 @@ let went_differently ~sources loc (d : Journal.differs) =
 let render_error ~sources = function
   | Diag.Error d -> Some (Diag.render ~sources d)
   | Diag.Errors ds -> Some (Diag.render_all ~sources ds)
-  | Eval.Panic { loc; msg; wrap; notes; help } ->
-      Some (Diag.render ~sources (panic_diag ~notes ?help ~sources loc msg wrap))
+  | Eval.Panic { loc; msg; wrap; notes; help; recv } ->
+      Some (Diag.render ~sources (panic_diag ~notes ?help ?recv ~sources loc msg wrap))
   | Eval.Assert_failed { loc; sides } ->
       Some (Diag.render ~sources (assert_failed loc sides))
   | Eval.Went_differently { loc; differs } ->
@@ -1658,6 +1691,22 @@ let site_pieces ~lines_of ~sources (s : Mem.site) : Diag.piece list =
         | p -> [ p ]
       in
       let pieces = List.concat_map (split_at '\000') pieces in
+      (* a help the binary writes, ["\001"], and the receiver it names *)
+      let rec helps (ps : Diag.piece list) : Diag.piece list =
+        match ps with
+        | Spaces n :: Text t :: rest
+          when String.starts_with ~prefix:" help: \001\n" t ->
+            let recv =
+              match s.recv with Some l -> receiver_in ~lines_of l | None -> "s"
+            in
+            let after = String.length " help: \001\n" in
+            Help_hole (n, recv)
+            :: Text (String.sub t after (String.length t - after))
+            :: helps rest
+        | p :: rest -> p :: helps rest
+        | [] -> []
+      in
+      let pieces = helps pieces in
       if List.length (List.filter (( = ) Diag.Hole) pieces) <> 1 then
         failwith "bug: a panic's message that doesn't hold its message";
       (* each operand, where its text is in the help: a slice of its line *)

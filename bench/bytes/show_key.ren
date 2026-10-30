@@ -4,8 +4,8 @@
 
 pub type Tag = opaque Str
   pub fn of(s: Str) -> Tag = s
-  pub fn key(self) -> Str = self.lower()
-  pub fn show(self) -> Str = "Tag(".concat(self).concat(")")
+  pub fn key(self) -> Str = self.ascii_lower()
+  pub fn show(self) -> Str = "Tag(" + self + ")"
 
 fn main() uses Console =
   let t = Tag.of("Hi")

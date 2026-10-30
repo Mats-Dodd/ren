@@ -649,6 +649,7 @@ let rec check_expr env (e : expr) =
   | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
   | Piped ->
       ()
+  | Interp ps -> List.iter (check_expr env) (Ast.holes ps)
   | Named (_, a) -> check_expr env a
   | Pipe _ -> List.iter (check_expr env) (children e)
   | Try ({ kind = Match (subject, arms); _ } as m) ->

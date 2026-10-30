@@ -223,7 +223,7 @@ let%expect_test "[b3] `x.hash()` is the derived hash, unseeded, agreeing with `=
 type P = { x: Int, y: Int }
 pub type Name = opaque Str
   pub fn of(s: Str) -> Name = s
-  pub fn key(self) -> Str = self.lower()
+  pub fn key(self) -> Str = self.ascii_lower()
 fn main() uses Console =
   print(P { x: 1, y: 2 }.hash() == P { x: 1, y: 2 }.hash())
   print(Name.of("Ann").hash() == Name.of("ANN").hash())

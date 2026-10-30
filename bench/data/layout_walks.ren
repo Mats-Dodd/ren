@@ -64,7 +64,7 @@ fn main() uses Console =
   var t = 0
   for i in 0..6
     match held(i)
-      Has { z, s: One(k) } => t += k.z + z.a + z.b.len()
+      Has { z, s: One(k) } => t += k.z + z.a + z.b.byte_len()
       Has { z: Z { a, .. }, s: Two { n, .. } } => t += n + a
       _ => t += 1
   print(t)

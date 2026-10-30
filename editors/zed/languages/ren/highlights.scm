@@ -17,6 +17,13 @@
 (float) @number
 (string) @string
 (escape_sequence) @string.escape
+; a hole in a string, `\{e}`, is code, not the string's text, and its
+; braces are its own
+(interpolation) @embedded
+(interpolation_start) @punctuation.special
+(interpolation_end) @punctuation.special
+; 'a', an `Int`
+(character) @string.special
 (boolean) @boolean
 (self) @variable.special
 (wildcard) @variable.special

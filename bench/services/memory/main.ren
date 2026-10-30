@@ -16,7 +16,7 @@ pub dep Doc =
 
 pub handler doc(id: DocId) for Doc =
   var text = ""
-  add(s) => text = text.concat(s)
+  add(s) => text = text + s
   text() => text
 
 pub dep Docs = Actors<DocId, Doc>

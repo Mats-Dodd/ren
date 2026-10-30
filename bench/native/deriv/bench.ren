@@ -83,5 +83,5 @@ pub fn run(n: Int) uses Console =
   var e = powr(Var("x"), Var("x"))
   for i in 0..n
     e = d("x", e)
-    Console.write(show(i + 1).concat(" count: ").concat(show(count(e))))
+    Console.write(show(i + 1) + " count: " + show(count(e)))
   Console.write("done")

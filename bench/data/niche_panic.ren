@@ -15,11 +15,11 @@ type Mark =
 
 fn main() uses Console =
   let names = ["tea", "jam"]
-  let kept: Option<Str> = Some("kept".concat("!"))
-  var marks: Array<Mark> = [Pin { on: true, label: "m".concat("!") }, Gone]
+  let kept: Option<Str> = Some("kept" + "!")
+  var marks: Array<Mark> = [Pin { on: true, label: "m" + "!" }, Gone]
   var n = 0
   for i in 0..5
-    let p = if i == 2 then Lapsed else if i == 3 then Free else Pro { name: names[i % 2].concat("?"), seats: i }
+    let p = if i == 2 then Lapsed else if i == 3 then Free else Pro { name: names[i % 2] + "?", seats: i }
     &marks.push(Dot(i % 2 == 0))
     match p
       Pro { name, seats } =>

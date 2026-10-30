@@ -130,8 +130,8 @@ let%expect_test "[s1 accept] a record pattern in a match, with literals and `..`
    ^ {|
 fn state(o: Order) -> Str =
   match o
-    { paid: true, total, .. } => "paid ".concat(show(total))
-    { lines, .. } => "open ".concat(show(lines.len()))
+    { paid: true, total, .. } => "paid " + show(total)
+    { lines, .. } => "open " + show(lines.len())
 
 fn main() uses Console =
   let ls = [Line { sku: "a", qty: 1 }, Line { sku: "b", qty: 2 }]
@@ -510,7 +510,7 @@ let%expect_test "[s2 accept] a by-name pattern with `..`, renamed and nested" =
    ^ {|
 fn describe(s: Shape) -> Str =
   match s
-    Rect { h: 0, w } => "flat ".concat(show(w))
+    Rect { h: 0, w } => "flat " + show(w)
     Rect { w: width, .. } => show(width)
     _ => "0"
 
@@ -2774,8 +2774,8 @@ handler sized(s: Shape, name: Option<Str>) for Area ! NoName | NotRect uses Cons
   let Rect { w, h } = s else
     print("not a rect")
     fail NotRect
-  let (a, b) = (w * h, n.concat("!"))
-  area() => b.concat(show(a))
+  let (a, b) = (w * h, n + "!")
+  area() => b + show(a)
 
 fn area_of(s: Shape, name: Option<Str>) -> Str uses Console =
   match attempt with sized(s, name) in Area.area()
@@ -3017,7 +3017,7 @@ type Pt = { x: Int, y: Int }
 handler at(p: Pt, q: (Str, Int), o: Option<Str>) for Area =
   let { x, y } = p
   let (s, n) = q
-  area() => s.concat(show(x + y + n)).concat(o orelse "")
+  area() => s + show(x + y + n) + (o orelse "")
 
 fn main() uses Console =
   let d: Area = at(Pt { x: 1, y: 2 }, ("p", 3), Some("!"))

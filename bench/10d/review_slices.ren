@@ -39,7 +39,7 @@ fn part_a() uses Console =
   var s = "hello world"
   var ks = s[0..5]
   &s.split_at(5) fn(&a, &b) =>
-    a = a.concat("!")
+    a = a + "!"
     ks = b
   print(s)
   print(ks)

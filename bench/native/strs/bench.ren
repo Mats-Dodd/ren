@@ -15,20 +15,19 @@
 //   two `Int`s, then three queries (B1).
 // - out: 1M people as one JSON array and 1M log records as logfmt,
 //   built by appending to a `Str` (B3). `_append` appends a piece at a
-//   time, what `s += x` will write; `_plus` adds each record's pieces in
-//   one expression, what `a + b` will. `Str` has no `+` yet, so both are
-//   `concat`, and both copy the whole string each time: quadratic.
+//   time, `o += x`; `_plus` adds each record's pieces in one expression,
+//   `o = o + a + b`. Until appending is in place (step 3) both copy the
+//   whole string each time: quadratic.
 // - utf8: `Str.from_utf8` of a 1 MiB text, ASCII, CJK or mixed (B5).
 //
-// Ren today has no `byte_len` (`len` is in bytes), no interpolation and
-// no `starts_with` natively; later steps rename these lines.
+// Ren has no `starts_with` natively yet (`begins`, below).
 import gen
 
 fn join(xs: Array<Int>) -> Str =
   var out = ""
   for i in 0..xs.len()
-    if i > 0 then out = out.concat(",")
-    out = out.concat(show(xs[i]))
+    if i > 0 then out = out + ","
+    out = out + show(xs[i])
   out
 
 fn letter(c: Int) -> Bool = c == 95 || c >= 97 && c <= 122 || c >= 65 && c <= 90
@@ -96,7 +95,7 @@ fn tok(src: Str) -> Str =
   for t in ts
     if t.text == "return" then returns += 1
     if t.kind == 0 then idents += 1
-    total += t.text.len()
+    total += t.text.byte_len()
   join([ts.len(), returns, idents, total])
 
 // ---- map: `Map<Str, Int>` counts of 4M keys, then 4M lookups ----
@@ -139,7 +138,7 @@ fn sorting(src: Str) -> Str =
   var check = 0
   var k = 0
   while k < xs.len()
-    check += xs[k].len() * k + xs[k].bytes().at(0)
+    check += xs[k].byte_len() * k + xs[k].bytes().at(0)
     k += 1000
   join([xs.len(), check])
 
@@ -166,7 +165,7 @@ fn grouping(src: Str) -> Str =
   var check = 0
   var total = 0
   for (city, x) in m
-    check = check.xor(city.len() * 1000003 + x)
+    check = check.xor(city.byte_len() * 1000003 + x)
     total += x
   join([m.len(), total, check])
 
@@ -240,38 +239,38 @@ fn people(src: Str, limit: Int) -> Array<Person> =
 // on as they are
 fn put_json(inout o: Str, s: Str) =
   let p = s.bytes()
-  o = o.concat("\"")
+  o += "\""
   var run = 0
   for i in 0..p.len()
     let c = p.at(i)
     if c == 34 || c == 92 || c < 32 then
-      if i > run then o = o.concat(s[run..i])
-      o = o.concat(if c == 34 then "\\\"" else "\\\\")
+      if i > run then o += s[run..i]
+      o += if c == 34 then "\\\"" else "\\\\"
       run = i + 1
-  if p.len() > run then o = o.concat(s[run..p.len()])
-  o = o.concat("\"")
+  if p.len() > run then o += s[run..p.len()]
+  o += "\""
 
-// one piece at a time: later `o += x`
+// one piece at a time: `o += x`
 fn json_append(ps: Array<Person>) -> Str =
   var o = "["
   for r in 0..ps.len()
     let x = ps[r]
-    if r > 0 then o = o.concat(",")
-    o = o.concat("{\"id\":")
-    o = o.concat(show(x.id))
-    o = o.concat(",\"name\":")
+    if r > 0 then o += ","
+    o += "{\"id\":"
+    o += show(x.id)
+    o += ",\"name\":"
     put_json(&o, x.name)
-    o = o.concat(",\"email\":")
+    o += ",\"email\":"
     put_json(&o, x.email)
-    o = o.concat(",\"score\":")
-    o = o.concat(show(x.score))
-    o = o.concat(",\"tags\":[")
+    o += ",\"score\":"
+    o += show(x.score)
+    o += ",\"tags\":["
     for t in 0..x.tags.len()
-      if t > 0 then o = o.concat(",")
+      if t > 0 then o += ","
       put_json(&o, x.tags[t])
-    o = o.concat("]}")
-  o = o.concat("]")
-  join([ps.len(), o.len()])
+    o += "]}"
+  o += "]"
+  join([ps.len(), o.byte_len()])
 
 // [s] as a JSON string
 fn json_quoted(s: Str) -> Str =
@@ -279,45 +278,45 @@ fn json_quoted(s: Str) -> Str =
   put_json(&o, s)
   o
 
-// each record's pieces added in one expression: later `o = o + a + b`
+// each record's pieces added in one expression: `o = o + a + b`
 fn json_plus(ps: Array<Person>) -> Str =
   var o = "["
   for r in 0..ps.len()
     let x = ps[r]
     var tags = ""
     for t in 0..x.tags.len()
-      tags = tags.concat(if t > 0 then "," else "").concat(json_quoted(x.tags[t]))
-    o = o.concat(if r > 0 then "," else "").concat("{\"id\":").concat(show(x.id)).concat(",\"name\":").concat(json_quoted(x.name)).concat(",\"email\":").concat(json_quoted(x.email)).concat(",\"score\":").concat(show(x.score)).concat(",\"tags\":[").concat(tags).concat("]}")
-  o = o.concat("]")
-  join([ps.len(), o.len()])
+      tags = tags + (if t > 0 then "," else "") + json_quoted(x.tags[t])
+    o = o + (if r > 0 then "," else "") + "{\"id\":" + show(x.id) + ",\"name\":" + json_quoted(x.name) + ",\"email\":" + json_quoted(x.email) + ",\"score\":" + show(x.score) + ",\"tags\":[" + tags + "]}"
+  o = o + "]"
+  join([ps.len(), o.byte_len()])
 
 fn logfmt_append(rs: Array<Rec>) -> Str =
   var o = ""
   for r in rs
-    o = o.concat("ts=")
-    o = o.concat(r.ts)
-    o = o.concat(" level=")
-    o = o.concat(r.level)
-    o = o.concat(" svc=")
-    o = o.concat(r.svc)
-    o = o.concat(" method=")
-    o = o.concat(r.method)
-    o = o.concat(" path=\"")
-    o = o.concat(r.path)
-    o = o.concat("\" status=")
-    o = o.concat(show(r.status))
-    o = o.concat(" dur_ms=")
-    o = o.concat(show(r.dur))
-    o = o.concat(" req_id=")
-    o = o.concat(r.req)
-    o = o.concat("\n")
-  join([rs.len(), o.len()])
+    o += "ts="
+    o += r.ts
+    o += " level="
+    o += r.level
+    o += " svc="
+    o += r.svc
+    o += " method="
+    o += r.method
+    o += " path=\""
+    o += r.path
+    o += "\" status="
+    o += show(r.status)
+    o += " dur_ms="
+    o += show(r.dur)
+    o += " req_id="
+    o += r.req
+    o += "\n"
+  join([rs.len(), o.byte_len()])
 
 fn logfmt_plus(rs: Array<Rec>) -> Str =
   var o = ""
   for r in rs
-    o = o.concat("ts=").concat(r.ts).concat(" level=").concat(r.level).concat(" svc=").concat(r.svc).concat(" method=").concat(r.method).concat(" path=\"").concat(r.path).concat("\" status=").concat(show(r.status)).concat(" dur_ms=").concat(show(r.dur)).concat(" req_id=").concat(r.req).concat("\n")
-  join([rs.len(), o.len()])
+    o = o + "ts=" + r.ts + " level=" + r.level + " svc=" + r.svc + " method=" + r.method + " path=\"" + r.path + "\" status=" + show(r.status) + " dur_ms=" + show(r.dur) + " req_id=" + r.req + "\n"
+  join([rs.len(), o.byte_len()])
 
 // ---- each workload: its input made, its size printed, then each round's check ----
 
@@ -327,45 +326,45 @@ fn cities(n: Int) -> Int = if n >= 2000 then n / 500 else 4
 // [n] scales every input: at 1,000,000 each is gen.c's
 pub fn run_tok(n: Int, rounds: Int) uses Console =
   let src = gen.tok(n)
-  print(src.len())
+  print(src.byte_len())
   for _ in 0..rounds
     print(tok(src))
 
 pub fn run_map(n: Int, rounds: Int) uses Console =
   let src = gen.keys(n / 5, 4 * n)
-  print(src.len())
+  print(src.byte_len())
   for _ in 0..rounds
     print(map(src))
 
 pub fn run_sort(n: Int, rounds: Int) uses Console =
   let src = gen.sorting(n)
-  print(src.len())
+  print(src.byte_len())
   for _ in 0..rounds
     print(sorting(src))
 
 pub fn run_group(n: Int, rounds: Int) uses Console =
   let src = gen.rows(cities(n), 5 * n)
-  print(src.len())
+  print(src.byte_len())
   for _ in 0..rounds
     print(grouping(src))
 
 pub fn run_logs(n: Int, rounds: Int) uses Console =
   let src = gen.logs(n)
-  print(src.len())
+  print(src.byte_len())
   for _ in 0..rounds
     print(logs(src))
 
 // [n] records, of [n] people or log lines
 pub fn run_json(n: Int, rounds: Int, plus: Bool) uses Console =
   let src = gen.people(n)
-  print(src.len())
+  print(src.byte_len())
   let ps = people(src, n)
   for _ in 0..rounds
     print(if plus then json_plus(ps) else json_append(ps))
 
 pub fn run_logfmt(n: Int, rounds: Int, plus: Bool) uses Console =
   let src = gen.logs(n)
-  print(src.len())
+  print(src.byte_len())
   let rs = records(src)
   for _ in 0..rounds
     print(if plus then logfmt_plus(rs) else logfmt_append(rs))
@@ -381,7 +380,7 @@ pub fn run_utf8(kind: Str, size: Int, rounds: Int) uses Console =
     match attempt Str.from_utf8(b)
       Ok(s) =>
         ok += 1
-        total += s.len()
+        total += s.byte_len()
       Err(_) => ok -= 1
   print(join([ok, total]))
 

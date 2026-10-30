@@ -1244,6 +1244,10 @@ let item env sc (t : tyname) (f : ident) =
                 ~help:(sprintf "if it's defined in `%s`, mark it `pub`" p.home)
                 (sprintf "`%s` has no public `%s`" shown f.name);
               Global path
+          | None, _ when p = Path.prelude "Str" && f.name = "concat" ->
+              (* `Str.concat(a, b)`, which `+` replaced (strings.md) *)
+              Diag.report env.sink (Infer_msg.str_concat f.loc);
+              Global path
           | None, _ ->
               (* the module's own type, or a built-in one, which has every item
              it will ever have *)
@@ -1815,6 +1819,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Float f -> Float f
     | Bool b -> Bool b
     | Str s -> Str s
+    | Interp ps ->
+        Interp (List.map (function Ast.Lit t -> Ast.Lit t | Hole h -> Hole (go h)) ps)
     | Unit -> Unit
     | Var (Bare "next") when next_free env sc -> (
         match sc.next with

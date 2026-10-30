@@ -533,7 +533,7 @@ A handler `over any` is written once for every dependency: one arm, `call => ...
 ```ren
 handler logged() over any uses Console =
   call =>
-    Console.write("> ".concat(call.name).concat(show(call.args)))
+    Console.write("> \{call.name}\{call.args}")
     try call.forward()
 
 with logged() over mem_users() in ...
@@ -654,7 +654,7 @@ Writing it the other way round, `Duration.seconds(30) + now`, is an error that s
 ```ren
 pub type Email = opaque Str
   pub fn of(s: Str) -> Email = s
-  pub fn key(self) -> Str = self.lower()
+  pub fn key(self) -> Str = self.ascii_lower()
 
 assert Email.of("Ann@Example.com") == Email.of("ann@example.com")
 ```

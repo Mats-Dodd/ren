@@ -60,7 +60,7 @@ fn plan(k: Int, names: Array<Str>) -> Plan =
     2 => Pro { name: names[k % 3], seats: k }
     3 => Lapsed
     4 => Banned
-    _ => Pro { name: names[(k + 1) % 3].concat("+"), seats: 1 }
+    _ => Pro { name: names[(k + 1) % 3] + "+", seats: 1 }
 
 fn seats(p: Plan) -> Int =
   match p
@@ -129,13 +129,13 @@ fn main() uses Console =
   var arrs: Array<Option<Array<Int>>> = []
   var items: Array<Option<Item>> = []
   for k in 0..30
-    &strs.push(if k % 3 == 0 then None else Some(names[k % 3].concat("!")))
+    &strs.push(if k % 3 == 0 then None else Some(names[k % 3] + "!"))
     &arrs.push(if k % 4 == 0 then Some([k, k + 1]) else None)
     &items.push(if k % 5 == 1 then Some(Item { name: names[k % 3], price: k }) else None)
   var n = 0
   for s in strs
     match s
-      Some(x) => n += x.len()
+      Some(x) => n += x.byte_len()
       None => n += 100
   print(n)
   var m = 0
@@ -149,10 +149,10 @@ fn main() uses Console =
   // shared, then changed
   let kept = items
   items[1] = None
-  items[0] = Some(Item { name: "fig".concat("s"), price: 1000 })
+  items[0] = Some(Item { name: "fig" + "s", price: 1000 })
   print(total(kept, fn(i) => i.price))
   print(total(items, fn(i) => i.price))
-  print(total(items[0..3], fn(i) => i.name.len()))
+  print(total(items[0..3], fn(i) => i.name.byte_len()))
   // several without fields and one with an object
   var plans: Array<Plan> = []
   for k in 0..12
@@ -167,7 +167,7 @@ fn main() uses Console =
     t += seats(p)
     match p
       Trial | Free => t += 1000
-      Pro { name, .. } => t += name.len() * 100000
+      Pro { name, .. } => t += name.byte_len() * 100000
       Lapsed | Banned => ()
   print(t)
   // variant types, round-tripped
@@ -175,39 +175,39 @@ fn main() uses Console =
   print(pros.len())
   var q = pros[0]
   q.seats = 99
-  match Pro { ..q, name: q.name.concat("?") }
-    Pro { name, seats } => print(name.len() * 1000 + seats)
+  match Pro { ..q, name: q.name + "?" }
+    Pro { name, seats } => print(name.byte_len() * 1000 + seats)
     _ => print("?")
   match upgrade(pros[1])
     Pro { seats, .. } as up => print(seats + up.seats)
     _ => ()
   // the join of a constructor without fields and a parameter
-  match pick(false, Some("kept".concat("!")))
+  match pick(false, Some("kept" + "!"))
     Some(x) => print(x)
     None => print("none")
-  match pick(true, Some("dropped".concat("!")))
+  match pick(true, Some("dropped" + "!"))
     Some(x) => print(x)
     None => print("none")
   print(seats(lapse(false, plans[2])))
   print(seats(lapse(true, plans[2])))
   // the one with fields first, and one object through a record
-  var holds: Array<Hold> = [Empty, Held("a".concat("b")), Locked]
-  holds[0] = Held("c".concat("d"))
+  var holds: Array<Hold> = [Empty, Held("a" + "b"), Locked]
+  holds[0] = Held("c" + "d")
   var hl = 0
   for h in holds
     match h
-      Held(x) => hl += x.len()
+      Held(x) => hl += x.byte_len()
       Empty => hl += 10
       Locked => hl += 100
   print(hl)
-  let whos = [Named(Name { s: "ann".concat("e") }), Anon]
+  let whos = [Named(Name { s: "ann" + "e" }), Anon]
   for w in whos
     match w
       Named(Name { s }) => print(s)
       Anon => print("anon")
-  let w = Wrap { s: "w".concat("w"), n: 3, ok: true }
+  let w = Wrap { s: "w" + "w", n: 3, ok: true }
   match w
-    Wrap { s, n, ok } => if ok then print(s.len() + n) else print(0)
+    Wrap { s, n, ok } => if ok then print(s.byte_len() + n) else print(0)
   // byte tags
   var cells: Array<Cell> = []
   for k in 0..16
@@ -228,17 +228,17 @@ fn main() uses Console =
       print(depth(Floor { ..g, glyph: 7 }))
       print(depth(Floor { ..g }))
     _ => print("?")
-  var marks: Array<Mark> = [Dot(true), Pin { on: false, label: "pin".concat("!") }, Gone]
+  var marks: Array<Mark> = [Dot(true), Pin { on: false, label: "pin" + "!" }, Gone]
   &marks.push(Pin { on: true, label: "two" })
   var ml = 0
   for mk in marks
     match mk
       Dot(on) | Pin { on, .. } if on => ml += 1
-      Pin { label, .. } => ml += label.len() * 10
+      Pin { label, .. } => ml += label.byte_len() * 10
       _ => ml += 100
   print(ml)
   // through a block that keeps one
-  let held = Some(Item { name: "held".concat("!"), price: 5 })
+  let held = Some(Item { name: "held" + "!", price: 5 })
   let get = fn() =>
     match held
       Some(i) => i.name

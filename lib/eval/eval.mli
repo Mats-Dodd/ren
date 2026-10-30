@@ -10,13 +10,15 @@ type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 (* A running program failed: division by zero, an index out of bounds, an
    `Int` that overflowed. Its notes say more, the task it was in, if it
    isn't `main` or a test, first among them; and it can have a help of
-   its own. *)
+   its own, which may name the receiver at [recv] as it's written, for
+   each `\002` in it (Driver.recv_help). *)
 exception Panic of {
   loc : Loc.t;
   msg : string;
   wrap : wrap option;
   notes : string list;
   help : string option;
+  recv : Loc.t option;
 }
 
 (* `main` failed with this error, and nothing handled it: the error, shown

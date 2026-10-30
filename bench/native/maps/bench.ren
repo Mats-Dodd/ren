@@ -15,7 +15,7 @@ fn id_of(i: Int, n: Int) -> Int = i * 2_654_435_761 % (2 * n)
 fn names(n: Int) -> Array<Str> =
   var out: Array<Str> = []
   for i in 0..n
-    &out.push("user-".concat(show(i * 7_919 % n)))
+    &out.push("user-" + show(i * 7_919 % n))
   out
 
 // one round: both maps built, looked up, a third removed, iterated
@@ -39,9 +39,9 @@ fn round(names: Array<Str>, n: Int) -> Int =
       &by_id.remove(id_of(i, n))
       &by_name.remove(names[i])
   for (k, a) in by_id
-    h = h.wrapping_mul(31).wrapping_add(k + a.balance + a.name.len())
+    h = h.wrapping_mul(31).wrapping_add(k + a.balance + a.name.byte_len())
   for (s, id) in by_name
-    h = h.wrapping_mul(17).wrapping_add(id + s.len())
+    h = h.wrapping_mul(17).wrapping_add(id + s.byte_len())
   h.wrapping_add(by_id.len() * 1_000 + by_name.len())
 
 pub fn run(n: Int, rounds: Int) uses Console =

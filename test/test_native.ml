@@ -630,7 +630,7 @@ fn main() -> Int =
   let xs = ["a", "bb"]
   let (s, k) = pick(xs, 1)
   match first(xs)
-    Some(t) => s.len() + k + t.len()
+    Some(t) => s.byte_len() + k + t.byte_len()
     None => 0
 |};
   [%expect {|
@@ -675,7 +675,7 @@ let lint ?(structs = []) fns =
       dsites = [];
       clones = [];
       overflow =
-        { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None; notes = []; help = None };
+        { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None; notes = []; help = None; recv = None };
     }
   in
   match Mem_lint.program p with

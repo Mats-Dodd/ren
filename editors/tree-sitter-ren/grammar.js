@@ -209,6 +209,7 @@ module.exports = grammar({
     _default: ($) =>
       choice(
         $.number,
+        $.character,
         $.float,
         $.string,
         $.boolean,
@@ -754,6 +755,7 @@ module.exports = grammar({
     _let_pattern: ($) =>
       choice(
         $.number,
+        $.character,
         $.negative_number,
         $.boolean,
         $.constructor_pattern,
@@ -1037,6 +1039,7 @@ module.exports = grammar({
     _primary: ($) =>
       choice(
         $.number,
+        $.character,
         $.float,
         $.string,
         $.boolean,
@@ -1075,15 +1078,34 @@ module.exports = grammar({
     float: (_) => /[0-9][0-9_]*\.[0-9][0-9_]*/,
 
     // "Ren\n": it ends on the line it starts on, and its escapes are
-    // `\n`, `\t`, `\"` and `\\`
+    // `\n`, `\t`, `\"` and `\\`. A hole, `\{e}`, holds an expression,
+    // shown through its type's `show`, and `\{x=}` writes `x=` before it
     string: ($) =>
       seq(
         '"',
-        repeat(choice($.escape_sequence, token.immediate(prec(1, /[^"\\\n]+/)))),
+        repeat(
+          choice(
+            $.escape_sequence,
+            $.interpolation,
+            token.immediate(prec(1, /[^"\\\n]+/)),
+          ),
+        ),
         token.immediate('"'),
       ),
 
     escape_sequence: (_) => token.immediate(seq('\\', /[nt"\\]/)),
+
+    interpolation: ($) =>
+      seq(
+        alias(token.immediate('\\{'), $.interpolation_start),
+        field('expression', $._expression),
+        optional(field('named', '=')),
+        alias('}', $.interpolation_end),
+      ),
+
+    // 'a': an `Int`, its code point, with the escapes `\n`, `\t`, `\'`
+    // and `\\`
+    character: (_) => token(seq("'", choice(/[^'\\\n]/, /\\[nt'\\]/), "'")),
     boolean: (_) => choice('true', 'false'),
     unit: (_) => seq('(', ')'),
     self: (_) => 'self',
@@ -1319,6 +1341,7 @@ module.exports = grammar({
         $.wildcard,
         $.identifier,
         $.number,
+        $.character,
         $.negative_number,
         $.boolean,
         $.constructor_pattern,

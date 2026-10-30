@@ -171,7 +171,7 @@ let nonneg (body : expr) (refs : Ids.t) =
     | Local w -> Ids.mem w.id !set
     | Prim (Length, [ _ ])
     | Call
-        ( { kind = Intrinsic ((Array_len | Bytes_len | Str_len), _, _, _); _ },
+        ( { kind = Intrinsic ((Array_len | Bytes_len | Str_byte_len), _, _, _); _ },
           [ Value _ ],
           _ ) ->
         true

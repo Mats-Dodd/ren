@@ -27,7 +27,7 @@ fn main() uses Console =
   print(m.keys())
   print(m.values())
   for (k, v) in m
-    print(k.concat("=").concat(show(v)))
+    print(k + "=" + show(v))
 
   // a map nothing else holds, grown past several tables, every third key
   // removed, then iterated
@@ -86,7 +86,7 @@ fn main() uses Console =
   print(bytes.get("ab".bytes()))
 
   // the collection methods, in order
-  print(m.map(fn((k, v)) => k.concat(":").concat(show(v))))
+  print(m.map(fn((k, v)) => k + ":" + show(v)))
   print(m.select(fn((_, v)) => v > 3))
   print(m.reduce(0, fn(acc, (_, v)) => acc + v))
   print(m.sort_by(fn((k, _)) => k))

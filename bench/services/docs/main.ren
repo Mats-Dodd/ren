@@ -44,7 +44,7 @@ pub handler doc(id: DocId) for Doc uses Store, Conns =
   var subs: Array<Conn> = []
   edit(op) =>
     let Append(s) = op
-    text = text.concat(s)
+    text = text + s
     try Store.save(id, text)
     version += 1
     for c in subs
@@ -58,7 +58,7 @@ pub dep Docs = Actors<DocId, Doc> ! StoreDown
 // what sends a line to a connection, over the network
 pub handler net_conns() for Conns uses Net =
   send(c, line) =>
-    match attempt Net.write(c, line.concat("\n").bytes())
+    match attempt Net.write(c, (line + "\n").bytes())
       _ => ()
 
 // the composition root: the store, the connections, and the documents,

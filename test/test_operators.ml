@@ -109,12 +109,6 @@ fn main() =
       ┌─ test.ren:2:11
     2 │   let a = true + false
       │           ^^^^^^^^^^^^
-
-    error: `Str` has no `+`
-      ┌─ test.ren:3:11
-    3 │   let b = "a" + "b"
-      │           ^^^^^^^^^
-      help: join two strings with `a.concat(b)`
     |}]
 
 let%expect_test "two operators that take the same type can't be told apart" =
@@ -533,7 +527,7 @@ let email =
   {|
 pub type Email = opaque Str
   pub fn of(s: Str) -> Email = s
-  pub fn key(self) -> Str = self.lower()
+  pub fn key(self) -> Str = self.ascii_lower()
 |}
 
 let%expect_test "the spec's Email is equal by its lowercase" =
@@ -566,7 +560,7 @@ let%expect_test "an error an error set's tail brings in is equal by its key" =
   run
     (email
    ^ {|
-  pub fn show(self) -> Str = "<".concat(self).concat(">")
+  pub fn show(self) -> Str = "<" + self + ">"
 fn same(f, g) = attempt f() == attempt g()
 fn shown(f) uses Console = print(attempt f())
 fn a() -> Int ! Bad(e: Email) = fail Bad(Email.of("A"))
@@ -620,7 +614,7 @@ fn main() uses Console, Clock =
         {|
 pub type Email = opaque Str
   pub fn of(s: Str) -> Email = s
-  fn key(self) -> Str = self.lower()
+  fn key(self) -> Str = self.ascii_lower()
 |}
       );
     ]
@@ -988,12 +982,11 @@ fn main() =
     ];
   [%expect
     {|
-    error: `Str` has no `+`, which `sum` needs
+    error: `Str` has no `zero`, which `sum` needs
       ┌─ main.ren:3:20
     3 │   let _ = util.sum(["a"])
       │                    ^^^^^
-      = `sum` uses `+` on its `T`
-      help: join two strings with `a.concat(b)`
+      = `sum` uses `zero` on its `T`
     |}]
 
 (* ---- found in review ---- *)

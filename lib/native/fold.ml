@@ -82,7 +82,7 @@ let rt h (r : rt) : rt =
     | Map_len | Map_find | Map_value | Map_set | Map_set_taking | Set_add
     | Set_add_taking | Map_remove | Map_remove_taking | Map_of _ | Set_of
     | Map_entries _ | Map_keys | Map_values | Hash_fixed | Array_sort _
-    | Str_lower | Panic_str ) as r ->
+    | Str_lower | Char_bound _ | Str_code | Str_of_code | Str_join | Panic_str ) as r ->
       r
 
 let kept h = List.map (fun (i, a) -> (i, atom h a))

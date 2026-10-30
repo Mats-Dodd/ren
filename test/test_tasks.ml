@@ -651,7 +651,7 @@ dep Ticks =
 handler ticks() for Ticks uses Console =
   var n = 0
   finally(r) =>
-    print("ticks: ".concat(show(n)))
+    print("ticks: " + show(n))
     try r
   tick() => n += 1
 
@@ -887,9 +887,9 @@ dep Log =
 handler logs(name: Str) for Log uses Clock, Console =
   finally(r) =>
     Clock.sleep(Duration.ms(5))
-    print(name.concat(" cleaned up"))
+    print(name + " cleaned up")
     try r
-  note(s) => print(name.concat(": ").concat(s))
+  note(s) => print(name + ": " + s)
 
 fn main() uses Console, Async, Clock =
   Async.scope fn(s) =>
@@ -2743,7 +2743,7 @@ test handler names() for Fetch<Int, Str> uses Asked =
     Asked.saw(keys)
     var m: Map<Int, Str> = Map.empty
     for k in keys
-      if k != 13 then &m.set(k, "n".concat(show(k)))
+      if k != 13 then &m.set(k, "n" + show(k))
     m
 
 test "what's asked for in one round is fetched in one call" =
@@ -2910,7 +2910,7 @@ dep Tally =
 handler tally(name: Str) for Tally uses Console =
   var n = 0
   finally(r) =>
-    print(name.concat(": ").concat(show(n)))
+    print(name + ": " + show(n))
     try r
   add(k) => n += k
 

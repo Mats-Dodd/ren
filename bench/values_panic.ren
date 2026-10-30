@@ -13,7 +13,7 @@ fn main() uses Console =
   var l = Line { item: "start", qty: 0 }
   for i in 0..5
     match nth(xs, i)
-      Some(s) => l = Line { item: l.item.concat(s), qty: l.qty + i }
+      Some(s) => l = Line { item: l.item + s, qty: l.qty + i }
       None => print("none")
     print(l.item)
   print(l.qty)

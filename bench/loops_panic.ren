@@ -7,10 +7,10 @@ fn main() uses Console =
   var zs = ["x", "y", "z"]
   var out = ""
   for (y, z) in ys.zip(zs)
-    out = out.concat(y).concat(z)
+    out = out + y + z
   print(out)
   for i in 0..ys.len()
     let f = fn() => ys = ["only"]
     if i == 1 then f()
-    out = out.concat(ys[i])
+    out = out + ys[i]
   print(out)

@@ -5014,7 +5014,7 @@ type M = opaque Int
 type Cents = opaque Int
   pub fn of(n: Int) -> Cents = n
   // inside it, `show(self)` shows only what it's represented as
-  pub fn show(self) -> Str = show(self).concat("c")
+  pub fn show(self) -> Str = show(self) + "c"
 type P = { m: M, c: Cents, at: Path }
 dep Out =
   put: fn(m: M)
@@ -5029,7 +5029,7 @@ fn twice<T>(x: T) uses Console =
 fn main() ! Gone(p: P) uses Console =
   let p = P { m: M.of(1), c: Cents.of(2), at: Path.of("a/b") }
   print(p)
-  print(show(M.of(3)).len())
+  print(show(M.of(3)).byte_len())
   twice(M.of(4))
   with out() in Out.put(M.of(5))
   print(Path.of("a/b"))
@@ -5052,7 +5052,7 @@ fn main() ! Gone(p: P) uses Console =
 type Cents = opaque Int
   pub fn of(n: Int) -> Cents = n
   // inside it, `show(self)` shows only what it's represented as
-  pub fn show(self) -> Str = show(self).concat("c")
+  pub fn show(self) -> Str = show(self) + "c"
 
 fn main() =
   assert [Cents.of(1)] == [Cents.of(2)]

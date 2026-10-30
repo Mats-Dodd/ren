@@ -14,7 +14,7 @@ fn main() uses Console =
     &ls.push(Line { sku: names[i % 3], qty: i % 10 })
   var t = 0
   for l in ls
-    t += l.qty * l.sku.len()
+    t += l.qty * l.sku.byte_len()
   print(t)
   print(ls[4].sku)
   print(ls[4].qty)

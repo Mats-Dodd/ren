@@ -51,13 +51,16 @@ type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
 
 (* A panic: where, what it says, the wrapping method its help suggests
    for an overflow, its notes, the task it was in first among them, and
-   a help of its own. *)
+   a help of its own. A help may name the receiver as it's written, a
+   `\002` in it, whose code is at [recv]: `line` in "end at
+   `line.char_floor(4)`" (driver.ml, [recv_help]). *)
 exception Panic of {
   loc : Loc.t;
   msg : string;
   wrap : wrap option;
   notes : string list;
   help : string option;
+  recv : Loc.t option;
 }
 exception Uncaught of { shown : string; written : string; from : string option }
 exception Assert_failed of { loc : Loc.t; sides : (string * string) option }
@@ -65,16 +68,16 @@ exception Went_differently of { loc : Loc.t; differs : Journal.differs }
 
 (* A panic at [loc], in the task running, which a note says if it isn't
    a root (compiler.md, "Errors and panics show the task path"). *)
-let panic_at ?wrap ?(notes = []) ?help loc msg =
+let panic_at ?wrap ?(notes = []) ?help ?recv loc msg =
   let task =
     match Sched.task_path () with
     | Some p -> [ "in the task " ^ p ]
     | None -> []
   in
-  Panic { loc; msg; wrap; notes = task @ notes; help }
+  Panic { loc; msg; wrap; notes = task @ notes; help; recv }
 
-let panic ?wrap ?notes ?help loc msg =
-  raise (panic_at ?wrap ?notes ?help loc msg)
+let panic ?wrap ?notes ?help ?recv loc msg =
+  raise (panic_at ?wrap ?notes ?help ?recv loc msg)
 
 (* The panic [p], said at [loc] instead: a panic in the prelude, whose
    source can't be shown, is said at the program's call that reached it. *)
@@ -259,12 +262,18 @@ let prim loc op args (at : expr list) =
       let ys = items xs in
       ys.(Int64.to_int i) <- x;
       array ys
-  | Slice Range, [ v; VInt a; VInt b ] ->
-      (try Builtins.slice_value v a b
-       with Builtins.Panic msg -> panic loc msg)
-  | Slice Before, [ v; VInt n ] ->
-      (try fst (Builtins.split_halves v n)
-       with Builtins.Panic msg -> panic loc msg)
+  (* a string's cut panics with a help naming what's sliced, as it's
+     written *)
+  | Slice Range, [ v; VInt a; VInt b ] -> (
+      try Builtins.slice_value v a b with
+      | Builtins.Panic msg -> panic loc msg
+      | Builtins.Panic_help { msg; help } ->
+          panic ~help ~recv:(List.hd at).loc loc msg)
+  | Slice Before, [ v; VInt n ] -> (
+      try fst (Builtins.split_halves v n) with
+      | Builtins.Panic msg -> panic loc msg
+      | Builtins.Panic_help { msg; help } ->
+          panic ~help ~recv:(List.hd at).loc loc msg)
   | Slice After, [ v; VInt n; _ ] -> snd (Builtins.split_halves v n)
   | Splice, [ v; VInt a; VInt b; w ] -> Builtins.splice v a b w
   | Join, [ a; b ] -> Builtins.join a b
@@ -929,7 +938,14 @@ let rec eval cx env (e : expr) =
           (List.map (function Value a -> a | Ref v -> local v e.loc) args)
       in
       let ev = evidence_in env ev ("a call of " ^ describe f) in
-      let result, finals = call_at cx e.loc f values (VEvidence ev) in
+      let result, finals =
+        try call_at cx e.loc f values (VEvidence ev) with
+        (* a help that names the receiver, the first argument *)
+        | Panic ({ help = Some h; recv = None; _ } as p)
+          when String.contains h '\002' && args <> [] ->
+            let recv = match List.hd args with Value a -> a.loc | Ref _ -> e.loc in
+            raise (Panic { p with recv = Some recv })
+      in
       (* written back whether the call failed or not: failing doesn't undo
          what it changed (errors.md, "Failure and `&`") *)
       List.iter2
@@ -2248,6 +2264,7 @@ let rooted ~root f =
         wrap = None;
         notes = waits;
         help = None;
+        recv = None;
       }
   in
   ignore

@@ -80,7 +80,7 @@ fn main() uses Console =
   print(us)
   // strings
   var t = "hello, world"
-  let n = &t.split_at(5) fn(&a, &b) => a.len() + b.len()
+  let n = &t.split_at(5) fn(&a, &b) => a.byte_len() + b.byte_len()
   print(t)
   print(n)
   &t.split_at(5) fn(&a, &b) => b = "!"
@@ -92,7 +92,7 @@ fn main() uses Console =
   print(parts[0].trim().split("=")[1].trim() == "value")
   print("a,,b,".split(","))
   print("".split(","))
-  print("   ".trim().len())
+  print("   ".trim().byte_len())
   // `Bytes`: slices, reads, `copy()` and `==`
   let b = Bytes.of([104, 105, 33, 0, 255])
   print(b)

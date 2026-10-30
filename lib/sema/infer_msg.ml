@@ -3339,6 +3339,63 @@ let other_names =
     ("index_of", "index");
   ]
 
+(* ---- strings' names (strings.md, "Compiler errors"; compiler.md,
+   "Bytes stage, part two", "Errors and panics") ----
+
+   Each help names the receiver as it's written, [recv], if it's a name
+   or a path, and `s` otherwise. *)
+
+let recv_name recv =
+  let word w =
+    w <> ""
+    && (match w.[0] with 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false)
+    && String.for_all
+         (function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false)
+         w
+  in
+  match recv with
+  | Some r when List.for_all word (String.split_on_char '.' r) -> r
+  | _ -> "s"
+
+(* `name.len()`: bytes, or characters? *)
+let str_len loc ~recv =
+  let r = recv_name recv in
+  Diag.make loc
+    ~help:
+      (sprintf
+         "bytes: `%s.byte_len()`; code points: `%s.chars().count()`;\n\
+          what a reader sees as characters: `unicode.graphemes(%s).count()`\n\
+          help: `%s.is_empty()` asks whether it has any"
+         r r r r)
+    "`Str` has no `len`: bytes, or characters?"
+
+(* `s[i]` *)
+let str_indexed loc ~recv =
+  let r = recv_name recv in
+  Diag.make loc
+    ~help:
+      (sprintf "a byte: `%s.bytes().u8(i)`; a slice: `%s[i..j]`; characters: `%s.chars()`"
+         r r r)
+    "a `Str` can't be indexed: `s[i]` would be a byte"
+
+(* `s.lower()`, which `ascii_lower` replaced *)
+let str_lower loc =
+  Diag.make loc ~help:"for every script's case, `unicode.lower(s)`"
+    "`s.lower()` is now `s.ascii_lower()`"
+
+(* `a.concat(b)` or `Str.concat(a, b)`, which `+` replaced *)
+let str_concat loc =
+  Diag.make loc
+    ~help:"`a + b`; in a loop, `out += s`; many at once, `xs.join(sep)`"
+    "`concat` is gone: strings are joined with `+`"
+
+(* `'é'` stored as a `UInt8`: [written] is the literal, [n] its bytes *)
+let char_not_byte loc ~written ~n =
+  let inside = String.sub written 1 (String.length written - 2) in
+  Diag.make loc
+    ~help:(sprintf "compare text as text: `c == \"%s\"`" inside)
+    (sprintf "`%s` isn't a byte: it's %d bytes in UTF-8" written n)
+
 (* `s.grow()`, where `s`'s type [shown] is the module's own, or built in,
    and has no `grow`. [methods] are the ones it has. *)
 let no_method ?slice (m : Ast.ident) ~shown ~own ~type_name methods =

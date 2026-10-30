@@ -199,16 +199,78 @@ let part v i j =
   | _ -> failwith "bug: a slice of what isn't an array, a string or bytes"
 
 (* For a string, that [i] and [j] are at characters' boundaries, as
-   [slice] says. *)
+   [slice] says. The help names `char_floor`, and `char_ceil` for a start
+   (strings.md, "Cutting a character"), on the receiver as it's written,
+   a `\002` (eval.ml, [Panic]). *)
 let check_chars v from to_ i j =
   match v with
   | VStr s ->
-      let fail fmt = Printf.ksprintf (fun msg -> raise (Panic msg)) fmt in
+      let fail help fmt =
+        Printf.ksprintf (fun msg -> raise (Panic_help { msg; help })) fmt
+      in
       if not (boundary s i) then
-        fail "slice %Ld to %Ld starts inside a character" from to_;
+        fail
+          (Printf.sprintf
+             "to start where a character does, use `\002.char_floor(%Ld)` or \
+              `\002.char_ceil(%Ld)`"
+             from from)
+          "slice %Ld to %Ld starts inside a character" from to_;
       if not (boundary s j) then
-        fail "slice %Ld to %Ld ends inside a character" from to_
+        fail
+          (Printf.sprintf "to cut at most %Ld bytes, end at `\002.char_floor(%Ld)`"
+             (Int64.sub to_ from) to_)
+          "slice %Ld to %Ld ends inside a character" from to_
   | _ -> ()
+
+(* The last character boundary at or before [i] of [s], or the first at
+   or after it, `s.char_floor(i)` and `s.char_ceil(i)`: panics if [i]
+   isn't in [s]. *)
+let char_bound ~ceil s i =
+  let n = String.length s in
+  if i < 0L || i > Int64.of_int n then
+    raise
+      (Panic
+         (Printf.sprintf "`%s` %Ld is out of bounds for a string of length %d"
+            (if ceil then "char_ceil" else "char_floor")
+            i n));
+  let rec go k = if boundary s k then k else go (if ceil then k + 1 else k - 1) in
+  go (Int64.to_int i)
+
+(* `c.code()`: the code point of a string of one, panicking on any other,
+   with a help naming the receiver, a `\002`, if it has more. *)
+let code s =
+  if s = "" then
+    raise (Panic "`code()` takes one code point, and this string is empty");
+  let d = String.get_utf_8_uchar s 0 in
+  if Uchar.utf_decode_length d = String.length s then
+    Int64.of_int (Uchar.to_int (Uchar.utf_decode_uchar d))
+  else
+    let rec count k n =
+      if k >= String.length s then n
+      else count (k + Uchar.utf_decode_length (String.get_utf_8_uchar s k)) (n + 1)
+    in
+    raise
+      (Panic_help
+         {
+           msg =
+             Printf.sprintf "`code()` takes one code point, and this string has %d"
+               (count 0 0);
+           help = "for each code point: `for c in \002.chars()`, and `c.code()`";
+         })
+
+(* `Str.of_code(n)`: the string of one code point, [n], a Unicode scalar
+   value. *)
+let of_code n =
+  if n < 0L || n > 0x10FFFFL || (n >= 0xD800L && n <= 0xDFFFL) then
+    raise
+      (Panic_help
+         {
+           msg = Printf.sprintf "`Str.of_code(%Ld)` isn't a Unicode scalar value" n;
+           help = "a scalar value is 0 to 0x10FFFF, but not 0xD800 to 0xDFFF, the surrogates";
+         });
+  let b = Buffer.create 4 in
+  Buffer.add_utf_8_uchar b (Uchar.of_int (Int64.to_int n));
+  Buffer.contents b
 
 (* `v[from..to]`: panics if the range ends before it starts, isn't in
    [v], or, in a string, cuts a character. *)
@@ -661,7 +723,7 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Map_len | Set_len ->
       pure (function [ m ] -> int (Table.len (table x m)) | _ -> bug x)
   (* in bytes *)
-  | Str_len ->
+  | Str_byte_len ->
       pure (function [ VStr s ] -> int (String.length s) | _ -> bug x)
   (* where [s] first starts *)
   | Str_index ->
@@ -684,9 +746,28 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
       pure (function
         | [ VStr s; VStr prefix ] -> VBool (String.starts_with ~prefix s)
         | _ -> bug x)
-  (* this, then [s] *)
-  | Str_concat ->
+  (* this, then [s]: `+`, and `+=`, a copy here, which a native build
+     makes in place when it can (compiler.md, "Bytes stage, part two",
+     "Appending in place") *)
+  | Str_add ->
       pure (function [ VStr a; VStr b ] -> VStr (a ^ b) | _ -> bug x)
+  | Bytes_add ->
+      pure (function [ VBytes a; VBytes b ] -> VBytes (a ^ b) | _ -> bug x)
+  | Str_char_floor | Str_char_ceil ->
+      pure (function
+        | [ VStr s; VInt i ] -> int (char_bound ~ceil:(x = Str_char_ceil) s i)
+        | _ -> bug x)
+  | Str_code -> pure (function [ VStr s ] -> VInt (code s) | _ -> bug x)
+  | Str_of_code -> pure (function [ VInt n ] -> VStr (of_code n) | _ -> bug x)
+  (* the strings, [sep] between each two *)
+  | Array_join ->
+      pure (function
+        | [ VArray xs; VStr sep ] ->
+            VStr
+              (String.concat sep
+                 (List.init xs.len (fun i ->
+                      match nth xs i with VStr s -> s | _ -> bug x)))
+        | _ -> bug x)
   (* its UTF-8 *)
   | Str_bytes -> pure (function [ VStr s ] -> VBytes s | _ -> bug x)
   (* fails with `at`, where OCaml's decoder first finds an invalid
@@ -782,7 +863,9 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
       pure (function [ v ] -> v | _ -> bug x)
   (* lowering writes each call out (lower.ml, [split_at]) *)
   | Array_split_at | Str_split_at | Bytes_split_at -> bug x
-  | Str_lower -> pure (function [ VStr s ] -> VStr (lower s) | _ -> bug x)
+  | Str_ascii_lower -> pure (function [ VStr s ] -> VStr (lower s) | _ -> bug x)
+  | Bytes_ascii_lower ->
+      pure (function [ VBytes s ] -> VBytes (lower s) | _ -> bug x)
   (* wrapping arithmetic at 64 bits, as [Int64]'s is *)
   | Int_wrapping_add ->
       pure (function [ VInt a; VInt b ] -> VInt (Int64.add a b) | _ -> bug x)

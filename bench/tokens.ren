@@ -10,20 +10,20 @@ type P = { a: Str, b: Int }
 fn check(n: Int) -> Int ! Bad(n: Int) = if n > 5 then fail Bad(n) else n
 
 fn go(n: Int) -> Int ! Bad(n: Int) =
-  let p = P { a: "x".concat(show(n)), b: n }
+  let p = P { a: "x" + show(n), b: n }
   let s = p.a
   let k = try check(n)
   let q = P { a: s, b: k }
-  q.a.len() + q.b
+  q.a.byte_len() + q.b
 
 // the same with the failing call inside a branch that goes on
 fn branchy(n: Int) -> Int ! Bad(n: Int) =
-  let p = P { a: "y".concat(show(n)), b: n }
+  let p = P { a: "y" + show(n), b: n }
   let s = p.a
   var k = 0
   if n % 2 == 0 then k = try check(n)
   let q = P { a: s, b: k }
-  q.a.len() + q.b
+  q.a.byte_len() + q.b
 
 fn main() uses Console =
   print(attempt go(3))
