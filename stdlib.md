@@ -11,7 +11,7 @@ This doc covers what ships with Ren: which modules are in the standard library, 
 ## The short version
 
 ```
- std owns the shared types        Time, Decimal, Request, Sql, Blob: libraries agree on them
+ std owns the shared types        Time, Request, Sql, Blob: libraries agree on them
  three implementations each       real, in-memory, simulated, plus one conformance suite
  cursors first                    for line in &reader: a value keeps its place, no Reader objects
  borrow the computation           SQLite, aws-lc, rustls, zstd: pure work, effects supplied by Ren
@@ -164,10 +164,10 @@ let bad = Clock.now() - started                      // error: Time - Instant
 
 ### `Decimal`
 
-The danger with money is `0.1` silently becoming a `Float`. One type per literal, and numbers that never convert, prevent it: `price * 0.1` with a `Decimal` price is an error whose help says `0.1d`. `Decimal` gets the `d` suffix, so it's in the prelude ([operators.md](operators.md#deferred)):
+The danger with money is `0.1` silently becoming a `Float`. One type per literal, and numbers that never convert, prevent it: `price * 0.1` with a `Decimal` price is an error whose help says `0.1d`. `Decimal` is a language number type beside `Int` and `Float`, and its `d` suffix is the language's ([operators.md](operators.md#deferred)), since a literal's type comes from its spelling, which only the compiler reads. Its operations are below:
 
 ```ren
-type Decimal = opaque i128
+type Decimal                               // the language's, 128 bits
   pub fn add(self, b: Decimal) -> Decimal = ...
   pub fn mul(self, b: Decimal) -> Decimal = ...
   pub fn round(self, places: Int, mode: Rounding) -> Decimal = ...
@@ -181,7 +181,7 @@ let x = 19.99 + 0.01                       // a Float: the spelling says so
 
 - **Representation.** 128-bit fixed precision, about 34 significant digits, like C#'s `decimal`. It's an inline value, so it costs nothing in code without `Alloc`. Arbitrary precision lives in `bigint`.
 - **No `/` operator.** Every division states its scale and rounding mode. The signature is the truth, applied to arithmetic.
-- **Why the prelude.** Its literals are part of the language, so it's there, though most modules don't handle money. It is a shared type: `json` decodes numbers into `Decimal` straight from their source text, never through an `f64`, and Postgres's `numeric` maps to it.
+- **Why the language.** Its literals are, so the type is, as `Int` and `Float` are, though most modules don't handle money. A third party's `BigDecimal` or `Money` has no literals; it's built from `Decimal` or `Int`. It is a shared type: `json` decodes numbers into `Decimal` straight from their source text, never through an `f64`, and Postgres's `numeric` maps to it.
 - **`Money`** (an amount with a currency) involves policy choices, such as what adding two currencies means, so it belongs in `std.x`.
 
 ### HTTP
@@ -368,10 +368,10 @@ try retry(5, on: Declined) fn() =>
   try Async.timeout(3.s) fn() => try Billing.charge(card, amount)
 ```
 
-Configuration comes from a type, and `secret` keeps a field out of logs and traces:
+Configuration comes from a type, and std's `Secret<T>` keeps a field out of logs and traces: it parses as `T` does, has no `repr`, and its `show` redacts, so the derived walk never writes it. It's written to the wire only through a named look over its public `reveal`:
 
 ```ren
-type Cfg = { port: Int = 8080, db_url: secret Str, region: Str }
+type Cfg = { port: Int = 8080, db_url: Secret<Str>, region: Str }
 
 let cfg = try config.load<Cfg>()           // reads PORT, DB_URL, REGION
 ```
@@ -427,7 +427,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 9** | operators; `Map` and `Set` ([operators.md](operators.md)) |
 | **Stage 10** | handlers `over` a dependency, like `transaction() over Sql`; journal fixtures for tests |
 | **Stage 11a** | `Net` and `Async` ([async.md](async.md)); `channel`; fault-injecting fakes; buffers leased from a pool for `Net` |
-| **Stage 12** | `Decimal` and its `d` suffix; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); cursors over files, sockets and SQL rows; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
+| **Stage 12** | `Decimal`, a language number type, and its `d` suffix; `Secret<T>`; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); cursors over files, sockets and SQL rows; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
 | **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
 | **Stage 15** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |

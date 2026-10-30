@@ -178,22 +178,26 @@ A dependency's shape gives a handler one more clause, `call`:
 
 ```ren
 pub handler traced<D>() over D uses Clock, Console =
-  call(op, args) =>
+  call(c: D.Call) =>
     let start = Clock.instant()
-    let r = attempt next.call(op, args)
-    Console.error(op.name + " took " + show(Clock.instant() - start))
+    let r = attempt next.call(c)
+    Console.error(c.name + " took " + show(Clock.instant() - start))
     try r
 ```
 
-- **`call(op, args)` handles every operation the handler doesn't write
-  itself.** It's a contextual keyword, like `task` and `finally`.
+- **`call(c: D.Call)` handles every operation the handler doesn't write
+  itself.** It's a contextual keyword, like `task` and `finally`. `c` is
+  the call value the compiler writes for each dependency, one variant
+  per operation with its arguments (foundations.md decisions 7 and 18):
+  the same value an `over any` handler's `call` is, and a mailbox holds.
 - **It works in ordinary handlers too.** A handler `over Users` can write
   `get` itself, and send the rest through `call` to log them.
 - **Without `call`, an operation an `over` handler doesn't write goes to
   `next` unchanged,** as [handlers.md](handlers.md#over-one-implementation-in-front-of-another)
   says. `call` is that, with a place to step in.
-- **`next.call(op, args)` passes it on.** `op` has a name and the
-  operation's shape, and `args` is the dynamic view of its arguments.
+- **`next.call(c)` passes it on.** `c.name` is the operation's name,
+  and its arguments are values the derived walk covers, with `Value` as
+  their dynamic view.
 
 What it makes into ordinary libraries:
 

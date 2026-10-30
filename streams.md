@@ -222,7 +222,10 @@ the same composed block, ending in its sink, so
 `orders.select(p).map(f).sum()` allocates no arrays. No program can tell.
 
 Stage names are reserved on types with a `next`, chosen by type: a
-cursor type can't declare a member named `map` or `count`.
+cursor type can't declare a member named `map` or `count`. That's the
+price of method syntax on the cursor protocol, which the language owns
+because `for` needs it; the names are in foundations.md decision 20's
+closed list.
 
 ### Pipelines and the pipe
 
@@ -321,7 +324,14 @@ one-input stages and the loop body folded in where it yields, `break`
 and `return` leave it through a control value, and its `finally` runs as
 an ordinary unwind. There's no state machine and nothing allocated. A
 two-input stage, or a pipeline passed to a user function, **pulls**, and
-the hover says "pulled: zip". The guarantee comes from decision 1,
+the hover says "pulled: zip".
+
+Built-in stages keep push fusion, and the reason is measured, not a
+privilege: a user stage pulled ran at 1.01 to 1.05× the hand loop
+(below), so fusing it buys almost nothing today. The lowering isn't
+std's: it's promised to any one-input stage written as a `gen fn`,
+std's or a user's, when it's built (rule 4 of decision 20: an
+optimization, invisible). The guarantee comes from decision 1,
 since blocks are specialized per call; Go's rewrite of `range` over a
 function allocates when the iterator isn't inlined.
 
@@ -442,9 +452,10 @@ Async.produce(cap: 16, fn() => crawl(root)) fn(pages) =>
   exactly as long as the consumer block.
 
 **Channels.** A channel is a dependency, `dep Events = Chan<Event>`, and
-`Events.items()` is a cursor the compiler derives for it, whose `next` is
-`Events.recv()`. It's typed by the dependency's name, so two channels of
-one element type don't mix.
+`Events.items()` is an ordinary function of `Chan<T>` in `sync`, as
+`Fs.read_str` is a function of `Fs`: a cursor whose `next` is
+`Events.recv()`. Nothing about it is derived. It's typed by the
+dependency's name, so two channels of one element type don't mix.
 
 **Time.** `stream.time` holds `batch(max:, within:)`, `debounce`,
 `throttle` and `sample`. Each races "the next item" against a timer, so
@@ -529,7 +540,8 @@ re-run:
 - **The one trap is a boxed recursive `yield from`,** the trap of Rust's
   `Box<dyn>` and Python's `yield from`. Ren never boxes child frames.
 - **Fusing a user stage into the push bought nothing** (1.02 once the
-  loop's shape is fixed), so it's **later**.
+  loop's shape is fixed), so it's **later**, and when it lands it's the
+  same lowering built-in stages get, for any one-input `gen fn` stage.
 - These are models without reference counting, with small generators.
   They're re-measured on Ren's own output once `gen fn` lowers natively.
 

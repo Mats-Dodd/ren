@@ -226,12 +226,16 @@ on `Str` reads one:
 | classes, of a `Str`'s first code point | `unicode.is_alphabetic(c)`, `is_numeric`, `is_whitespace`, `is_mark` |
 
 - **The tables are pinned** to one Unicode version per Ren release.
-- **The journal records that version only when a program uses
-  `unicode`.** Dispatch is static over a closed world (decision 4), so
-  the compiler knows whether a program can reach it. A replay under a
-  different version is refused only then, naming the function that was
-  reached. A program that never touches `unicode` replays across every
-  release, and its `tests/*.journal` files never go stale.
+- **The journal records a fingerprint of the pinned top-level data a
+  program reaches,** from any library: Unicode's tables, the time zone
+  database, a user's own tables. They're top-level `let`s, which the
+  build already hashes ([shapes.md](shapes.md)), and dispatch is static
+  over a closed world (decision 4), so the compiler knows which a
+  program can reach. A replay under different data is refused only
+  then, naming what was reached. `unicode` gets this as any library
+  does, with no rule of its own: a program that never touches it
+  replays across every release, and its `tests/*.journal` files never
+  go stale.
 - **`nfc(s)` returns `s` itself** when it's already in NFC, so it costs
   a scan and no copy.
 - **`Str`'s own methods give the same answer in every release,**

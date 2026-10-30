@@ -27,7 +27,7 @@ This doc covers how Ren code reaches the operating system: the shape of an I/O c
 epoll tells a program when a socket is ready, and the program then makes the call. io_uring takes the operation and the buffer, and reports when the operation is done. Ren's I/O is completion-shaped everywhere. A readiness backend (epoll, kqueue) can be wrapped to look like completion easily, while the other direction is hard, so this costs nothing on platforms without a completion API.
 
 **2. A call is a value.**
-An io_uring submission is a record of an operation and its arguments, and a completion is its result. A dependency call has the same shape, and so does an entry in the effect journal. The kernel is the outermost handler, and `sim.fs` and `sim.net` take its place by implementing the same dependencies.
+An io_uring submission is a record of an operation and its arguments, and a completion is its result. A dependency call has the same shape, `D.Call`, the value the compiler writes for each dependency (foundations.md decision 18), and so does an entry in the effect journal. The kernel is the outermost handler, and `sim.fs` and `sim.net` take its place by implementing the same dependencies.
 
 **3. Narrow capabilities, one ring.**
 A signature says `uses Fs` or `uses Net`, never a catch-all `Io`. Underneath, every capability goes through one submission queue owned by the runtime. Signatures stay precise, and batching stays global.

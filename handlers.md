@@ -446,8 +446,8 @@ the line's output. The replay shows the first, which went through
   this is what makes it a file you can replay.
 - **Recording says what it holds:** `ren run --record` warns that the
   journal has everything the program read, files and arguments included.
-  `secret` types will redact what they mark ([Later](#later)), and until
-  then the warning is the honest answer.
+  std's `Secret<T>` will redact what it wraps ([Later](#later)), and
+  until then the warning is the honest answer.
 - **Replaying is a handler for each,** answering every call with what was
   recorded, in order. Pure code is deterministic, so a program given the
   same answers makes the same calls.
@@ -605,8 +605,9 @@ submission and its completion:
   derived `==` and `show` use ([operators.md](operators.md#how-it-runs)).
   It stays internal: the journal's format is the runtime's, not a
   serialization API.
-- **Redaction is a value from the start.** `secret Str` doesn't exist yet,
-  but when it does, it's recorded as `<redacted>`. The format has room for
+- **Redaction is a value from the start.** std's `Secret<T>` doesn't
+  exist yet, but when it does, its `show` redacts and it has no `repr`,
+  so the walk records it as `<redacted>`. The format has room for
   that now, so it never has to change for it.
 - **Large values have a limit.** Past a size cap, an entry keeps only a
   value's length, and a replay that needs it says so. A journal has a byte
@@ -630,15 +631,18 @@ submission and its completion:
   below one fails to start, the error is handled there, the `finally`'s
   body run on it, and passed on. One in an arm is an `attempt` of the
   rest of the arm, then its body ([compiler.md](compiler.md#stage-10c)).
-- **The recorder is the one privileged handler,** as the README says: only
-  the runtime can install it over the real implementations. A program
+- **The journal is the runtime's own record,** one of the privileged
+  handlers in foundations.md's closed list (decision 20): only the
+  runtime can install its recorder over the real implementations. A program
   can't name them, so it can't wrap them any other way than `over Clock`.
   The recorders, `recording_fs(j) over Fs` and one for each built-in, and
   the replayer, `replaying(j)` for all of them, are handlers in the
   prelude, written in Ren. Each operation calls an intrinsic that writes
   the call down, or answers it, through its type; the runtime installs
   them, and journal.ml is the one place that knows the format
-  ([compiler.md](compiler.md#stage-10b)).
+  ([compiler.md](compiler.md#stage-10b)). Recording a program's own
+  dependencies, tracing and the flight recorder are plain Ren over
+  `over any`, with no privilege.
 - **A description's tag finds its handler's record** (compiler.md,
   "Descriptions (step 3)"): a native description is an object whose first
   word is the tag, then what the handler captured. A debug build's tag
@@ -812,6 +816,6 @@ things here:
   and deciding at the end of a request whether to keep it.
 - **Replaying production traffic against a new build,** and comparing the
   responses.
-- **`secret` types,** recorded as `<redacted>`.
+- **std's `Secret<T>`,** recorded as `<redacted>`.
 - **`arena`, with `Alloc`** (stage 15): a handler whose `finally` frees
   everything it allocated.

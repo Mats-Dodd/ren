@@ -726,7 +726,8 @@ Named here so they aren't forgotten:
   `show`.
 - **Literal suffixes.** A literal's type stays read from its spelling,
   and a closed set of suffixes says the rest: `0.08d` for `Decimal`,
-  which moves into the prelude when it arrives (stage 12). Sized
+  a language number type beside `Int` and `Float` when it arrives
+  (stage 12). Sized
   integers need none: a literal is an `Int`, checked where it's stored
   into one. There are no user-defined suffixes. Mixing needs no context: `price * 0.08` with a `Decimal`
   price is an error whose help says `0.08d`.
@@ -734,7 +735,8 @@ Named here so they aren't forgotten:
   [shapes.md](shapes.md) rather than `comptime`.
 - **Narrow lanes:** a loop over sized elements computed at their width
   where the compiler proves the values fit (foundations.md, decision 15).
-- **`Decimal`,** in std ([stdlib.md](stdlib.md)).
+- **`Decimal`,** a language number type, its operations described in
+  [stdlib.md](stdlib.md).
 - **A sorted map,** in std, on a type's order.
 - **Slices,** `xs[1..3]`, as values that share their root's buffer
   (foundations.md, decision 17).

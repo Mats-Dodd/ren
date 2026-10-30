@@ -4,7 +4,8 @@ You're building the services stage of Ren (foundations.md Staging item
 6, "Services and concurrency"): wirings and the pipe, the follow-ups
 11a left, the parts of streams.md that need tasks but not generators,
 and `striped` and `actors`, the two standard-library services that let
-a program keep many stateful things. Ren is a systems language whose
+a program keep many stateful things, written in Ren over a runtime
+primitive, the keyed instance family. Ren is a systems language whose
 compiler is written in OCaml. Work on `main`. This brief is
 self-contained: it names everything you need in the repo.
 
@@ -34,8 +35,10 @@ seeds finding a lost update split over two operations of one actor.
   `Async.beside`, `Async.background`, a background failure cancelling
   the body), decision 10 ("`release` lets go for one call", "No
   deadlock waiting for an instance", "Hot state is striped or split
-  by key"), decision 11 (the journal and the tape), and **decision 18,
-  all of it**: most of this stage. Decision 2's table, whose
+  by key"), decision 11 (the journal and the tape), **decision 18,
+  all of it**: most of this stage, and decision 20 (its closed list of
+  privileged handlers, which names the keyed instance family, and rule
+  3's one build-time mechanism). Decision 2's table, whose
   handler-state row is narrowed to `Async.until`, `release` and
   block-parameter calls (research/decision-11/ has the model that
   checked it).
@@ -56,7 +59,8 @@ seeds finding a lost update split over two operations of one actor.
   `with`" (the rule 11a built, which this stage replaces).
 - **compiler.md**: "Stage 11a", especially "Where 11a may differ from
   foundations.md", "Step 8, as built" (how `keyed` is built in, which
-  `striped` replaces and `actors` follows), "Step 9, as built" and the
+  the keyed instance family replaces in the runtime, with `striped`
+  and `actors` in Ren over it), "Step 9, as built" and the
   11a progress log's notes; "Parameters with defaults" (step 1 of 11a);
   and the data stage's section, which shows how a stage is specified
   and built.
@@ -64,8 +68,8 @@ seeds finding a lost update split over two operations of one actor.
   "A test's tasks run on `sim`" and "The journal is a test".
 - Code you'll live in: lib/eval/sched.ml (the scheduler, `sim`'s tape,
   instance queues), lib/eval/eval.ml (`Dep_call`, `With`, `VKeyed`),
-  lib/core/std_lib.ml (`sync`, `sim`), lib/core/prelude.ml (`Async`,
-  `Proc`), lib/eval/journal.ml, the exclusivity pass (excl.ml), and
+  lib/core/std_lib.ml (`sync`, `sim`, and where `actors` and `striped`
+  go, in Ren), lib/core/prelude.ml (`Async`, `Proc`), lib/eval/journal.ml, the exclusivity pass (excl.ml), and
   lexer.ml's `continues()`.
 
 ## What's decided
@@ -116,105 +120,153 @@ Each is decided; cite it in the spec, don't re-argue it.
      call), and a channel's `items()`. They pull on the caller's task
      only when a slot frees; `max:` 64 by default; `map` keeps order.
    - **Channels are dependencies**, `dep Events = Chan<Event>`, and
-     `Events.items()` is a cursor the compiler derives, whose `next` is
-     `Events.recv()`, typed by the dependency's name.
+     `Events.items()` is an ordinary function of `Chan<T>` in `sync`,
+     as `Fs.read_str` is a function of `Fs`: a cursor whose `next` is
+     `Events.recv()`, typed by the dependency's name. Nothing is
+     derived for it.
    - **`Async.produce(cap: Int = 16, f) fn(items) => body`** runs `f` on a task
      in the consumer's scope; `f` sends with `Send.send(x)` through a
      `Send<T>` dependency the call installs (decision 5), not a channel
      it holds; `cap` is the backpressure; when the body ends, by
      finishing, `break` or a failure, the producer is cancelled and
      waited for; a failure in the producer ends the stream with it.
-5. **`striped`** (decision 18, language.md §11 "Stripes" and "Policies
-   are data"): one function, `striped(h, n: Int = 16, by: Key)`, keeps
-   n instances; `by: Worker` with `n` given is a compile error, since
-   the workers decide the stripes. An operation whose
-   first parameter has a `key` goes to one stripe (`by: Key`, the
-   default); `by: Worker` gives the caller's worker's stripe and takes
-   no n; a keyless operation runs on every stripe, and one that returns
-   a value is folded with `merge:` (`Sum`, `Max`, `Min`, `Concat`,
-   `Custom(m)`, m a stateless handler for the derived `Merge<D>`), left
-   to right in stripe order. There's no default `merge:`: a `striped`
-   without one refuses, at compile time, a keyless operation that
-   returns a value; not an atomic snapshot; the split law, with
-   at least two virtual workers under `sim`, routing from the tape. **It
+5. **The keyed instance family, a runtime primitive** (decision 18,
+   "The keyed instance family"; decision 20's closed list). Where
+   instances live is the runtime's, as the scheduler is. It does five
+   things: make an instance of a handler for a key, running its setup,
+   whose errors the family declares; pin one for a block, installing it
+   as `D` there; evict one that's evictable, running its `finally` on the evicting task;
+   list the live keys; and keep a queue of `D.Call`s per key. It owns
+   decision 18's soundness rules, so every library over it has them:
+   a post makes its instance; queued calls count as waiting, so an
+   instance with mail is never evicted, and a delivery never runs
+   setup; a delivery may go past the library's bound when nothing is
+   evictable; every call from outside the family is metered at its
+   edge against the library's mailbox bound, and a sibling's post never
+   waits; a sibling's post past twice that bound panics, with each
+   family's high-water mark reported by debug builds and `sim`;
+   teardown drains the queues, then runs the `finally`s in reverse
+   creation order; partitions with their own map and cap; and the
+   no-deadlock rules (`at` inside `at` of one family, a sibling may
+   `post` and never `at`, `Full` where waiting could close a cycle),
+   which are checks on the primitive's pin, as decision 7's are on
+   `Async`'s spawn. What it doesn't decide is a library's: which
+   instance to evict, when, how many to keep, how to route.
+   **Journal names** come from one rule for every runtime instance
+   family, as task paths do (decision 11): where the family is
+   installed, the key and the incarnation, `docs[DocId(7)]#3`.
+   It's OCaml in the interpreter's runtime, in its own module beside
+   sched.ml with sched.ml's tape and journal hooks. Ren reaches it as
+   it reaches `Fs`: through a runtime dependency in the prelude (name it
+   in step 0), whose real implementation is the only caller of its
+   intrinsics, which Core Lint checks as it checks `fs_read`
+   (handlers.md, "How it runs"). Any library can use that dependency;
+   `actors` and `striped` are two such libraries.
+6. **A call is a typed value: `D.Call`** (decision 18; decision 7's
+   `over any`). For each dependency the compiler writes `D.Call`, one
+   variant per operation with its arguments, as it writes a
+   description's enum (language.md §6). Its type carries the
+   operation's result and errors, so `post`'s parameter can say "a call
+   whose result is `()` with no errors": an ordinary type rule, with
+   the help line decision 18 gives, not a check written for `actors`.
+   Arguments are values the derived walk covers (`show`, `==`, `repr`,
+   `parse`), so the queue copies them and the journal writes them like
+   any value. A handler may write a `call(c: D.Call) => ...` clause
+   beside its operations; `over any`'s `call` stays as built. Build only
+   what `post`, the queue, the journal and `striped`'s merge need; the
+   rest of a dependency's operations as data is later.
+7. **`striped`, plain Ren in std** over the family, with fixed keys
+   (decision 18, language.md §11 "Stripes" and "Policies are data"):
+   `striped(h, by: Key(n: 16) | Worker, merge:)`. Routing is an ADT,
+   so `Worker` with a count can't be written. Under `Key(n)`, the
+   default with n = 16, an operation whose first parameter has a `key`
+   goes to one of n stripes by it, read from the call's arguments
+   through the derived walk. Under `Worker`, the call goes to the
+   caller's worker's stripe, from `Async.worker()`, a new scheduler
+   operation any library can call (two virtual workers under `sim`,
+   routing from the tape). A keyless operation runs on every stripe;
+   one that returns a value is folded with `merge:` (`Sum`, `Max`,
+   `Min`, `Concat`, or `Custom(m)`, m a stateless handler over `D`
+   whose `call(c: D.Call)` clause folds two stripes' results for `c`),
+   left to right in stripe order. There's no `Merge<D>` and no derived
+   dependency. No default `merge:`: a `striped` without one over a
+   dependency with a keyless operation that returns a value is refused
+   by a check `striped` makes on its arguments (decision 20, rule 3);
+   until stage 12 builds that mechanism, `striped` makes it when it's
+   installed, a panic at the `with` naming the operation, with no Infer
+   rule written for it. Not an atomic snapshot; the split law. **It
    replaces `sync.keyed`, which goes.**
-6. **`actors`** (decision 18, language.md §11 "Actors are a service"):
-   `Actors<K, D> ! E` as a dependency, `E` the errors of making an
-   actor (`dep Docs = Actors<DocId, Doc> ! StoreDown`), which the
-   handler's setup must fit, as any handler fits its dependency;
-   `actors(h, max: Int = 10_000, evict: Lru, mailbox: Int = 10_000)`
-   with `h` a handler
-   whose one parameter is the key and whose other dependencies come
-   from the `with` set; `Docs.at(k) fn() => body` installs k's actor as
-   `D` for the block, pins it, and makes it on demand, setup's errors
-   being `at`'s, waiters on one key's setup sharing its error, a
-   cancelled setup retried by the waiters; each operation takes the
-   actor for one call; eviction under `max:`, of the least recently
-   released evictable actor, the victim's `finally` on the caller's
-   task, waiting when none is evictable; never evicting one that's
-   pinned, running or waited for; `evict_idle(d)`, `evict(k)`, `each`
-   (live actors in creation order, pinning each, not use), `count()`
-   and made and evicted counts; `finally` can't fail; `at` inside `at`
-   of the same family is a compile error, and a full family fails with
-   `Full` where waiting could close a cycle; **`post` is Erlang's
-   cast** (decision 18): `Docs.post(k).op(args)` puts one operation of
-   `D`, its arguments evaluated when posted and copied as data, in k's
-   mailbox, and returns; only an operation that returns `()` and can't
-   fail can be posted (anything else is a compile error with help);
-   **a post makes its actor as `at` does**, so its only errors are
-   setup's, `try Docs.post(k).op(args)`, queued mail counts as waiting
-   for the actor (never evicted), a delivery never runs setup, and an
-   actor made for a post goes past `max:` when none is evictable
-   instead of waiting; posts from one task to one actor run in order,
-   each as one operation, on a task the family's `with` owns, the
-   mailbox belonging to the key so order survives eviction; an actor
-   names its own family in its handler's `uses` and may only `post` to
-   it, never `at`; back-pressure is at the family's edge: **every call
-   from outside is metered**, a post and an operation called through
-   `at` (before it takes the actor) both wait while the family's mail
-   is over `mailbox:`; a sibling's post never waits, and **past twice
-   `mailbox:` it panics** (a chain reaction is runaway recursion);
-   debug builds and `sim` report each family's high-water mark; posts
-   are journaled as data; **teardown drains** queued posts, then runs
-   the `finally`s; research/actors-post/ is the FizzBee model of these
-   rules, and its counterexamples are tests;
-   `evict: Lru` by default; teardown in reverse creation order;
-   partitions with their own map, exact LRU and a cap of `max / parts`,
-   so a journal from one thread replays on many; under `sim`, eviction
-   only through `max:`, `evict_idle` and `evict`, and
-   `sim.scheduler(seed, evict: AnyIdle)` as opt-in chaos at any
-   scheduling point; the journal naming an actor `docs[DocId(7)]#3`.
-7. **Interpreter first, as tasks are** (Staging item 6). What's
+8. **`actors`, plain Ren in std** over the family (decision 18,
+   language.md §11 "Actors are a service"). The user's API stays as
+   language.md writes it: `dep Docs = Actors<DocId, Doc> ! StoreDown`,
+   `E` the errors of making an actor, which the handler's setup must
+   fit; `actors(h, max:, mailbox:, evict: Lru, chaos: false)`, std's
+   defaults 10_000 for `max:` and `mailbox:`, `h` a handler whose one
+   parameter is the key and whose other dependencies come from the
+   `with` set; `Docs.at(k) fn() => body` pins k's actor as `D` for the
+   block, making it on demand, setup's errors being `at`'s, waiters on
+   one key's setup sharing its error, a cancelled setup retried by the
+   waiters; each operation takes the actor for one call; eviction under
+   `max:`, of the least recently released evictable actor, the victim's
+   `finally` on the caller's task, waiting when none is evictable;
+   never evicting one that's pinned, running or waited for;
+   `evict_idle(d)`, `evict(k)`, `each` (live actors in creation order,
+   pinning each, not use), `count()` and made and evicted counts;
+   `finally` can't fail. **`post` is Erlang's cast:**
+   `Docs.post(k).op(args)` builds a `Doc.Call` from `op(args)`, its
+   arguments evaluated now, and puts it in k's queue; its only errors
+   are setup's, `try Docs.post(k).op(args)`. Keep that spelling through
+   a general rule any library can use (a last parameter of type
+   `D.Call` written as a trailing call, as a trailing block is); if
+   that can't be built as a general rule, use
+   `Docs.post(k, <call value>)` and record it. Posts from one task to
+   one actor run in order, each as one operation, on a task the
+   family's `with` owns, the queue belonging to the key so order
+   survives eviction; an actor names its own family in its handler's
+   `uses`. **Chaos is a parameter of `actors`:** `chaos: true` evicts,
+   at each call into the family, the evictable actors `Random` picks
+   (from the tape under `sim`); the scheduler and `ren test` know
+   nothing of it. research/actors-post/ is the FizzBee model of the
+   family's rules, and its counterexamples are tests.
+9. **Interpreter first, as tasks are** (Staging item 6). What's
    sequential also builds natively and agrees with `ren run`: wirings
    and the pipe are front-end only, and `release` with no other task is
    a plain call. What starts tasks is refused by `ren build` as 11a
-   refuses `Async.scope`. `actors` and `striped` are built in, as `keyed`
-   is (a handler can't keep instances of another), and refused natively
-   as `keyed` is, unless that's cheap.
-8. **Decision 2's handler-state row is narrowed** to `Async.until`,
+   refuses `Async.scope`. The family is the runtime's (a handler can't
+   keep instances of another), and `actors` and `striped` are Ren over
+   it; all three are refused natively as `keyed` is, unless that's
+   cheap.
+10. **Decision 2's handler-state row is narrowed** to `Async.until`,
    `release` and block-parameter calls, so an actor loops over a reader
    kept in its state while each step calls other services. Build it in
    excl.ml in step 4, with `release`.
-9. **Defaults** (language.md §2, "Calls have one by-name form"): a
+11. **Defaults** (language.md §2, "Calls have one by-name form"): a
    parameter given by name always has a default. A default may be a
-   literal or a variant with no fields (`kill: Kill = Tree`, `evict:
-   Evict = Lru`, `by: By = Key`), a small extension to the parser and
-   Lower in step 0.
+   literal, a variant with no fields, or a variant whose fields all
+   have defaults, written bare (`kill: Kill = Tree`, `evict: Evict =
+   Lru`, `by: By = Key`, meaning `Key(n: 16)`), a small extension to
+   the parser and Lower in step 0.
 
 ## Decided after the draft
 
 Record these in the spec; don't reopen them.
 
+- **2026-10-29: decision 20 moved actors and striped to std over a
+  runtime primitive; re-read steps 6 and 7.** What's decided 5 to 8
+  are rewritten: the keyed instance family is the runtime's, `D.Call`
+  is the compiler's, and `actors` and `striped` are Ren in std.
+  Entries below marked *superseded* give way to them.
 - **Sequencing:** after the data stage is merged.
-- **By-name arguments:** defaults only, a variant with no fields
-  allowed as one (What's decided 9); `max: Int = 10_000`, `mailbox: Int
-  = 10_000`, `cap: Int = 16`, `n: Int = 16`; no default `merge:`.
-- **`striped`:** one function, `striped(h, n: Int = 16, by: Key)`.
+- **By-name arguments:** defaults only, a variant allowed as one
+  (What's decided 11); std's defaults are `max:` 10_000, `mailbox:`
+  10_000, `cap:` 16 and `Key`'s `n` 16; no default `merge:`.
+- **`striped`:** one function, `striped(h, by: Key(n: 16) | Worker,
+  merge:)` (*superseded*: it was `striped(h, n: Int = 16, by: Key)`).
 - **Stale reads after `release`:** found by `sim`'s seeds; no warning.
 - **`Docs.at`'s errors:** declared on the family, `Actors<K, D> ! E`.
   `Full` is in `at`'s errors only where the checker sees that waiting
   could close a cycle.
-- **`post`:** Erlang's cast, as What's decided 6 says.
+- **`post`:** Erlang's cast, as What's decided 8 says.
 - **`Async.produce`'s `items`** is a block parameter, `fn() ->
   Option<T>`, looped with `for p in try items` and passed on as a block.
   `Async.map_pull` lands here, in `produce`'s shape.
@@ -222,9 +274,10 @@ Record these in the spec; don't reopen them.
   hand-written `fn() -> Option<T>` block, and a channel's `items()`,
   a block whose step is `Events.recv()`.
 - **A trailing block in a pipe** only in the last link.
-- **The journal:** actors add made, evicted and posted lines, and an
-  operation names `docs[DocId(7)]#3`; that's version 3, and recorded
-  journals are recorded again.
+- **The journal:** the family adds made, evicted and posted lines, and
+  an operation names `docs[DocId(7)]#3` by the one rule for every
+  runtime instance family; that's version 3, and recorded journals are
+  recorded again.
 - **`sim` chooses fairly** among an instance's waiters and arrivals,
   from the tape, landing in step 4 with `release`.
 - **Partitions now,** so a journal replays across cores: `parts: Int =
@@ -232,18 +285,19 @@ Record these in the spec; don't reopen them.
   the count decides which actor is evicted; the journal records it.
 - **`Lfu`** later; `Lru` only.
 - **Native:** wirings, the pipe and `release` with no other task build
-  natively; `beside`, `background`, `produce`, `striped` and `actors`
-  are interpreter-only, refused by `ren build` as `keyed` is.
+  natively; `beside`, `background`, `produce`, the family, `striped`
+  and `actors` are interpreter-only, refused by `ren build` as `keyed`
+  is.
 - **Decision 7's run-time half:** a panic at the spawn.
 - **`Async.background`'s tasks** may fail; the first failure cancels the
   body and is its error, as `beside`'s is.
 - **The milestone** uses a line protocol over `sim.net` and an `Op`
   that appends; "runs" means its tests pass under `--seeds 1000` with
-  `evict: AnyIdle`.
+  `actors(doc, chaos: true)`.
 - **`sim` has two virtual workers** for `by: Worker`.
-- **`Merge<D>`'s `Custom(m)`** takes a stateless handler of the derived
-  `Merge<D>`. Decision 18's `fn(a, b) => ...` shorthand is the inline
-  handler form a one-operation dependency already has; nothing new.
+- **`Custom(m)`** takes a stateless handler over `D` whose `call(c:
+  D.Call)` clause folds (*superseded*: it took a handler of a derived
+  `Merge<D>`, which goes).
 
 ## Working beside bytes part two
 
@@ -252,9 +306,10 @@ same time. It owns strings' runtime and native layout; this stage owns
 the front end's new forms and the interpreter's scheduler.
 
 - **Yours:** wirings and `|>` in the parser and checker; the lexer's
-  `continues()`; lib/eval/sched.ml; `With` and `Dep_call` in eval.ml;
-  std_lib.ml's `sync`, `sim`, `striped` and `actors`; excl.ml; the
-  journal.
+  `continues()`; lib/eval/sched.ml and the keyed instance family's new
+  module beside it; `With` and `Dep_call` in eval.ml; `D.Call` in the
+  checker; std_lib.ml's `sync`, `sim`, `striped` and `actors`; excl.ml;
+  the journal.
 - **Theirs, don't touch:** ren_rt.c and ren_rt.h's string and byte
   code; `to_mem.ml`, `emit_c.ml` and Mem Lint where `Str` and `Bytes`
   are laid out; the interpreter's `VStr` and `VBytes`; the lexer's
@@ -282,10 +337,14 @@ what's finished, and write down exactly what's missing.
    compiler.md that settles what the later steps need: the grammar for
    `wiring`, `|>` and `release`, and how `try`'s parser stops at `|>`;
    how a wiring is flattened in Resolve and Infer, and where `provides`
-   is enforced; how `Send<T>`, `Chan<T>`'s `items()`, `Actors<K, D>` and
-   `Merge<D>` are declared or derived; the representation of a family
-   (partitions, the LRU, pins, mailboxes, incarnations) in the
-   scheduler; which journal lines are new and whether that's version 3;
+   is enforced; how `Send<T>` is declared, and `Chan<T>`'s `items()` as
+   an ordinary function in `sync`; `D.Call` (its type with the result
+   and errors, the `call(c: D.Call)` clause, and how `post`'s trailing
+   call is written); the keyed instance family's dependency, its
+   intrinsics and its representation (partitions, pins, queues,
+   incarnations) in the runtime; `Actors<K, D>` and `striped` as Ren in
+   std over it, and where the LRU lives; which journal lines are new and
+   whether that's version 3;
    and "Decided after the draft". Inventory
    every site that changes: users of `sync.keyed`, of the background
    rule 11a built (examples/refresh, async.md's metrics flusher, tests
@@ -345,27 +404,40 @@ what's finished, and write down exactly what's missing.
    *Done when* each is a test under `--seeds 1000`, a `break` in
    `produce`'s body cancels and waits for the producer, and a producer
    blocked at `cap` makes progress as the consumer takes.
-6. **`striped`,** built in where `keyed` was, with `by: Key`,
-   `by: Worker` (two virtual workers under `sim`, routing from the
-   tape), keyless broadcast and `merge:`, `Merge<D>` derived and
-   `Custom(m)` checked as a stateless description; `sync.keyed` removed
-   and its tests moved. A test shows the split law: a program whose
-   result depends on routing beyond what the merge erases fails under
-   some seed.
-   *Done when* language.md §11's `striped` lines run, and nothing names
-   `keyed`.
-7. **`actors`,** built in: `Actors<K, D> ! E`, `at` with setup and its
-   declared errors, pinning, partitions and LRU eviction under `max:`,
-   `evict`, `evict_idle`, `each`, `count` and the counts, the
-   no-deadlock rules (`at` in `at`, `Full`), `finally` that can't fail,
-   teardown order; `sim.scheduler(seed, evict: AnyIdle)`; the journal's
-   actor names with incarnations, recorded and replayed. Then **`post`**,
-   as What's decided 6 says.
+6. **The family, `D.Call` and `striped`.** First the runtime half:
+   the keyed instance family in its own module beside sched.ml, with
+   its dependency in the prelude and Core Lint checking its intrinsics
+   (What's decided 5); `D.Call` written by the compiler for every
+   dependency, with the `call(c: D.Call)` clause (What's decided 6);
+   `Async.worker()`; the journal's names for family instances by the
+   general rule. Then `striped` in Ren in std over it, replacing
+   `keyed`: `by: Key(n)`, `by: Worker` (two virtual workers under
+   `sim`, routing from the tape), keyless broadcast and `merge:`, with
+   `Custom(m)` a stateless handler whose `call(c: D.Call)` clause folds,
+   and the missing `merge:` refused at install; `sync.keyed` removed and
+   its tests moved. A test shows the split law: a program whose result
+   depends on routing beyond what the merge erases fails under some
+   seed.
+   *Done when* language.md §11's `striped` lines run; nothing names
+   `keyed` or `Merge<D>`; `striped(h, by: Worker)` with a count is a
+   refusal test (it can't be written); and `striped`'s source in std
+   calls nothing a user library couldn't: the family's dependency and
+   `Async.worker()`.
+7. **`actors`,** in Ren in std over the family: `Actors<K, D> ! E`,
+   `at` with setup and its declared errors, pinning, partitions and LRU
+   eviction under `max:`, `evict`, `evict_idle`, `each`, `count` and the
+   counts, the no-deadlock rules (`at` in `at`, `Full`), `finally` that
+   can't fail, teardown order; `chaos: true`; the journal's names with
+   incarnations, recorded and replayed. Then **`post`**, as What's
+   decided 8 says, its queue and rules the family's.
    *Done when* each rule in decision 18's `actors` list has a test, a
    journal of a run that evicts and remakes a key replays byte for
-   byte, and `post` has tests that: arguments are evaluated at the post
-   (a `var` changed after it doesn't change the message); posting an
-   operation that returns a value, or can fail, is refused; posts from
+   byte, a third library over the family written in a test (a family
+   with a fixed key set, say) gets the no-deadlock and post rules with
+   no compiler support of its own, and `post` has tests that: arguments
+   are evaluated at the post (a `var` changed after it doesn't change
+   the message); posting an operation that returns a value, or can
+   fail, is a type error on `post`'s parameter; posts from
    one task to one actor run in order under `--seeds 1000`; an actor
    can `post` to its own family and `at` on it is refused; two actors
    posting to each other past `mailbox:` don't deadlock while an
@@ -382,7 +454,8 @@ what's finished, and write down exactly what's missing.
    behind a wiring, sessions over `sim.net`, a test store, and tests
    that every subscriber sees one order of edits and that the store
    holds the final text. Then:
-   - it passes `ren test --seeds 1000` with `evict: AnyIdle`;
+   - it passes `ren test --seeds 1000` under `actors(doc, chaos:
+     true)`;
    - a variant that keeps the text only in memory (no write-through)
      fails under chaos eviction, and the seed reproduces it;
    - a variant that reads with one operation and writes with another
@@ -413,7 +486,7 @@ what's finished, and write down exactly what's missing.
    Fix what blocks; list the rest with its severity.
 
 **Done when** language.md §11's document server runs under `sim` with
-`evict: AnyIdle`, and `ren test --sim --seeds` finds a lost update split
+`actors(doc, chaos: true)`, and `ren test --sim --seeds` finds a lost update split
 over two operations of one actor and replays it by seed (Staging item
 6), with the end-to-end program of language.md running with its wiring
 and its pipe.
@@ -509,19 +582,22 @@ skips bench crams unless `REN_TCC` is set; set it.
 - **Continuation lines.** A line starting with `.` continuing the one
   above is new to the lexer and to tree-sitter's external scanner, and
   must not swallow a line that starts a new statement.
-- **Built-ins that are standard library.** `striped` and `actors` are
-  OCaml in the interpreter, as `keyed` is; their rules (eviction,
-  pins, mailboxes, partitions) are a second scheduler inside the first.
-  Keep them in their own module, beside sched.ml, with the same
-  journal and tape hooks.
+- **A primitive general enough for two libraries.** The family's
+  rules (pins, queues, partitions, the edge meter) are a second
+  scheduler inside the first. Keep it in its own module, beside
+  sched.ml, with the same journal and tape hooks, and keep policy out of
+  it: if `actors` needs the runtime to know about LRU or chaos, the
+  line is in the wrong place, so stop and say so. The LRU may live in
+  the family as an order of release it exposes, if Ren over it can't
+  keep one cheaply; record which.
 - **Eviction runs code on someone else's task.** A victim's `finally`
   runs on the caller that pays for it, which can itself be cancelled
   while it runs; it's shielded, as 11a's `finally`s are, under the
   cleanup deadline.
-- **Chaos eviction multiplies schedules.** `evict: AnyIdle` at every
-  scheduling point makes 1000 seeds slower; measure the milestone's run
+- **Chaos eviction multiplies schedules.** `chaos: true` at every
+  call into a family makes 1000 seeds slower; measure the milestone's run
   time and say it.
-- **The journal format.** Actor names, incarnations and posts may need
+- **The journal format.** Family names, incarnations and posts may need
   version 3; examples/just/tests/build.journal and any other recorded
   journal would be recorded again, as 11a did for version 2.
 - **`Proc.run(kill: Tree)`** needs a child in its own process group;
@@ -546,6 +622,15 @@ skips bench crams unless `REN_TCC` is set; set it.
 - **Phase one of the many-cores experiments** (K3, P1, P3, S1, K1 and
   K2, the cache three ways): they run alongside this stage, on the M4
   Max, in experiments/, not in this brief.
+- **The rest of a dependency's operations as data** (12c): `D.Call`
+  beyond what `post`, the queue, the journal and `striped`'s merge
+  need, such as `rpc.client`, recorders of user dependencies, and
+  shapes.md's `Value` view of a call's arguments.
+- **Stage 12's build-time mechanism,** checks a generic function makes
+  on its constant arguments: until then `striped`'s missing `merge:` is
+  refused at install.
+- **`ren test --chaos`:** there's no such flag. A test installs
+  `actors(h, chaos: true)`; `sim.scheduler` takes no eviction policy.
 - **Actors' open items** (decision 18): `Docs.at_all(keys)`; containing
   a panic in an actor under `Async.isolate`; `expire:` and `weigh:`,
   designed with the server milestone; a `place:` parameter.

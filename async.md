@@ -79,7 +79,8 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
   outlive it.
 - **Everything is bounded.** `spawn` waits while `max` of the scope's
   tasks run, which is a server's backpressure, and `map` and `each` run
-  `max` at once. The default is 64, so a server writes `max: 10_000`.
+  `max` at once. The default is std's, 64 in their signatures, so a
+  server writes `max: 10_000`.
 - **`map` and `each` take any pull argument,** as `for` does: an
   array, a named cursor as `&r`, a pipeline or a generator. They pull
   the next item on the caller's task, only when a slot frees, so memory
@@ -273,7 +274,7 @@ over `Async.until`, but for `keyed`:
 
 | | What it is |
 |---|---|
-| `sync.channel(cap)` for `Chan<T>` | `send` waits while it's full, `recv` while it's empty and open, `None` once it's closed and empty; a send on a closed channel panics. A channel is a dependency, `dep Events = Chan<Event>`, and `Events.items()` is a cursor the compiler derives, whose `next` is `recv` |
+| `sync.channel(cap)` for `Chan<T>` | `send` waits while it's full, `recv` while it's empty and open, `None` once it's closed and empty; a send on a closed channel panics. A channel is a dependency, `dep Events = Chan<Event>`, and `Events.items()` is an ordinary function of `Chan<T>` in `sync`, as `Fs.read_str` is a function of `Fs`: a cursor whose `next` is `recv` |
 | `sync.semaphore(n)` for `Semaphore` | `acquire` waits while no permit is free, `release` gives one back |
 | `sync.limit() over any` | each call takes a permit of the `Semaphore` outside it, is passed on, and gives it back in a `finally`, however it ends |
 | `sync.batcher()` for `Batcher<K, V>` | `get(k)` waits until a `flush` has fetched `k` through the `Fetch<K, V>` outside it, with every key asked for since the last |
@@ -641,7 +642,7 @@ body waits on. It runs, with its tests, in
   seeded tape takes over ([handlers.md](handlers.md#the-journal)).
 - **Many cores, later.** Values a task shares are marked shared and
   counted atomically from then on; data for every core is built in an
-  arena; reads that take no lock are `snapshot`
+  arena; reads that take no lock are `Mem.snapshot`
   ([foundations.md](foundations.md#10-many-cores)).
 - **In the interpreter,** fibers are OCaml 5's effect continuations, and
   the scheduler is the interpreter's own.
@@ -758,7 +759,7 @@ This document was first written before foundations.md, which changed it
 - **Restart policies,** like Erlang's supervisors. Until then, it's
   `attempt` or `retry` inside a task.
 - **Many cores** (stage 11b): `work_stealing`, `per_core` and `pinned`,
-  arenas, `snapshot` and lock-free handlers.
+  arenas, `Mem.snapshot` and lock-free handlers.
 - **The rest of the simulation scheduler** (after 11a's `sim`): failing
   networks and disks, crashes, and checking every interleaving.
 

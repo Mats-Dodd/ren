@@ -241,7 +241,8 @@ A random string rarely has an `@`. Two things make this work anyway:
 ### 3. A type can write its own, as plain Ren
 
 When the derived one isn't good enough, a type writes `arbitrary`, a
-reserved member like `key` and `show`:
+reserved member like `key` and `show`, the derived walk's generating
+direction (foundations.md decision 20 lists every reserved name):
 
 ```ren
 pub type Email = opaque Str

@@ -586,8 +586,9 @@ pub fn main() uses Console, Os =
   function, as `retry` does. A wiring installs; a function runs.
 - **The one function that installs is addressing.** `Docs.at(id) fn()
   => body` installs one actor for its block (§11), because its key is
-  known only at run time, so no wiring could name it. Addressing
-  installs, wiring composes.
+  known only at run time, so no wiring could name it. It's the
+  runtime's keyed instance family that installs, and any library over
+  it addresses the same way. Addressing installs, wiring composes.
 - **Wirings combine.** `with live, metrics in ...`, and a wiring can list
   another among its items.
 - **Parameters** carry config, and can be descriptions, functor-style:
@@ -736,7 +737,8 @@ Decisions:
   The standard library's own knobs are ADTs (`evict: Lru`, `by: Worker`,
   `merge: Sum`). A description appears only where a program supplies
   the kind: a `striped` merge the built-in folds don't cover is a
-  stateless handler for a dependency the compiler derives (§11).
+  stateless handler over the dependency, folding in a `call(c: D.Call)`
+  clause (§11).
 
 ## 7. Methods are vocabulary, workflows are functions
 
@@ -1117,16 +1119,15 @@ reused, and an old id now silently names someone else.
 
 Decisions:
 
-- **`Pool` wraps a collection:** `Pool<Table<Session>>` or
-  `Pool<Array<Session>>`. Three questions, kept apart and composable:
-  what a thing is (its type), how many sit in memory (`Array` or
-  `Table`), whether they keep identity through churn (`Pool`). Without
-  traits, `Pool` can't be generic over any collection in the language,
-  but all three are built in, so the compiler handles exactly those two,
-  as it does for `Enumerable`'s methods on `Array`, `Map` and `Set`.
-- **Generational ids.** In a `Table`, the generation is one more column,
-  so checking it reads only that column. A sparse set can come later
-  behind the same API if dense sweeps under heavy churn need it.
+- **`Pool<T>` is plain Ren in std,** over a `Table` of `{ gen, value }`
+  slots. Three questions, kept apart: what a thing is (its type), how
+  many sit in memory (`Array` or `Table`), whether they keep identity
+  through churn (`Pool`). A user's pool over a collection of their own
+  is written the same way; the compiler knows nothing of `Pool`.
+- **Generational ids.** The `Table` flattens the slot, so the generation
+  is one more column, and checking it reads only that column. A sparse
+  set can come later behind the same API if dense sweeps under heavy
+  churn need it.
 - **Generations never wrap: a slot is retired** when its generation would
   overflow. Cheap, and it removes the silent case entirely.
 - **`pool.get(id)` returns `Option<T>`,** since a stale id is expected (the
@@ -1266,6 +1267,10 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
     for op in conn.ops() => try Doc.edit(op)
 ```
 
+- **`actors` is plain Ren in std,** over the runtime's keyed instance
+  family, which keeps the live instances, pins them, evicts them and
+  queues their calls (foundations.md decision 18). Its policies, the
+  bound, the mailbox and eviction, are std's.
 - **A family is a dependency, `Actors<K, D> ! E`,** with `E` the errors
   of making an actor, which `try Docs.at(id)` can fail with. It's named in `uses`,
   installed by the root, and swapped in tests by installing a family of
@@ -1276,7 +1281,8 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   actor as `Doc` for its block, making it if it isn't live. There's no
   handle to keep, because `Docs` is a dependency. A key can be stored
   anywhere, and a stored key can't dangle: `at` makes the actor again.
-- **`actors(doc, max: Int = 10_000)` names the handler,** whose one
+- **`actors(doc, max:)` names the handler,** `max:` defaulting to std's
+  10_000, whose one
   parameter is the key. What else it needs comes from the `with` set, as
   for any item.
 - **An actor can't `at` its own family,** only `post` to it (below).
@@ -1288,8 +1294,9 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   as in every actor system: a read-modify-write is one operation.
 - **`post` is Erlang's cast.** `try Docs.post(k).edit(op)` puts one
   operation, with its arguments evaluated now, in k's mailbox and
-  returns: a message, which is data. Only an operation that returns `()`
-  and can't fail can be posted; the post itself makes the actor, as
+  returns: a message, which is data, a `Doc.Call`, the call value the
+  compiler writes for every dependency. `post` takes a call whose
+  result is `()` with no errors, an ordinary type rule; the post itself makes the actor, as
   `at` does, so it fails only with setup's errors. An actor posts to its
   siblings by naming its family in `uses`. Every call from outside, a
   post or an `at`, waits while the family's mail is over its `mailbox:`
@@ -1302,8 +1309,9 @@ is in [foundations.md decision 18](foundations.md#18-actors-and-stripes).
 ### Stripes: one service on many cores
 
 `striped` keeps a fixed number of instances of one handler and
-map-reduces over them. Callers can't tell: code that `uses Hits` doesn't
-know whether one instance serves it or sixteen.
+map-reduces over them, plain Ren in std over the same family. Callers
+can't tell: code that `uses Hits` doesn't know whether one instance
+serves it or sixteen.
 
 ```ren
 dep Hits =
@@ -1313,9 +1321,10 @@ dep Hits =
 with striped(counter(), by: Worker, merge: Sum) in serve()
 ```
 
-- **An operation whose first parameter has a `key` goes to one stripe**
-  (`by: Key`, the default), or to the stripe of the worker it's running
-  on (`by: Worker`, which takes no count).
+- **Routing is an ADT, `by: Key(n: 16) | Worker`.** Under `Key(n)`, the
+  default, an operation whose first parameter has a `key` goes to one
+  of n stripes by it. Under `Worker`, which has no count, it goes to
+  the stripe of the worker it's running on, from `Async.worker()`.
 - **An operation with no key runs on every stripe.** One that returns
   `()` broadcasts; one that returns a value is folded with `merge:`, in
   stripe order.
@@ -1327,14 +1336,16 @@ library, as §2 says a rule should be:
 
 ```ren
 actors(doc, max: 50_000, evict: Lru)              // or Lfu
+actors(doc, chaos: true)                           // a test's: evicts what Random picks
 striped(sessions(ttl), merge: Concat)              // Sum, Max, Min, Concat
-striped(books(), n: 64, merge: Custom(book_merge()))  // the rare kind the menu lacks
+striped(books(), by: Key(n: 64), merge: Custom(book_merge()))  // the rare kind the menu lacks
 ```
 
-`Custom` holds a description, a stateless handler for `Merge<Books>`, a
-dependency the compiler derives with one operation per keyless
-operation that returns a value. That's §6's rule: a description where
-the program adds the kind.
+`Custom` holds a description, a stateless handler over `Books` whose
+`call(c: Books.Call)` clause folds two stripes' results for the call
+`c`. There's no derived `Merge` dependency: the call value is the one
+every handler over any dependency already gets. That's §6's rule: a
+description where the program adds the kind.
 
 ### The marriage: a partitioned table
 

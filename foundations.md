@@ -13,7 +13,8 @@ record, [language.md](language.md): decision 18 is new, 3 is reframed,
 10 changed, and [Staging](#staging) is rewritten. On 2026-10-29 it took
 [formats.md](formats.md): decision 19 is new, and explicit layout is no
 longer open; then decision 20, what the language owns and what std
-owns. language.md is the
+owns, which moved `actors` and `striped` into std over a runtime
+primitive, the keyed instance family (decision 18). language.md is the
 language a program is written in, data, services, the pipe and
 collections; this record is how it runs. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
@@ -356,9 +357,9 @@ Async.scope fn(s) =>
   key.
 - A spawned task can't fail with an unhandled error.
 - **A scope has a limit.** `Async.scope(max: n)`: `spawn` waits while
-  `n` of the scope's tasks run, which is a server's backpressure. The
-  default is 64, as `Async.map`'s is, so a server writes
-  `max: 10_000`.
+  `n` of the scope's tasks run, which is a server's backpressure. Every
+  scope has one; its default is std's, in `Async.scope`'s signature
+  (64 today, as `Async.map`'s is).
 - **A handler has no task of its own.** Background work is a task
   that calls the handler's operations (`Metrics.flush()`), and every
   piece of handler code is an operation, which keeps its instance until
@@ -419,8 +420,11 @@ Async.scope fn(s) =>
   `call.result` for recording, `call.fail(e)` with only the operation's
   declared errors. `limit`, the recorder, replay and fault injection are
   Ren code. There's no reflection: `call.args` and `call.result` are
-  opaque, and can only be shown, compared and encoded to and from the
-  journal, by functions the compiler derives for each dependency. An
+  values the derived walk covers (`show`, `==`, `repr`, `parse`), which
+  any encoder uses; the journal is one such encoder. A call is one
+  mechanism: `call` here is a `D.Call`, the call value the compiler
+  writes for each dependency (decision 18), and a handler that names
+  it writes `call(c: D.Call) => ...` beside its operations. An
   `over any` handler is specialized per dependency it wraps, so it's
   static dispatch like any other.
 - **A `finally` covers everything after the point it's written,**
@@ -612,8 +616,8 @@ that belong to the arena.
   add on an M4), and contended, a striped counter beats it (34 against
   13 million operations a second at 8 threads). Its rules would have
   been the most special-cased in the model.
-- **Reads that take no lock: `snapshot(v)`,** a standard-library
-  handler. `read` lends the current version to a block whose row is
+- **Reads that take no lock: `Mem.snapshot(v)`,** the runtime's,
+  since it needs the runtime's reclamation (decision 20). `read` lends the current version to a block whose row is
   closed and empty, so it can't suspend and can't keep what it borrowed;
   `publish` and `update` swap in a new version, writers serialized
   against each other only. A read is one load: no lock, no count. The
@@ -657,6 +661,11 @@ thread can reach every behaviour.
   queue.
 - Resources are closed in a `finally` or an operation, never when a count
   reaches zero.
+- **The journal is the runtime's own record,** one of its privileged
+  handlers (decision 20): polls, the tape, task paths, and the world's
+  answers. `ren replay` and `ren test --keep` read the runtime, not a
+  library. Recording a user's own dependencies, tracing and the flight
+  recorder are plain Ren over `over any` and `call(c: D.Call)`.
 - Completions arrive at counted poll points, and the journal records each
   poll.
 - `Async.tick()` is a barrier across workers.
@@ -667,7 +676,11 @@ thread can reach every behaviour.
 - The tape has typed streams: scheduler choices, `Random` split per task,
   and faults.
 - A task's path is the label of its spawn site and an ordinal in that
-  scope (`main/accept:7/handle:0`), so a journal survives edits.
+  scope (`main/accept:7/handle:0`), so a journal survives edits. An
+  instance in a runtime family is named by the same kind of rule: where
+  its family is installed, its key and its incarnation
+  (`docs[DocId(7)]#3`), for every library built on the family
+  (decision 18).
 - A journal becomes a test as world answers plus a schedule prefix:
   replay follows the recorded order while it can, then the seeded tape
   explores.
@@ -778,7 +791,7 @@ a `T` field is an `Int`, not a pointer.
   compiled to a loop (Koka's tail recursion modulo cons: building a
   list by recursion, peak memory 97.4 to 25.5 MB, with no stack).
 - **Indices are a library.** `Id<T>` and `Pool<T>`, opaque types over an
-  `Int` and an array of small records, give Roc's and Zig's
+  `Int` and a `Table` of `{ gen, value }` slots, plain Ren in std, give Roc's and Zig's
   arrays-and-indices pattern, with an id that can't be used on another
   kind of pool, and a pool of plain records saves and loads as arrays (a
   1M-entry map loads in 3 ms, against 120 to 180 ms to rebuild it).
@@ -919,14 +932,52 @@ borrows its input needs no lifetime.
 ### 18. Actors and stripes
 
 A program never holds an instance ([the bet](#the-bet)), so it can't
-keep a collection of live handlers of its own. Two standard-library
-services buy back what it needs, and both are dependencies, installed
-by the root and swapped in tests. What a program writes with them, and
-when to choose them over data in one service, is in
+keep a collection of live handlers of its own. The runtime keeps them
+for it, as it keeps tasks: where instances live is the runtime's, as
+the scheduler is. Two standard-library services are written in plain
+Ren over that, `actors` and `striped`, and both are dependencies,
+installed by the root and swapped in tests. What a program writes with
+them, and when to choose them over data in one service, is in
 [language.md §11](language.md#11-many-stateful-things-data-or-actors).
 
-**`actors`: one instance per key, made on demand.** These are virtual
-actors, as Orleans' grains and Cloudflare's Durable Objects are:
+**The keyed instance family: a runtime primitive.** It's one of the
+runtime's privileged handlers (decision 20), and it does five things:
+
+- **Make an instance for a key,** running the handler's setup, whose
+  errors the family declares, `! StoreDown`, as a dependency states its
+  operations' errors.
+- **Pin one for a block,** so it isn't evicted while the block runs.
+- **Evict one,** running its `finally`.
+- **List the live keys.**
+- **Keep a queue of calls per key.**
+
+Which instance to evict, when, how many to keep and how to route are a
+library's: `actors` and `striped` are two such libraries, and a third
+party's (actors with a time to live, stripes by consistent hash) is
+written the same way.
+
+- **A call is a typed value.** For each dependency `D` the compiler
+  writes `D.Call`, one variant per operation with its arguments, typed
+  by the operation's result and errors, as it writes a description's
+  enum (language.md §6). It's the `call` of an `over any` handler
+  (decision 7), and a handler that takes every call writes
+  `call(c: D.Call) => ...`. A queue holds `D.Call`s, and the journal
+  records them as data. It's the start of a dependency's operations as
+  data; the rest of that direction is later.
+- **The soundness rules are the primitive's,** so every library over it
+  has them: a post makes its instance; queued calls count as waiting, so
+  an instance with mail is never evicted; a delivery may go past the
+  library's bound when nothing is evictable; every call from outside the
+  family is metered at its edge; a sibling's post past twice the bound
+  panics; teardown drains; and the no-deadlock rules. They're stated
+  below as `actors` uses them, and research/actors-post/ model-checks
+  them.
+- **Journal names** come from decision 11's rule for every runtime
+  instance family, as task paths do.
+
+**`actors`: one instance per key, made on demand.** Plain Ren in std,
+over the family. These are virtual actors, as Orleans' grains and
+Cloudflare's Durable Objects are:
 
 ```ren
 dep Docs = Actors<DocId, Doc> ! StoreDown
@@ -952,8 +1003,9 @@ try Docs.at(id) fn() => Doc.edit(op)
   its operations' errors; the handler given to `actors` must fit them. Callers waiting on the same key's setup
   get the same error, and the next `at` tries again. If setup is
   cancelled, the waiters try it themselves.
-- **Eviction.** A family is always bounded, `max: Int = 10_000`: an
-  unbounded family is a memory leak keyed by whatever the network sends. Making one past `max:` evicts the
+- **Eviction.** `actors` is always bounded by `max:`, whose default is
+  std's (10_000): an unbounded family is a memory leak keyed by
+  whatever the network sends. Making one past `max:` evicts the
   least recently released actor that's evictable, and the caller that
   makes it pays: the victim's `finally` runs on its task. If none is
   evictable, it waits. An actor that's pinned, running an operation, or
@@ -978,15 +1030,16 @@ try Docs.at(id) fn() => Doc.edit(op)
   actors posting to each other in a cycle safe, and an actor made for
   a post never waits for a slot.
 - **`post` is Erlang's cast: a message, and messages are data.**
-  `Docs.post(k).edit(op)` puts one operation of `D`, with its arguments,
+  `Docs.post(k).edit(op)` puts one call of `D`, with its arguments,
   in k's mailbox and returns. The arguments are evaluated when it's
   posted and are data, copied as an Erlang message is; no block is kept.
-  A mailbox holds the enum of `D`'s operations the compiler writes
-  (language.md §6), and the journal records posts as data. `at` is the
-  call, `post` the cast. research/actors-post/ model-checks these rules.
-  - **Only an operation that returns `()` and can't fail may be
-    posted**, since there's no caller to give a result or an error to.
-    Anything else is a compile error whose help says to handle it inside
+  A mailbox is the family's queue of `D.Call`s, and the journal records
+  posts as data. `at` is the call, `post` the cast.
+  research/actors-post/ model-checks these rules.
+  - **`post` takes a call whose result is `()` with no errors**, since
+    there's no caller to give a result or an error to. It's an ordinary
+    type rule on `post`'s parameter, not a rule written for `actors`:
+    anything else is a type error whose help says to handle it inside
     the actor, or to use `at`.
   - **`post` makes its actor, as `at` does,** so setup's errors are
     `post`'s, `try Docs.post(k).edit(op)`, the only errors a post has; a
@@ -1004,7 +1057,7 @@ try Docs.at(id) fn() => Doc.edit(op)
     `post` to it, never `at`: a post holds nothing, so it can't close a
     cycle. The handler's parameter, its key, is its `self()`.
   - **Back-pressure at the family's edge.** A family has one bound,
-    `mailbox: Int = 10_000`, and every call from outside the family is
+    `mailbox:` (std's default is 10_000), and every call from outside the family is
     metered by it: a post waits while the family's mail is over it, and
     so does an operation called through `at`, before it takes the actor
     (the compiler may meter only operations that post). A post from an
@@ -1032,30 +1085,38 @@ try Docs.at(id) fn() => Doc.edit(op)
 - **`sim` is faithful to the policy.** Eviction happens only through
   `max:`, `evict_idle` and `evict`, which depend only on the schedule
   and the clock, so `sim` already reaches every eviction the runtime
-  could make. `sim.scheduler(seed, evict: AnyIdle)` is opt-in chaos: it
-  evicts any evictable actor at any scheduling point, to test that
-  nothing important lives only in memory. The journal names an actor
-  `docs[DocId(7)]#3`, its family, key and incarnation, so replay can
-  tell two lives of one key apart.
+  could make. Chaos is a parameter of `actors`, `actors(doc, chaos:
+  true)`: at each call into the family it evicts the evictable actors
+  `Random` picks, from the tape under `sim`, to test that nothing
+  important lives only in memory. A test installs the chaotic family;
+  the scheduler and the toolchain know nothing of it. The journal names
+  an actor by decision 11's rule, `docs[DocId(7)]#3`, its family, key
+  and incarnation, so replay can tell two lives of one key apart.
 - **Open:** whether `Docs.at_all(keys)`, holding several actors for a
   block in sorted order, is in v1; and whether `Async.isolate` can
   contain a panic in an actor by dropping it without its `finally`.
 
-**`striped`: map-reduce over fixed stripes.**
+**`striped`: map-reduce over fixed stripes.** Plain Ren in std, over
+the family, with fixed keys.
 
-- `striped(h, n: Int = 16, by: Key)` keeps n instances of h. An
-  operation whose first parameter has a `key` goes to one stripe by it
-  (`by: Key`, the default). `by: Worker` gives each worker a stripe and
-  sends an operation to the caller's; giving it `n` is an error.
+- `striped(h, by: Key(n: 16) | Worker)` keeps instances of h. Routing
+  is an ADT, so a count with `Worker` can't be written. `by: Key(n)`,
+  the default with `n` 16, keeps n stripes and sends an operation whose
+  first parameter has a `key` to one stripe by it, read through the
+  derived walk from the call's arguments. `by: Worker` gives each
+  worker a stripe and sends an operation to the caller's, which it
+  learns from `Async.worker()`, a scheduler operation any library can
+  call.
 - An operation with no key runs on every stripe. If it returns `()`,
   that's all; if it returns a value, the results are folded with
   `merge:`, left to right in stripe order: `Sum`, `Max`, `Min`,
-  `Concat`, or `Custom(m)`, where m describes a stateless handler for
-  `Merge<D>`, a dependency the compiler derives with one operation per
-  keyless operation that returns a value (`fn(a, b) => ...` shorthand
-  for its arms). `merge:` has no default: a `striped` without one, over
-  a dependency with a keyless operation that returns a value, is a
-  compile error.
+  `Concat`, or a merge handler: a stateless handler over `D` whose
+  `call(c: D.Call)` clause folds two stripes' results for the call `c`,
+  the clause decision 7 gives every handler. There's no `Merge<D>`.
+  `merge:` has no default: a `striped` without one, over a dependency
+  with a keyless operation that returns a value, is refused at build
+  time by a check `striped` makes on its constant arguments, decision
+  20's one mechanism, as `Sum` over a result that isn't a number is.
 - The fold needs no algebraic law, since its order is fixed, and it
   isn't an atomic snapshot: stripes are visited one at a time.
 - **The split law.** Under `by: Worker` which stripe an operation lands
@@ -1076,12 +1137,14 @@ try Docs.at(id) fn() => Doc.edit(op)
   hop per call; a `place:` parameter can come later if measurements
   ask for it.
 - **Fair, not first in first out** (decision 10).
-- **A family is split into partitions**, a fixed number the program
-  sets with `parts:`, whose default comes from `max:` and never from the
+- **A family is split into partitions**, a fixed number `actors` sets
+  with `parts:`, whose default comes from `max:` and never from the
   core count. Each has its own lock, map, exact LRU and a cap of
   `max / parts`. So a journal from a run on one thread replays on
   sixteen.
-- **The runtime changes cost, never meaning:**
+- **The runtime changes cost, never meaning.** This falls out of
+  decision 10's rule, exclusion is skipped unless shared, applied to the
+  family:
 
 | Runtime | `striped(by: Key)` | `striped(by: Worker)` | `actors` |
 |---|---|---|---|
@@ -1148,15 +1211,38 @@ builds abstractions out of them. Every feature is placed by five rules:
    library, so a third party's msgpack or protobuf is as fast and as
    checked as std's json. **The one exception:** the world and the
    runtime come in through dependencies (decision 9), and their
-   built-in handlers (`Fs`, `Net`, `Clock`, the scheduler) are the only
-   privileged code. Everything else in std is plain Ren.
+   built-in handlers are the only privileged code. The list is closed
+   and complete:
+   - **the world:** `Fs`, `Net`, `Clock`, `Random`, `Console`, `Os`,
+     `Proc` and `Signal`;
+   - **the runtime:** the scheduler (`Async`), the keyed instance
+     family (decision 18), `Mem` with its arenas and `Mem.snapshot`,
+     `Alloc`, and the journal, the runtime's own record (decision 11),
+     so `ren replay` reads the runtime.
+
+   Everything else in std is plain Ren: `actors` and `striped` over the
+   family, tracing, the flight recorder and recording a user's own
+   dependencies over `over any` and `call(c: D.Call)`.
 3. **The language owns what only the compiler can know or guarantee:**
    the program's declarations as data (a type's shape, a dependency's
-   operations), building a value that respects its type's rules, checks
-   that run at build time (through one general mechanism, top-level
-   `let` and `assert`, never a check written for one library), and
-   whatever must behave the same in every library (the derived walk and
-   its reserved names `show`, `key`, `parse`, `repr`).
+   operations, `D.Call`), building a value that respects its type's
+   rules, checks that run at build time, and whatever must behave the
+   same in every library (the derived walk and its reserved names).
+   - **Build-time checks have one general mechanism:** top-level `let`
+     and `assert`, and the checks a generic function makes on its
+     constant arguments at build time. Any library uses it; none gets a
+     check written for it alone. Stage 12 spells it; a "signature
+     `let`" is the proposal from the templates experiment.
+   - **The reserved names are one closed list:** the derived walk's
+     `show`, `repr`, `parse`, `key` and `arbitrary` (the walk's
+     generating direction, [testing.md](testing.md)); the operator
+     methods `add`, `sub`, `mul`, `div`, `rem` and `neg`, and the
+     associated values `zero` and `one`
+     ([operators.md](operators.md)); and a cursor's `next`, with the
+     stream stage names on a type that has one, the price of method
+     syntax on the cursor protocol, which `for` needs
+     ([streams.md](streams.md)). `==`, `hash` and order are derived
+     through `key` and never written.
 4. **Optimizations are invisible.** Specializing a library over a
    constant, a string `match` compiled to a perfect hash, unboxing:
    none changes what a program means. A debug build means the same,
@@ -1177,13 +1263,15 @@ invisibly. A language feature that only one library uses is a sign the
 line is in the wrong place: make the primitive general, or move the
 feature out.
 
-For example, formats ([formats.md](formats.md)): the language owns
-`format ... for T`, because a format talks about the program's own
-names, `customerId = customer` refers to a field, and a library could
-only do that with strings. But the format's vocabulary has no medium in
-it: a tag is a constant the language checks is well typed and distinct,
-and json makes it a string, http a route. The language owns reshaping;
-libraries own spelling. A dependency whose operations can fail remotely
+For example, formats ([formats.md](formats.md)): bytes are the one
+medium the language owns. `Bytes` is a language type, and a view's
+promise, checked once and then each field a load, is a type rule only
+the compiler can keep, with accessors it inlines (rules 3 and 4). So
+`format ... for T`, with its byte orders, widths and tags, is the
+language's, and json, toml and http are libraries over shapes. Saying
+how a type looks to a library that isn't bytes, a field renamed for
+json or a tag spelled as a route, is a proposal for stage 12, called
+looks; nothing in the language does it today. A dependency whose operations can fail remotely
 says so with the header's error set, `pub dep Keys ! Unavailable`, the
 form `Actors<DocId, Doc> ! StoreDown` already has, rather than a
 keyword: the language gives "errors on the header", std gives
@@ -1226,8 +1314,9 @@ keyword: the language gives "errors on the header", std gives
   else that would fix a representation, outside `trust`; and outer
   variables changed by an isolated block or an arena's body.
 - **Held instances.** A program can't keep handler instances as values,
-  in a map of its own or a record. Keys address actors; a stripe is
-  never named.
+  in a map of its own or a record. The runtime's keyed instance family
+  holds them (decision 18): keys address actors; a stripe is never
+  named.
 - **First in first out on a busy instance.** Waiters are served fairly,
   in an order the runtime picks.
 - **Interfaces over data.** A data interface was a `dep` with stateless
@@ -1269,7 +1358,7 @@ and 32-bit references as the default.
 | A lambda's dependencies are found where it's called | Where it's written, except its parameter type's |
 | Lambda sets in function types (stage 10.0) | Gone from the type checker. Release may narrow switches |
 | A dependency can't take type parameters | Generic dependencies |
-| `Async.limit` and the recorder are built in | `over any` handlers in Ren |
+| `Async.limit` and the recorder are built in | `over any` handlers in Ren; the journal itself is the runtime's record (decision 11) |
 | `Async.group(max:)` | `Async.scope(max:)` |
 | A handler can run a `task =>` that lives as long as its `with` (async.md) | `Async.beside(task) fn() => body` inside the `with`, whose task's failure cancels the body |
 | A cancelled `Proc.run` kills its program | It kills the program's whole process group, `kill: Tree`, unless `kill: Child` |
@@ -1280,7 +1369,7 @@ and 32-bit references as the default.
 | A `with` whose setup can fail is written `with` | `try with` |
 | The journal has no task column | A task path column, answers keyed by task |
 | A `Float` operation that makes a NaN panics | A NaN panics where it's observed |
-| `sync.keyed(n, h)`: stripes by key, each held across its outward calls, and a keyless operation gives the last stripe's result | `striped`, a map-reduce with `merge:`, and `actors`, one instance per key, both dependencies (decision 18) |
+| `sync.keyed(n, h)`: stripes by key, each held across its outward calls, and a keyless operation gives the last stripe's result | `striped`, a map-reduce with `merge:`, and `actors`, one instance per key, both dependencies in std over the runtime's keyed instance family (decision 18) |
 | Callers queue for an instance first in first out | Fairly, in an order the runtime chooses |
 | A stateful handler called as a method starts fresh at each call | An error whose help writes the `with` |
 | Data interfaces as dependencies (`Shape`, `Expr`) | ADTs ([language.md](language.md)) |
@@ -1413,11 +1502,12 @@ and 32-bit references as the default.
    the compile error for a task that reaches a handler installed inside
    its scope, `Async.beside` and `Async.background`, `release` with
    `sim` switching at it, and
-   `Proc.run(kill:)`. `striped` and `actors` as decision 18 says, as
-   dependencies, with `post`, `evict: Lru`, `sim`'s chaos eviction and
-   the journal's incarnations; `sync.keyed` goes. Interpreter first, as
-   tasks are. **Done when** language.md §11's document server runs
-   under `sim` with `evict: AnyIdle`, and `ren test --sim --seeds` finds
+   `Proc.run(kill:)`. The keyed instance family in the runtime, with
+   `D.Call` and its incarnations in the journal; `striped` and `actors`
+   in std over it as decision 18 says, as dependencies, with `post`,
+   `evict: Lru` and chaos eviction; `sync.keyed` goes. Interpreter
+   first, as tasks are. **Done when** language.md §11's document server
+   runs under `sim` with `actors(doc, chaos: true)`, and `ren test --sim --seeds` finds
    a lost update split over two operations of one actor.
 
    **Alongside 5 and 6: phase one of the many-cores experiments,** C
@@ -1500,7 +1590,7 @@ and 32-bit references as the default.
    shared mark and atomic counts on shared objects, a heap per thread
    with frees returned to the heap they came from, the current heap a
    pointer each task holds; arenas, sealed when shared, with copy-in;
-   `snapshot` and its reclamation; lock-free handlers with `Atomic`
+   `Mem.snapshot` and its reclamation; lock-free handlers with `Atomic`
    fields; `striped` and `actors` on many cores as decision 18 says,
    with fair handoff, partitions and marking as K3 decided. **Phase two
    of the experiments:** the prototypes' questions again on the real
