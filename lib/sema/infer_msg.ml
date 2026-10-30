@@ -3733,12 +3733,49 @@ let tag_in_open_set (c : Ast.ident) ?(arm = false) ?(value = false) ~param tags
        holds)
 
 (* A call no marker covers, of [callee], which can fail with [tags], as
-   shown; [name_loc] is where the callee is written. *)
-let unhandled_call loc ~name_loc callee tags =
+   shown; [name_loc] is where the callee is written. [step] is the callee
+   as written, if the call is a chain's step, which carries its own `try`
+   (language.md §8). *)
+let unhandled_call loc ~name_loc ?step callee tags =
   Diag.make loc
     ~labels:[ (name_loc, sprintf "it can fail with %s" (and_list tags)) ]
-    ~help:"pass the errors on with `try`, or handle them with `match`"
+    ?notes:
+      (Option.map
+         (fun _ -> [ "in a chain each step that can fail carries its own `try`" ])
+         step)
+    ~help:
+      (match step with
+      | Some w -> sprintf "write `|> try %s`, or handle it with `match`" w
+      | None -> "pass the errors on with `try`, or handle them with `match`")
     (sprintf "`%s` can fail, and nothing handles it" callee)
+
+(* A `try` or an `attempt`, [keyword], at [loc], that's a chain's head and
+   covers nothing that can fail: it covers only [covers], since `|>` ends
+   its reach; [chain] is the chain with a `try` on each step that can
+   fail. *)
+let try_stops loc keyword ~covers ~chain =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "it covers only `%s`, which can't fail; each step is marked on its own"
+          covers;
+      ]
+    ~help:(sprintf "`%s`" chain)
+    (sprintf "`%s` stops at `|>`" keyword)
+
+(* A chain's step, at [loc], that's a method of the subject's own type
+   [ty]: `.` calls those (language.md §8). *)
+let step_own_method loc ~ty ~name =
+  Diag.make loc
+    ~help:(sprintf "write `(...).%s()`, or end the chain with a `let`" name)
+    (sprintf "`%s` is `%s`'s own method, so it's called with `.`" name ty)
+
+(* A chain's step, [callee], whose first parameter is `inout`: a chain
+   passes values (language.md §8). *)
+let step_changes loc ~callee ~subject =
+  Diag.make loc
+    ~help:(sprintf "call it with `&` directly: `%s(&%s, ...)`" callee subject)
+    "`|>` passes a value, so nothing in a chain can change it"
 
 (* The same, for installing the items of a `with`, at its keyword [loc],
    [item] the first that can fail: a `with` is marked as a call that can

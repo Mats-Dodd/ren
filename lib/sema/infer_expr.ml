@@ -246,6 +246,27 @@ let block_uses env cx loc ~listed (bcx : ctx) =
    them. *)
 let op_args : (int, string * Path.t) Hashtbl.t = Hashtbl.create 16
 
+(* The links of a chain inside the one being checked, by node: only the
+   whole chain looks for a marker on its head ([infer_pipe]). *)
+let inner_links : (int, unit) Hashtbl.t = Hashtbl.create 8
+
+(* A chain's head marked with `try` or `attempt`, by the marker's node,
+   with what it covers and the chain as it should be marked, while it's
+   inferred: its marker keeps them, for the message that says `|>` stopped
+   it ([Infer_env.marker]'s [chain_head]). *)
+let chain_heads : (int, string * (unit -> string)) Hashtbl.t = Hashtbl.create 8
+
+(* The markers around a chain, by the node of a link's `try` inside it,
+   or of a link that's the subject of another, while it's inferred: a
+   link is covered only by its own marker, but what its `try` passes on
+   goes to those around the chain too, as a `try` inside an `attempt`
+   does ([infer_pipe]). *)
+let chain_markers : (int, marker list) Hashtbl.t = Hashtbl.create 8
+
+(* The subject of each chain's step being checked, by the node of the
+   [Piped] that stands for it, for a message about its first argument. *)
+let piped_subjects : (int, expr) Hashtbl.t = Hashtbl.create 8
+
 (* The calls in the body of each lambda, by node, which a `let` that binds
    one keeps for its local ([ctx.let_blocks]). *)
 let lambda_calls : (int, call list ref) Hashtbl.t = Hashtbl.create 16
@@ -951,10 +972,16 @@ and synth env cx (e : expr) : ty =
       t
   | Try a -> (
       let m = marker env Mtry (keyword e.loc 3) in
+      m.chain_head <- Hashtbl.find_opt chain_heads e.node;
       (* the `try` around a group's test in a run of it, which needn't
          cover anything: the test may fail with nothing *)
       if e.node = Test_items.passed_on then m.failed <- true;
-      let t = infer env { cx with markers = m :: cx.markers } a in
+      (* a chain's link marked with `try` passes on to the markers around
+         the chain too, which the link itself is outside of *)
+      let around =
+        Option.value (Hashtbl.find_opt chain_markers e.node) ~default:[]
+      in
+      let t = infer env { cx with markers = (m :: around) @ cx.markers } a in
       (match (a.kind, Hashtbl.find_opt cx.found a.node) with
       | Con (_, [ (_, tag) ]), Some (Ctor_of (p, "Err")) when p = result_path ->
           (* `fail` is the way to fail with a tag written in place. A
@@ -1004,6 +1031,7 @@ and synth env cx (e : expr) : ty =
          `fail` *)
       let at = keyword e.loc 7 in
       let m = marker env Mattempt at in
+      m.chain_head <- Hashtbl.find_opt chain_heads e.node;
       let kept = fresh_row env.st in
       defer env (Kept (kept, cx.params, Some at));
       let t =
@@ -1011,6 +1039,10 @@ and synth env cx (e : expr) : ty =
       in
       TCon (result_path, [ t; TErrors kept ])
   | With { items; body } -> with_ core env cx e items body
+  | Pipe { subject; step } -> infer_pipe env cx e subject step
+  | Piped -> (
+      (* the subject's type, which [infer_pipe] recorded at this node *)
+      match Hashtbl.find_opt cx.nodes e.node with Some t -> t | None -> TError)
   | Assert a ->
       want_bool env Asserted a (infer env cx a);
       unit
@@ -1735,6 +1767,112 @@ and op_method env cx (e : expr) ~onode (a : expr) ta b path =
    [x]'s type: as a field is, by [through_type], except that a method can
    be in a type of any kind, not only a record. [changed] is where the `&`
    is, if it's `&x.m(...)`. *)
+(* A chain's link, [e], `subject |> step` (language.md §8): [step] is
+   checked as the call it is, `f(subject, a)`, its first argument the
+   [Piped] that stands for [subject]'s value, but [subject] is inferred
+   first, and each of the two only with its own markers: a `try` around
+   the chain, or an `attempt (...)`, covers neither, though what a step's
+   `try` passes on still goes to it. So a step that can fail needs a `try`
+   of its own, and a `try` on the head covers only the head. *)
+and infer_pipe env cx (e : expr) subject step =
+  let rec call (s : expr) = match s.kind with Try c | Attempt c -> call c | _ -> s in
+  (* the chain's head, and its steps' calls, in order, when [e] is a
+     whole chain and not a link inside one *)
+  let rec links (s : expr) acc =
+    match s.kind with
+    | Pipe { subject; step } ->
+        Hashtbl.replace inner_links s.node ();
+        links subject (call step :: acc)
+    | _ -> (s, acc)
+  in
+  if not (Hashtbl.mem inner_links e.node) then (
+    let head, steps = links e [] in
+    Hashtbl.remove inner_links e.node;
+    match head.kind with
+    | Try covers | Attempt covers ->
+        (* a marker on the head that covers nothing that can fail is
+           told that `|>` stopped it, with the chain marked as it should
+           be, which is known once the group is done *)
+        let src (x : expr) = Option.value (env.source x) ~default:"..." in
+        let chain () =
+          let step (c : expr) =
+            match c.kind with
+            | Call (f, _ :: rest) ->
+                let fails =
+                  match Option.map repr (Hashtbl.find_opt cx.nodes f.node) with
+                  | Some (TFun (_, _, errs, _)) ->
+                      row_names errs <> [] || row_tail errs <> None
+                  | _ -> false
+                in
+                (if fails then "try " else "")
+                ^ src f
+                ^ if rest = [] then "" else "(" ^ String.concat ", " (List.map src rest) ^ ")"
+            | _ -> src c
+          in
+          String.concat " |> " (src covers :: List.map step steps)
+        in
+        Hashtbl.replace chain_heads head.node (src covers, chain)
+    | _ -> ());
+  (* a link's `try` passes on to the markers around the whole chain,
+     which a link inside it is given by its node, as a `try` is *)
+  let outside =
+    Option.value (Hashtbl.find_opt chain_markers e.node) ~default:cx.markers
+  in
+  let around (link : expr) f =
+    match link.kind with
+    | Try _ | Pipe _ ->
+        Hashtbl.replace chain_markers link.node outside;
+        Fun.protect ~finally:(fun () -> Hashtbl.remove chain_markers link.node) f
+    | _ -> f ()
+  in
+  let t = around subject (fun () -> infer env { cx with markers = [] } subject) in
+  Hashtbl.remove inner_links subject.node;
+  Hashtbl.remove chain_heads subject.node;
+  match (call step).kind with
+  | Call (f, ({ kind = Piped; _ } as hole) :: _) ->
+      Hashtbl.replace cx.nodes hole.node t;
+      (* `|> Array.len`: a method of the subject's own type is called with
+         `.`, so `|>` keeps meaning a step from elsewhere *)
+      let owner =
+        match reveal env.st t with
+        | TCon (p, _) | TVariant (p, _, _) -> Some p
+        | _ -> None
+      in
+      let own_method =
+        match (f.kind, owner) with
+        | Var (Intrinsic x), Some p ->
+            let q = Intrinsic.path x in
+            Path.owner q = p
+            && List.exists
+                 (fun (b : Prelude.builtin_type) -> List.mem x b.methods)
+                 Prelude.types
+        | Var (Global q), Some p ->
+            q.member <> None
+            && Path.owner q = p
+            && (match Hashtbl.find_opt env.params_of q with
+               | Some ("self" :: _) -> true
+               | _ -> false)
+        | _ -> false
+      in
+      (match f.kind with
+      | Var (Intrinsic x) when own_method ->
+          report env
+            (step_own_method f.loc ~ty:(env.names (Option.get owner))
+               ~name:(Path.short (Intrinsic.path x)))
+      | Var (Global q) when own_method ->
+          report env
+            (step_own_method f.loc ~ty:(env.names (Option.get owner))
+               ~name:(Path.short q))
+      | _ -> ());
+      Hashtbl.replace piped_subjects hole.node subject;
+      Hashtbl.replace chain_steps (call step).node ();
+      Fun.protect
+        ~finally:(fun () ->
+          Hashtbl.remove piped_subjects hole.node;
+          Hashtbl.remove chain_steps (call step).node)
+        (fun () -> around step (fun () -> infer env { cx with markers = [] } step))
+  | _ -> invalid_arg "a chain's step that isn't a call of its subject"
+
 and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
   match f.kind with
   | Field (r, m) -> (
@@ -2562,6 +2700,15 @@ and check_args env cx ~name ?callee ~written ps args =
       | Inout, Ref place when passed ->
           Hashtbl.replace cx.nodes a.node p.ty;
           check env cx ~exact:true place p.ty
+      | Inout, Piped ->
+          (* a chain's subject, given to a parameter the step changes *)
+          let subject =
+            Option.bind (Hashtbl.find_opt piped_subjects a.node) env.source
+          in
+          report env
+            (step_changes a.loc
+               ~callee:(Option.value name ~default:"f")
+               ~subject:(Option.value subject ~default:"x"))
       | Inout, Ref call ->
           (* `take(&c.pop())`: the `&` is `c`'s, and the argument is
                    what the call returns *)
@@ -2586,6 +2733,7 @@ and check_args env cx ~name ?callee ~written ps args =
       | Read, _ -> (
           let why =
             match (cant_fail_why env callee a p.ty, callee) with
+            | _ when a.kind = Piped -> piped_why env cx ~name ps args a
             | Some why, _ -> why
             | None, Some c when c = Path.member (Path.prelude "Async") "each" ->
                 (* what `each`'s block gives is thrown away, so it gives
@@ -2622,6 +2770,61 @@ and check_args env cx ~name ?callee ~written ps args =
                 ?written:(if written then Some p.ty else None)
                 a p.ty))
     (List.combine ps written) args
+
+(* How to word a chain's subject, [a], the [Piped] first of [args],
+   not fitting the first of [ps], the parameters of the step [name]
+   (language.md §8): `|>` always passes it first. If another parameter
+   would take it, the message says which, and the help passes it there. *)
+and piped_why env cx ~name ps args (a : expr) =
+  let fn = Option.value name ~default:"this" in
+  let subject = Hashtbl.find_opt piped_subjects a.node in
+  let shown = Option.value (Option.bind subject env.source) ~default:"this" in
+  let t = Option.value (Hashtbl.find_opt cx.nodes a.node) ~default:TError in
+  (* the other parameter whose type the subject's fits, if one does *)
+  let fits (p : Types.param) =
+    p.mode = Read
+    && Result.is_ok
+         (Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+              Unify.unify st (c.ty t) (c.ty p.ty)))
+  in
+  let other =
+    List.find_map Fun.id
+      (List.mapi (fun i p -> if i > 0 && fits p then Some i else None) ps)
+  in
+  let ordinal i =
+    match i with
+    | 1 -> "second"
+    | 2 -> "third"
+    | 3 -> "fourth"
+    | i -> sprintf "as its argument %d" (i + 1)
+  in
+  let src (x : expr) = Option.value (env.source x) ~default:"..." in
+  let help =
+    match other with
+    | Some i ->
+        let rest = List.map src (List.tl args) in
+        let before = List.filteri (fun j _ -> j < i) rest
+        and after = List.filteri (fun j _ -> j >= i) rest in
+        sprintf "call it directly: `%s(%s)`" fn
+          (String.concat ", " (before @ [ shown ] @ after))
+    | None -> sprintf "call it directly: `%s(...)`" fn
+  in
+  explain ~alone:true
+    ~msg:(fun _ x ->
+      sprintf "`|>` puts `%s` first, but `%s` takes %s there" shown fn
+        (Diag.article x))
+    ~labels:(fun f _ ->
+      match (other, subject) with
+      | Some i, Some s ->
+          [
+            ( s.loc,
+              sprintf "`%s` is %s, which `%s` takes %s" shown (Diag.article f)
+                fn (ordinal i) );
+          ]
+      | _ -> [])
+    ~notes:[ "`|>` always passes its value as the first argument" ]
+    ~help:(fun _ _ -> help)
+    ()
 
 (* How to word [a], a block given to a parameter of [callee]'s of type
    [t] that can't fail, failing: a spawned task's, or a branch of

@@ -646,8 +646,11 @@ let guard env f = Diag.recover env.sink ~default:() f
 
 let rec check_expr env (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
+  | Piped ->
+      ()
   | Named (_, a) -> check_expr env a
+  | Pipe _ -> List.iter (check_expr env) (children e)
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
   | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->

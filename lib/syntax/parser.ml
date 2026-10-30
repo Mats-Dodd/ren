@@ -113,8 +113,19 @@
      line     := expr [("=" | "+=" | "-=" | "*=") body]
                                                     (an assignment's target
                                                      must be a place, mut.ml)
-     expr     := or ["orelse" expr]                 (`a orelse b orelse c`
+     expr     := pipe ["orelse" expr]               (`a orelse b orelse c`
                                                      is `a orelse (b orelse c)`)
+     pipe     := or { "|>" step }                   (a chain, language.md §8:
+                                                     its head one term, and
+                                                     no operator after it)
+     step     := ["try" | "attempt"] target ["(" arg, ... ")"] [lambda]
+                                                    (a trailing lambda only in
+                                                     the last step)
+     target   := IDENT | IDENT "." IDENT | tyname "." IDENT
+                                                    (a function, `module.f`
+                                                     or `Type.f`: Resolve
+                                                     decides, and refuses a
+                                                     field of a value)
      or       := and { "||" and }
      and      := not { "&&" not }
      not      := "not" not | cmp                    (`not a == b` is
@@ -123,7 +134,8 @@
      add      := mul { ("+" | "-") mul }
      mul      := unary { ("*" | "/" | "%") unary }
      unary    := "-" unary | "&" unary | postfix
-              |  "try" expr                         (everything to its right)
+              |  "try" expr                         (everything to its right,
+                                                     up to a `|>`)
               |  "attempt" add                      (stops at a comparison)
               |  "assert" expr
      postfix  := primary { "." IDENT | "[" expr "]"
@@ -1373,9 +1385,9 @@ and parse_finally p =
   let body = parse_body p in
   Finally (mk (Lambda (params, body)) at p)
 
-and parse_expr p =
+and parse_expr ?(chain = true) p =
   let first = p.i in
-  let e = parse_orelse p in
+  let e = parse_orelse ~chain p in
   if peek p = OVER then chain_not_value p first;
   if peek p = DOTDOT then
     Diag.error (loc p)
@@ -1408,14 +1420,180 @@ and chain_not_value p first =
 
 (* An expression that may be followed by `..`, which only a `for` reads
    ([parse_for]). *)
-and parse_orelse p =
+and parse_orelse ?(chain = true) p =
   let start = loc p in
-  let lhs = parse_or p in
+  let lhs = if chain then parse_pipe p else parse_or p in
   if peek p = ORELSE then (
     advance p;
     let rhs = parse_expr p in
     mk (Binop (Orelse, lhs, rhs, onode p)) start p)
   else lhs
+
+(* A chain, `order |> try validate |> price(d)` (language.md §8): a head,
+   then steps, each [x |> f(a)] a [Pipe] whose step calls `f(_, a)`. It
+   sits between `orelse` and `||`, so `orelse` may follow a chain and
+   applies to its result. The head is one term, so there's no precedence
+   to learn: anything that isn't a unary or postfix expression, a `try`,
+   an `attempt` or one in parentheses, is refused, as is a binary operator
+   after the last step; and `&` is, since a chain passes values. *)
+and parse_pipe p =
+  let start = loc p in
+  let first = p.i in
+  let head = parse_or p in
+  let head_last = p.i - 1 in
+  (* the steps, each with the chain before it as written, for a help *)
+  let rec steps subject n =
+    if peek p <> PIPEGT then subject
+    else
+      let before = spelled p first (p.i - 1) in
+      advance p;
+      let step, block, (text, tsrc, inner) = parse_step p ~subject:before in
+      (if n = 0 then
+         match head.kind with
+         | Binop _ ->
+             Diag.error head.loc
+               ~help:
+                 (Printf.sprintf "put it in parentheses: `(%s) |> %s`"
+                    (spelled p first head_last) text)
+               "`|>` takes one value on its left"
+         | Ref _ ->
+             Diag.error
+               { head.loc with stop = { head.loc.start with col = head.loc.start.col + 1 } }
+               ~help:
+                 (Printf.sprintf "call it with `&` directly: `%s`"
+                    (amp_call tsrc inner ~subject:(spelled p (first + 1) head_last)))
+               "`|>` passes a value, so nothing in a chain can change it"
+         | _ -> ());
+      let e = mk (Pipe { subject; step }) start p in
+      if block && peek p = PIPEGT then
+        Diag.error (loc p)
+          ~help:
+            "name the block first, `let f = fn(x) => ...`, and pass it in the \
+             parentheses"
+          "only the chain's last step can take a block";
+      steps e (n + 1)
+  in
+  let e = steps head 0 in
+  (if e != head then
+     match peek p with
+     | PLUS | MINUS | STAR | SLASH | PERCENT | PLUSPERCENT | MINUSPERCENT
+     | STARPERCENT | EQEQ | NEQ | LT | LE | GT | GE | AMPAMP | PIPEPIPE | DOT
+     | LBRACKET ->
+         Diag.error (loc p)
+           ~help:"put the chain in parentheses, or name it with `let`"
+           "a chain ends its expression"
+     | _ -> ());
+  e
+
+(* One step of a chain, after its `|>`: an optional `try` or `attempt`,
+   then a function by name, `f`, `module.f` or `Type.f` (Resolve decides
+   which, and refuses a field of a value), then its other arguments in
+   parentheses, if it has any, then a trailing block. It's the call
+   `f(_, a)`, [Piped] for the value on the left, inside its marker. Also
+   whether it has a trailing block, which only the last step may, and, as
+   written, the step, its function and its other arguments. [subject] is
+   the chain before it as written, for a help. *)
+and parse_step p ~subject =
+  let start = loc p and first = p.i in
+  let mark =
+    match peek p with
+    | TRY ->
+        advance p;
+        Some `Try
+    | ATTEMPT ->
+        advance p;
+        Some `Attempt
+    | _ -> None
+  in
+  let amp =
+    if peek p = AMP then (
+      let l = loc p in
+      advance p;
+      Some l)
+    else None
+  in
+  let not_a_step at =
+    Diag.error at
+      ~help:
+        "name it first, `let apply_rules = fn(o) => ...`, then `|> \
+         apply_rules`"
+      "a step is a function by name, not a block"
+  in
+  let tstart = loc p and tfirst = p.i in
+  let target =
+    match peek p with
+    | IDENT n when at_module_type p || is_upper n -> (
+        (* `Type.f` or `module.Type.f`, a member, as [parse_primary] reads
+           one; a constructor or a record isn't a step *)
+        let e = parse_primary p in
+        match e.kind with
+        | Var (Item _) | Field ({ kind = Con (_, []); _ }, _) -> e
+        | _ -> not_a_step e.loc)
+    | IDENT n ->
+        advance p;
+        let v = mk (Var (Bare n)) tstart p in
+        if
+          peek p = DOT
+          && match peek2 p with IDENT m -> not (is_upper m) | _ -> false
+        then (
+          advance p;
+          let f = ident p in
+          mk (Field (v, f)) tstart p)
+        else v
+    | _ -> not_a_step (loc p)
+  in
+  let tsrc = spelled p tfirst (p.i - 1) in
+  let args, inner =
+    if peek p = LPAREN then (
+      let open_i = p.i in
+      advance p;
+      let args = sep_list p ~close:RPAREN parse_call_arg in
+      (args, if p.i - 2 > open_i then spelled p (open_i + 1) (p.i - 2) else ""))
+    else ([], "")
+  in
+  Option.iter
+    (fun at ->
+      Diag.error at
+        ~help:
+          (Printf.sprintf "call it with `&` directly: `%s`"
+             (amp_call tsrc inner ~subject))
+        "`|>` passes a value, so nothing in a chain can change it")
+    amp;
+  let block =
+    if peek p = FN then (
+      let lam = parse_lambda p in
+      (* a block on the step's line whose body is a chain took the rest
+         of the chain in, as R's pipe did a lambda's: what's after it was
+         meant as steps, and only the last step can take a block *)
+      (match lam.kind with
+      | Lambda (_, ({ kind = Pipe _ | Binop (Orelse, { kind = Pipe _; _ }, _, _); _ } as body))
+        when body.loc.start.line = lam.loc.start.line ->
+          Diag.error body.loc
+            ~help:
+              "name the block first, `let f = fn(x) => ...`, and pass it in \
+               the parentheses"
+            "only the chain's last step can take a block"
+      | _ -> ());
+      [ lam ])
+    else []
+  in
+  let text = spelled p first (p.i - 1) in
+  let hole = node p Piped target.loc in
+  let call = mk (Call (target, (hole :: args) @ block)) tstart p in
+  let step =
+    match mark with
+    | Some `Try -> mk (Try call) start p
+    | Some `Attempt -> mk (Attempt call) start p
+    | None -> call
+  in
+  (step, block <> [], (text, tsrc, inner))
+
+(* `f(&x, a)`, the call a step `|> &f(a)` or a head `&x |> f(a)` meant:
+   [target] the step's function as written, [inner] its other arguments,
+   [subject] what's on the left. *)
+and amp_call target inner ~subject =
+  Printf.sprintf "%s(&%s%s)" target subject
+    (if inner = "" then "" else ", " ^ inner)
 
 and parse_or p = left_assoc [ (PIPEPIPE, Or) ] parse_and p
 and parse_and p = left_assoc [ (AMPAMP, And) ] parse_not p
@@ -1498,10 +1676,13 @@ and parse_unary p =
   | TRY ->
       (* `try` covers every call to its right (errors.md, "Marking"), so it
          takes the whole expression there: `try a() + b()` is
-         `try (a() + b())` *)
+         `try (a() + b())`; but `|>` ends its reach, so `try order |>
+         validate` is `(try order) |> validate`, each step marked on its own
+         (language.md §8). Brackets and bodies inside it start afresh:
+         `try f(a |> g)` covers the whole call *)
       let start = loc p in
       advance p;
-      let e = parse_expr p in
+      let e = parse_expr ~chain:false p in
       mk (Try e) start p
   | ATTEMPT ->
       (* `attempt` makes a value, a `Result`, which is usually compared

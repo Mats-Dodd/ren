@@ -17,7 +17,9 @@
 // continues the signature above it, so it gets no layout token at all,
 // unless a block can open there (after `type E =`, a named error set one
 // `|` per line). Neither does one after a line ending in `,`, where no
-// layout token is valid.
+// layout token is valid. Nor does an indented line that starts with
+// `|>`, a chain's next step, or with `.` and a name, the next stage over
+// a cursor.
 //
 // Each layout token is empty and sits at the end of the line before it.
 // So each call starts there again, before the line break: after a DEDENT
@@ -102,6 +104,21 @@ static bool at_bang(TSLexer *lexer) {
   if (lexer->lookahead != '!') return false;
   advance(lexer);
   return lexer->lookahead != '=';
+}
+
+// Does the line go on with a chain's next step, `|>`, or a stage, `.`
+// and a name (not `..`)? Moves past what it reads, as at_uses does.
+static bool at_step(TSLexer *lexer) {
+  if (lexer->lookahead == '|') {
+    advance(lexer);
+    return lexer->lookahead == '>';
+  }
+  if (lexer->lookahead == '.') {
+    advance(lexer);
+    int32_t c = lexer->lookahead;
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+  }
+  return false;
 }
 
 // An opening bracket, or a closing one, which first closes the lambdas'
@@ -221,6 +238,12 @@ bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
     uint16_t current = current_indent(s);
 
     if (indent > current && lexer->lookahead == 'u' && at_uses(lexer))
+      return false;
+    // a chain's next step, or a stage over a cursor, continues the line
+    // above (language.md §8, "Grammar and layout")
+    if (indent > current &&
+        (lexer->lookahead == '|' || lexer->lookahead == '.') &&
+        at_step(lexer))
       return false;
     // after `=`, where a block can open, a `!` starts a named error set
     // written one `|` per line instead (the compiler checks for the `=`)

@@ -53,7 +53,8 @@
   (glob_files %{project_root}/examples/*.ren)
   (glob_files %{project_root}/examples/shop/*.ren)
   (glob_files %{project_root}/examples/shop/billing/*.ren)
-  (glob_files %{project_root}/examples/two/*.ren)))
+  (glob_files %{project_root}/examples/two/*.ren)
+  (glob_files %{project_root}/examples/checkout/*.ren)))
 
 ; tasks.t runs stage 11a's programs, in 11a/tasks/ until their steps
 ; land them in examples/, each `ren test` in its folder, and says which

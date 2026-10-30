@@ -12,8 +12,9 @@
  * Layout works as in the compiler's lexer (lib/syntax/lexer.ml): the
  * external scanner (src/scanner.c) turns indentation into INDENT, DEDENT
  * and NEWLINE, ignores line breaks inside brackets except in a lambda's
- * block, and lets an indented line starting with `uses` continue the
- * signature above it.
+ * block, lets an indented line starting with `uses` continue the
+ * signature above it, and one starting with `|>` or `.` and a name the
+ * expression above it.
  *
  * Capitalization tells names apart without looking anything up, as in the
  * compiler: types and constructors are capitalized, and variables,
@@ -25,22 +26,26 @@
 
 // `not` binds below the comparisons, so `not a == b` is `not (a == b)`,
 // and above `&&`, so `not a && b` is `(not a) && b`. `orelse` binds below
-// `||`. `try` takes everything to its right, so it binds loosest of all,
-// and so does `assert`. `attempt` stops at a comparison, so `attempt f()
-// == x` is `(attempt f()) == x`, but `attempt a() + b()` is
+// `||`, and a chain, `x |> f`, between the two (language.md §8). `try`
+// takes everything to its right, so it binds loosest of all, and so does
+// `assert`, but `|>` ends `try`'s reach: its operand, and the operands of
+// a binary operator, which a chain can't be, are an `_operand`, an
+// expression that isn't a chain. `attempt` stops at a comparison, so
+// `attempt f() == x` is `(attempt f()) == x`, but `attempt a() + b()` is
 // `attempt (a() + b())`.
 const PREC = {
   prefix: -1,
   orelse: 0,
-  or: 1,
-  and: 2,
-  not: 3,
-  compare: 4,
-  attempt: 5,
-  add: 6,
-  mul: 7,
-  unary: 8,
-  postfix: 9,
+  pipe: 1,
+  or: 2,
+  and: 3,
+  not: 4,
+  compare: 5,
+  attempt: 6,
+  add: 7,
+  mul: 8,
+  unary: 9,
+  postfix: 10,
 };
 
 // `a, b, c`, with a trailing comma allowed, and possibly empty
@@ -806,9 +811,15 @@ module.exports = grammar({
     // ---- expressions ----
 
     _expression: ($) =>
+      choice($._operand, $.orelse_expression, $.pipe_expression),
+
+    // an expression that's neither a chain nor an `orelse`: what `try`
+    // covers, but for an `orelse` of its own ([_try_orelse]), and an
+    // operator's operands, since a chain ends its expression and `orelse`
+    // binds loosest
+    _operand: ($) =>
       choice(
         $.binary_expression,
-        $.orelse_expression,
         $.unary_expression,
         $.reference,
         $.try_expression,
@@ -816,6 +827,39 @@ module.exports = grammar({
         $.assert_expression,
         $._postfix,
       ),
+
+    // order |> try validate |> price(d): one link of a chain, its subject
+    // the chain before it (language.md §8)
+    pipe_expression: ($) =>
+      prec.left(
+        PREC.pipe,
+        seq(
+          field('subject', $._expression),
+          '|>',
+          field('step', $.pipe_step),
+        ),
+      ),
+
+    // try validate, price(d), checkout.place, Cart.of, each fn(x) => ...:
+    // a function by name, its marker, the arguments after the value on the
+    // left, and a trailing block, which the compiler allows only in the
+    // last step
+    pipe_step: ($) =>
+      prec.right(
+        seq(
+          optional(field('marker', choice('try', 'attempt'))),
+          field(
+            'function',
+            choice($.identifier, $.step_path, $.item_expression),
+          ),
+          optional(field('arguments', $.arguments)),
+          optional(field('trailing', $.lambda)),
+        ),
+      ),
+
+    // checkout.place: a module's function, as a step
+    step_path: ($) =>
+      seq(field('module', $.identifier), '.', field('name', $.identifier)),
 
     binary_expression: ($) =>
       choice(
@@ -830,9 +874,9 @@ module.exports = grammar({
           prec.left(
             p,
             seq(
-              field('left', $._expression),
+              field('left', $._operand),
               field('operator', op),
-              field('right', $._expression),
+              field('right', $._operand),
             ),
           ),
         ),
@@ -851,15 +895,36 @@ module.exports = grammar({
       ),
 
     // try f(), and try match f(): passes on the errors of every call to its
-    // right
+    // right, up to a `|>`: `try load() |> price(1)` is `(try load()) |>
+    // price(1)`. An `orelse` it covers goes on past one, `try a orelse b
+    // |> f` covering `a orelse (b |> f)`, as the compiler reads it
     try_expression: ($) =>
-      prec.right(PREC.prefix, seq('try', field('operand', $._expression))),
+      prec.right(
+        PREC.prefix,
+        seq(
+          'try',
+          field(
+            'operand',
+            choice($._operand, alias($._try_orelse, $.orelse_expression)),
+          ),
+        ),
+      ),
+
+    _try_orelse: ($) =>
+      prec.right(
+        PREC.orelse,
+        seq(
+          field('left', $._operand),
+          'orelse',
+          field('right', $._expression),
+        ),
+      ),
 
     // attempt f(): its outcome, as a Result, up to a comparison
     attempt_expression: ($) =>
       prec.right(
         PREC.attempt,
-        seq('attempt', field('operand', $._expression)),
+        seq('attempt', field('operand', $._operand)),
       ),
 
     // assert a == b: a panic if it's false
@@ -872,13 +937,13 @@ module.exports = grammar({
     // -x, not b
     unary_expression: ($) =>
       choice(
-        prec(PREC.unary, seq('-', field('operand', $._expression))),
-        prec(PREC.not, seq('not', field('operand', $._expression))),
+        prec(PREC.unary, seq('-', field('operand', $._operand))),
+        prec(PREC.not, seq('not', field('operand', $._operand))),
       ),
 
     // &xs, &xs.push(x): the value the call changes
     reference: ($) =>
-      prec(PREC.unary, seq('&', field('place', $._expression))),
+      prec(PREC.unary, seq('&', field('place', $._operand))),
 
     _postfix: ($) =>
       choice(

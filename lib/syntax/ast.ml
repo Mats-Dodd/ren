@@ -333,6 +333,18 @@ and ('v, 'b, 't) expr_kind =
       (** [try e]: pass on the errors of every call in [e]. [try match] is a
           [Try] of a [Match] *)
   | Attempt of ('v, 'b, 't) expr  (** [attempt e]: its outcome, as a [Result] *)
+  | Pipe of { subject : ('v, 'b, 't) expr; step : ('v, 'b, 't) expr }
+      (** [order |> try validate]: one link of a chain (language.md §8), its
+          [subject] the chain before it, so a chain of three is two nested
+          [Pipe]s. [step] is the step's call with a [Piped] for its first
+          argument, `validate(_)`, inside the step's own [Try] or [Attempt]
+          if it's marked: [x |> f(a)] is [f(x, a)], checked as that call,
+          but [subject] is evaluated first, with markers of its own, and
+          the step's marker covers only the step's call (compiler.md,
+          "Services stage", "The pipe (step 1)") *)
+  | Piped
+      (** the value of the [Pipe]'s subject, the first argument of its step's
+          call: only ever there *)
   | With of { items : ('v, 'b, 't) with_item list; body : ('v, 'b, 't) expr }
       (** [with a, b in body] (deps.md, "`with`"): a set of items, each
           installed once around [body], in an order inference works out
@@ -680,7 +692,9 @@ let children (e : ('v, 'b, 't) expr) =
     | Expr e | Finally e -> [ e ]
   in
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
+  | Piped ->
+      []
   | Unop (_, a, _)
   | Field (a, _)
   | Ref a
@@ -691,7 +705,10 @@ let children (e : ('v, 'b, 't) expr) =
   | Attempt a
   | Assert a ->
       [ a ]
-  | Binop (_, a, b, _) | Index (a, b) | Assign { target = a; value = b; _ } ->
+  | Binop (_, a, b, _)
+  | Index (a, b)
+  | Assign { target = a; value = b; _ }
+  | Pipe { subject = a; step = b } ->
       [ a; b ]
   | Slice (a, lo, hi) -> [ a; lo; hi ]
   | If (c, t, f) -> c :: t :: Option.to_list f
@@ -1102,6 +1119,8 @@ let rec show_expr (e : expr) =
       parens ("fail" :: t.name :: List.map show_arg args)
   | Try a -> parens [ "try"; show_expr a ]
   | Attempt a -> parens [ "attempt"; show_expr a ]
+  | Pipe { subject; step } -> parens [ "|>"; show_expr subject; show_expr step ]
+  | Piped -> "_"
   | Assert a -> parens [ "assert"; show_expr a ]
   | Inline_handler a -> parens [ "handler"; show_expr a ]
   | Named (n, a) -> parens [ n.name ^ ":"; show_expr a ]
@@ -1401,6 +1420,24 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         left n a ^ " " ^ binop_to_string op ^ " " ^ operand (n + 1) b
     | Try a -> "try " ^ go a
     | Attempt a -> "attempt " ^ operand 5 a
+    | Pipe { subject; step } ->
+        (* the step as written: its marker, then the call without the
+           subject, and without parentheses if it has no other argument *)
+        let rec step_src (s : Resolved.expr) =
+          match s.kind with
+          | Try c -> "try " ^ step_src c
+          | Attempt c -> "attempt " ^ step_src c
+          | Call (f, { kind = Piped; _ } :: []) -> left 8 f
+          | Call (f, { kind = Piped; _ } :: rest) ->
+              left 8 f ^ "(" ^ list rest ^ ")"
+          | _ -> raise Exit
+        in
+        let subject =
+          match subject.kind with
+          | Binop _ -> "(" ^ go subject ^ ")"
+          | _ -> go subject
+        in
+        subject ^ " |> " ^ step_src step
     | Assert a -> "assert " ^ go a
     | Fail (t, []) -> "fail " ^ t.name
     | Fail (t, args) -> "fail " ^ t.name ^ "(" ^ con_args args ^ ")"
@@ -1439,11 +1476,13 @@ let source ~type_name ~value_name (e : Resolved.expr) =
             (List.map (fun ((f : ident), v) -> ", " ^ f.name ^ ": " ^ go v) fields)
         ^ " }"
     | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | While _ | Break
-    | With _ | Handler _ | Inline_handler _ ->
+    | With _ | Handler _ | Inline_handler _ | Piped ->
         raise Exit
   and operand n (a : Resolved.expr) =
     match a.kind with
     | Binop (op, _, _, _) when precedence op < n -> "(" ^ go a ^ ")"
+    (* a chain ends its expression: only `orelse` may follow one bare *)
+    | Pipe _ when n > 1 -> "(" ^ go a ^ ")"
     | Unop (Not, _, _) when 3 < n -> "(" ^ go a ^ ")"
     | _ -> go a
   (* an operator's left operand, or what a call, field or index is of

@@ -834,6 +834,10 @@ let param_use cx (b : binder) loc why =
 let rec walk cx (e : expr) =
   match e.kind with
   | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Todo -> ()
+  | Piped ->
+      (* the subject's value, read where the subject was walked, before
+         the step: as a `let` of it would be (Lower makes one) *)
+      ()
   | Var _ | Field _ | Index _ | Slice _ -> (
       match place_of cx e with
       | Some p ->
@@ -891,7 +895,7 @@ let rec walk cx (e : expr) =
   | Match _ | Array _
   | Tuple _
   | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _
-  | Named _ | Tag_set _ ->
+  | Named _ | Tag_set _ | Pipe _ ->
       List.iter (walk cx) (children e)
 
 and stmt cx = function

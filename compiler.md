@@ -11036,11 +11036,59 @@ fit the code, each to revisit if a step finds it wrong:
   and an `Op` appends (`Append(text)`); subscribers are seen through a
   test `Conns`.
 
+Chosen in step 1, as built:
+
+- **A link is `Pipe { subject; step }`, `step` the call itself,** `f(_,
+  a)`, with a `Piped` for its first argument, inside the step's own `Try`
+  or `Attempt`, rather than The AST's `{ subject; step; args; mark;
+  block }`: Resolve, Infer and Lower then see a call, checked by the
+  call's own path (defaults, by-name arguments, a trailing block, an
+  operation's block), and nothing that walks calls needed a case. Infer
+  records the subject's type at the `Piped`'s node; Lower makes `let s =
+  subject in f(s, a)`, the `Piped` the `s`.
+- **A link's marker covers only its link, but a step's `try` still
+  passes on to the markers around the chain,** as a `try` inside an
+  `attempt` does: `attempt (x |> try f |> g)` keeps `f`'s errors, and
+  `attempt (x |> f)` with an unmarked `f` that can fail is refused, and
+  so is that `attempt`, which then covers nothing (§8, "`try` on each
+  step").
+- **An unmarked step's error is the one §8 gives;** its function, if it
+  says it fails with the step's errors, also hears it says what nothing in
+  it can, as for any unmarked call: the fix, `|> try f`, clears both.
+- **A trailing block on the step's line whose body is a chain** took the
+  rest of the chain in, as R's pipe did a lambda's: it's "only the chain's
+  last step can take a block". A block on lines of its own may hold a
+  chain.
+- **A step whose first parameter is `inout`** is "`|>` passes a value",
+  as `&` is, with the help that calls it directly.
+- **The subject swapped with another argument** is §8's message, and the
+  argument that then doesn't fit its parameter is reported too, as any
+  argument is.
+- **A line starting with `.` that ends a chain** (`x |> f` then `.g()`)
+  is "a chain ends its expression", as an operator after one is: calling
+  a method mid-chain is later (the brief's "Deliberately out").
+- **tree-sitter's operands:** an operator's operands, and `try`'s,
+  `attempt`'s, `-`'s, `not`'s and `&`'s, are an `_operand`, an
+  expression that's neither a chain nor an `orelse`, so `|>` stops `try`
+  by the grammar's structure, not a precedence (which can't order `try`
+  below `orelse` and above `|>`, with `|>` above `orelse`); `try`'s own
+  `orelse` keeps a chain on its right, as the compiler's does. It still
+  accepts a head the compiler refuses, `a + b |> f`, as `(a + b) |> f`.
+- **No formatter exists yet,** so §8's all-or-nothing formatting has
+  nothing to change in this step.
+- **Step 0's programs that weren't Ren** were mended to say what they
+  meant, their targets unchanged: a block parameter called without `try`
+  (`n |> try f`, `try xs.map(f)`), functions declared `! Bad` that
+  couldn't fail (`if n < 0 then fail Bad else n`), a statement that threw
+  an `Int` away (`let _ = try Orders.save(p)`), and bench/services/pipe's
+  `attempt [7]`, which covers nothing (`attempt validate([7])`).
+
 ### Progress log
 
 | step | commit | done | left |
 |---|---|---|---|
-| 0 | this commit | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
+| 0 | 7a624b2 | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
+| 1 | this commit | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
 
 ## The runtime model
 

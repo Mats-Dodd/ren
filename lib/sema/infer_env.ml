@@ -540,6 +540,9 @@ and ecall = {
   einstall : bool;
       (** whether it's installing a `with`'s item, which can fail to start
           (handlers.md, "State that can fail to start"), not a call *)
+  estep : bool;
+      (** whether it's a chain's step, `|> validate`, which carries its own
+          marker or none (language.md §8, "`try` on each step") *)
 }
 
 (* A `try`, an `attempt` or a `match` with `fail` arms, and the calls it
@@ -558,6 +561,11 @@ and marker = {
       (** for `try`: why it may cover nothing, for a help *)
   mutable failed : bool;
       (** for `attempt` and `match`: whether a `fail` is inside it *)
+  mutable chain_head : (string * (unit -> string)) option;
+      (** for a `try` or an `attempt` that is a chain's head, `try order |>
+          validate`, which `|>` stops: what it covers, as written, and the
+          chain with a `try` on each step that can fail, once that's known,
+          for the message that says so (language.md §8) *)
 }
 
 and marker_kind =

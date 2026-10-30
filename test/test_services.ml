@@ -98,15 +98,8 @@ let pub_all src =
 let%expect_test "[s1 accept] `x |> f(a)` is `f(x, a)`, to each kind of target" =
   (* a function, an associated function, a function parameter and a
      block bound by `let`, each with and without arguments *)
-  until "s1"
-    ~want:{|
-120
-6
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Cart = { items: Array<Int> }
   pub fn of(xs: Array<Int>) -> Cart = Cart { items: xs }
 
@@ -118,39 +111,24 @@ fn total(c: Cart) -> Int =
 
 fn scaled(n: Int, by: Int) -> Int = n * by
 
-fn apply(n: Int, f: fn(Int) -> Int) -> Int = n |> f
+fn apply(n: Int, f: fn(Int) -> Int) -> Int = n |> try f
 
 fn main() uses Console =
   let double = fn(n: Int) => n * 2
   print([1, 2, 3] |> Cart.of |> total |> scaled(10) |> double)
   print(apply(5, fn(x) => x + 1))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-       ┌─ test.ren:12:48
-    12 │ fn apply(n: Int, f: fn(Int) -> Int) -> Int = n |> f
-       │                                                ^
-
-    error: expected `,` or `)`, found `|`
-       ┌─ test.ren:16:19
-    16 │   print([1, 2, 3] |> Cart.of |> total |> scaled(10) |> double)
-       │                   ^
+    120
+    6
+    ()
     |}]
 
 let%expect_test "[s1 accept] a vertical chain with a `try` on each step that can fail" =
   (* language.md §8's shape: each line starting with `|>`, indented
      further, continues the one above, and each `try` covers its own step *)
-  until "s1"
-    ~want:{|
-Ok(12)
-Err(Empty)
-Err(TooBig(501))
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn validate(xs: Array<Int>) -> Array<Int> ! Empty =
   if xs == [] then fail Empty
   xs
@@ -175,62 +153,42 @@ fn main() uses Console =
   print(attempt checkout([5, 6]))
   print(attempt checkout([]))
   print(attempt checkout([500]))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found an indented block
-       ┌─ test.ren:17:5
-    17 │     |> try validate
-       │     ^
+    Ok(12)
+    Err(Empty)
+    Err(TooBig(501))
+    ()
     |}]
 
 let%expect_test "[s1 accept] `try` and `attempt` on the head stop at `|>`" =
   (* `try load() |> price(1)` is `(try load()) |> price(1)`, and
      `attempt` likewise: each marks only its own step *)
-  until "s1"
-    ~want:{|
-Ok(4)
-5
-()
-|}
-    (fun () ->
-      run
-        {|
-fn load() -> Int ! Down = 3
+  run
+    {|
+fn load(n: Int) -> Int ! Down =
+  if n < 0 then fail Down
+  n
 
 fn price(n: Int, fee: Int) -> Int = n + fee
 
-fn total() -> Int ! Down = try load() |> price(1)
+fn total() -> Int ! Down = try load(3) |> price(1)
 
 fn main() uses Console =
   print(attempt total())
-  print(attempt load() |> show |> fn_len)
+  print(attempt load(3) |> show |> fn_len)
 
 fn fn_len(s: Str) -> Int = s.bytes().len()
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-      ┌─ test.ren:5:39
-    5 │ fn total() -> Int ! Down = try load() |> price(1)
-      │                                       ^
-
-    error: expected `,` or `)`, found `|`
-      ┌─ test.ren:9:24
-    9 │   print(attempt load() |> show |> fn_len)
-      │                        ^
+    Ok(4)
+    5
+    ()
     |}]
 
 let%expect_test "[s1 accept] `orelse` follows a chain, and applies to its result" =
-  until "s1"
-    ~want:{|
-20
-0
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn first_over(xs: Array<Int>, n: Int) -> Option<Int> =
   var found: Option<Int> = None
   for x in xs
@@ -240,51 +198,33 @@ fn first_over(xs: Array<Int>, n: Int) -> Option<Int> =
 fn main() uses Console =
   print([5, 20, 30] |> first_over(10) orelse 0)
   print([5] |> first_over(10) orelse 0)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `|`
-      ┌─ test.ren:8:21
-    8 │   print([5, 20, 30] |> first_over(10) orelse 0)
-      │                     ^
+    20
+    0
+    ()
     |}]
 
 let%expect_test "[s1 accept] a line starting with `.` continues the one above" =
   (* streams.md's addition to §8: one stage on a line *)
-  until "s1"
-    ~want:{|
-[2, 4]
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let xs = [1, 2, 3, 4]
   let evens = xs
     .select(fn(x) => x % 2 == 0)
   print(evens)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found an indented block
-      ┌─ test.ren:4:5
-    4 │     .select(fn(x) => x % 2 == 0)
-      │     ^
+    [2, 4]
+    ()
     |}]
 
 let%expect_test "[s1 accept] a statement that starts a line after a chain isn't swallowed" =
   (* a line at the block's own indent, or one starting with a name, is a
      statement of its own: only `|>` and `.` indented further continue *)
-  until "s1"
-    ~want:{|
-3
-4
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn inc(n: Int) -> Int = n + 1
 
 fn main() uses Console =
@@ -293,49 +233,31 @@ fn main() uses Console =
     |> inc
   print(a)
   print(a |> inc)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found an indented block
-      ┌─ test.ren:5:5
-    5 │     |> inc
-      │     ^
+    3
+    4
+    ()
     |}]
 
 let%expect_test "[s1 accept] a trailing block in the chain's last step" =
   (* decided after the draft: a trailing block only in the last link *)
-  until "s1"
-    ~want:{|
-[2, 4, 6]
-()
-|}
-    (fun () ->
-      run
-        {|
-fn each_doubled(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> = xs.map(f)
+  run
+    {|
+fn each_doubled(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> = try xs.map(f)
 
 fn main() uses Console =
   print([1, 2, 3] |> each_doubled fn(x) => x * 2)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `,` or `)`, found `|`
-      ┌─ test.ren:4:19
-    4 │   print([1, 2, 3] |> each_doubled fn(x) => x * 2)
-      │                   ^
+    [2, 4, 6]
+    ()
     |}]
 
 let%expect_test "[s1 accept] the pipe in the end-to-end program's shape" =
   (* language.md's "A program, end to end", its checkout as a chain *)
-  until "s1"
-    ~want:{|
-Ok(Receipt { total: 15 })
-Err(Empty)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Discount =
   | NoDiscount
   | Flat(off: Int)
@@ -368,7 +290,7 @@ fn price(lines: Array<Int>, d: Discount) -> Priced =
   Priced { total: d.apply(t) }
 
 fn place(p: Priced) -> Receipt ! DbDown uses Orders =
-  try Orders.save(p)
+  let _ = try Orders.save(p)
   Receipt { total: p.total }
 
 fn checkout(c: Int, cart: Cart) -> Receipt ! Empty | DbDown uses Orders, Discounts =
@@ -387,138 +309,139 @@ fn main() uses Console =
   with mem_orders(), fixed(Flat(5)) in
     print(attempt checkout(1, Open { lines: [10, 10] }))
     print(attempt checkout(1, Empty_cart))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found an indented block
-       ┌─ test.ren:38:5
-    38 │     |> try validate
-       │     ^
+    Ok(Receipt { total: 15 })
+    Err(Empty)
+    ()
     |}]
 
 let%expect_test "[s1 reject] a step that can fail without its own `try`" =
-  until "s1"
-    ~says:
-      [
-        "error: `validate` can fail, and nothing handles it";
-        "in a chain each step that can fail carries its own `try`";
-        "help: write `|> try validate`, or handle it with `match`";
-      ]
-    (fun () ->
-      check_error
-        {|
-fn validate(n: Int) -> Int ! Bad = n
+  check_error
+    {|
+fn validate(n: Int) -> Int ! Bad = if n < 0 then fail Bad else n
 fn main() -> Int ! Bad = 1 |> validate
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-      ┌─ test.ren:2:28
+    error: `fn main` says it can fail with `Bad`, but nothing in it can
+      ┌─ test.ren:2:20
     2 │ fn main() -> Int ! Bad = 1 |> validate
-      │                            ^
+      │                    ^^^
+      = a signature lists exactly what a function can fail with, so its callers handle nothing that can't happen
+      help: remove `Bad` from after `!`
+
+    error: `validate` can fail, and nothing handles it
+      ┌─ test.ren:2:31
+    2 │ fn main() -> Int ! Bad = 1 |> validate
+      │                               ^^^^^^^^
+      │                               -------- it can fail with `Bad`
+      = in a chain each step that can fail carries its own `try`
+      help: write `|> try validate`, or handle it with `match`
     |}]
 
 let%expect_test "[s1 reject] a step that can fail, inside `attempt (...)`, still needs its `try`" =
-  until "s1"
-    ~says:
-      [
-        "error: `validate` can fail, and nothing handles it";
-        "help: write `|> try validate`, or handle it with `match`";
-      ]
-    (fun () ->
-      check_error
-        {|
-fn validate(n: Int) -> Int ! Bad = n
+  check_error
+    {|
+fn validate(n: Int) -> Int ! Bad = if n < 0 then fail Bad else n
 fn inc(n: Int) -> Int = n + 1
 fn main() uses Console = print(attempt (1 |> validate |> inc))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected `)`, found `|`
-      ┌─ test.ren:3:43
+    error: nothing here can fail
+      ┌─ test.ren:3:32
     3 │ fn main() uses Console = print(attempt (1 |> validate |> inc))
-      │                                           ^
+      │                                ^^^^^^^
+      = `attempt` marks the calls that can fail, so a reader can see where the code can stop
+      help: remove the `attempt`
+
+    error: `validate` can fail, and nothing handles it
+      ┌─ test.ren:3:46
+    3 │ fn main() uses Console = print(attempt (1 |> validate |> inc))
+      │                                              ^^^^^^^^
+      │                                              -------- it can fail with `Bad`
+      = in a chain each step that can fail carries its own `try`
+      help: write `|> try validate`, or handle it with `match`
     |}]
 
 let%expect_test "[s1 reject] a `try` on a step that can't fail" =
-  until "s1"
-    ~says:
-      [
-        "error: nothing here can fail";
-        "`try` marks the calls that can fail, so a reader can see where the code can stop";
-        "help: remove the `try`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn price(n: Int) -> Int = n + 1
 fn main() -> Int = 1 |> try price
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-      ┌─ test.ren:2:22
+    error: nothing here can fail
+      ┌─ test.ren:2:25
     2 │ fn main() -> Int = 1 |> try price
-      │                      ^
+      │                         ^^^
+      = `try` marks the calls that can fail, so a reader can see where the code can stop
+      help: remove the `try`
     |}]
 
 let%expect_test "[s1 reject] `try` on the head covers only the head" =
-  until "s1"
-    ~says:
-      [
-        "error: `try` stops at `|>`";
-        "it covers only `order`, which can't fail; each step is marked on its own";
-        "help: `order |> try validate |> try place`";
-      ]
-    (fun () ->
-      check_error
-        {|
-fn validate(n: Int) -> Int ! Bad = n
-fn place(n: Int) -> Int ! Down = n
+  check_error
+    {|
+fn validate(n: Int) -> Int ! Bad = if n < 0 then fail Bad else n
+fn place(n: Int) -> Int ! Down = if n < 0 then fail Down else n
 fn main() -> Int ! Bad | Down =
   let order = 1
   try order |> validate |> place
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:5:13
+    error: `fn main` says it can fail with `Bad`, but nothing in it can
+      ┌─ test.ren:3:20
+    3 │ fn main() -> Int ! Bad | Down =
+      │                    ^^^
+      = a signature lists exactly what a function can fail with, so its callers handle nothing that can't happen
+      help: remove `Bad` from after `!`
+
+    error: `fn main` says it can fail with `Down`, but nothing in it can
+      ┌─ test.ren:3:26
+    3 │ fn main() -> Int ! Bad | Down =
+      │                          ^^^^
+      = a signature lists exactly what a function can fail with, so its callers handle nothing that can't happen
+      help: remove `Down` from after `!`
+
+    error: `try` stops at `|>`
+      ┌─ test.ren:5:3
     5 │   try order |> validate |> place
-      │             ^
+      │   ^^^
+      = it covers only `order`, which can't fail; each step is marked on its own
+      help: `order |> try validate |> try place`
+
+    error: `validate` can fail, and nothing handles it
+      ┌─ test.ren:5:16
+    5 │   try order |> validate |> place
+      │                ^^^^^^^^
+      │                -------- it can fail with `Bad`
+      = in a chain each step that can fail carries its own `try`
+      help: write `|> try validate`, or handle it with `match`
+
+    error: `place` can fail, and nothing handles it
+      ┌─ test.ren:5:28
+    5 │   try order |> validate |> place
+      │                            ^^^^^
+      │                            ----- it can fail with `Down`
+      = in a chain each step that can fail carries its own `try`
+      help: write `|> try place`, or handle it with `match`
     |}]
 
 let%expect_test "[s1 reject] `|>` into the subject's own method" =
-  until "s1"
-    ~says:
-      [
-        "error: `len` is `Array`'s own method, so it's called with `.`";
-        "help: write `(...).len()`, or end the chain with a `let`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() -> Int = [1, 2] |> Array.len
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-      ┌─ test.ren:1:27
+    error: `len` is `Array`'s own method, so it's called with `.`
+      ┌─ test.ren:1:30
     1 │ fn main() -> Int = [1, 2] |> Array.len
-      │                           ^
+      │                              ^^^^^^^^^
+      help: write `(...).len()`, or end the chain with a `let`
     |}]
 
 let%expect_test "[s1 reject] the subject goes first, and the step takes it second" =
-  until "s1"
-    ~says:
-      [
-        "error: `|>` puts `rules` first, but `apply` takes an `Order` there";
-        "`rules` is a `Rules`, which `apply` takes second";
-        "`|>` always passes its value as the first argument";
-        "help: call it directly: `apply(order, rules)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Order = { total: Int }
 type Rules = { off: Int }
 fn apply(o: Order, r: Rules) -> Int = o.total - r.off
@@ -526,199 +449,151 @@ fn main() -> Int =
   let order = Order { total: 5 }
   let rules = Rules { off: 1 }
   rules |> apply(order)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:7:9
+    error: `|>` puts `rules` first, but `apply` takes an `Order` there
+      ┌─ test.ren:7:12
     7 │   rules |> apply(order)
-      │         ^
+      │            ^^^^^
+      │   ----- `rules` is a `Rules`, which `apply` takes second
+      = `|>` always passes its value as the first argument
+      help: call it directly: `apply(order, rules)`
+
+    error: expected `Rules`, found `Order`
+      ┌─ test.ren:7:18
+    7 │   rules |> apply(order)
+      │                  ^^^^^
     |}]
 
 let%expect_test "[s1 reject] a mismatched subject that the step doesn't take anywhere" =
   (* the "takes second" line only when another parameter's type matches *)
-  until "s1"
-    ~says:
-      [
-        "error: `|>` puts `n` first, but `twice` takes a `Str` there";
-        "help: call it directly: `twice(...)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn twice(s: Str) -> Str = s.concat(s)
 fn main() -> Str =
   let n = 3
   n |> twice
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:4:5
+    error: `|>` puts `n` first, but `twice` takes a `Str` there
+      ┌─ test.ren:4:8
     4 │   n |> twice
-      │     ^
+      │        ^^^^^
+      = `|>` always passes its value as the first argument
+      help: call it directly: `twice(...)`
     |}]
 
 let%expect_test "[s1 reject] `&` on the subject" =
-  until "s1"
-    ~says:
-      [
-        "error: `|>` passes a value, so nothing in a chain can change it";
-        "help: call it with `&` directly: `add(&cart, item)`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn add(inout cart: Array<Int>, item: Int) = &cart.push(item)
 fn main() =
   var cart: Array<Int> = []
   let item = 1
   &cart |> add(item)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:5:9
+    error: `|>` passes a value, so nothing in a chain can change it
+      ┌─ test.ren:5:3
     5 │   &cart |> add(item)
-      │         ^
+      │   ^
+      help: call it with `&` directly: `add(&cart, item)`
     |}]
 
 let%expect_test "[s1 reject] `&` on a step" =
-  until "s1"
-    ~says:
-      [
-        "error: `|>` passes a value, so nothing in a chain can change it";
-        "help: call it with `&` directly";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn add(inout cart: Array<Int>, item: Int) = &cart.push(item)
 fn main() =
   var cart: Array<Int> = []
   cart |> &add(1)
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:4:8
+    error: `|>` passes a value, so nothing in a chain can change it
+      ┌─ test.ren:4:11
     4 │   cart |> &add(1)
-      │        ^
+      │           ^
+      help: call it with `&` directly: `add(&cart, 1)`
     |}]
 
 let%expect_test "[s1 reject] a block as a step" =
-  until "s1"
-    ~says:
-      [
-        "error: a step is a function by name, not a block";
-        "help: name it first, `let apply_rules = fn(o) => ...`, then `|> apply_rules`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn main() -> Int = 1 |> fn(o) => o + 1
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-      ┌─ test.ren:1:22
+    error: a step is a function by name, not a block
+      ┌─ test.ren:1:25
     1 │ fn main() -> Int = 1 |> fn(o) => o + 1
-      │                      ^
+      │                         ^^
+      help: name it first, `let apply_rules = fn(o) => ...`, then `|> apply_rules`
     |}]
 
 let%expect_test "[s1 reject] a binary operation on the left of `|>`" =
-  until "s1"
-    ~says:
-      [
-        "error: `|>` takes one value on its left";
-        "help: put it in parentheses: `(total + fee) |> round`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn round(n: Int) -> Int = n
 fn main() -> Int =
   let total = 1
   let fee = 2
   total + fee |> round
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:5:15
+    error: `|>` takes one value on its left
+      ┌─ test.ren:5:3
     5 │   total + fee |> round
-      │               ^
+      │   ^^^^^^^^^^^
+      help: put it in parentheses: `(total + fee) |> round`
     |}]
 
 let%expect_test "[s1 reject] an operator after a chain" =
-  until "s1"
-    ~says:
-      [
-        "error: a chain ends its expression";
-        "help: put the chain in parentheses, or name it with `let`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 fn price(n: Int) -> Int = n
 fn main() -> Bool =
   let order = 1
   let expected = 1
   order |> price == expected
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:5:9
+    error: a chain ends its expression
+      ┌─ test.ren:5:18
     5 │   order |> price == expected
-      │         ^
+      │                  ^^
+      help: put the chain in parentheses, or name it with `let`
     |}]
 
 let%expect_test "[s1 reject] a trailing block on a step that isn't the last" =
-  until "s1"
-    ~says:
-      [
-        "error: only the chain's last step can take a block";
-        "help: name the block first, `let f = fn(x) => ...`, and pass it in the parentheses";
-      ]
-    (fun () ->
-      check_error
-        {|
-fn each(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> = xs.map(f)
+  check_error
+    {|
+fn each(xs: Array<Int>, f: fn(Int) -> Int) -> Array<Int> = try xs.map(f)
 fn count(xs: Array<Int>) -> Int = xs.len()
 fn main() -> Int = [1] |> each fn(x) => x |> count
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected a new line, found `|`
-      ┌─ test.ren:3:24
+    error: only the chain's last step can take a block
+      ┌─ test.ren:3:41
     3 │ fn main() -> Int = [1] |> each fn(x) => x |> count
-      │                        ^
+      │                                         ^^^^^^^^^^
+      help: name the block first, `let f = fn(x) => ...`, and pass it in the parentheses
     |}]
 
 let%expect_test "[s1 reject] a field of a value as a step" =
   (* a step is a function, a module's or a type's: the parser can't tell
      `o.f` from `m.f`, so Resolve says it *)
-  until "s1"
-    ~says:
-      [
-        "error: a step is a function by name, and `rules.apply` is a field of `rules`";
-        "help: name it first: `let apply = rules.apply`, then `|> apply`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Rules = { apply: Int }
 fn main() -> Int =
   let rules = Rules { apply: 1 }
   2 |> rules.apply
-|});
+|};
   [%expect {|
-    (until s1)
-    error: expected the end of the line, found `|`
-      ┌─ test.ren:4:5
+    error: a step is a function by name, and `rules.apply` is a field of `rules`
+      ┌─ test.ren:4:8
     4 │   2 |> rules.apply
-      │     ^
+      │        ^^^^^^^^^^^
+      help: name it first: `let apply = rules.apply`, then `|> apply`
     |}]
 
 (* ---- s2: wirings (language.md §5) ---- *)

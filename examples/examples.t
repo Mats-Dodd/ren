@@ -1054,3 +1054,21 @@ the wrong folder than a pass, so `ren test` on one exits 1:
   no tests: nothing in untested declares a `test`
     = help: write one, `test "it works" = assert 1 + 1 == 2`, or give `ren test` the folder that has them
   [1]
+
+The checkout is language.md's end-to-end program (examples/checkout):
+its workflow a chain, `x |> f(a)` being `f(x, a)`, with a `try` on each
+step that can fail (language.md §8), and its services installed by
+`main`, and by each test, with a `with`:
+
+  $ ren run checkout/main.ren
+  Ok(Receipt { id: OrderId(1), total: Money(1500) })
+  Err(Empty)
+  Err(DbDown)
+  $ ren test checkout
+  main.ren
+    ✓ a flat discount comes off the total
+    ✓ a discount over an amount only applies past it
+    ✓ an empty cart is refused, and nothing is saved
+    ✓ a database that's down fails the checkout
+  
+  4 passed

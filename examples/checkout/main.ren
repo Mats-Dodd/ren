@@ -1,0 +1,56 @@
+// The composition root: the one place that knows who provides what, and
+// tests built from data, nothing mocked by hand.
+
+import order.{Cart, Discount, Line, Money, Sku}
+import checkout.{CustomerId, Discounts, OrderId, Orders}
+
+// orders kept in memory, numbered from 1
+pub handler mem_orders() for Orders =
+  var made = 0
+  save(_) =>
+    made += 1
+    OrderId.of(made)
+
+// a database that's down
+pub handler down() for Orders =
+  save(_) => fail DbDown
+
+pub handler fixed(d: Discount) for Discounts =
+  for_customer(_) => d
+
+pub fn ann() -> CustomerId = CustomerId.of(1)
+
+// two lines that come to $20
+pub fn cart_of_20() -> Cart =
+  Cart {
+    lines: [
+      Line { sku: Sku.of(7), qty: 2, price: Money.dollars(5) },
+      Line { sku: Sku.of(9), qty: 1, price: Money.dollars(10) },
+    ],
+  }
+
+fn main() uses Console =
+  let five_over_20 = OverAmount { min: Money.dollars(20), off: Money.dollars(5) }
+  with mem_orders(), fixed(five_over_20) in
+    print(attempt checkout.checkout(ann(), cart_of_20()))   // Ok(Receipt { id: OrderId(1), total: Money(1500) })
+    print(attempt checkout.checkout(ann(), Cart { lines: [] }))   // Err(Empty)
+  with down(), fixed(NoDiscount) in
+    print(attempt checkout.checkout(ann(), cart_of_20()))   // Err(DbDown)
+
+test "a flat discount comes off the total" =
+  with mem_orders(), fixed(Flat(Money.dollars(5))) in
+    let r = try checkout.checkout(ann(), cart_of_20())
+    assert r.total == Money.dollars(15)
+
+test "a discount over an amount only applies past it" =
+  with mem_orders(), fixed(OverAmount { min: Money.dollars(50), off: Money.dollars(5) }) in
+    let r = try checkout.checkout(ann(), cart_of_20())
+    assert r.total == Money.dollars(20)
+
+test "an empty cart is refused, and nothing is saved" =
+  with down(), fixed(NoDiscount) in
+    assert attempt checkout.checkout(ann(), Cart { lines: [] }) == Err(Empty)
+
+test "a database that's down fails the checkout" =
+  with down(), fixed(NoDiscount) in
+    assert attempt checkout.checkout(ann(), cart_of_20()) == Err(DbDown)

@@ -145,6 +145,10 @@
   (#not-eq? @function "next"))
 (method_call_expression name: (identifier) @function.method)
 (item_expression name: (identifier) @function)
+; a chain's step, a function from elsewhere (language.md §8)
+(pipe_step function: (identifier) @function)
+(step_path module: (identifier) @namespace)
+(step_path name: (identifier) @function)
 (field_expression field: (identifier) @property)
 (field_initializer name: (identifier) @property)
 ; a record pattern's field, `{ id, lines: ls, .. }`
@@ -164,7 +168,7 @@
 (record_expression ".." @operator)
 (constructor_expression ".." @operator)
 (rest_pattern) @operator
-["=" "=>" "->" "|"] @operator
+["=" "=>" "->" "|" "|>"] @operator
 
 ["." "," ":"] @punctuation.delimiter
 ["(" ")" "[" "]" "{" "}"] @punctuation.bracket

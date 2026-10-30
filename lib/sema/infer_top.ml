@@ -108,8 +108,11 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
+    | Piped ->
+        ()
     | Named (_, a) -> expr a
+    | Pipe { subject; step } -> go [ subject; step ]
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
@@ -1814,7 +1817,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
   (* the block [e] itself, at [pos] *)
   let here pos (e : expr) =
     match (e.kind, pos) with
-    | (Block _ | With _ | Call _ | Index _ | Field _ | Try _ | Attempt _), _ ->
+    | ( ( Block _ | With _ | Call _ | Index _ | Field _ | Try _ | Attempt _
+        | Pipe _ ),
+        _ ) ->
         (* its value is said where it's made *)
         ()
     | _, (Said | Callee | Install | Receiver) -> ()
@@ -1871,8 +1876,15 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     let carried = if block then Said else Kept Elsewhere in
     let all place = List.iter (walk (Kept place)) in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
+    | Piped ->
+        ()
     | Named (_, a) -> walk pos a
+    | Pipe { subject; step } ->
+        (* the subject is the step's call's first argument, which [Piped]
+           stands for there *)
+        walk Arg subject;
+        walk carried step
     | Call (callee, args) ->
         (* a block a type variable of the callee stands for is blamed on
            the argument that gives it *)

@@ -38,4 +38,4 @@ fn main() uses Console =
   let evens = [1, 2, 3, 4]
     .select(fn(x) => x % 2 == 0)
   print(evens |> total(0))                         // 6
-  print(attempt [7] |> show)                       // Ok([7])
+  print(attempt validate([7]) |> show)             // Ok([7])

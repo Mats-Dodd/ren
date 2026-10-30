@@ -286,6 +286,11 @@ and join_uses env ~loc ~what joined into =
       | Ok () -> ()
       | Error _ -> report env (cant_use loc what (dep_names env joined)))
 
+(* The calls being checked that are a chain's steps, by node: each is
+   added while its step is inferred (Infer_expr, [Pipe]), and taken out
+   after, so a node of another function is never in it. *)
+let chain_steps : (int, unit) Hashtbl.t = Hashtbl.create 8
+
 (* A call adds the callee's dependencies to the caller's, and its errors
    to whatever marks it (errors.md, "Marking"): the innermost marker's
    handler, the caller's own errors for a `try` or the `attempt`'s. A call
@@ -324,6 +329,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?(install = false) ?target
       eparams = cx.params;
       eselves = cx.selves;
       einstall = install;
+      estep = Hashtbl.mem chain_steps call.node;
     }
   in
   let sources =
@@ -372,7 +378,15 @@ let keyword (loc : Loc.t) n =
 (* A new marker at [mloc], kept for the checks at the end of the group. *)
 let marker env mkind mloc =
   let m =
-    { mkind; mloc; covered = []; unwrapped = []; hint = None; failed = false }
+    {
+      mkind;
+      mloc;
+      covered = [];
+      unwrapped = [];
+      hint = None;
+      failed = false;
+      chain_head = None;
+    }
   in
   defer env (Marker m);
   m

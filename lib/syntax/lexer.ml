@@ -37,7 +37,14 @@
          uses Console =
        with Clock.frozen(t),
            retry(3) in
-         body *)
+         body
+
+   Nor does an indented line that starts with `|>`, a chain's next step,
+   or with `.` and a name, the next stage over a cursor (language.md §8):
+
+     order
+       |> try validate
+       |> try place *)
 
 open Token
 
@@ -217,7 +224,11 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
      more than the block it's in, and does it start with the word `uses` or
      with the `!` of an error set (not `!=`), or does the line before end
      in `,`? A `!` after `=` opens a block instead: a named error set
-     written one `|` per line, `type E =` then `! A` indented under it. *)
+     written one `|` per line, `type E =` then `! A` indented under it.
+     A line starting with `|>`, a chain's next step, or with `.` and a
+     name, the next stage over a cursor, continues too (language.md §8,
+     "Grammar and layout"): no line started with either before, so nothing
+     that parsed changes. `..` and `.0` aren't a name after a `.`. *)
   let continues () =
     let starts_uses =
       !i + 4 <= len
@@ -227,7 +238,11 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
     let after_eq = match !toks with (EQ, _) :: _ -> true | _ -> false in
     let starts_errors = peek 0 = '!' && peek 1 <> '=' && not after_eq in
     let after_comma = last_tok () = Some COMMA in
-    !i - !bol > current () && (starts_uses || starts_errors || after_comma)
+    let starts_step = peek 0 = '|' && peek 1 = '>' in
+    let starts_stage = peek 0 = '.' && is_ident_start (peek 1) in
+    !i - !bol > current ()
+    && (starts_uses || starts_errors || after_comma || starts_step
+      || starts_stage)
   in
 
   (* A string literal, `"Ren\n"`: its contents, with each escape undone.
@@ -420,6 +435,9 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '>', '=' -> advance_by 2 GE
       | '&', '&' -> advance_by 2 AMPAMP
       | '|', '|' -> advance_by 2 PIPEPIPE
+      (* the pipe, before `|` alone, which sum types' lines, error sets
+         and or-patterns look for (language.md §8) *)
+      | '|', '>' -> advance_by 2 PIPEGT
       | '.', '.' -> advance_by 2 DOTDOT
       | '(', _ ->
           frames := Bracket :: !frames;

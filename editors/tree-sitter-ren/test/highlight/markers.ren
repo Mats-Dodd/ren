@@ -363,3 +363,16 @@ fn first(o: Option<Int>) -> Int =
     0 => todo
 //       ^ keyword
     _ => n
+
+// a chain: `|>` and its steps, each marked on its own
+fn checkout(cart: Cart) -> Int ! Empty =
+  cart
+    |> try validate
+//  ^ operator
+//     ^ keyword.failure
+//         ^ function
+    |> price(1)
+//     ^ function
+    |> checkout.place
+//     ^ namespace
+//              ^ function

@@ -1,0 +1,35 @@
+// The services a checkout needs, and the workflow: a chain, each step a
+// function from elsewhere, and a `try` on each step that can fail
+// (language.md §8).
+
+import order.{Cart, Discount, Line, Money, Order}
+
+pub type CustomerId = opaque Int
+  pub fn of(n: Int) -> CustomerId = n
+
+pub type OrderId = opaque Int
+  pub fn of(n: Int) -> OrderId = n
+
+pub type Receipt = { id: OrderId, total: Money }
+
+pub dep Orders =
+  save: fn(o: Order) -> OrderId ! DbDown
+
+pub dep Discounts =
+  for_customer: fn(c: CustomerId) -> Discount
+
+// an empty cart is refused, before anything is priced or saved
+fn validate(cart: Cart) -> Array<Line> ! Empty =
+  if cart.lines.len() == 0 then fail Empty
+  cart.lines
+
+fn place(o: Order) -> Receipt ! DbDown uses Orders =
+  let id = try Orders.save(o)
+  Receipt { id, total: o.total() }
+
+pub fn checkout(c: CustomerId, cart: Cart) -> Receipt ! Empty | DbDown
+    uses Orders, Discounts =
+  cart
+    |> try validate                              // can reject
+    |> order.price(Discounts.for_customer(c))    // can't fail
+    |> try place                                 // can fail: DbDown

@@ -1,0 +1,40 @@
+// The domain of language.md's "A program, end to end": data, and the
+// rules it keeps. Nothing here uses a service, so nothing here can be
+// anything but what it says.
+
+// An amount in cents, a number of its own: two add up to a `Money`, one
+// scales by an `Int`, and they're ordered.
+pub type Money = opaque Int with numeric
+  pub fn dollars(n: Int) -> Money = n * 100
+
+pub type Sku = opaque Int
+  pub fn of(n: Int) -> Sku = n
+
+pub type Line = { sku: Sku, qty: Int, price: Money }
+
+pub type Cart = { lines: Array<Line> }
+
+// A policy is data: matched here, kept, and handed to a test's handler.
+pub type Discount =
+  | NoDiscount
+  | Flat(off: Money)
+  | OverAmount { min: Money, off: Money }
+
+  pub fn apply(self, m: Money) -> Money =
+    match self
+      NoDiscount => m
+      Flat(off) => m - off
+      OverAmount { min, off } => if m < min then m else m - off
+
+// An order's total is a rule it keeps, so it's opaque: only `price` makes
+// one, and `total` is what an `Order` knows about itself.
+pub type Order = opaque { lines: Array<Line>, total: Money }
+  pub fn total(self) -> Money = self.total
+
+// A workflow over the domain's own data: the lines, priced under a
+// discount.
+pub fn price(lines: Array<Line>, d: Discount) -> Order =
+  var t = Money.zero
+  for l in lines
+    t = t + l.price * l.qty
+  Order { lines, total: d.apply(t) }

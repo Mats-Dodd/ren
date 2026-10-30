@@ -93,6 +93,10 @@ val use_row :
 val join_uses :
   env -> loc:Loc.t -> what:Infer_msg.user -> Types.row -> Types.row -> unit
 
+(* The calls being checked that are a chain's steps, by node, which
+   [absorb] marks as one ([Infer_env.ecall]'s [estep]). *)
+val chain_steps : (int, unit) Hashtbl.t
+
 (* A call, [call], of [fn], named [ename] in messages: it adds the callee's
    errors, the first row, to whatever marks it, and its dependencies, the
    second, to the caller's (errors.md, "Marking"). [target] is the

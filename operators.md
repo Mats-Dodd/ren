@@ -476,6 +476,38 @@ keeps an `Array<UInt8>` as bytes, an `Array<Int32>` as 4-byte elements
 and so on, and packs a record's sized fields into shared words, as it
 packs `Bool`s (compiler.md, "Sized storage").
 
+## The pipe, `|>`
+
+`x |> f(a)` is `f(x, a)`, and `x |> f` is `f(x)`, checked exactly as that
+call (language.md §8). It isn't a method: `.` reaches a type's own
+vocabulary, and `|>` a step from elsewhere, a function by name, `f`,
+`module.f` or `Type.f`, so a workflow reads in the order it happens:
+
+```ren
+cart
+  |> try validate                          // can reject
+  |> order.price(Discounts.for_customer(c))
+  |> try place                             // can fail: DbDown
+```
+
+- **The value goes first,** matching `self`-first methods. One that
+  belongs in another position gets a `let`.
+- **Each link is one term,** so there's no precedence to learn: `total +
+  fee |> round` asks for parentheses, and so does an operator after a
+  chain. `orelse` may follow one, and applies to its result.
+- **Values only:** no `&` before the value or a step, and no block as a
+  step; a step that's a method of the value's own type is called with
+  `.`. Only the last step may take a trailing block.
+- **`|>` ends the reach of `try` and `attempt`**, so each step that can
+  fail carries its own `try` (errors.md).
+- **A line starting with `|>`, or with `.` and a name, indented further
+  than its block, continues the line above**, so a chain puts a step on
+  each line.
+
+It runs as the call it is, in `ren run` and natively: `let s = x in f(s,
+a)`. examples/checkout is language.md's end-to-end program, its checkout a
+chain.
+
 ## Ranges
 
 `a..b` is the `Int`s from `a` up to, but not including, `b`. There's one

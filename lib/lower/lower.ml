@@ -364,6 +364,11 @@ let mk = C.mk
 let local = C.local
 let int_lit n loc = mk (Int n) Ty.int loc
 
+(* The temporaries holding the subjects of the chains being lowered,
+   innermost first: a step's [Piped] is the innermost's (see [Pipe] in
+   [expr_of]). *)
+let piped : C.var list ref = ref []
+
 (* [let v = value in body], for each binding in turn. *)
 let lets binds (body : C.expr) =
   List.fold_right
@@ -639,6 +644,22 @@ and expr_of cx (e : expr) : C.expr =
         (Assert_equal (a, b, C.describe cx.tys a.ty, dict cx "eq" a.ty))
         Ty.unit cmp.loc
   | Assert a -> here (Assert (expr cx a))
+  | Pipe { subject; step } ->
+      (* `x |> f(a)` is `let s = x in f(s, a)`: the subject is evaluated
+         first, then the step's call, which [Piped] gives [s] (language.md
+         §8) *)
+      let s = temp cx "piped" (ty_of cx subject.node) in
+      let value = expr cx subject in
+      piped := s :: !piped;
+      let call =
+        Fun.protect ~finally:(fun () -> piped := List.tl !piped) (fun () ->
+            expr cx step)
+      in
+      mk (Let (s, value, call)) call.ty e.loc
+  | Piped -> (
+      match !piped with
+      | s :: _ -> local s e.loc
+      | [] -> bug "a step's subject outside its chain")
   | Attempt a ->
       (* `Ok` of its value, or `Err` of its error *)
       let t = ty () in
@@ -2638,7 +2659,9 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
+    | Piped ->
+        ()
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
@@ -2648,6 +2671,7 @@ let max_binder (f : fn_def) =
     | Named (_, a)
     | Inline_handler a ->
         go a
+    | Pipe { subject = a; step = b }
     | Binop (_, a, b, _)
     | Index (a, b)
     | Assign { target = a; value = b; _ }

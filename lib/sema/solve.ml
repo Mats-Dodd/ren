@@ -566,7 +566,9 @@ let unmarked env (c : ecall) unhandled =
            (List.map (show_label (printer env)) labels))
   | _ when labels <> [] ->
       report env
-        (unhandled_call c.eloc ~name_loc:c.ename_loc c.ename
+        (unhandled_call c.eloc ~name_loc:c.ename_loc
+           ?step:(if c.estep then Some c.ewritten else None)
+           c.ename
            (List.map (show_label (printer env)) labels))
   | Some t when own t ->
       (* the caller's own errors, which it doesn't pass on: it fails with
@@ -586,10 +588,17 @@ let marker env m =
            m.unwrapped)
   then
     report env
-      (match m.mkind with
+      (match (m.mkind, m.chain_head) with
+      | (Mtry | Mattempt), Some (covers, chain) ->
+          (* a chain's head, which `|>` stops (language.md §8) *)
+          try_stops m.mloc
+            (if m.mkind = Mtry then "try" else "attempt")
+            ~covers ~chain:(chain ())
+      | _ -> (
+      match m.mkind with
       | Mtry -> covers_nothing m.mloc ?hint:m.hint "try"
       | Mattempt -> covers_nothing m.mloc ?hint:m.hint "attempt"
-      | Mmatch | Mmatch_on -> cannot_fail_arm m.mloc)
+      | Mmatch | Mmatch_on -> cannot_fail_arm m.mloc))
 
 (* ---- what an operation fails with (deps.md, "Implementations") ---- *)
 

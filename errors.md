@@ -113,6 +113,22 @@ print(try acme.statement(bob).len())     // covers statement(); len() can't fail
 let n = try parse(read(path)) + 1        // covers read() and parse()
 ```
 
+`|>` ends the reach of `try` and of `attempt` (language.md §8): in a
+chain each step that can fail carries its own `try`, and one on the head
+covers only the head. A step that can fail without its own `try` is an
+error even inside `attempt (...)` or a `match`, which still receive what
+a step's `try` passes on. This is a deliberate exception to Swift's rule,
+which forbids `try` to the right of an operator:
+
+```ren
+order
+  |> try validate                        // covers validate() alone
+  |> price(rules)                        // can't fail, so no `try`
+  |> try place
+try load() |> price(1)                   // `(try load()) |> price(1)`
+try f(a |> g)                            // brackets start afresh: covers f() and g()
+```
+
 A `with` whose items' setup or `finally` can fail is marked too, `try
 with transaction() over Sql in ...`, `attempt with` or a `match` of the
 `with` with `fail` arms; the marker covers only installing them, so each

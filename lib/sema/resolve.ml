@@ -2082,6 +2082,28 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         Fail (t, List.map (fun (l, a) -> (l, go a)) args)
     | Try a -> Try (go a)
     | Attempt a -> Attempt (go a)
+    | Pipe { subject; step } ->
+        (* a step's function is found as a call's, but a field of a value,
+           which the parser can't tell from a module's function, isn't
+           one: a step is a function by name (language.md §8) *)
+        let rec call (s : Parsed.expr) =
+          match s.kind with Try c | Attempt c -> call c | _ -> s
+        in
+        (match (call step).kind with
+        | Call ({ kind = Field ({ kind = Var (Bare x); _ }, m); loc; _ }, _)
+          when Env.mem x sc.locals && not (Env.mem x env.modules) ->
+            report env loc
+              ~help:
+                (sprintf "name it first: `let %s = %s.%s`, then `|> %s`"
+                   m.name x m.name m.name)
+              (sprintf
+                 "a step is a function by name, and `%s.%s` is a field of `%s`"
+                 x m.name x)
+        | _ -> ());
+        (* the subject first, as it's evaluated *)
+        let subject = go subject in
+        Pipe { subject; step = go step }
+    | Piped -> Piped
     | Assert a -> Assert (go a)
     | With { items; body } ->
         let item (i : Parsed.with_item) : Resolved.with_item =

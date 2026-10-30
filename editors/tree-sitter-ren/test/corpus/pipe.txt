@@ -1,0 +1,257 @@
+================================================================================
+a chain, one step a line, a `try` on each step that can fail
+================================================================================
+
+fn checkout(c: Int, cart: Cart) -> Receipt ! Empty | DbDown =
+  cart
+    |> try validate
+    |> price(Discounts.for_customer(c))
+    |> try checkout.place
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier))
+      (error_tag
+        (type_identifier)))
+    (block
+      (pipe_expression
+        (pipe_expression
+          (pipe_expression
+            (identifier)
+            (pipe_step
+              (identifier)))
+          (pipe_step
+            (identifier)
+            (arguments
+              (call_expression
+                (item_expression
+                  (type_name
+                    (type_identifier))
+                  (identifier))
+                (arguments
+                  (identifier))))))
+        (pipe_step
+          (step_path
+            (identifier)
+            (identifier)))))))
+
+================================================================================
+`try` and `attempt` on the head stop at `|>`
+================================================================================
+
+fn total() -> Int ! Down = try load(3) |> price(1)
+
+fn f() = attempt load(3) |> show |> Cart.of
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (named_type
+      (type_name
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (pipe_expression
+      (try_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (number))))
+      (pipe_step
+        (identifier)
+        (arguments
+          (number)))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (pipe_expression
+      (pipe_expression
+        (attempt_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (number))))
+        (pipe_step
+          (identifier)))
+      (pipe_step
+        (item_expression
+          (type_name
+            (type_identifier))
+          (identifier))))))
+
+================================================================================
+`try` covers a chain inside brackets, and one after its `orelse`
+================================================================================
+
+fn f() = try f(a |> g, 3)
+
+fn g() = try a orelse b |> h
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (try_expression
+      (call_expression
+        (identifier)
+        (arguments
+          (pipe_expression
+            (identifier)
+            (pipe_step
+              (identifier)))
+          (number)))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (try_expression
+      (orelse_expression
+        (identifier)
+        (pipe_expression
+          (identifier)
+          (pipe_step
+            (identifier)))))))
+
+================================================================================
+`orelse` after a chain, and a chain after `orelse`
+================================================================================
+
+fn f() = [5] |> first_over(10) orelse 0
+
+fn g() = a orelse b |> inc
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (orelse_expression
+      (pipe_expression
+        (array_expression
+          (number))
+        (pipe_step
+          (identifier)
+          (arguments
+            (number))))
+      (number)))
+  (function_definition
+    (identifier)
+    (parameters)
+    (orelse_expression
+      (identifier)
+      (pipe_expression
+        (identifier)
+        (pipe_step
+          (identifier))))))
+
+================================================================================
+a trailing block in the last step, and a chain in a block's body
+================================================================================
+
+fn f() = [1, 2] |> each fn(x) => x * 2
+
+fn g() = xs.map(fn(x) => x |> inc)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (pipe_expression
+      (array_expression
+        (number)
+        (number))
+      (pipe_step
+        (identifier)
+        (lambda
+          (parameters
+            (parameter
+              (identifier)))
+          (binary_expression
+            (identifier)
+            (number))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (method_call_expression
+      (identifier)
+      (identifier)
+      (arguments
+        (lambda
+          (parameters
+            (parameter
+              (identifier)))
+          (pipe_expression
+            (identifier)
+            (pipe_step
+              (identifier))))))))
+
+================================================================================
+a line starting with `|>` or `.` continues; one at the block's indent doesn't
+================================================================================
+
+fn f() =
+  let a = 1
+    |> inc
+  let evens = xs
+    .select(fn(x) => x % 2 == 0)
+  print(a)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (pipe_expression
+          (number)
+          (pipe_step
+            (identifier))))
+      (let_statement
+        (identifier)
+        (method_call_expression
+          (identifier)
+          (identifier)
+          (arguments
+            (lambda
+              (parameters
+                (parameter
+                  (identifier)))
+              (binary_expression
+                (binary_expression
+                  (identifier)
+                  (number))
+                (number))))))
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier))))))

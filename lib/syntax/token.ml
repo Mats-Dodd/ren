@@ -137,6 +137,7 @@ type t =
   | GE
   | AMPAMP
   | PIPEPIPE
+  | PIPEGT  (** [|>], the pipe (language.md §8) *)
   (* layout: see lexer.ml *)
   | NEWLINE
   | INDENT
@@ -238,6 +239,7 @@ let to_string = function
   | GE -> ">="
   | AMPAMP -> "&&"
   | PIPEPIPE -> "||"
+  | PIPEGT -> "|>"
   | NEWLINE -> "newline"
   | INDENT -> "indent"
   | DEDENT -> "dedent"
