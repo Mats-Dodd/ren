@@ -109,9 +109,10 @@ journaled, because no program can observe it:** which core ran a task,
 where a key lives, whether `at` moved the task or shipped each call.
 So a journal recorded on sixteen cores replays on one, by construction.
 
-`Async.worker()` would leak place, so it's std's alone, for
-`striped(by: Worker)`, whose merge erases the split (decision 18's
-split law).
+`Async.worker()` would leak place, so it's an operation of the
+runtime's privileged `Async` handler (decision 20, rule 2's exception),
+reachable only through `striped(by: Worker)`, whose merge erases the
+split (decision 18's split law).
 
 ## Places
 

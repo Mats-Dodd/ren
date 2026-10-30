@@ -238,7 +238,7 @@ The full map, including the questions about cost (§9):
 | Do they keep identity through churn? | `Pool` around either |
 | Many entities, each with its own I/O and exclusion? | `actors`, addressed by key, a service (§11) |
 | One hot service on many cores? | `striped`, map-reduce over stripes (§11) |
-| Work alongside other work? | `Async.scope`, `Async.beside` |
+| Work alongside other work? | a combinator, `Async.each`, `map`, `merge` or `beside`; a family where others reach it by name ([concurrency.md](concurrency.md)) |
 | Where can state change under me? | only at `release` |
 | How does it look as bytes? | a format for its type (§12) |
 

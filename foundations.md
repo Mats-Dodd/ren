@@ -16,7 +16,9 @@ longer open; then decision 20, what the language owns and what std
 owns, which moved `actors` and `striped` into std over a runtime
 primitive, the keyed instance family (decision 18). On 2026-10-30 it
 took [concurrency.md](concurrency.md), which changed the bet
-and decisions 7, 9 and 18, and [runtime.md](runtime.md), which states
+and decisions 7, 9 and 18, then its rule that the shape of the work
+decides its owner, with combinators as the surface and resources as
+families (decisions 7 and 18), and [runtime.md](runtime.md), which states
 the runtime decision 9 installs; [Staging](#staging) gained the runtime
 core. language.md is the
 language a program is written in, data, services, the pipe and
@@ -59,7 +61,9 @@ calls posted to it. A task is code, so it never outlives its call. Work
 outlives its call only as data, a `D.Call` posted to a family reached by
 name. Every queue has a bound and every wait points outward, so the
 tree composes: cancellation goes down it, errors go up it, a call that
-returns is done, and a run of it replays exactly
+returns is done, and a run of it replays exactly. The shape of the
+work decides its owner: what combines into the call that asked for it
+is a call's, and what others must reach by name is a family's
 ([concurrency.md](concurrency.md)).
 
 It's aimed at three things Rust gets wrong for the programs Ren is for:
@@ -361,9 +365,7 @@ library, not once per dependency or in the runtime.
 ### 7. Structured tasks
 
 ```ren
-Async.scope fn(s) =>
-  for conn in Net.accept_until(Signal.term) =>
-    s.spawn fn() => handle(conn)
+try Async.each(Net.connections(l), max: 10_000) fn(conn) => serve(conn)
 ```
 
 - **Two owners.** A call owns the tasks it starts and waits for them;
@@ -372,6 +374,26 @@ Async.scope fn(s) =>
   handle kept past its call, no pool nobody owns. **If only the call
   that started some work can reach it, the call owns it; if other calls
   must reach it by name, a family owns it, and the key is the name.**
+  It's a rule about shape: a tree, one-to-one or many-to-one, combines
+  into the call and needs no names; a graph, one-to-many or
+  many-to-many, needs names, so it's a family's
+  ([concurrency.md](concurrency.md)).
+- **Combinators are the surface.** A program composes calls and
+  streams with `map`, `each`, `both`, `race`, `timeout`, `merge` and
+  `zip`, not tasks. A server is `Async.each(Net.connections(l), max:)`,
+  and work that finds more work is `Async.expand(roots, max:) fn(x) =>
+  children` (its name is open). **`scope` and `spawn` are the layer std
+  writes them on,** as `trust` code is the layer under safe code: public,
+  since a program may write a combinator std lacks (decision 20, rule
+  2), and anonymous, but not how a program starts work. The rules below
+  are that layer's.
+- **Every computation ends once and says how.** A call to a dependency
+  has an id with a generation, so a late reply can't land on a new call,
+  and a reply nobody waits for is released; a generator keeps how it
+  ended, so every later step says so; a posted call runs once or is
+  dropped with its family's cancel; an actor has an incarnation, and an
+  id from an ended one fails with `Closed`. So every stream is fused by
+  construction ([concurrency.md](concurrency.md#ends-once)).
 - **Scopes are anonymous.** `s.spawn` starts a task and gives nothing
   back, so a task is reachable only inside the call that owns it.
   Waiting for two things is `Async.both`, a first to finish is
@@ -379,10 +401,11 @@ Async.scope fn(s) =>
   family whose operation skips what's redundant. A scope is a block, so
   it's passed down and never stored.
 - A spawned task can't fail with an unhandled error.
-- **A scope has a limit.** `Async.scope(max: n)`: `spawn` waits while
-  `n` of the scope's tasks run, which is a server's backpressure. Every
-  scope has one; its default is std's, in `Async.scope`'s signature
-  (64 today, as `Async.map`'s is).
+- **Every combinator has a limit, and so does a scope.** `Async.each(src,
+  max: n)` pulls the next item only while fewer than `n` run, which is
+  a server's backpressure; `Async.scope(max: n)`'s `spawn` waits while
+  `n` of its tasks run. The defaults are std's, in their signatures (64
+  today).
 - **A handler has no task of its own.** Background work is a task
   that calls the handler's operations (`Metrics.flush()`), and every
   piece of handler code is an operation, which keeps its instance until
@@ -406,7 +429,7 @@ Async.scope fn(s) =>
   ```ren
   with pool() in
     Async.beside(fn() => health_loop()) fn() =>
-      Async.scope(max: 10_000) fn(s) => ...
+      Async.each(conns, max: 10_000) fn(conn) => ...
   ```
 
 - **A background task's failure cancels the body** and is its error:
@@ -1134,6 +1157,13 @@ try Docs.at(id) fn() => Doc.edit(op)
   checked at run time since keys are values. Moving a value between two
   documents or two accounts is written this way, from outside the
   family. It's in v1.
+- **A service's open resources are a family keyed by id.** Open files,
+  database cursors and socket buffers are entries in their service's
+  family: an entry's incarnation is an actor's, the family's `max:` is
+  the cap on open files, a reader whose resource was evicted or ended
+  fails with a typed `Closed`, and the family's end closes the
+  leftovers. A reader is data, an id and an offset; there's no separate
+  handle table and no close rule ([streams.md](streams.md)).
 - **A panic ends the program** (decision 8): no supervisors and no
   restarts.
 
@@ -1146,8 +1176,10 @@ the family, with fixed keys.
   first parameter has a `key` to one stripe by it, read through the
   derived walk from the call's arguments. `by: Worker` gives each
   worker a stripe and sends an operation to the caller's, which it
-  learns from `Async.worker()`, a scheduler operation that's std's
-  alone, since it would let a program see place
+  learns from `Async.worker()`. It's an operation of the runtime's
+  privileged `Async` handler, decision 20 rule 2's one exception,
+  reachable only through `striped(by: Worker)`, since anywhere else it
+  would let a program see place
   ([runtime.md](runtime.md#whats-journaled-time-and-order-never-place)).
 - An operation with no key runs on every stripe. If it returns `()`,
   that's all; if it returns a value, the results are folded with
@@ -1416,7 +1448,10 @@ and 32-bit references as the default.
 | `Async.limit` and the recorder are built in | `over any` handlers in Ren; the journal itself is the runtime's record (decision 11) |
 | `Async.group(max:)` | `Async.scope(max:)` |
 | A task's handle, `t.join()` and `t.cancel()`, from `s.start`; `s.replace(key)` (async.md) | Anonymous scopes: `both`, `race`, or a family keyed by the name |
-| An actor posts to its siblings, metered at the family's edge (decision 18 as first written) | No mail inside a family; a per-key `mailbox:` bound every post waits on || A handler can run a `task =>` that lives as long as its `with` (async.md) | `Async.beside(task) fn() => body` inside the `with`, whose task's failure cancels the body |
+| An actor posts to its siblings, metered at the family's edge (decision 18 as first written) | No mail inside a family; a per-key `mailbox:` bound every post waits on |
+| A server is `Async.scope` with an `s.spawn` per connection (decision 7 as first written) | `Async.each(Net.connections(l), max:)`; combinators are the surface and `scope` is std's layer (concurrency.md) |
+| A reader's handle registers with its handler, which closes leftovers (streams.md) | A service's open resources are a family keyed by id, whose end closes them (decision 18) |
+| A handler can run a `task =>` that lives as long as its `with` (async.md) | `Async.beside(task) fn() => body` inside the `with`, whose task's failure cancels the body |
 | A cancelled `Proc.run` kills its program | It kills the program's whole process group, `kill: Tree`, unless `kill: Child` |
 | `par_map` | `Async.map` over a block with no dependencies |
 | Preemption at loop back-edges (async.md) | None |
@@ -1601,7 +1636,7 @@ and 32-bit references as the default.
      stalling other keys in its partition.
 7. **The `just`, natively,** in two parts. The `just` as written runs
    its recipes at once, and tasks are native only with item 8, the
-   runtime core, so the concurrent `just` built natively is item 11's
+   runtime core, so the concurrent `just` built natively is item 8's
    "Done when", not this item's.
 
    **7a. Strings and bytes at Rust's speed.** Byte and string code
@@ -1662,7 +1697,10 @@ and 32-bit references as the default.
    replay on one, and a server benchmark against Go and Rust. **Its
    conformance test:** the interpreter is the reference, and a
    program's journal under `sim` from the native core matches the
-   interpreter's, byte for byte, across many seeds.
+   interpreter's, byte for byte, across many seeds. **Done when**, among
+   the rest, the `just` as written, its recipes at once, builds natively
+   and its tests pass against the native build (item 7's "Done when",
+   moved here with tasks).
 9. **11c, generators,** built natively on the core from the start, and
    the stream library on them.
 10. **Stage 12, the standard library,** designed generally, not for any
@@ -1671,10 +1709,7 @@ and 32-bit references as the default.
    per module in parallel; release built with clang -O2 per module in
    parallel, cached by content. Specialization per block and per
    handler, and most of the memory work, are built (item 2), and
-   dispatch with `--explain-dispatch` (item 3). **Done when**, among the
-   rest, the `just` as written, its recipes at once, builds natively and
-   its tests pass against the native build (item 7's "Done when", moved
-   here).
+   dispatch with `--explain-dispatch` (item 3).
 
 The interpreter runs tasks on OCaml effects throughout, so the stages
 before the runtime core need no native tasks; from it on, tasks and

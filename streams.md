@@ -21,6 +21,14 @@ implemented beyond cursors and `for` over them (stage 10c). What it
 still rests on is marked **open**; items marked **later** are noted so
 they aren't lost.
 
+**A stream is a call that answers many times.** It isn't a third kind
+of thing beside calls and families: each relationship around it has a
+shape, and the shape decides its owner
+([concurrency.md](concurrency.md#streams-calls-that-answer-many-times)).
+One-to-one is a loop on the consumer's task; many-to-one is a
+combinator the call owns (`zip`, `chain`, `merge`); one-to-many needs
+names, so it's a channel or a family.
+
 ## Contents
 
 - [What it has to do](#what-it-has-to-do)
@@ -93,7 +101,7 @@ made, and the rest of this document is what they give.
 | 3 | **A pull parameter takes what `for` takes, written the same way.** A temporary goes as itself, a named data cursor as `&r`, a collection by snapshot, a block as itself. A chain's head follows the same rule. `&` marks a data place, and a block never takes `&`. | decisions 2, 16 |
 | 4 | **A block-typed local has one definition, made here.** `let` binds a literal block, a chain, or a call that gives a block. It can't be chosen with `if`, stored or returned. | decision 1 |
 | 5 | **A generator's frame is a scope, like a `with`.** Its `finally` runs when its binding's scope ends, by any exit; a temporary's scope is its statement. Being stopped from outside is `Err(Cancelled)`. Never at a count dropping to zero. | `with`; errors.md; async.md; decision 11 |
-| 6 | **A resource belongs to its service.** A reader holds an id, its incarnation and an offset. A copy reads from where it was copied, or fails, typed. | the bet; decisions 7, 17, 18; strings.md positions |
+| 6 | **A resource is a family's.** A reader is data, an id and an offset; the open resource lives in its service, in a family keyed by that id. A copy reads from where it was copied, or fails, typed. | the bet; decisions 7, 17, 18; strings.md positions |
 | 7 | **Waiting is an operation.** Anything that races a timer or a task takes a source whose step is one operation. A pipeline isn't one, so it can't be raced. | async.md's cancel safety; decisions 5, 6, 7 |
 
 ## Data: cursors you keep
@@ -128,16 +136,24 @@ step a copy and leave `c` where it was. Collections keep `for x in xs`,
 and temporaries need no `&`: `for row in try Db.rows(q)`,
 `for n in walk(t)`.
 
-**Resources: state in the service, ids and offsets in the reader** (rule
-6). No affine or unique types are needed (foundations.md rejected them):
+**Resources are families: state in the service, ids and offsets in the
+reader** (rule 6). A service's open resources, its open files, database
+cursors and socket buffers, are a family keyed by id
+([concurrency.md](concurrency.md#streams-calls-that-answer-many-times)).
+No affine or unique types are needed (foundations.md rejected them), and
+there's no separate handle table and no close rule:
 
 - **A file's reader** holds a path and an offset, and reads with `pread`.
-  `Fs` caches the open file, with a `max:`.
+  The open file is an entry in `Fs`'s family, and the family's `max:` is
+  the cap on open files.
 - **A socket's reader** holds a connection id; unread bytes are the
-  runtime's leased buffers, not the reader's.
-- **A query's rows** are a cursor id on the database's service.
-- **Ids carry their instance's incarnation.** Using one on another
-  instance, or after its `with` ended, fails with a typed `Closed`.
+  runtime's leased buffers, kept by the connection's entry, not the
+  reader.
+- **A query's rows** are a cursor id on the database's service, an
+  entry in its family.
+- **An entry has an incarnation, as an actor does.** A reader whose
+  resource was evicted, or whose family's `with` ended, fails with a
+  typed `Closed`, and the leftovers are closed by the family's end.
 - **A copy reads from where it was copied, or fails, typed.** The service
   checks the offset, so two names for one connection can't silently
   interleave. Rust's RFC 3550 calls `Range` being an `Iterator` a
@@ -353,6 +369,10 @@ A generator's frame is a scope (rule 5). Its `finally` runs:
 A generator that was never stepped has run none of its body, so it has
 no `finally` to run: a transaction's `BEGIN` happens at the first step.
 Several generators in one scope close in reverse order, as `with`s do.
+**A generator may hold a `with` across a `yield`,** a transaction across
+rows, and the `with` ends with the generator, inside the consumer's
+scope. If it installs a family, the family ends there too: a consumer's
+`break` drains or cancels it, as it would any `with` in the generator.
 In the interpreter this is the cleanup node `with` already uses, wrapped
 around the rest of the block that names the generator.
 
@@ -369,7 +389,9 @@ generator rolls it back.
 **A cancel mid-step ends the generator.** Its `finally` runs.
 
 **A generator ends once, keeps how it ended, and every later step says
-so.** How it ended is what its `finally(r)` was given:
+so.** It's one row of a rule for every computation, calls, posted calls
+and actors too ([concurrency.md](concurrency.md#ends-once)). How it
+ended is what its `finally(r)` was given:
 
 | How it ended | `finally` saw | Every later step |
 |---|---|---|
@@ -378,8 +400,9 @@ so.** How it ended is what its `finally(r)` was given:
 | it was cancelled | `Err(Cancelled)` | panics: only a `finally` can get here |
 | it was never stepped | nothing; its body never ran | as a task cancelled before it starts |
 
-So a timed-out stream can't pass for a clean end, and a wrapper never
-has to remember that what it wraps is done (Wuyts' [missing
+So every stream is fused by construction: a timed-out stream can't pass
+for a clean end, and a wrapper, `zip` or `merge`, never has to remember
+that what it wraps is done (Wuyts' [missing
 state](https://blog.yoshuawuyts.com/the-future-trait-has-a-missing-state)).
 Answering the same way forever is a promise of a generator's frame, not
 of the cursor protocol: a reader at an offset can say `None` and be
@@ -388,8 +411,8 @@ operation (`Async.timeout`, `race`, `until`) can't step a pipeline from
 outside it: a pipeline isn't an operation (rule 7). To time each step,
 time it over a reader, `Async.timeout(d) fn() => &r.next()`.
 
-**Backstop:** handles register with their handler, which closes leftovers
-when its `with` ends. The bugs the survey found elsewhere can't happen: Python's async
+**Backstop:** an open resource is an entry in its service's family, so
+the family's end closes leftovers. The bugs the survey found elsewhere can't happen: Python's async
 generators finalized later in another context (PEP 525, `aclosing`),
 Java's `Files.lines` leaking without try-with-resources, Clojure's lazy
 seq read after `with-open` closed its file, Haskell's lazy IO.
@@ -466,6 +489,24 @@ Async.produce(cap: 16, fn() => crawl(root)) fn(pages) =>
   shape: a stage whose results are a stream, with its tasks living
   exactly as long as the consumer block.
 
+**Merging gives items as they're ready:**
+
+```ren
+Async.merge([a, b], cap: 16) fn(items) =>
+  for x in try items
+    try handle(x)
+```
+
+- **Its sources run at once,** so each gets a producer task, all
+  feeding one bounded queue, `cap:`, and the call owns them all. When
+  the body ends, they're cancelled and waited for, as `produce`'s is.
+- **Merging is producing, on the page.** A suspended step can't be
+  raced without ending its generator (rule 7), so the tasks a merge
+  needs are written where it's called, not hidden in a combinator.
+- **`zip` and `chain` need no task:** they pull their sources one at a
+  time on the consumer's task. Every stream is fused (Stopping), so
+  none of them fuses by hand.
+
 **Channels.** A channel is a dependency, `dep Events = Chan<Event>`, and
 `Events.items()` is an ordinary function of `Chan<T>` in `sync`, as
 `Fs.read_str` is a function of `Fs`: a cursor whose `next` is
@@ -479,7 +520,7 @@ each **takes a source whose step is one operation:** a channel's
 suspension. Over a generator, the race would cancel it mid-step and end
 it, which is why Kotlin and Effect pull upstream on a second task. Ren
 puts that task on the page: a generator goes on a channel through
-`Async.produce`.
+`Async.produce`, or several through `Async.merge`.
 
 ```ren
 fn searcher() ! SearchDown uses Queries, Search, Results, Clock, Async =
@@ -507,7 +548,8 @@ it sound (research/decision-11/).
   `zip`, `merge_by`
 - consuming: `sum`, `reduce`, `count` (its predicate optional), `any`,
   `all`, `find`, `first`, `min`, `max`, `to_array()`
-- concurrent: `Async.each` and `Async.map` with `max:`
+- concurrent: `Async.each` and `Async.map` with `max:`, `Async.merge`
+  with `cap:`
 - producing: `gen fn`, `xs.cursor()`, `Events.items()`
 
 `drop` is operators.md's name, so `skip` and `skip_while` go, and
@@ -711,7 +753,7 @@ A truncated frame at EOF is `Short(at, need)` with `at` in the stream.
 | async.md | `Async.each` and `Async.map` take any pull argument, `max:` 64 by default; `produce` installs `Send<T>`; `map_pull` takes the consumer-block shape; channels are dependencies with `items()` |
 | errors.md | abandonment (`break`, `take`) is `Cancelled` to a generator's `finally`, its result thrown away |
 | runtime-io.md | the pool may move a held leased chunk to the heap; a pool metric counts it |
-| stdlib.md | `Async.pull` goes (`yield from` and `Async.produce`); two forms per resource; readers hold an id, incarnation and offset; the default set above |
+| stdlib.md | `Async.pull` goes (`yield from` and `Async.produce`); two forms per resource; readers hold an id and an offset, and a service's open resources are a family keyed by id; the default set above |
 | language.md §8 | a line starting with `.`, indented further, continues the line above |
 | operators.md | `count`'s predicate is optional across the vocabulary |
 
