@@ -1,0 +1,320 @@
+// The document server (language.md §11), the services stage's milestone
+// (compiler.md, "Services stage"): each document is an actor, one per
+// key, made on demand from what the store holds and evicted under a cap;
+// a session is a connection that opens a document, joins it, sends its
+// edits and leaves. Every edit is written through to the store before
+// it's sent to the document's subscribers, so the store holds what's
+// durable and every subscriber sees one order of edits.
+//
+// Two stand-ins, for what other stages build (compiler.md, "Where this
+// stage may differ"): the protocol is lines, not frames, the document's
+// name on the first and an edit on each after it, `+text`, then `bye`,
+// answered `done N`, N the document's version; and an `Op` appends a
+// line, where a real editor would have an editing model.
+//
+// Its tests install the documents with chaos eviction, `documents(2,
+// true)`, which evicts what `Random` picks at each call into the family,
+// and THE CHECKS run them under a thousand seeds, `ren test --seeds
+// 1000`: nothing a document needs lives only in its actor.
+
+import sim.{SimNet}
+
+pub type DocId = | DocId(name: Str)
+
+// an edit: a line added to the end of the document
+pub type Op = | Append(line: Str)
+
+// ---- the services ----
+
+// where documents are kept, as their text
+pub dep Store =
+  load: fn(id: DocId) -> Str ! StoreDown
+  save: fn(id: DocId, text: Str) ! StoreDown
+
+// what a document sends its subscribers: one line each
+pub dep Conns =
+  send: fn(c: Conn, line: Str)
+
+// one document, inside `Docs.at`: an edit gives the document's version,
+// the number of edits it has
+pub dep Doc =
+  edit: fn(op: Op) -> Int ! StoreDown
+  join: fn(c: Conn)
+  leave: fn(c: Conn)
+
+// a document, made when a session first opens it, from what the store
+// holds: each edit is saved before it's sent, so an evicted document
+// made again has every edit, and every subscriber sees one order
+pub handler doc(id: DocId) for Doc ! StoreDown uses Store, Conns =
+  var text = try Store.load(id)
+  var subs: Array<Conn> = []
+  edit(op) =>
+    let Append(line) = op
+    text = text + line + "\n"
+    try Store.save(id, text)
+    for c in subs
+      Conns.send(c, line)
+    text.split("\n").len() - 1
+  join(c) => &subs.push(c)
+  leave(c) => subs = subs.reject(fn(x) => x == c)
+
+// the documents, by name: making one can fail as the store's `load` can
+pub dep Docs = Actors<DocId, Doc> ! StoreDown
+
+// a store that keeps each document in a file of its own under `dir`
+pub handler fs_store(dir: Path) for Store uses Fs =
+  load(id) =>
+    let p = file(dir, id)
+    if not Fs.exists(p) then ""
+    else
+      match attempt Fs.read_str(p)
+        Ok(text) => text
+        Err(_) => fail StoreDown
+  save(id, text) =>
+    match attempt Fs.write(file(dir, id), text.bytes())
+      Ok(_) => ()
+      Err(_) => fail StoreDown
+
+// where `fs_store` keeps the document `id`
+fn file(dir: Path, id: DocId) -> Path =
+  let DocId(name) = id
+  dir.join(name + ".txt")
+
+// what sends a line to a connection over the network: one that's closed
+// has gone, and its session leaves
+pub handler net_conns() for Conns uses Net =
+  send(c, line) =>
+    match attempt Net.write(c, (line + "\n").bytes())
+      _ => ()
+
+// ---- the composition root ----
+
+// the documents: at most `max` live at once, the least recently used
+// evicted past it; `chaos`, a test's, evicts at each call what `Random`
+// picks (`actors` uses `Random` for it, so this names it)
+pub wiring documents(max: Int, chaos: Bool) provides Docs uses Store, Conns, Random =
+  actors(doc, max: max, chaos: chaos) as Docs
+
+// the server's: documents kept in files under `dir`, sent over the
+// network
+pub wiring live(dir: Path) provides Docs uses Net, Fs, Random =
+  fs_store(dir), net_conns(), documents(50_000, false)
+
+// ---- a session ----
+
+// the next line `conn` sends, without its "\n", read into `buf` as it's
+// needed, and what's left after it kept there; `None` once the other
+// side has closed
+pub fn read_line(conn: Conn, inout buf: Bytes) -> Option<Str> ! NetError | BadRequest uses Net =
+  var at = newline(buf)
+  var open = true
+  while at == None && open
+    let more = try Net.read(conn, 4096)
+    if more.len() == 0 then open = false
+    else
+      buf = buf + more
+      at = newline(buf)
+  match at
+    Some(i) =>
+      let line = buf[0..i]
+      buf = buf[i + 1..buf.len()]
+      Some(try text(line))
+    None => None
+
+// `b` as text: a line that isn't UTF-8 isn't the protocol
+fn text(b: Bytes) -> Str ! BadRequest =
+  match attempt Str.from_utf8(b)
+    Ok(s) => s
+    Err(_) => fail BadRequest
+
+// where the first "\n" in `b` is
+fn newline(b: Bytes) -> Option<Int> =
+  var i = 0
+  var found: Option<Int> = None
+  while found == None && i < b.len()
+    if b.at(i) == 10 then found = Some(i)
+    i += 1
+  found
+
+// what a line after the first asks for: an edit, or the end
+fn request(line: Str) -> Option<Op> ! BadRequest =
+  if line == "bye" then None
+  else if line.starts_with("+") then
+    let b = line.bytes()
+    Some(Append(try text(b[1..b.len()])))
+  else fail BadRequest
+
+// the edits a session sends, each applied in turn, until `bye`: the
+// document's version after the last
+fn edits(conn: Conn, inout buf: Bytes) -> Int ! StoreDown | BadRequest | NetError =
+  var version = 0
+  var open = true
+  while open
+    match try read_line(conn, &buf)
+      Some(line) =>
+        match try request(line)
+          Some(op) => version = try Doc.edit(op)
+          None => open = false
+      None => fail BadRequest
+  version
+
+// one connection: it names its document, joins it, sends its edits and
+// leaves, however its edits end, and is answered `done` with the
+// document's version after its last edit
+pub fn session(conn: Conn) ! StoreDown | BadRequest | NetError uses Docs, Net =
+  var buf = "".bytes()
+  let name = try read_line(conn, &buf) orelse fail BadRequest
+  if not plain(name) then fail BadRequest
+  let version = try Docs.at(DocId(name)) fn() =>
+    Doc.join(conn)
+    let r = attempt edits(conn, &buf)
+    Doc.leave(conn)
+    try r
+  try Net.write(conn, ("done " + show(version) + "\n").bytes())
+
+// whether `name` can name a document: letters, digits, `-` and `_`, at
+// least one, so it's a file in `fs_store`'s folder and nowhere else
+fn plain(name: Str) -> Bool =
+  let b = name.bytes()
+  var ok = b.len() > 0
+  for i in 0..b.len()
+    let c = b.at(i)
+    let letter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+    let digit = c >= 48 && c <= 57
+    if not (letter || digit || c == 45 || c == 95) then ok = false
+  ok
+
+// the connections a listener accepts, until SIGTERM comes
+type Connections = opaque { listener: Listener }
+  fn next(inout self) -> Option<Conn> = try Net.accept_until(self.listener, Signal.term)
+
+// each connection a session of its own, as it's accepted
+pub fn serve(addr: Addr) ! NetError uses Docs, Net, Console, Async =
+  let listener = try Net.listen(addr)
+  try Async.each(Connections { listener: listener }, max: 10_000) fn(conn) =>
+    match attempt session(conn)
+      Ok(_) => Net.close(conn)
+      Err(_) =>
+        Console.error("session failed")
+        Net.close(conn)
+
+pub fn main() ! NetError uses Net, Fs, Console, Async, Random =
+  with live(Path.of("docs")) in
+    try serve(Addr { host: "127.0.0.1", port: 8080 })
+
+// ---- tests: a store in memory, sessions over `sim.net()` ----
+
+// a store that keeps the last text saved for each document
+pub handler mem_store() for Store =
+  var saved: Map<Str, Str> = Map.empty
+  load(id) =>
+    let DocId(name) = id
+    saved.get(name) orelse ""
+  save(id, text) =>
+    let DocId(name) = id
+    &saved.set(name, text)
+
+pub dep Seen =
+  // the lines sent to `c`, the first first
+  lines: fn(c: Conn) -> Array<Str>
+  // every connection sent a line
+  conns: fn() -> Array<Conn>
+
+// connections that keep what each was sent, for a test to read
+test handler seen_conns() for Conns, Seen =
+  var sent: Array<(Conn, Str)> = []
+  send(c, line) => &sent.push((c, line))
+  lines(c) => sent.select(fn((d, _)) => d == c).map(fn((_, l)) => l)
+  conns() => sent.map(fn((d, _)) => d).uniq()
+
+test fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
+
+// the server, in a task: one that fails says so
+test fn run_server() =
+  match attempt serve(here())
+    Ok(_) => ()
+    Err(_) => Console.error("serve failed")
+
+// a client: connects, names `name`, sends each of `lines` with a write
+// of its own, so other sessions' edits can come between them, and says
+// whether it's answered `done`
+test fn client(name: Str, lines: Array<Str>) -> Bool ! NetError | BadRequest =
+  let c = try SimNet.connect(here())
+  try Net.write(c, (name + "\n").bytes())
+  for l in lines
+    try Net.write(c, (l + "\n").bytes())
+  try Net.write(c, "bye\n".bytes())
+  var buf = "".bytes()
+  let answer = try read_line(c, &buf) orelse ""
+  Net.close(c)
+  answer.starts_with("done ")
+
+// what `a` and `b` both have comes in the same order in each
+test fn one_order(a: Array<Str>, b: Array<Str>) -> Bool =
+  a.select(fn(x) => b.includes(x)) == b.select(fn(x) => a.includes(x))
+
+// the lines of a document's text
+test fn lines_of(text: Str) -> Array<Str> = text.split("\n").reject(fn(l) => l == "")
+
+test "every subscriber sees one order of edits" =
+  // four sessions of one document at once: each sees the edits made
+  // while it's joined, its own among them, in the order the store has
+  with sim.net(), mem_store(), seen_conns(), documents(2, true) in
+    Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      Async.each([["+a1", "+a2", "+a3"], ["+b1", "+b2"], ["+c1", "+c2", "+c3"], ["+d1"]]) fn(ls) =>
+        assert attempt client("notes", ls) == Ok(true)
+      SimNet.signal(Signal.term)
+    let text = lines_of(try Store.load(DocId("notes")))
+    assert text.len() == 9
+    let conns = Seen.conns()
+    assert conns.len() == 4
+    for c in conns
+      assert one_order(Seen.lines(c), text)
+      for d in conns
+        assert one_order(Seen.lines(c), Seen.lines(d))
+  assert TestConsole.errors() == []
+
+test "the store holds the final text" =
+  // three documents and one live at a time, so each session's document
+  // is made again from the store, under chaos besides
+  with sim.net(), mem_store(), seen_conns(), documents(1, true) in
+    Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      Async.each([("a", ["+1", "+2"]), ("b", ["+3"]), ("a", ["+4"]), ("c", ["+5"]), ("b", ["+6", "+7"])]) fn((name, ls)) =>
+        assert attempt client(name, ls) == Ok(true)
+      SimNet.signal(Signal.term)
+    let a = lines_of(try Store.load(DocId("a")))
+    assert a.len() == 3 && a.includes("1") && a.includes("4")
+    assert one_order(a, ["1", "2"])
+    assert lines_of(try Store.load(DocId("b"))).len() == 3
+    assert try Store.load(DocId("c")) == "5\n"
+  assert TestConsole.errors() == []
+
+test "a session that isn't the protocol fails, and the document goes on" =
+  with sim.net(), mem_store(), seen_conns(), documents(2, true) in
+    Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      // answered with nothing, or closed before its `bye` is written
+      assert attempt client("notes", ["+x", "y"]) != Ok(true)
+      assert attempt client("notes", ["+z"]) == Ok(true)
+      assert attempt client("../notes", ["+w"]) != Ok(true)
+      SimNet.signal(Signal.term)
+    assert try Store.load(DocId("notes")) == "x\nz\n"
+  assert TestConsole.errors() == ["session failed", "session failed"]
+
+test "the documents outlive the server, in their files" =
+  // `live`'s store, over files in memory: a second server, with
+  // documents of its own, finds what the first saved
+  with mem_fs([]) in
+    with sim.net(), fs_store(Path.of("docs")), seen_conns(), documents(4, true) in
+      Async.scope fn(s) =>
+        s.spawn fn() => run_server()
+        assert attempt client("notes", ["+first"]) == Ok(true)
+        SimNet.signal(Signal.term)
+    with sim.net(), fs_store(Path.of("docs")), seen_conns(), documents(4, true) in
+      Async.scope fn(s) =>
+        s.spawn fn() => run_server()
+        assert attempt client("notes", ["+second"]) == Ok(true)
+        SimNet.signal(Signal.term)
+    assert try Fs.read_str(Path.of("docs/notes.txt")) == "first\nsecond\n"

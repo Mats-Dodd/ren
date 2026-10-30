@@ -5833,175 +5833,6 @@ every build (Perceus and naive debug and release under the sanitizers,
 tcc, `ren run --release`), with no object alive at the end but in the
 panics, which leave their program's as `ren run` does.
 
-Chosen in step 3, as built:
-
-- **A task's `context` stays,** though "Background work" says it goes:
-  the run time's check needs it, since a task spawned into a scope
-  inside the `with` that spawns into one outside it spawns from inside
-  the `with` too, and without its spawner's frames that task could
-  outlive the handler. `frame.bg` and `leave_with`'s cancelling went;
-  `leave_with` only marks the frame over (`Sched.inner`).
-- **What a task can reach is counted the same way at compile time and at
-  the spawn, and generously:** the dependencies its block calls an
-  operation of, those of each function it calls by its *scheme* (not by
-  the nodes' types, whose `uses` rows are joined to the rows around
-  them, so every call there would look like it reaches everything), a
-  `let`-bound block's, a block parameter's given ones (a block passed in
-  was written outside, so it reaches nothing installed here but those);
-  at the spawn, the closure's Core body and every closure it captured
-  (eval.ml, `reaching`; excl.ml, `reach`). A dependency a `with` inside
-  the block installs counts too. **`Async` is always reached:** every
-  task is run by the runtime installed around it, so a task can't be
-  spawned out of a `sim.scheduler`'s `with` (which `Sched.leave`
-  relies on, as it relied on 11a's rule).
-- **A task outside a `with` that reaches nothing it installs is
-  allowed,** and outlives it, the scope waiting for it (test_tasks.ml's
-  s9 "outlives it"): 11a cancelled every task spawned outside a `with`
-  from its body.
-- **The compile error's help writes the `with` as the program does,** its
-  items, an alias as `as Names`, a wiring by its name, and the scope's
-  opener with its parameter's name, `Async.scope fn(o) =>`; it labels
-  the outermost `with` inside the scope that installs what's reached.
-  `Async.background`'s body counts as a scope for it.
-- **`Background<E>` is a builtin type whose argument is an error set,**
-  as `Result`'s second is (infer_top.ml, infer_written.ml), and
-  `bg.spawn` is an intrinsic member whose block's errors are that set:
-  so `Async.background<T>(body: fn(bg: Background<! ..e>) -> T) -> T !
-  ..e` passes them out with no `try` on `bg.spawn`, and its scheme marks
-  the block `spawned` for Excl.
-- **A background failure cuts the body through a deadline,** pushed when
-  the body starts and moved to now by the first failure, so the body
-  sees a cancel where a timeout's would (`Sched.background`, `fail`,
-  `cut_off`); an infinite deadline sets no timer. The body's own error
-  wins over a background task's; a background failure while the body
-  returned, or while its tasks were being cancelled, is the call's
-  error; any after the first is said on stderr, as a scope's second
-  failure is. A background task that hasn't started when the body ends
-  never runs, as a cancelled task never does.
-- **bench/build.t refuses `beside` and `background` natively** in a cram
-  of their own, since `refused` reaches stripes first and waits for step 6.
-- **Step 0's programs that weren't Ren, mended:** the pool test's
-  `finally(_) => print(...)` gave `()` for the body's value; it's
-  `finally(r) => print(...); try r`. Its target is unchanged.
-- **test_tasks.ml's 11a tests moved:** s2's ticker is beside its body
-  with `Async.background`; the batcher's flusher is `Async.beside`; s9's
-  two spawns outside a `with` are the compile error where it's lexical,
-  and through helpers the panic at the spawn, by a task's task too; a
-  task outside a `with` that reaches nothing in it outliving it is new;
-  s1's help names `Async.beside`. stdlib.md and testing.md name no
-  background work, so they're unchanged.
-
-Chosen in step 7b, as built:
-
-- **A call's type carries which operations it may be a call of,** not R
-  and E as type arguments: the checker gives a concrete `Doc.Call` a row
-  of its cases after the dependency's own type arguments
-  (Types.calls), as OCaml types a polymorphic variant. A case built is
-  its own name and possibly more, open; `Doc.Call` written, or read from
-  an interface, is every case, closed; and generic code's `Call<D, R, !
-  E>`, once [D] is a description of `Doc`, unifies with a `Doc.Call`
-  closing its row to the cases whose operations give R and fail with at
-  most E (Unify's `known_call`). So a value built as `Put` is a
-  `Doc.Call<()>` where one is wanted, `if b then Put {..} else Line {..}`
-  is a call of either and isn't, and two calls of different cases still
-  compare with `==` (test_calls.ml's), which a GADT's R would refuse. A
-  call given to `post` is, from then on, one of the cases `post` takes,
-  as unifying rows makes it (a type variable's row could otherwise gain
-  a case after the post was checked), so it isn't compared with a call
-  of another case after. The
-  row is erased where the checker hands a type on (`canon_ty`), so
-  lowering, Core Lint and the interpreter see `Doc.Call` as declared,
-  and `Call<D, R, E>` with [D] known is `Doc.Call` there as before
-  (Ty.known). An operation's parameter of generic code's `Call<D, R, !
-  E>`, `Actors.send`'s, is read without that erasure where a call
-  through an alias is checked (`Iface.dep_fields ~calls:false`), else an
-  alias's operation would take any call.
-- **`Doc.Call<R ! E>` isn't written of a dependency's own calls:** it's
-  refused, "what a call of `Log` gives and fails with isn't written",
-  with help to build the call where it's posted. A function's interface,
-  which other modules see it through, keeps only `Doc.Call` (the row is
-  the checker's), so a parameter written `Log.Call<Unit>` would let an
-  importer pass any call to a body checked as taking only some. Generic
-  code writes `D.Call<R>` and `D.Call<R, ! E>` (Resolve passes them on
-  as `Call<D, R, ! E>`), and a function whose parameter's type isn't
-  written, `fn g(c) uses Logs = Logs.post(k, c)`, is checked at its
-  callers in its module; a `pub` one writes its types, so it's `Log.Call`
-  and can't post what it's given.
-- **The refusal is a type rule on any parameter of `D.Call<R ! E>`:**
-  where an argument may be a call of an operation that gives something
-  else or can fail with more, "`post` takes a call that gives `()` and
-  can't fail, and `line` gives a `Str`" (or "`edit` can fail with
-  `StoreDown`"), naming the function as it's called (Infer_expr's
-  `call_arg`): `Counts.send` in a third library says it the same way.
-- **`post` is a member of `Actors`,** over the operation `send(k, c) ->
-  Pinned<D>`, as `at` is over `enter`: what it fails with is setup's,
-  the alias's `E`, which an operation's type can't name (step 7a);
-  `Instances.post(f, k, c, victim) ->
-  Pinned<D>` keeps what making the instance failed with, for `made`.
-  The member's parameter is `Call<(D ! ..e), Unit, !>`, the description
-  its `uses` names, so it unifies with `send`'s.
-- **A task's posts and its calls of one actor come in the order it made
-  them** (Family.ordered): an operation called from outside the family,
-  through `at`, waits first until what its task posted to that key has
-  been delivered, as an Erlang process's cast and call to another go
-  through its one mailbox. The spec says a task's posts run in order and
-  is silent on a post and a later `at`; without this, `post` then `at`
-  on one task would read the actor before its mail, which every s7
-  test's target assumes it doesn't. It can wait for nothing a slot
-  holds (deliveries never wait for one) and for no lock its own task
-  holds but through a delivered operation calling back into something
-  the poster is in, which `sim` reports as every task waiting.
-- **The edge** (Family.edge, `metered`): a call from outside waits while
-  the family's mail is at `mailbox:` (full), so it adds at most one
-  call; an operation called through `at` is metered in eval.ml's
-  `dep_op` before it takes its instance, by the instance's number
-  (Family.owners). A sibling is a task that's one of the family's
-  deliveries or is in an operation of one of its instances; its posts
-  never wait, and one that makes the mail more than twice `mailbox:`
-  panics, "`Peers` has 5 posts queued, past twice its `mailbox:` of 2",
-  with "the high-water mark: 5" and the cycle's note, said where it
-  posted, in its delivery's task.
-- **A delivery task per key with mail,** in a scope of the family's own
-  (Sched.owned, never a task's body's), named by its instance by the one
-  rule, `peers[Key(2)]#1`, in the `with`s the opener was in; it takes
-  each call off the queue as it starts it (mail counts what's queued,
-  not what's running), pins the instance for that one operation, and
-  ends when the queue is empty. A post's making goes past the cap only
-  when nothing is evictable or the library's `victim` gives none
-  (`pin ~over`).
-- **Siblings name their family:** an item's needs that come only from
-  the makers it's given (Infer_expr.kept_needs records them by the call,
-  and by the function it's in, for a wiring's link) aren't its own where
-  it's installed as one of them, `actors(peer) as Peers` for a `peer`
-  that uses `Peers`, and the family adds the opener's own install to its
-  maker's evidence once the `with` has made it (Family.installed_as),
-  which `open` captured before it existed.
-- **The high-water mark is reported by `ren test`,** under each test that
-  posted, the most over its seeds: "`Docs`'s high-water mark: 4 posts
-  queued at once"; a program reads it with `high_water()`. There's no
-  native family, so no debug build reports one.
-- **Journal:** `posted` lines, on the posting task, to a key, not a life:
-  `posted peers[Key(2)] Ping { left: 2 }`; a delivery's lines are under
-  its instance's name, which the journal reads as a task's path, a key
-  in brackets that may hold a space in a string (Journal.task_word). A
-  key and a call are written as the journal writes a value, so a
-  string key is quoted, `logs["a b"]#1`: 7a showed it as `show` does.
-- **Test programs mended,** their targets unchanged: the teardown
-  test's `finally` gives back the body's result; the two refusals of a
-  post call it from a function, not a `main` that uses what nothing
-  installs; and the order test's actors write through to a `Kept`
-  handler, since its `max: 1` evicts key 1's actor once its mail is
-  delivered (the second task's `at` needs the slot), which loses what
-  it kept in memory, as it should; it runs under 1000 seeds.
-- **Found, not fixed (step 8's first):** a wiring item `actors(peer) as
-  Peers` is refused, "`live` provides `Peers`, which nothing in it
-  installs" and "`actors(peer)` in `live` provides `Actors`, which
-  nothing needs": a wiring's checks don't see an item's `as` alias of a
-  generic dependency. It's so on main before this step (7a's), and
-  examples/docs puts its actors behind a wiring, as s8's test does.
-  Where it's fixed, a sibling's need through a wiring's link is already
-  met (`kept_in`).
-
 ### Progress log
 
 | step | commit | done | left |
@@ -12351,10 +12182,21 @@ fit the code, each to revisit if a step finds it wrong:
   journal, research/actors-post/'s model.
 - **`Full` is added statically only where the `at` is lexically inside
   another family's `at`;** a helper's `at` gets the run time's rule.
-- **The milestone's stand-ins** (the brief's risk): a session's message is
-  the document's name and its edits on lines, read in one `Net.read`,
-  and an `Op` appends (`Append(text)`); subscribers are seen through a
-  test `Conns`.
+- **The milestone's stand-ins** (the brief's risk; decided after the
+  draft): language.md's `conn.ops()` is a framed reader and
+  `text.apply(op)` an editing model, which the formats and strings
+  stages own, so examples/docs has the smallest that keep what the
+  milestone tests. **A line protocol:** a session's first line names its
+  document, each line after it is an edit, `+text`, and `bye` ends it,
+  answered `done N` with the document's version; `read_line` keeps what
+  it read past a line in the session's buffer, so lines may come in any
+  number of `Net.read`s, and the test clients write each line on its
+  own, so sessions' edits interleave. **An `Op` that appends a line,**
+  `Append(line)`, so the text is its edits in order, which is what the
+  tests compare: a subscriber's edits against the store's lines, and
+  every two subscribers' against each other. Subscribers are seen
+  through a test `Conns`, `seen_conns()`; the real one writes each
+  line to its connection.
 
 Chosen in step 1, as built:
 
@@ -12471,6 +12313,64 @@ Chosen in step 2, as built:
 - **README's and deps.md's `with_fake_net(body: fn() uses Net)`** show
   where a block's dependencies are found, so they stay, with a note that
   a helper that only installs is better a wiring.
+
+Chosen in step 3, as built:
+
+- **A task's `context` stays,** though "Background work" says it goes:
+  the run time's check needs it, since a task spawned into a scope
+  inside the `with` that spawns into one outside it spawns from inside
+  the `with` too, and without its spawner's frames that task could
+  outlive the handler. `frame.bg` and `leave_with`'s cancelling went;
+  `leave_with` only marks the frame over (`Sched.inner`).
+- **What a task can reach is counted the same way at compile time and at
+  the spawn, and generously:** the dependencies its block calls an
+  operation of, those of each function it calls by its *scheme* (not by
+  the nodes' types, whose `uses` rows are joined to the rows around
+  them, so every call there would look like it reaches everything), a
+  `let`-bound block's, a block parameter's given ones (a block passed in
+  was written outside, so it reaches nothing installed here but those);
+  at the spawn, the closure's Core body and every closure it captured
+  (eval.ml, `reaching`; excl.ml, `reach`). A dependency a `with` inside
+  the block installs counts too. **`Async` is always reached:** every
+  task is run by the runtime installed around it, so a task can't be
+  spawned out of a `sim.scheduler`'s `with` (which `Sched.leave`
+  relies on, as it relied on 11a's rule).
+- **A task outside a `with` that reaches nothing it installs is
+  allowed,** and outlives it, the scope waiting for it (test_tasks.ml's
+  s9 "outlives it"): 11a cancelled every task spawned outside a `with`
+  from its body.
+- **The compile error's help writes the `with` as the program does,** its
+  items, an alias as `as Names`, a wiring by its name, and the scope's
+  opener with its parameter's name, `Async.scope fn(o) =>`; it labels
+  the outermost `with` inside the scope that installs what's reached.
+  `Async.background`'s body counts as a scope for it.
+- **`Background<E>` is a builtin type whose argument is an error set,**
+  as `Result`'s second is (infer_top.ml, infer_written.ml), and
+  `bg.spawn` is an intrinsic member whose block's errors are that set:
+  so `Async.background<T>(body: fn(bg: Background<! ..e>) -> T) -> T !
+  ..e` passes them out with no `try` on `bg.spawn`, and its scheme marks
+  the block `spawned` for Excl.
+- **A background failure cuts the body through a deadline,** pushed when
+  the body starts and moved to now by the first failure, so the body
+  sees a cancel where a timeout's would (`Sched.background`, `fail`,
+  `cut_off`); an infinite deadline sets no timer. The body's own error
+  wins over a background task's; a background failure while the body
+  returned, or while its tasks were being cancelled, is the call's
+  error; any after the first is said on stderr, as a scope's second
+  failure is. A background task that hasn't started when the body ends
+  never runs, as a cancelled task never does.
+- **bench/build.t refuses `beside` and `background` natively** in a cram
+  of their own, since `refused` reaches stripes first and waits for step 6.
+- **Step 0's programs that weren't Ren, mended:** the pool test's
+  `finally(_) => print(...)` gave `()` for the body's value; it's
+  `finally(r) => print(...); try r`. Its target is unchanged.
+- **test_tasks.ml's 11a tests moved:** s2's ticker is beside its body
+  with `Async.background`; the batcher's flusher is `Async.beside`; s9's
+  two spawns outside a `with` are the compile error where it's lexical,
+  and through helpers the panic at the spawn, by a task's task too; a
+  task outside a `with` that reaches nothing in it outliving it is new;
+  s1's help names `Async.beside`. stdlib.md and testing.md name no
+  background work, so they're unchanged.
 
 Chosen in step 4, as built:
 
@@ -12845,6 +12745,161 @@ Chosen in step 7a, as built:
   `with`s so `Outers` is outside `Inners`, and the `at`-making test
   prints the `with`'s body before the family's end.
 
+Chosen in step 7b, as built:
+
+- **A call's type carries which operations it may be a call of,** not R
+  and E as type arguments: the checker gives a concrete `Doc.Call` a row
+  of its cases after the dependency's own type arguments
+  (Types.calls), as OCaml types a polymorphic variant. A case built is
+  its own name and possibly more, open; `Doc.Call` written, or read from
+  an interface, is every case, closed; and generic code's `Call<D, R, !
+  E>`, once [D] is a description of `Doc`, unifies with a `Doc.Call`
+  closing its row to the cases whose operations give R and fail with at
+  most E (Unify's `known_call`). So a value built as `Put` is a
+  `Doc.Call<()>` where one is wanted, `if b then Put {..} else Line {..}`
+  is a call of either and isn't, and two calls of different cases still
+  compare with `==` (test_calls.ml's), which a GADT's R would refuse. A
+  call given to `post` is, from then on, one of the cases `post` takes,
+  as unifying rows makes it (a type variable's row could otherwise gain
+  a case after the post was checked), so it isn't compared with a call
+  of another case after. The
+  row is erased where the checker hands a type on (`canon_ty`), so
+  lowering, Core Lint and the interpreter see `Doc.Call` as declared,
+  and `Call<D, R, E>` with [D] known is `Doc.Call` there as before
+  (Ty.known). An operation's parameter of generic code's `Call<D, R, !
+  E>`, `Actors.send`'s, is read without that erasure where a call
+  through an alias is checked (`Iface.dep_fields ~calls:false`), else an
+  alias's operation would take any call.
+- **`Doc.Call<R ! E>` isn't written of a dependency's own calls:** it's
+  refused, "what a call of `Log` gives and fails with isn't written",
+  with help to build the call where it's posted. A function's interface,
+  which other modules see it through, keeps only `Doc.Call` (the row is
+  the checker's), so a parameter written `Log.Call<Unit>` would let an
+  importer pass any call to a body checked as taking only some. Generic
+  code writes `D.Call<R>` and `D.Call<R, ! E>` (Resolve passes them on
+  as `Call<D, R, ! E>`), and a function whose parameter's type isn't
+  written, `fn g(c) uses Logs = Logs.post(k, c)`, is checked at its
+  callers in its module; a `pub` one writes its types, so it's `Log.Call`
+  and can't post what it's given.
+- **The refusal is a type rule on any parameter of `D.Call<R ! E>`:**
+  where an argument may be a call of an operation that gives something
+  else or can fail with more, "`post` takes a call that gives `()` and
+  can't fail, and `line` gives a `Str`" (or "`edit` can fail with
+  `StoreDown`"), naming the function as it's called (Infer_expr's
+  `call_arg`): `Counts.send` in a third library says it the same way.
+- **`post` is a member of `Actors`,** over the operation `send(k, c) ->
+  Pinned<D>`, as `at` is over `enter`: what it fails with is setup's,
+  the alias's `E`, which an operation's type can't name (step 7a);
+  `Instances.post(f, k, c, victim) ->
+  Pinned<D>` keeps what making the instance failed with, for `made`.
+  The member's parameter is `Call<(D ! ..e), Unit, !>`, the description
+  its `uses` names, so it unifies with `send`'s.
+- **A task's posts and its calls of one actor come in the order it made
+  them** (Family.ordered): an operation called from outside the family,
+  through `at`, waits first until what its task posted to that key has
+  been delivered, as an Erlang process's cast and call to another go
+  through its one mailbox. The spec says a task's posts run in order and
+  is silent on a post and a later `at`; without this, `post` then `at`
+  on one task would read the actor before its mail, which every s7
+  test's target assumes it doesn't. It can wait for nothing a slot
+  holds (deliveries never wait for one) and for no lock its own task
+  holds but through a delivered operation calling back into something
+  the poster is in, which `sim` reports as every task waiting.
+- **The edge** (Family.edge, `metered`): a call from outside waits while
+  the family's mail is at `mailbox:` (full), so it adds at most one
+  call; an operation called through `at` is metered in eval.ml's
+  `dep_op` before it takes its instance, by the instance's number
+  (Family.owners). A sibling is a task that's one of the family's
+  deliveries or is in an operation of one of its instances; its posts
+  never wait, and one that makes the mail more than twice `mailbox:`
+  panics, "`Peers` has 5 posts queued, past twice its `mailbox:` of 2",
+  with "the high-water mark: 5" and the cycle's note, said where it
+  posted, in its delivery's task.
+- **A delivery task per key with mail,** in a scope of the family's own
+  (Sched.owned, never a task's body's), named by its instance by the one
+  rule, `peers[Key(2)]#1`, in the `with`s the opener was in; it takes
+  each call off the queue as it starts it (mail counts what's queued,
+  not what's running), pins the instance for that one operation, and
+  ends when the queue is empty. A post's making goes past the cap only
+  when nothing is evictable or the library's `victim` gives none
+  (`pin ~over`).
+- **Siblings name their family:** an item's needs that come only from
+  the makers it's given (Infer_expr.kept_needs records them by the call,
+  and by the function it's in, for a wiring's link) aren't its own where
+  it's installed as one of them, `actors(peer) as Peers` for a `peer`
+  that uses `Peers`, and the family adds the opener's own install to its
+  maker's evidence once the `with` has made it (Family.installed_as),
+  which `open` captured before it existed.
+- **The high-water mark is reported by `ren test`,** under each test that
+  posted, the most over its seeds: "`Docs`'s high-water mark: 4 posts
+  queued at once"; a program reads it with `high_water()`. There's no
+  native family, so no debug build reports one.
+- **Journal:** `posted` lines, on the posting task, to a key, not a life:
+  `posted peers[Key(2)] Ping { left: 2 }`; a delivery's lines are under
+  its instance's name, which the journal reads as a task's path, a key
+  in brackets that may hold a space in a string (Journal.task_word). A
+  key and a call are written as the journal writes a value, so a
+  string key is quoted, `logs["a b"]#1`: 7a showed it as `show` does.
+- **Test programs mended,** their targets unchanged: the teardown
+  test's `finally` gives back the body's result; the two refusals of a
+  post call it from a function, not a `main` that uses what nothing
+  installs; and the order test's actors write through to a `Kept`
+  handler, since its `max: 1` evicts key 1's actor once its mail is
+  delivered (the second task's `at` needs the slot), which loses what
+  it kept in memory, as it should; it runs under 1000 seeds.
+- **Found, not fixed (step 8's first; fixed there):** a wiring item `actors(peer) as
+  Peers` is refused, "`live` provides `Peers`, which nothing in it
+  installs" and "`actors(peer)` in `live` provides `Actors`, which
+  nothing needs": a wiring's checks don't see an item's `as` alias of a
+  generic dependency. It's so on main before this step (7a's), and
+  examples/docs puts its actors behind a wiring, as s8's test does.
+  Where it's fixed, a sibling's need through a wiring's link is already
+  met (`kept_in`).
+
+Chosen in step 8, as built:
+
+- **A wiring provides an item by its alias** (step 7b's finding, fixed):
+  `actors(doc) as Docs` installs the dependency `Actors`, which lowering's
+  `With` needs, but a wiring's `provides`, its "nothing in it installs"
+  and "which nothing needs" checks, and its body's hidden dependencies
+  name it by its alias, `Docs`, the name the program gives it
+  (infer_handlers.ml's `provided_as`). An alias written as the
+  dependency itself, `as Chan<Int>`, names `Chan`, as before.
+- **examples/docs's wirings split the way §5's "Tests" says:**
+  `documents(max, chaos)` is the family, `actors(doc, max: max, chaos:
+  chaos) as Docs`, over a `Store` and a `Conns` from outside; `live(dir)`
+  is the server's, a store of files, `fs_store(dir)`, the network's
+  `net_conns()` and `documents(50_000, false)`, `uses Net, Fs, Random`
+  (language.md's `live(url)` is a `pg_store`, which Ren doesn't have;
+  `Random` is `actors`', "Where this stage may differ"). The tests list
+  `documents(2, true)` beside `sim.net()`, `mem_store()` and
+  `seen_conns()`.
+- **A session's edits run in its one `Docs.at` block,** and it leaves
+  however they end: language.md's `finally(_) => Doc.leave(conn.id)`
+  inside a block isn't Ren as built, so the block keeps the edits'
+  outcome with `attempt`, leaves, then passes it on with `try`.
+- **The variants are the whole server** with the one change each, so
+  each fails for the reason the milestone names and no other:
+  services/memory's `doc` doesn't save (and has a `text()` the tests
+  read through `Docs.at`), its calm test `documents(4, false)`;
+  services/lost_update's `Doc` has `text()` and `set(text, line)`, and a
+  session's `append` reads with one and writes with the other;
+  fixed.ren is examples/docs' server with lost_update's test. Every
+  variant's family has `chaos: true` but the calm test's, so fixed.ren's
+  thousand seeds hold under chaos too. They stay in bench/services,
+  since their tests are meant to fail.
+- **What the seeds found** (recorded for the stage's report): the lost
+  update fails at `ren test --sim --seeds 200`'s first seed, 4702 (its
+  test's own), `left: 3`, `right: 4`, and `--seed 4702` fails the same;
+  of the seeds 1 to 100 run one by one, 63 lose an edit. The in-memory
+  document fails under chaos at its first seed, 9904, `left: ""`, which
+  `--seed 9904` repeats; 93 of the seeds 1 to 100 lose it. examples/docs'
+  `ren test --seeds 1000` takes about 10 s of wall clock here (9.7 s;
+  each of its four tests under a thousand seeds).
+- **No test of examples/docs posts,** so `ren test` prints no
+  high-water mark there: language.md's server calls its actors through
+  `at` alone.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -12862,7 +12917,8 @@ Chosen in step 7a, as built:
 | 6a | 261287d | the runtime half: lib/eval/family.ml, the keyed instance family (partitions, pins, the order of release, lives, names by the one rule, eviction with its `finally` on the evicting task, teardown in reverse creation order), reached through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`) over `family_*` intrinsics that Core Lint lets only its members call (`Prelude.runtime_of`); `D.Call` for every dependency whose operations are all data (Resolve's `call_types`, `Doc.Call.Edit { op }` three-part paths in the parser and tree-sitter, `X.Call` as a type, "`Docs.Call` needs every operation of `Docs` to be data"); the `call(c)` clause and a merge's `call(c, a, b)`, checked once with a refined skolem result (`Types.refined`, Infer_handlers.call_clause) and copied per operation (Lower's `clause_ops`); handlers `for D`, made per dependency (`For_param`, Lower's `for_call`); generic code's `Call<D, R, E>` and its members `first_hash`, `sum`, `max`, `min`, `concat`, `fold`, and `operations(h)`; handler parameters with defaults; `Async.worker()` (sched.ml); the family refused natively (to_mem.ml); test/test_calls.ml; language.md's table | step 6b: `striped` in Ren, `sync.keyed` removed; step 7: `pin`, `post`, queues, the meter, setup's errors, `victim`, journal version 3, `D.Call<R ! E>` |
 | 6b | 04d0347 | `striped` in the prelude, plain Ren over the family's `Instances`, `Async.worker()` and `Call`'s members: `By` (`Key(n: Int = 16)`, `Worker`), `Fold<D>` (`Unmerged`, `Sum`, `Max`, `Min`, `Concat`, `Custom(m)`), its checks at the `with` reading `operations(h)`, a keyless call on every stripe folded left to right; `sync.keyed` removed with `Sync_keyed`, `VKeyed`, `VKeys` and their sites, its tests moved to test_services.ml as `striped`'s; test_services.ml's s6 all on, the split law failing under seed 5671; language.md §11's `striped` lines run (test_calls.ml); bench/services/refused as specified, natively refused; async.md, deps.md, handlers.md, language.md's table, the README | step 7: `actors`, `pin`, `post`, journal version 3; the review's stripes program (a merge whose result depends on stripe order) |
 | 7a | 07434ed | `actors` in the prelude, plain Ren over the family: `Actors<K, D>` with `at` and `each` as members over the operations `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`; `actors(h: spawned fn(k: K) -> D, max, mailbox, evict: Lru, chaos, parts)`; the alias's `! E`; the family's `pin` for a block with a library's `victim`, `visit`, `enter`/`made`, `idle`, setup's errors as the family's, waiters sharing them, a cancelled setup retried; the no-deadlock rules static and at run time, `Full`; `finally` can't fail; partitions; chaos; journal version 3 (`opened`, `made`, `evicted`), replayed; test_services.ml's s7 tests but `post`'s on, test/test_actors.ml; tree-sitter's alias errors (corpus actors.txt); language.md's table | step 7b: `post`, the per-key queues and their delivery tasks, the edge's meter and high-water mark, a sibling's post and an actor naming its own family, teardown draining, research/actors-post/'s counterexamples; s7's `post` tests |
-| 7b | this commit | `post`: `Actors.post(k, c)` over the operation `send` and `Instances.post` (`family_post`), its parameter generic code's `Call<D, (), !>`; a concrete call's type carrying which operations it may be a call of (Types.calls; Unify's `known_call`; `D.Call<R ! E>` written in generic code; refused of a dependency's own), the refusal "`post` takes a call that gives `()` and can't fail, and ..." for any such parameter; the family's per-key queues, delivery tasks in a scope of its own named by their instance, a post making its actor past the cap when none is evictable, mail keeping an instance from eviction, the edge's meter for posts and for operations through `at`, a task's posts before its own later calls of the actor, a sibling's post never waiting and panicking past twice `mailbox:` with the high-water mark, the family's end draining before the `finally`s; an actor naming its own family in `uses` (Infer's `kept_own`, the opener's install in its maker's evidence); journal `posted` lines, keys written as journal values, delivery tasks' names read back; `ren test`'s high-water mark; test_services.ml's s7 `post` tests on, with the high-water mark, a replay of a run with posts, and a third library that posts; language.md's table | step 8; a wiring that lists `actors(...) as Docs` (7a's, below) |
+| 7b | e8c9e02 | `post`: `Actors.post(k, c)` over the operation `send` and `Instances.post` (`family_post`), its parameter generic code's `Call<D, (), !>`; a concrete call's type carrying which operations it may be a call of (Types.calls; Unify's `known_call`; `D.Call<R ! E>` written in generic code; refused of a dependency's own), the refusal "`post` takes a call that gives `()` and can't fail, and ..." for any such parameter; the family's per-key queues, delivery tasks in a scope of its own named by their instance, a post making its actor past the cap when none is evictable, mail keeping an instance from eviction, the edge's meter for posts and for operations through `at`, a task's posts before its own later calls of the actor, a sibling's post never waiting and panicking past twice `mailbox:` with the high-water mark, the family's end draining before the `finally`s; an actor naming its own family in `uses` (Infer's `kept_own`, the opener's install in its maker's evidence); journal `posted` lines, keys written as journal values, delivery tasks' names read back; `ren test`'s high-water mark; test_services.ml's s7 `post` tests on, with the high-water mark, a replay of a run with posts, and a third library that posts; language.md's table | step 8; a wiring that lists `actors(...) as Docs` (7a's, below) |
+| 8 | this commit | the milestone: a wiring provides an item by its alias, `actors(doc) as Docs` (infer_handlers.ml's `provided_as`, 7b's finding), with tests; examples/docs (moved from bench/services/docs), language.md §11's document server behind wirings, `documents(max, chaos)` and `live(dir)`, over a line protocol and an `Op` that appends, a store of files and one in memory, sessions over `sim.net()` that interleave, tests that every subscriber sees one order, that the store holds the final text, that a session off the protocol fails alone, and that the documents outlive the server; its tests under `documents(2, true)`, chaos, pass `ren test --seeds 1000` (about 10 s); bench/services/memory and lost_update (and fixed.ren) as the whole server with one change each; bench/tasks.t's `services_milestone` holds; test_services.ml's s8 on, with two wiring tests; step 3's and 7b's "Chosen" lists moved here from Stage 11a's section, where they'd landed; language.md's table | step 9, the review |
 
 ## Patterns stage
 

@@ -60,7 +60,8 @@
 ; tasks.t runs stage 11a's programs, in 11a/tasks/ until their steps
 ; land them in examples/, each `ren test` in its folder, and says which
 ; are as specified yet (compiler.md, "Stage 11a", "The tests"); and the
-; services stage's milestone, in services/ ("Services stage").
+; services stage's milestone, examples/docs and its variants in services/
+; ("Services stage").
 
 (cram
  (applies_to tasks)
@@ -73,6 +74,7 @@
   (glob_files %{project_root}/examples/refresh/*.ren)
   (glob_files %{project_root}/examples/server/*.ren)
   (glob_files %{project_root}/examples/breaker/*.ren)
+  (glob_files %{project_root}/examples/docs/*.ren)
   (glob_files 11a/tasks/lost_update/*.ren)
   (glob_files 11a/tasks/journal/*.ren)
   %{project_root}/examples/crawler/expected
@@ -81,10 +83,9 @@
   %{project_root}/examples/refresh/expected
   %{project_root}/examples/server/expected
   %{project_root}/examples/breaker/expected
+  %{project_root}/examples/docs/expected
   11a/tasks/journal/v1.journal
   11a/tasks/journal/v1.expected
-  (glob_files services/docs/*.ren)
-  services/docs/expected
   (glob_files services/lost_update/*.ren)
   (glob_files services/memory/*.ren)
   (glob_files services/breaker_held/*.ren)))

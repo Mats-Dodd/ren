@@ -1081,6 +1081,7 @@ and with_ core env cx (e : expr) (items : with_item list) body =
             (fun (_, (it : with_item), links, installs) ->
               List.filter_map
                 (fun ((l : label), p) ->
+                  let p = provided_as it p in
                   Option.map
                     (fun (v : Ast.via) ->
                       (l, v.wiring, src (fst (List.hd links)).link))
@@ -1353,7 +1354,9 @@ and wiring_checks env ~src order =
   | (_, (first : with_item), _, _) :: _ ->
       let own = wiring first in
       let installs =
-        List.concat_map (fun (_, _, _, ins) -> List.map snd ins) order
+        List.concat_map
+          (fun (_, it, _, ins) -> List.map (fun (_, p) -> provided_as it p) ins)
+          order
       in
       List.iter
         (fun p ->
@@ -1377,19 +1380,21 @@ and wiring_checks env ~src order =
               let unused =
                 List.filter
                   (fun ((l : label), p) ->
-                    (not (List.mem p own.provides))
+                    (not (List.mem (provided_as it p) own.provides))
                     && not (List.mem l.name needed))
                   ins
               in
               if unused <> [] && List.length unused = List.length ins then
                 report env
                   (item_unused it.iloc ~wiring:own.wiring ~item:top
-                     ~deps:(List.map (fun (_, p) -> env.names p) unused))
+                     ~deps:
+                       (List.map (fun (_, p) -> env.names (provided_as it p)) unused))
           | inner ->
               (* one a wiring inside it lists: what this one provides of
                  it, that one has to *)
               List.iter
                 (fun (_, p) ->
+                  let p = provided_as it p in
                   if List.mem p own.provides then
                     match
                       List.find_opt
@@ -1403,6 +1408,16 @@ and wiring_checks env ~src order =
                     | _ -> ())
                 ins)
         order
+
+(* What a wiring's `provides` names the dependency [p] the item [it]
+   installs by: the alias it's installed as, `Docs` for `actors(doc) as
+   Docs`, since that's the name the program gives it and the body calls
+   it by; otherwise [p] itself. An item's installs keep the dependency
+   it implements, `Actors`, which lowering's `With` needs. *)
+and provided_as (it : with_item) p =
+  match it.alias with
+  | Some { dep = { tref = Named a; _ }; _ } -> a
+  | _ -> p
 
 (* The order to install a `with`'s [items] in, outermost first: one that
    installs what another needs goes around it, and otherwise the one whose

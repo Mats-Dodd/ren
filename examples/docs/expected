@@ -1,0 +1,8 @@
+main.ren
+  ✓ every subscriber sees one order of edits
+  ✓ the store holds the final text
+  ✓ a session that isn't the protocol fails, and the document goes on
+  ✓ the documents outlive the server, in their files
+
+4 passed
+exit 0

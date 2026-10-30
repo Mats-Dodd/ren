@@ -3884,13 +3884,12 @@ fn main() uses Console =
 
 let%expect_test "[s8 accept] the document server's actors under chaos eviction keep every edit" =
   (* chaos is the program's: its wiring installs `actors(doc, max: 2,
-     chaos: true)`; there's no `ren test --chaos` *)
-  until "s8"
-    ~says:[ "✓ every edit is in the store, in one order" ]
-    (fun () ->
-      test ~seeds:100
-        (pub_all
-         (docs
+     chaos: true)`; there's no `ren test --chaos`. The spawned blocks end
+     in `()`, as a block that ends with a `let` has no value (mended
+     from step 0's, the target unchanged) *)
+  test ~seeds:100
+    (pub_all
+       (docs
        ^ {|
 wiring live provides Docs uses Console, Random = mem_store(), actors(doc, max: 2, chaos: true) as Docs
 
@@ -3902,15 +3901,61 @@ test "every edit is in the store, in one order" =
           let _ = attempt Docs.at(DocId(n % 2)) fn() =>
             let _ = attempt Doc.edit("x")
             ()
+          ()
     let t = attempt Docs.at(DocId(0)) fn() => Doc.text()
     assert t == Ok("xx")
-|})));
+|}));
   [%expect {|
-    (until s8)
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:40:15
-    40 │           let _ = attempt Docs.at(DocId(n % 2)) fn() =>
-       │               ^
-       help: add the value this block should produce as its last line
+    test.ren
+      ✓ every edit is in the store, in one order
+
+    1 passed, each under 100 seeds
+    [exit 0]
     |}]
 
+let%expect_test "[s8 accept] a wiring provides a family by the alias it's installed as" =
+  (* language.md §11's `live`: `actors(doc, max: 50_000) as Docs` is
+     provided as `Docs`, the name the body calls it by, not as `Actors`,
+     the dependency it implements *)
+  run
+    (docs
+   ^ {|
+wiring live provides Docs uses Console, Random = mem_store(), actors(doc, max: 4) as Docs
+
+fn main() ! StoreDown uses Console, Random =
+  with live in
+    try Docs.at(DocId(1)) fn() => try Doc.edit("a")
+    print(try Docs.at(DocId(1)) fn() => Doc.text())
+|});
+  [%expect {|
+    a
+    evicted DocId(1)
+    ()
+    |}]
+
+let%expect_test "[s8 refuse] a wiring that installs a family under one alias doesn't provide another" =
+  run
+    (docs
+   ^ {|
+dep Others = Actors<DocId, Doc> ! StoreDown
+
+wiring live provides Others uses Console, Random = mem_store(), actors(doc, max: 4) as Docs
+
+fn main() uses Console, Random =
+  with live in
+    print("x")
+|});
+  [%expect {|
+    error: `live` provides `Others`, which nothing in it installs
+       ┌─ test.ren:35:8
+    35 │ wiring live provides Others uses Console, Random = mem_store(), actors(doc, max: 4) as Docs
+       │        ^^^^
+       help: remove it from `provides`, or add an item that installs it
+
+    error: `actors(doc, max: 4)` in `live` provides `Docs`, which nothing needs
+       ┌─ test.ren:35:65
+    35 │ wiring live provides Others uses Console, Random = mem_store(), actors(doc, max: 4) as Docs
+       │                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = Ren has no warnings: what nothing uses is an error
+       help: remove it, or add `Docs` to `live`'s `provides`
+    |}]

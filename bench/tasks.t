@@ -96,28 +96,30 @@ up a fast one" fails under some seed, which `--seed` fails again.
   without release, a seed finds it
 
 The services stage's milestone (compiler.md, "Services stage", "The
-tests"; foundations.md, Staging, item 6), in services/ until step 8
-moves `docs` to examples/docs, where THE CHECKS run its tests: the
-document server, language.md §11's, whose `expected` is what `ren test`
-prints there.
+tests"; foundations.md, Staging, item 6), landed by step 8: the document
+server, language.md §11's, in examples/docs, where THE CHECKS run its
+tests, and whose `expected` is what `ren test` prints there.
 
-  $ spec services/docs
-  services/docs: not yet
+  $ spec ../examples/docs
+  ../examples/docs: as specified
 
-Then, once step 8 lands: the server's tests, which install its
-documents with chaos eviction, `actors(doc, chaos: true)`, pass under a
-thousand seeds, `ren test --seeds 1000`; in
-services/lost_update, a read and a write in two operations of one actor
-inside one `Docs.at` block, `ren test --sim --seeds 200` finds a seed
-that loses an edit, and `--seed` with it fails the same way again,
-while fixed.ren's one operation passes under a thousand seeds; and in
-services/memory, a document kept only in memory passes under a
-thousand seeds in a family without chaos, and fails under some seed in
-one with `chaos: true`, which `--seed` fails again. There's no `ren
-test --chaos`: chaos is a parameter of `actors`.
+Its tests, which install its documents with chaos eviction,
+`documents(2, true)`, a wiring of `actors(doc, max: 2, chaos: true) as
+Docs`, pass under a thousand seeds, `ren test --seeds 1000`; in
+services/lost_update, the same server with an edit read with one
+operation and written with another inside one `Docs.at` block, `ren
+test --sim --seeds 200` finds a seed that loses an edit, and `--seed`
+with it fails the same way again, while fixed.ren's one operation
+passes under a thousand seeds; and in services/memory, the same server
+with its text kept only in memory passes under a thousand seeds in a
+family without chaos, and fails under some seed in one with `chaos:
+true`, which `--seed` fails again. There's no `ren test --chaos`: chaos
+is a parameter of `actors`.
 
+  $ (cd ../examples/docs && ren test --seeds 1000 | tail -n 1)
+  4 passed, each under 1000 seeds
   $ services_milestone() {
-  >   (cd services/docs && ren test --seeds 1000 > /dev/null 2>&1); docs=$?
+  >   (cd ../examples/docs && ren test --seeds 1000 > /dev/null 2>&1); docs=$?
   >   (cd services/lost_update &&
   >    ren test --sim --seeds 200 --only "two sessions" > seeds.out 2>&1; found=$?
   >    seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
@@ -132,7 +134,8 @@ test --chaos`: chaos is a parameter of `actors`.
   >    ren test --seeds 200 --only "under chaos" > seeds.out 2>&1; found=$?
   >    seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
   >    ren test --seed "${seed:-0}" --only "under chaos" > again.out 2>&1; again=$?
-  >    [ "$calm" = 0 ] && [ "$found" = 1 ] && [ -n "$seed" ] && [ "$again" = 1 ]; ok=$?
+  >    [ "$calm" = 0 ] && [ "$found" = 1 ] && [ -n "$seed" ] && [ "$again" = 1 ] &&
+  >      [ "$(grep -e 'left:' -e 'right:' seeds.out)" = "$(grep -e 'left:' -e 'right:' again.out)" ]; ok=$?
   >    rm -f seeds.out again.out; exit $ok); memory=$?
   >   if [ "$docs" = 0 ] && [ "$lost" = 0 ] && [ "$memory" = 0 ]
   >   then echo "the services milestone holds"
@@ -140,4 +143,4 @@ test --chaos`: chaos is a parameter of `actors`.
   >   fi
   > }
   $ services_milestone
-  the services milestone: not yet
+  the services milestone holds
