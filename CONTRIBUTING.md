@@ -82,8 +82,7 @@ Rust 1.99.1 and Go 1.27.3 are optional tools:
 
 ```sh
 ./.devenv-cli/bin/devenv --profile benchmarks shell --clean
-rustc --version
-go version
+ren-check-bench
 sh bench/native/build.sh
 ```
 

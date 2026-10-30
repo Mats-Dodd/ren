@@ -34,6 +34,9 @@ in {
   '';
 
   profiles.benchmarks.module = {
+    scripts.ren-check-bench.exec = ''
+      exec bash "${config.devenv.root}/tools/check-benchmark-toolchain.sh"
+    '';
     packages = [
       pkgs.go_1_27
       (inputs.rust-overlay.lib.mkRustBin { } pkgs).stable."1.99.1".minimal

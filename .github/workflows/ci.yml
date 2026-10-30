@@ -41,5 +41,7 @@ jobs:
         run: ./.devenv-cli/bin/devenv --no-tui shell --clean -- ren-toolchain
       - name: Compiler, native backends, and grammar checks
         run: ./.devenv-cli/bin/devenv --no-tui shell --clean -- ren-check
+      - name: Benchmark compiler smoke tests
+        run: ./.devenv-cli/bin/devenv --no-tui --profile benchmarks shell --clean -- ren-check-bench
       - name: Verify checks leave tracked files unchanged
         run: git diff --exit-code
