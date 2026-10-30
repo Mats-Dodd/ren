@@ -160,7 +160,10 @@ of thing: it obeys the rule above, by the shape of each relationship.
   `cap:`, and the call owns them all. A suspended step can't be raced
   without ending its generator (streams.md, rule 7), so merging *is*
   producing, on the page:
-  `Async.merge([a, b], cap: 16) fn(items) => for x in try items ...`.
+  `Async.merge(a, b, cap: 16) fn(items) => for x in try items ...`.
+  Its sources are separate arguments, as `both`'s and `race`'s are,
+  since a block can't sit in an array; a list of sources known only at
+  run time has to be data: value cursors, readers or channels.
 - **One-to-many needs names, so it's a family.** A channel is a
   dependency, `dep Events = Chan<Event>`, installed by a `with` that
   owns it; a fan-out to named receivers is a family keyed by receiver.

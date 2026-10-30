@@ -1176,11 +1176,10 @@ the family, with fixed keys.
   first parameter has a `key` to one stripe by it, read through the
   derived walk from the call's arguments. `by: Worker` gives each
   worker a stripe and sends an operation to the caller's, which it
-  learns from `Async.worker()`. It's an operation of the runtime's
-  privileged `Async` handler, decision 20 rule 2's one exception,
-  reachable only through `striped(by: Worker)`, since anywhere else it
-  would let a program see place
-  ([runtime.md](runtime.md#whats-journaled-time-and-order-never-place)).
+  learns from `Async.worker()`, a public scheduler operation whose
+  answer is journaled, as every choice the runtime makes is, so a
+  replay gives it back
+  ([runtime.md](runtime.md#whats-journaled-time-and-order-and-place-only-when-its-read)).
 - An operation with no key runs on every stripe. If it returns `()`,
   that's all; if it returns a value, the results are folded with
   `merge:`, left to right in stripe order: `Sum`, `Max`, `Min`,

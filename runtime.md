@@ -101,18 +101,21 @@ released instance, which sampled actor is evicted, when a reply lands.
 `Sched.Call.Pick` from a seeded tape. A runtime is correct if it keeps
 the list; `sim` covers everything off it.
 
-## What's journaled: time and order, never place
+## What's journaled: time and order, and place only when it's read
 
 The core writes the journal, through the host's `journal` hook: each
 choice it made, each world call and its reply, each post. **Place isn't
-journaled, because no program can observe it:** which core ran a task,
-where a key lives, whether `at` moved the task or shipped each call.
-So a journal recorded on sixteen cores replays on one, by construction.
+journaled, because a program can't observe it unless it asks:** which
+core ran a task, where a key lives, whether `at` moved the task or
+shipped each call. So a journal recorded on sixteen cores replays on
+one, by construction.
 
-`Async.worker()` would leak place, so it's an operation of the
-runtime's privileged `Async` handler (decision 20, rule 2's exception),
-reachable only through `striped(by: Worker)`, whose merge erases the
-split (decision 18's split law).
+**Asking is an observation, and observations are recorded.**
+`Async.worker()` is public, and its answer is journaled like any other
+choice the runtime made: `sim` draws it from the tape, and a replay
+gives it back. So `striped(by: Worker)` needs no privilege, and a user
+library may read the worker too. Its results may depend on it only as
+far as its merge erases it (decision 18's split law).
 
 ## Places
 

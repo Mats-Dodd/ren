@@ -50,7 +50,7 @@ are the layer std writes the combinators on.
 Async.map(xs) fn(x) => ...                         // results, in order
 Async.each(xs) fn(x) => ...                        // no results
 Async.expand(roots, max: n) fn(x) => children      // work that finds more work
-Async.merge([a, b], cap: n) fn(items) => ...       // several streams, as they're ready
+Async.merge(a, b, cap: n) fn(items) => ...         // several streams, as they're ready
 Async.produce(cap: n, fn() => ...) fn(items) => ... // a producer task; its sends are a stream
 Async.map_pull(xs, fn(x) => ...) fn(results) => ... // map's results as a stream, in order
 Async.beside(fn() => task) fn() => ...             // a task beside the body, stopped when it ends
@@ -63,7 +63,7 @@ Async.until(fn() => cond)                          // in an operation: wait for 
 try release Next.get(id)                           // in an operation: let others in for one call
 Async.tick()                                       // let what can run, run
 Async.yield()                                      // let others go first
-Async.worker()                                     // the runtime's: reached only through striped(by: Worker)
+Async.worker()                                     // the worker this task runs on, journaled
 with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at once
 with striped(h, by: Key(n: 16), merge: Sum) in     // h's instances, a call by its key
 with actors(doc, max: 50_000) as Docs in           // one actor per key, made on demand

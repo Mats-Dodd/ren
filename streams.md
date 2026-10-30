@@ -492,7 +492,7 @@ Async.produce(cap: 16, fn() => crawl(root)) fn(pages) =>
 **Merging gives items as they're ready:**
 
 ```ren
-Async.merge([a, b], cap: 16) fn(items) =>
+Async.merge(a, b, cap: 16) fn(items) =>
   for x in try items
     try handle(x)
 ```
