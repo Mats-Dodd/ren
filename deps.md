@@ -447,8 +447,10 @@ error: `with` installs only handlers
   a task cancelled meanwhile kills it and waits for it to exit; a test
   that runs programs at once uses `sim.proc(runs)`, in virtual time.
   `sync`, found by `import sync`, is what tasks share: a channel, a
-  semaphore, `limit() over any`, a batcher and `keyed(n, h)`
-  ([async.md](async.md#what-tasks-share-sync)).
+  semaphore, `limit() over any` and a batcher
+  ([async.md](async.md#what-tasks-share-sync)); many instances of one
+  handler are the prelude's `striped`, over the runtime's keyed instance
+  family.
   There is no `Io`.
 
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.

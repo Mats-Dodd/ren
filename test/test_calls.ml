@@ -338,3 +338,118 @@ fn main() uses Console =
     2 │   print(family_keys(1))
       │         ^^^^^^^^^^^
     |}]
+
+(* ---- step 6b: `striped`, plain Ren in the prelude over the family ---- *)
+
+let%expect_test "language.md §11's `striped` lines, as written" =
+  (* stand-ins for what §11 leaves out: `serve`, `sessions`, `books` and
+     their merge, a `Table` an `Array`; and `expire` takes no `now`, since
+     an operation with a first parameter goes to one stripe by it
+     (compiler.md, "Where this stage may differ") *)
+  run
+    {|
+dep Hits =
+  hit: fn(path: Path)
+  total: fn() -> Int
+
+handler counter() for Hits =
+  var n = 0
+  hit(_) => n += 1
+  total() => n
+
+dep Sessions =
+  touch: fn(id: Int, now: Int)
+  expire: fn() -> Array<Int>
+
+type Session = { id: Int, last_seen: Int }
+
+handler mem_sessions(ttl: Int) for Sessions =
+  var all: Array<Session> = []
+  touch(id, now) => &all.push(Session { id: id, last_seen: now })
+  expire() =>                                 // sweeps one column, `last_seen`
+    all.select(fn(s) => s.last_seen < ttl).map(fn(s) => s.id)
+
+dep Books =
+  put: fn(id: Int, price: Int)
+  best: fn() -> Int
+
+handler books() for Books =
+  var best = 0
+  put(_, price) => if price > best then best = price
+  best() => best
+
+// the rare kind the menu lacks: the larger, as `Max` would, written out
+handler book_merge() for Books =
+  call(c: Books.Call, a, b) =>
+    match c
+      Best => if a > b then a else b
+      Put { .. } => a
+
+fn serve() uses Hits, Console =
+  for p in ["/a", "/b", "/c"]
+    Hits.hit(Path.of(p))
+  print(Hits.total())
+
+fn main() uses Console, Async =
+  with striped(counter(), by: Worker, merge: Sum) in serve()
+  let ttl = 35
+  with striped(mem_sessions(ttl), merge: Concat) in
+    for id in 0..5
+      Sessions.touch(id, id * 10)
+    print(Sessions.expire().sort())
+  with striped(books(), by: Key(n: 64), merge: Custom(book_merge())) in
+    for id in 0..20
+      Books.put(id, (id * 7) % 23)
+    print(Books.best())
+|};
+  [%expect {|
+    3
+    [0, 1, 2, 3]
+    22
+    ()
+    |}]
+
+let%expect_test "a keyless call runs on every stripe, folded left to right in stripe order" =
+  run
+    {|
+dep Log =
+  put: fn(key: Int, s: Str)
+  all: fn() -> Str
+  firsts: fn() -> Array<Str>
+
+handler log() for Log =
+  var s = ""
+  var first: Array<Str> = []
+  put(_, x) =>
+    s = s + x
+    if first.len() == 0 then &first.push(x)
+  all() => s
+  firsts() => first
+
+// the earlier stripe's, so the fold's order shows
+handler earlier() for Log =
+  call(c, a, b) => a
+
+fn main() uses Console, Async =
+  with striped(log(), by: Key(n: 3), merge: Concat) in
+    for i in 0..9
+      Log.put(i, show(i))
+    print(Log.all())
+    print(Log.firsts())
+  with striped(log(), by: Key(n: 3), merge: Custom(earlier())) in
+    for i in 0..9
+      Log.put(i, show(i))
+    print(Log.firsts())
+  // under `single`, one worker, so one stripe
+  with striped(log(), by: Worker, merge: Concat) in
+    for i in 0..4
+      Log.put(i, show(i))
+    print(Log.all())
+|};
+  [%expect {|
+    127805634
+    ["1", "0", "3"]
+    ["1"]
+    0123
+    ()
+    |}]

@@ -291,9 +291,10 @@ the arm ends, cancelled too: its `finally` can give back what it took,
 `finally` from the state as the other operations left it. The standard
 library's `sync` is written this way: a channel, a semaphore, `limit()
 over any`, whose `finally` gives its permit back, and a batcher, each
-over `Async.until` ([async.md](async.md#what-tasks-share-sync)); and
-`sync.keyed(n, h)`, `n` instances of `h`, each with its own lock, a
-call sent to one by its first argument's key.
+over `Async.until` ([async.md](async.md#what-tasks-share-sync)). Many
+instances of one handler, each with its own lock, are the prelude's
+`striped(h, by: Key(n: 4))`, a call sent to one by its first argument's
+key, over the runtime's keyed instance family (language.md §11).
 
 ### Called as a method
 

@@ -4,8 +4,7 @@
    never from a file. Each is checked once, against the whole prelude,
    the intrinsics only the runtime calls among it, since what it is made
    of is the runtime's: `sim.scheduler(seed)` sets the scheduler's
-   policy, `sim.clock()` reads its virtual time, and `sync.keyed` is
-   built in. Every program has them linked
+   policy and `sim.clock()` reads its virtual time. Every program has them linked
    in, since `ren test` installs `sim`'s around each test whether the
    program imports it or not (driver.ml).
 
@@ -249,7 +248,8 @@ handler sim_proc(runs: Array<Run>) for Proc, TestProc, SimProc uses Async =
 (* `sync`: what tasks share, written once (compiler.md, "The standard
    library (step 8)"): a channel, a semaphore, a limit over any
    dependency, and a batcher, each waiting in `Async.until`, so each
-   uses `Async`; and `keyed`, which is built in. *)
+   uses `Async`. Many instances of one handler are the prelude's
+   `striped`, over the runtime's keyed instance family. *)
 let sync =
   {|
 // What tasks share. Each handler here waits in `Async.until`, which lets
@@ -385,18 +385,6 @@ pub handler batcher<K has hash, V>() for Batcher<K, V> uses Fetch<K, V>, Async =
           Some(v) => &got.set(k, v)
           None => &missing.add(k)
       wanted = []
-
-// ---- keyed instances ----
-
-// `n` instances of the handler `h` describes, 1 or more, made in order
-// when it's installed: each call of an operation goes to one of them by
-// its first argument's key, its type's `key` if it has one, so the same
-// key always goes to the same instance, and calls on keys in different
-// instances overlap; an operation with no parameters goes to each in
-// turn, and gives what the last gave. Each instance is one as any other,
-// with its own state and its own `finally`, the last made's run first.
-// It's built in, since a handler can't keep instances of another
-pub fn keyed<T>(n: Int, h: T) -> T = sync_keyed(n, h)
 |}
 
 (* Each module's source, by its name; a name of [homes] without one

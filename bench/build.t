@@ -2102,7 +2102,7 @@ line here to say so, and adds it to the loops above. examples/checkout,
 which was in them since step 1, left them in step 2: its `main` is
 language.md's, which uses the real `Net`, not native yet, and its chain
 and its wiring are `pipe`'s and `wiring`'s here. `refused` starts a task beside its body and keeps stripes, which
-`ren run` runs once steps 3 and 6 land, and `ren build` refuses at its
+`ren run` runs since steps 3 and 6 landed, and `ren build` refuses at its
 first such call, the line `refused.native` holds; and `ren
 explain-wiring live wiring.ren` prints `wiring.explain` once step 2
 lands.
@@ -2112,18 +2112,18 @@ lands.
   services/wiring.ren: as specified
   services/service.ren: as specified
   services/release.ren: as specified
-  services/refused.ren: not yet
+  services/refused.ren: as specified
   $ (cd services && ren build refused.ren -o ./refused.bin 2>&1 | head -n 1 > native.out;
   >  if cmp -s native.out refused.native; then echo "refused natively: as specified"; else echo "refused natively: not yet"; fi;
   >  rm -f native.out refused.bin)
-  refused natively: not yet
+  refused natively: as specified
   $ (cd services && ren explain-wiring live wiring.ren > explain.out 2>&1;
   >  if cmp -s explain.out wiring.explain; then echo "explain-wiring: as specified"; else echo "explain-wiring: not yet"; fi;
   >  rm -f explain.out)
   explain-wiring: as specified
 
 `Async.beside` and `Async.background` (step 3) start tasks, so `ren
-build` refuses them as it refuses `Async.scope`, until `refused`'s line
+build` refuses them as it refuses `Async.scope`, as `refused`'s line
 says so of the stripes it reaches first:
 
   $ cat > beside.ren <<'EOF'

@@ -2387,13 +2387,7 @@ handler counter() for Hits =
 |}
 
 let%expect_test "[s6 accept] `striped` by key: a keyless operation folded with `merge: Sum`" =
-  until "s6"
-    ~want:{|
-3
-()
-|}
-    (fun () ->
-      run
+  run
         (hits
        ^ {|
 fn main() uses Console, Async =
@@ -2402,20 +2396,14 @@ fn main() uses Console, Async =
     Hits.hit("/b")
     Hits.hit("/a")
     print(Hits.total())
-|}));
+|});
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:11:8
-    11 │   with striped(counter(), by: Key(n: 4), merge: Sum) in
-       │        ^^^^^^^
+    3
+    ()
     |}]
 
 let%expect_test "[s6 accept] `by: Worker`: a stripe per worker, the merge erasing which" =
-  until "s6"
-    ~says:[ "✓ every hit is counted, whichever worker it lands on" ]
-    (fun () ->
-      test ~seeds:200
+  test ~seeds:200
         (pub_all
          (hits
        ^ {|
@@ -2423,23 +2411,20 @@ test "every hit is counted, whichever worker it lands on" =
   with striped(counter(), by: Worker, merge: Sum) in
     Async.each([1, 2, 3, 4]) fn(_) => Hits.hit("/")
     assert Hits.total() == 4
-|})));
+|}));
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:11:8
-    11 │   with striped(counter(), by: Worker, merge: Sum) in
-       │        ^^^^^^^
+    test.ren
+      ✓ every hit is counted, whichever worker it lands on
+
+    1 passed, each under 200 seeds
+    [exit 0]
     |}]
 
 let%expect_test "[s6 accept] the split law: a result that depends on routing fails under some seed" =
   (* under `sim` two virtual workers, `Async.worker()` from the tape: `Max`
      of the stripes' counts erases nothing about which stripe a hit went
      to *)
-  until "s6"
-    ~says:[ "✗ the busiest stripe saw every hit" ]
-    (fun () ->
-      test ~seeds:200
+  test ~seeds:200
         (pub_all
          (hits
        ^ {|
@@ -2447,24 +2432,29 @@ test "the busiest stripe saw every hit" =
   with striped(counter(), by: Worker, merge: Max) in
     Async.each([1, 2, 3, 4]) fn(_) => Hits.hit("/")
     assert Hits.total() == 4
-|})));
+|}));
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:11:8
-    11 │   with striped(counter(), by: Worker, merge: Max) in
-       │        ^^^^^^^
+    test.ren
+      ✗ the busiest stripe saw every hit
+
+    ──── the busiest stripe saw every hit ── test.ren:13
+       │
+    13 │     assert Hits.total() == 4
+       │            ^^^^^^^^^^^^^^^^^
+       │
+       left:  3
+       right: 4
+              ^ differs here
+
+       seed 5671 · rerun: ren test test.ren --only "the busiest" --seed 5671
+
+    0 passed, 1 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s6 accept] a keyless operation that returns `()` broadcasts" =
   (* `by:` left out is `Key`, which is `Key(n: 16)` *)
-  until "s6"
-    ~want:{|
-0
-()
-|}
-    (fun () ->
-      run
+  run
         {|
 dep Hits =
   hit: fn(path: Str)
@@ -2483,27 +2473,17 @@ fn main() uses Console, Async =
     Hits.hit("/b")
     Hits.reset()
     print(Hits.total())
-|});
+|};
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:13:8
-    13 │   with striped(counter(), merge: Sum) in
-       │        ^^^^^^^
+    0
+    ()
     |}]
 
 let%expect_test "[s6 accept] `merge: Concat` and `Custom(m)`, m's `call` clause folding, left to right in stripe order" =
   (* `Custom` holds a stateless handler over `Seen` whose `call(c:
      Seen.Call, a, b)` clause folds two stripes' results for `c`: there's
      no `Merge<D>` *)
-  until "s6"
-    ~want:{|
-["/a", "/b"]
-2
-()
-|}
-    (fun () ->
-      run
+  run
         {|
 dep Seen =
   see: fn(path: Str)
@@ -2529,72 +2509,51 @@ fn main() uses Console, Async =
     Seen.see("/a")
     Seen.see("/b")
     print(Seen.all().len())
-|});
+|};
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:17:8
-    17 │   with striped(seen(), by: Key(n: 1), merge: Concat) in
-       │        ^^^^^^^
-
-    error: there's no function named `striped`
-       ┌─ test.ren:21:8
-    21 │   with striped(seen(), by: Key(n: 1), merge: Custom(longest())) in
-       │        ^^^^^^^
+    ["/a", "/b"]
+    2
+    ()
     |}]
 
 let%expect_test "[s6 reject] a keyless operation that returns a value, with no `merge:`, panics at the `with`" =
   (* decision 20, rule 3: a check `striped` makes on its arguments, at the
      `with` until stage 12 makes it at build time; no Infer rule *)
-  until "s6"
-    ~says:[ "panic: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`" ]
-    (fun () ->
-      run_error
+  run_error
         (hits
        ^ {|
 fn main() uses Console, Async =
   with striped(counter()) in print(Hits.total())
-|}));
+|});
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:11:8
+    error: panic: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`
+       ┌─ test.ren:11:3
     11 │   with striped(counter()) in print(Hits.total())
-       │        ^^^^^^^
+       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s6 reject] `by: Worker` with a count can't be written" =
   (* routing is an ADT: `Worker` has no fields, so this is the ADT's own
      error, not a rule written for `striped` *)
-  until "s6"
-    ~says:
-      [
-        "error: `Worker` has 0 fields but was given 1";
-        "help: write `Worker` with no parentheses";
-      ]
-    (fun () ->
-      check_error
+  check_error
         (hits
        ^ {|
 fn main() uses Console, Async =
   with striped(counter(), by: Worker(n: 4), merge: Sum) in print(Hits.total())
-|}));
+|});
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:11:8
+    error: `Worker` has 0 fields but was given 1
+       ┌─ test.ren:11:31
     11 │   with striped(counter(), by: Worker(n: 4), merge: Sum) in print(Hits.total())
-       │        ^^^^^^^
+       │                               ^^^^^^^^^^^^
+       help: write `Worker` with no parentheses
     |}]
 
 let%expect_test "[s6 reject] `Custom(m)` with a handler that has state" =
   (* `striped` calls m as a method, `m.call(c, a, b)`: the data stage's
      rule for a description called as a method, nothing written for
      `striped` *)
-  until "s6"
-    ~says:[ "may be a description of `adding`, which keeps state, so it isn't called as a method" ]
-    (fun () ->
-      run_error
+  run_error
         (hits
        ^ {|
 handler adding() for Hits =
@@ -2607,20 +2566,16 @@ handler adding() for Hits =
 
 fn main() uses Console, Async =
   with striped(counter(), merge: Custom(adding())) in print(Hits.total())
-|}));
+|});
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:19:8
+    error: panic: `m` may be a description of `adding`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:19:61
     19 │   with striped(counter(), merge: Custom(adding())) in print(Hits.total())
-       │        ^^^^^^^
+       │                                                             ^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s6 reject] `merge: Sum` of what isn't a number panics at the `with`" =
-  until "s6"
-    ~says:[ "panic: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number" ]
-    (fun () ->
-      run_error
+  run_error
         {|
 dep Seen =
   see: fn(path: Str)
@@ -2631,62 +2586,175 @@ handler seen() for Seen =
   all() => paths
 fn main() uses Console, Async =
   with striped(seen(), merge: Sum) in print(Seen.all())
-|});
+|};
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-      ┌─ test.ren:9:8
+    error: panic: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number
+      ┌─ test.ren:9:3
     9 │   with striped(seen(), merge: Sum) in print(Seen.all())
-      │        ^^^^^^^
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s6 reject] `striped` keeps at least 1 stripe" =
-  until "s6"
-    ~says:[ "panic: `striped` keeps at least 1 stripe, not 0" ]
-    (fun () ->
-      run_error
+  run_error
         (hits
        ^ {|
 fn main() uses Console, Async =
   with striped(counter(), by: Key(n: 0), merge: Sum) in print(Hits.total())
-|}));
+|});
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-       ┌─ test.ren:11:8
+    error: panic: `striped` keeps at least 1 stripe, not 0
+       ┌─ test.ren:11:3
     11 │   with striped(counter(), by: Key(n: 0), merge: Sum) in print(Hits.total())
-       │        ^^^^^^^
+       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
 let%expect_test "[s6 reject] `striped` of what isn't a handler's description" =
-  until "s6"
-    ~says:[ "error: `striped` takes a handler's description, and `16` is an `Int`" ]
-    (fun () ->
-      check_error {|
+  check_error {|
 fn main() uses Console, Async =
   with striped(16) in print(1)
-|});
+|};
   [%expect {|
-    (until s6)
-    error: there's no function named `striped`
-      ┌─ test.ren:2:8
+    error: `striped` takes a handler's description, and `16` is an `Int`
+      ┌─ test.ren:2:16
     2 │   with striped(16) in print(1)
-      │        ^^^^^^^
+      │                ^^
+      help: describe the handler whose dependency it implements: `striped(counter())`
     |}]
 
 let%expect_test "[s6 reject] `sync.keyed` is gone" =
-  until "s6"
-    ~says:[ "error: `sync` has no `keyed`" ]
-    (fun () ->
-      check_error
+  check_error
         ("import sync\n" ^ hits
        ^ {|
 fn main() uses Console =
   with sync.keyed(4, counter()) in print(Hits.total())
-|}));
+|});
   [%expect {|
-    (until s6)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: `sync` has no public `keyed`
+       ┌─ test.ren:13:13
+    13 │   with sync.keyed(4, counter()) in print(Hits.total())
+       │             ^^^^^
+       help: if it's defined there, mark it `pub`
+    |}]
+
+(* test_tasks.ml's tests of `sync.keyed` (11a's step 8), moved here as
+   `striped`'s, `keyed(n, h)` becoming `striped(h, by: Key(n: n))`; a
+   call with no key that gives a value is folded by a `merge:` *)
+
+let%expect_test "[s6 accept] `striped` sends each call to a stripe by its key" =
+  run
+    {|
+dep Counts =
+  add: fn(key: Str)
+  get: fn(key: Str) -> Int
+
+handler counts() for Counts =
+  var m: Map<Str, Int> = Map.of([])
+  add(k) => &m.set(k, m.get(k).unwrap_or(0) + 1)
+  get(k) => m.get(k).unwrap_or(0)
+
+fn main() uses Console, Async =
+  with striped(counts(), by: Key(n: 4)) in
+    Counts.add("a")
+    Counts.add("b")
+    Counts.add("a")
+    print(Counts.get("a"))
+    print(Counts.get("b"))
+|};
+  [%expect {|
+    2
+    1
+    ()
+    |}]
+
+let%expect_test "[s6 accept] `striped`'s stripes: two keys overlap, one key takes turns" =
+  (* "a" and "b" go to different stripes of 2, by a hash that's the same
+     in every run; each stripe keeps its own instance's lock, so two
+     calls on one key wait for each other; and a call with no key goes to
+     each stripe in turn, in order, folded here to the last's *)
+  test ~seeds:100
+    {|
+pub dep Slow =
+  // takes a second, keeping its instance
+  put: fn(key: Str)
+  // how many puts this instance had, and says so
+  count: fn() -> Int
+
+pub dep Said =
+  say: fn(n: Int)
+  all: fn() -> Array<Int>
+
+test handler said() for Said =
+  var xs: Array<Int> = []
+  say(n) => &xs.push(n)
+  all() => xs
+
+test handler slow() for Slow uses Clock, Said =
+  var n = 0
+  put(k) =>
+    n += 1
+    Clock.sleep(Duration.seconds(1))
+  count() =>
+    Said.say(n)
+    n
+
+// the second of two results, the later stripe's
+test handler last() for Slow =
+  call(c, a, b) => b
+
+test fn puts(keys: Array<Str>) uses Slow, Async =
+  Async.each(keys) fn(k) => Slow.put(k)
+
+test "calls on keys in different stripes overlap" =
+  with said(), striped(slow(), by: Key(n: 2), merge: Custom(last())) in
+    puts(["a", "b"])
+    assert Clock.now() == Time.epoch + Duration.seconds(1)
+
+test "calls on one key take turns" =
+  with said(), striped(slow(), by: Key(n: 2), merge: Custom(last())) in
+    puts(["a", "a"])
+    assert Clock.now() == Time.epoch + Duration.seconds(2)
+
+test "a call with no key goes to each stripe in turn" =
+  with said(), striped(slow(), by: Key(n: 3), merge: Custom(last())) in
+    puts(["a", "b", "a"])
+    let n = Slow.count()
+    assert Said.all().len() == 3
+    assert n == Said.all()[2]
+    assert Said.all()[0] + Said.all()[1] + Said.all()[2] == 3
+|};
+  [%expect {|
+    test.ren
+      ✓ calls on keys in different stripes overlap
+      ✓ calls on one key take turns
+      ✓ a call with no key goes to each stripe in turn
+
+    3 passed, each under 100 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s6 accept] `striped`'s stripes each have their own `finally`, the last made's first" =
+  run
+    {|
+dep Tally =
+  add: fn(key: Int)
+
+handler tally(name: Str) for Tally uses Console =
+  var n = 0
+  finally(r) =>
+    print(name + ": " + show(n))
+    try r
+  add(k) => n += k
+
+fn main() uses Console, Async =
+  with striped(tally("one"), by: Key(n: 2)) in
+    Tally.add(1)
+    Tally.add(2)
+    Tally.add(3)
+|};
+  [%expect {|
+    one: 2
+    one: 4
+    ()
     |}]
 
 (* ---- s7: `actors`, plain Ren over the keyed instance family (decisions 18 and 20, language.md §11) ----

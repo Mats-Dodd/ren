@@ -648,16 +648,6 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Unsafe_cast -> pure (function [ v ] -> v | _ -> bug x)
   (* `sum`'s own: whether its `T` is `Float`, and its lanes if it is *)
   | Float_lanes -> pure (fun _ -> VBool (tys = [ Ty.float ]))
-  | Sync_keyed ->
-      pure (function
-        | [ VInt n; h ] ->
-            if n < 1L then
-              raise
-                (Panic
-                   (Printf.sprintf
-                      "`sync.keyed` keeps at least 1 instance, not %Ld" n));
-            VKeyed (Int64.to_int n, h)
-        | _ -> bug x)
   | Lib_panic -> (
       function
       | [ VStr what ] -> raise (Panic what)

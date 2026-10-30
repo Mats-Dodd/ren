@@ -1071,6 +1071,116 @@ pub type Operation = { name: Str, params: Int, gives: Str, adds: Bool, orders: B
 // declares them: its declarations as data (decision 20, rule 3)
 pub fn operations<D>(h: D) -> Array<Operation> = call_operations(h)
 
+// ---- stripes (foundations.md, decision 18; language.md §11) ----
+//
+// `striped` keeps a fixed number of instances of one handler, in the
+// runtime's family, and map-reduces over them. It's plain Ren over the
+// family's dependency, `Async.worker()` and the program's `D.Call`, which
+// any library can use (compiler.md, "Services stage", "Stripes").
+
+// how `striped` routes an operation whose first parameter has a key
+pub type By =
+  // to one of `n` stripes, by the key
+  | Key(n: Int = 16)
+  // to the stripe of the worker the caller runs on: one under `single`,
+  // two under `sim`
+  | Worker
+
+// how `striped` folds the results of an operation with no key, which
+// runs on every stripe, left to right in stripe order
+pub type Fold<D> =
+  // none given, which `striped` refuses at its `with` where it's needed
+  | Unmerged
+  | Sum
+  | Max
+  | Min
+  | Concat
+  // a stateless handler of `D` whose `call(c, a, b)` clause folds two
+  // stripes' results of the call `c`
+  | Custom(m: D)
+
+// the instances of `h`, by stripe, kept by the runtime's family: code
+// that uses `D` can't tell one instance serving it from sixteen. An
+// operation whose first parameter has a key runs on the stripe `by`
+// routes it to; one with none runs on every stripe, each in turn, so what
+// they give isn't a snapshot (the split law), folded by `merge`
+pub handler striped<D>(h: D, by: By = Key, merge: Fold<D> = Unmerged) for D uses Async =
+  // under `Key(n)`, its n stripes, made now, in order; under `Worker`,
+  // each worker's, made on its first call
+  let n = match by
+    Key(k) => k
+    Worker => 0
+  let _ = stripes_refused(h, by, n, merge)
+  let fam = Instances.open(fn(i: Int) => h, 1, if n > 0 then n else 1024, 1)
+  let _ = stripes_made(fam, n)
+  finally(r) =>
+    Instances.close(fam)
+    try r
+  call(c) =>
+    match c.first_hash()
+      Some(x) => try Instances.call(fam, stripe(by, x), c)
+      None =>
+        // every stripe, in order, each called on its own; under `Worker`,
+        // the caller's at least
+        if by == By.Worker then Instances.make(fam, Async.worker())
+        var got = None
+        for i in Instances.keys(fam)
+          let v = try Instances.call(fam, i, c)
+          got = match got
+            None => Some(v)
+            Some(a) => Some(folded(merge, c, a, v))
+        got orelse lib_panic("`striped` has no stripe")
+
+// what `striped` refuses at its `with`, a panic there naming what's
+// wrong (decision 20, rule 3: a check a library makes on its arguments,
+// at the `with` until stage 12 makes it as the program is built): fewer
+// than 1 stripe, and an operation with no key that gives a value, with
+// no fold or one that doesn't fit what it gives
+fn stripes_refused<D>(h: D, by: By, n: Int, merge: Fold<D>) =
+  if by != By.Worker && n < 1 then lib_panic("`striped` keeps at least 1 stripe, not " + show(n))
+  for op in operations(h)
+    if op.params == 0 && op.gives != "()" then
+      let gives = "`" + op.gives + "`"
+      match merge
+        Unmerged =>
+          lib_panic("`" + op.name + "` runs on every stripe and gives " + article(op.gives) + " " + gives + ", so `striped` needs `merge:`")
+        Sum =>
+          if not op.adds then
+            lib_panic("`merge: Sum` adds what `" + op.name + "` gives, and " + article(op.gives) + " " + gives + " isn't a number")
+        Max | Min =>
+          if not op.orders then
+            lib_panic("`merge: " + show(merge) + "` compares what `" + op.name + "` gives, and " + article(op.gives) + " " + gives + " isn't ordered")
+        Concat =>
+          if not op.concats then
+            lib_panic("`merge: Concat` joins what `" + op.name + "` gives, and " + article(op.gives) + " " + gives + " isn't an `Array` or a `Str`")
+        Custom(_) => ()
+
+// "a" or "an", before a type's name
+fn article(t: Str) -> Str =
+  if t.starts_with("A") || t.starts_with("E") || t.starts_with("I") || t.starts_with("O") || t.starts_with("U") then "an" else "a"
+
+// the stripes 0 to `n`, made in order
+fn stripes_made<D>(fam: Family<Int, D>, n: Int) =
+  for i in 0..n
+    Instances.make(fam, i)
+
+// the stripe a key's hash `x` goes to
+fn stripe(by: By, x: Int) -> Int =
+  match by
+    Key(n) => ((x % n) + n) % n
+    Worker => Async.worker()
+
+// two stripes' results of the call `c`, folded by `merge`; a `()` is
+// folded by any
+fn folded<D, R, E>(merge: Fold<D>, c: Call<D, R, E>, a: R, b: R) -> R =
+  match merge
+    Sum => c.sum(a, b)
+    Max => c.max(a, b)
+    Min => c.min(a, b)
+    Concat => c.concat(a, b)
+    Custom(m) => c.fold(m, a, b)
+    Unmerged => a
+
 // ---- trying again (handlers.md, "Functions that run a block") ----
 
 // runs `body`, and again while it fails with one of `on`'s errors, up
@@ -1734,10 +1844,6 @@ let scheme (x : Intrinsic.t) =
      the time is checked again then: how `sim.proc()`'s programs take
      time without keeping the instance meanwhile *)
   | Sim_alarm -> fn [ read int ] unit
-  (* fn<T>(n: Int, h: T) -> T: `sync.keyed`'s description of [n]
-     instances of the handler [h] describes, which the checker makes sure
-     it is (excl.ml) *)
-  | Sync_keyed -> fn [ read int; read (Var 0) ] (Var 0)
   (* fn() -> Int: the worker the calling task runs on, `Async.worker()`:
      0 under `single`; under `sim`, 0 or 1, two virtual workers, a task's
      drawn from the tape the first time it asks (sched.ml) *)
@@ -1849,7 +1955,7 @@ let reaches (x : Intrinsic.t) =
   | Task_each | Task_both | Task_race | Task_beside | Task_background | Background_spawn
   | Task_produce | Task_map_pull | Outbox_send | Inbox_take | Async_yield
   | Async_tick | Runtime_single | Runtime_sim
-  | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
+  | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Task_random
   | Async_worker | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
   | Family_counts | Family_close | Call_first_hash | Call_add | Call_max | Call_min
   | Call_concat | Call_fold | Call_operations
@@ -1895,7 +2001,7 @@ let caller (x : Intrinsic.t) =
       | Task_produce | Task_map_pull | Outbox_send | Inbox_take
       | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-      | Sim_advance | Sim_alarm | Sync_keyed | Task_drain | Hash | Async_worker
+      | Sim_advance | Sim_alarm | Task_drain | Hash | Async_worker
       | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
       | Family_counts | Family_close | Call_first_hash | Call_add | Call_max
       | Call_min | Call_concat | Call_fold | Call_operations ) ) ->
@@ -1987,7 +2093,6 @@ let fns : Intrinsic.t list =
     Sim_sleep;
     Sim_advance;
     Sim_alarm;
-    Sync_keyed;
     Async_worker;
     Family_open;
     Family_call;

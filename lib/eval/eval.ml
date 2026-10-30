@@ -529,9 +529,6 @@ let share_reach v =
     if not (Hashtbl.mem seen i.inst) then begin
       Hashtbl.replace seen i.inst ();
       Sched.share i.inst ~excl:i.excl;
-      (match i.impl with
-      | VKeys parts -> Array.iter (fun (_, inst, excl) -> Sched.share inst ~excl) parts
-      | _ -> ());
       List.iter installed i.outer
     end
   in
@@ -692,21 +689,6 @@ let rec eval cx env (e : expr) =
           (evidence_in env ev what)
       with
       | Some { impl = VRecord ops; outer; inst; _ } -> on ops outer inst
-      | Some { impl = VKeys parts; outer; _ } -> (
-          (* `sync.keyed`'s: the instance its first argument's key goes to,
-             by a hash that's the same in every run; or, with no
-             arguments, each in turn, giving the last's *)
-          let part (impl, inst, _) =
-            match impl with
-            | VRecord ops -> on ops outer inst
-            | _ -> bug (what ^ " on an implementation that isn't a record")
-          in
-          match (args, fty) with
-          | a :: _, Fun (p :: _, _, _, _) ->
-              let h = Walk.fixed_hash (walk cx) p.ty a in
-              let n = Int64.of_int (Array.length parts) in
-              part parts.(Int64.to_int (Int64.unsigned_rem h n))
-          | _ -> Array.fold_left (fun _ x -> part x) VUnit parts)
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
   | With { ev; outer; dep; dargs; from; impl; desc; body } ->
@@ -730,24 +712,6 @@ let rec eval cx env (e : expr) =
         | VHandler h ->
             let impl, finally, excl = made h in
             ({ dep; args; impl; outer; inst = Value.instance (); excl }, [ finally ])
-        | VKeyed (n, VHandler h) ->
-            (* `sync.keyed(n, h)`: [n] instances, each with a number of its
-               own, so its own exclusion *)
-            let parts = List.init n (fun _ -> made h) in
-            let excl = List.exists (fun (_, _, x) -> x) parts in
-            let keys =
-              Array.of_list
-                (List.map (fun (impl, _, x) -> (impl, Value.instance (), x)) parts)
-            in
-            ( {
-                dep;
-                args;
-                impl = VKeys keys;
-                outer;
-                inst = Value.instance ();
-                excl;
-              },
-              List.map (fun (_, f, _) -> f) parts )
         | _ -> bug (what ^ " with something that isn't a handler")
       in
       let installed = VEvidence (top :: outer) in
@@ -808,23 +772,6 @@ let rec eval cx env (e : expr) =
         | VHandler h ->
             let impls, finally, excl = made h in
             (install impls (fun p -> List.assoc p impls) excl, [ finally ])
-        | VKeyed (n, VHandler h) ->
-            (* `sync.keyed(n, h)`: [n] instances, each with a number of its
-               own, so its own exclusion, and for each dependency its
-               implementations of it, by instance *)
-            let parts =
-              List.init n (fun _ ->
-                  let impls, finally, excl = made h in
-                  (impls, finally, excl, Value.instance ()))
-            in
-            let impls = match parts with (impls, _, _, _) :: _ -> impls | [] -> [] in
-            let keys p =
-              VKeys
-                (Array.of_list
-                   (List.map (fun (impls, _, excl, i) -> (List.assoc p impls, i, excl)) parts))
-            in
-            let excl = List.exists (fun (_, _, x, _) -> x) parts in
-            (install impls keys excl, List.map (fun (_, f, _, _) -> f) parts)
         | _ -> bug (what ^ " with something that isn't a handler")
       in
       let top = List.filter (fun i -> not (List.memq i outer)) installed in
@@ -1276,10 +1223,10 @@ and dep_op cx ~loc ~(dep : Path.t) ~op ~fty ~next ~what ?(held = dep.name) args 
   | None -> bug (what ^ " on an implementation without it")
 
 (* [ending] with each of [finallys], the `finally`s of instances made in
-   that order, `sync.keyed`'s (compiler.md, "The standard library (step
-   8)"): the last made's runs first, given the body's outcome, and each
-   before it is given what the one after it gave, as a handler's own
-   `finally`s are. *)
+   that order: the last made's runs first, given the body's outcome, and
+   each before it is given what the one after it gave, as a handler's own
+   `finally`s are. A `with` installs one instance; the runtime's keyed
+   instance family runs its own (family.ml). *)
 and endings cx env (loc : Loc.t) finallys desc outer installed body =
   match List.filter_map Fun.id finallys with
   | [] -> ending cx env loc None desc outer installed body

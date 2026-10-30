@@ -102,7 +102,6 @@ type t =
   | Sim_sleep
   | Sim_advance
   | Sim_alarm
-  | Sync_keyed
   | Async_worker
   | Family_open
   | Family_call
@@ -264,7 +263,6 @@ let path x =
   | Sim_sleep -> fn "sim_sleep"
   | Sim_advance -> fn "sim_advance"
   | Sim_alarm -> fn "sim_alarm"
-  | Sync_keyed -> fn "sync_keyed"
   | Async_worker -> fn "async_worker"
   | Family_open -> fn "family_open"
   | Family_call -> fn "family_call"

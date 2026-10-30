@@ -265,8 +265,8 @@ The Strategy pattern written as handlers can do none of that.
 
 Tested against the compiler on 2026-10-30, after the data stage and the
 services stage's pipe, wirings, background work, `release`, services,
-pull arguments, channels and producers, and the keyed instance family
-and `D.Call`:
+pull arguments, channels and producers, the keyed instance family,
+`D.Call` and `striped`:
 
 | Feature | Today |
 |---|---|
@@ -302,6 +302,7 @@ and `D.Call`:
 | A call as a value, `D.Call` | the compiler writes `Doc.Call` for each dependency whose operations are all data, a case per operation, `Doc.Call.Edit { op }`, built, matched, compared and shown as any sum; its cases are named only after `Doc.Call`; `Docs.Call` of one that takes a block is an error naming the operation. Not yet: its result and errors as type arguments, `Doc.Call<()>`, which `post` takes (step 7) |
 | A `call` clause | a handler writes `call(c) => ...` beside its operations, run for each it doesn't write, `c` that call, a `match` on it giving each case its operation's result type; a merge writes `call(c, a, b) => ...`, folding two results; a handler `for D`, `handler striped<D>(h: D) for D`, writes only that clause, made for the dependency it's given |
 | The keyed instance family | the runtime's, in the interpreter: `Instances.open(fn(k) => h, parts, cap, mailbox)` and `Instances.call(fam, k, c)`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`, which only the prelude's `Instances` reaches; `Async.worker()` is 0 under `single` and one of two virtual workers under `sim`, from the tape. Refused by `ren build`. Not yet: `pin` for a block, `post` and the family's queues (step 7) |
+| Stripes | `with striped(counter(), by: Key(n: 4), merge: Sum)` keeps 4 instances of `counter()` in the family: a call with a first argument goes to one by its hash, one with none runs on each in stripe order, folded by `Sum`, `Max`, `Min`, `Concat` or `Custom(m)`, `m`'s `call(c, a, b)` clause; `by: Worker` goes to the caller's worker's; a missing or unfitting `merge:` is a panic at the `with`; plain Ren in the prelude; `sync.keyed` is gone. Refused by `ren build` |
 | Layout, natively | a small record or tuple inside a small value is flattened into its parent's slots; an array of small records that hold objects keeps them inline, counted by the mask of the slots that hold them; a sum's tag is a byte, and a sum with one constructor that has fields, the rest without, has no tag, a pointer niche: `Option<Item>` is two words, not three. `show`, `==` and `hash` of a small value still box its type program-wide (bench/native/RESULTS.md, "Data stage: layout") |
 
 The core is right. What's missing is convenience, and two layout rules

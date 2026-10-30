@@ -5891,89 +5891,6 @@ Chosen in step 3, as built:
   s1's help names `Async.beside`. stdlib.md and testing.md name no
   background work, so they're unchanged.
 
-Chosen in step 6a, as built:
-
-- **`Instances` is a dependency with members and no operations,** each
-  member a function over one of the family's intrinsics, which only that
-  member calls (Core Lint's `world`, by `Prelude.runtime_of`), as
-  `Async.scope` reaches the scheduler: a dependency's operations can't be
-  generic yet (step 7 brings `fn<T>` in an operation), and one whose
-  members reach the runtime needs nothing installed, so no `uses` names
-  it and no test can swap it (a handler `for Instances` is refused: it
-  has no operations). Only the prelude's source may declare a
-  dependency with no operations (the parser), and the list of
-  dependencies an unknown one's error gives leaves it out. Built: `open(make,
-  parts, cap, mailbox)`, `call(f, k, c)`, `make(f, k)`, `keys`,
-  `evictable`, `evict`, `counts` (an `InstanceCounts`: a program's own
-  `Counts` is common) and `close`. Not yet, step 7's: `pin` for a block,
-  whose `uses D` needs a dependency named by a type variable; `post`, the
-  queues, their delivery tasks and the edge's meter; a library's
-  `victim` (a full partition waits for room); `visit`; and setup's
-  errors as the family's, `! E`: an instance that fails to start panics,
-  "an instance of `Hits` failed to start, with `DbDown`".
-- **A family's instances are shared from the start** (`Sched.share`), as
-  every task that reaches the family reaches them, so an exclusive one's
-  operations don't interleave; an operation runs as `Dep_call`'s does
-  (eval.ml's `dep_op`, factored out of it), the deadlock panic naming the
-  instance by the one rule, `hits[0]#1` (`Family.name_of`). The family is
-  named by the dependency the `with` making its opener installs,
-  snake_cased (`Family.installing`). The journal's lines for families
-  are step 7's, with version 3.
-- **`D.Call` takes no type arguments in concrete code:** `Doc.Call` is an
-  ordinary sum the compiler writes beside the dependency (Resolve's
-  `call_types`), for every module but the prelude, whose operations are
-  all data as far as the parser can see (no block, no `&` argument; a
-  description or a handle among the arguments isn't caught), a field
-  written without a name `_1`. Generic code's `D.Call<R ! E>` is the
-  prelude's `Call<D, R, E>`, and the function made of it for a dependency
-  has that one's `Doc.Call` in its place (`Ty.known`). So `post`'s
-  `D.Call<()>`, a concrete call whose result is in its type, is step 7's,
-  which gives the sum its two type arguments, fixed by each case; until
-  then nothing unifies a concrete `Doc.Call` with `Call<D, R, E>`, so
-  generic code never gets a call whose result it doesn't know.
-- **A `D.Call`'s cases are never bare:** a case is named after
-  `Doc.Call`, or found where a `Doc.Call` is expected, as a pattern's
-  is; so a program's own `Edit` isn't made ambiguous by its
-  dependency's.
-- **A `call` clause is checked once, its call's result a skolem, `R`,**
-  as an arm `over any` is, and copied by Lower for each operation it
-  runs for (`clause_ops`). In an arm of a `match` on the clause's call,
-  `R` is that case's operation's result (`Types.refined`, which `repr`
-  reads while the arm is checked: a link is never shortened to the
-  refined type, so nothing outside the arm learns it), and each copy
-  drops the arms of other cases, which can't be taken there. Only a
-  `match` whose result is wanted, the clause's, refines.
-- **A merge's clause, `call(c, a, b)`,** is copied for every operation,
-  as the fold `fold op` in its instance's record, which Core Lint checks
-  beside the operations; its operations that it doesn't write panic,
-  "`longest` folds two results of a call with its `call` clause, so it
-  isn't installed to run `Seen.see`". `c.fold(m, a, b)` makes `m`'s
-  instance for the fold and calls it. Whether `m` keeps state is checked
-  as the fold runs, a panic in the data stage's words, not by
-  Stateless: Stateless can't tell `Custom(m)`'s description from
-  `striped(h)`'s, both kept descriptions of `D`, and would refuse every
-  `striped` over a handler with state.
-- **`Call`'s fold members are `sum`, `max`, `min` and `concat`,** not
-  `add`, which is `+`'s method and takes one argument; the operations as
-  data are the prelude's `operations(h)`, `Operation`'s `gives` writing
-  `()` for `()`, since generic code can't name `D.Call`'s members.
-- **A handler `for D`,** `D` its type parameter, implements whatever
-  dependency a call of it gives it a description of: its type lists the
-  dependency `for` of `D` (`Ty.param_path`), which a call makes the one
-  dependency of `D` it's given, needing what both need
-  (Infer_expr.given_for, recording which variable is `D` for Lower,
-  `For_param`); Lower makes `striped$main.Hits` as it makes an `over any`
-  handler's function, `D` replaced by an implementation of `Hits` whose
-  needs and setup errors are rows of the function's. It writes one arm,
-  its `call` clause. A handler's parameters may now have defaults, as a
-  function's may.
-- **`Async.worker()` draws a task's worker from the tape the first time
-  it asks,** not when it's spawned, so a program that never asks draws
-  what it drew before and its seeds find what they found.
-- **The family is refused natively at the program's call of the
-  library that reaches it,** "`striped` uses the keyed instance family,
-  which isn't native yet" (to_mem's `reaches_family`).
-
 ### Progress log
 
 | step | commit | done | left |
@@ -12392,6 +12309,132 @@ Chosen in step 4, as built:
   `Net.connections(listener)` replaces it with stage 11c. examples/crawler
   sends its pages through `Async.produce`, as async.md now shows both.
 
+Chosen in step 6a, as built:
+
+- **`Instances` is a dependency with members and no operations,** each
+  member a function over one of the family's intrinsics, which only that
+  member calls (Core Lint's `world`, by `Prelude.runtime_of`), as
+  `Async.scope` reaches the scheduler: a dependency's operations can't be
+  generic yet (step 7 brings `fn<T>` in an operation), and one whose
+  members reach the runtime needs nothing installed, so no `uses` names
+  it and no test can swap it (a handler `for Instances` is refused: it
+  has no operations). Only the prelude's source may declare a
+  dependency with no operations (the parser), and the list of
+  dependencies an unknown one's error gives leaves it out. Built: `open(make,
+  parts, cap, mailbox)`, `call(f, k, c)`, `make(f, k)`, `keys`,
+  `evictable`, `evict`, `counts` (an `InstanceCounts`: a program's own
+  `Counts` is common) and `close`. Not yet, step 7's: `pin` for a block,
+  whose `uses D` needs a dependency named by a type variable; `post`, the
+  queues, their delivery tasks and the edge's meter; a library's
+  `victim` (a full partition waits for room); `visit`; and setup's
+  errors as the family's, `! E`: an instance that fails to start panics,
+  "an instance of `Hits` failed to start, with `DbDown`".
+- **A family's instances are shared from the start** (`Sched.share`), as
+  every task that reaches the family reaches them, so an exclusive one's
+  operations don't interleave; an operation runs as `Dep_call`'s does
+  (eval.ml's `dep_op`, factored out of it), the deadlock panic naming the
+  instance by the one rule, `hits[0]#1` (`Family.name_of`). The family is
+  named by the dependency the `with` making its opener installs,
+  snake_cased (`Family.installing`). The journal's lines for families
+  are step 7's, with version 3.
+- **`D.Call` takes no type arguments in concrete code:** `Doc.Call` is an
+  ordinary sum the compiler writes beside the dependency (Resolve's
+  `call_types`), for every module but the prelude, whose operations are
+  all data as far as the parser can see (no block, no `&` argument; a
+  description or a handle among the arguments isn't caught), a field
+  written without a name `_1`. Generic code's `D.Call<R ! E>` is the
+  prelude's `Call<D, R, E>`, and the function made of it for a dependency
+  has that one's `Doc.Call` in its place (`Ty.known`). So `post`'s
+  `D.Call<()>`, a concrete call whose result is in its type, is step 7's,
+  which gives the sum its two type arguments, fixed by each case; until
+  then nothing unifies a concrete `Doc.Call` with `Call<D, R, E>`, so
+  generic code never gets a call whose result it doesn't know.
+- **A `D.Call`'s cases are never bare:** a case is named after
+  `Doc.Call`, or found where a `Doc.Call` is expected, as a pattern's
+  is; so a program's own `Edit` isn't made ambiguous by its
+  dependency's.
+- **A `call` clause is checked once, its call's result a skolem, `R`,**
+  as an arm `over any` is, and copied by Lower for each operation it
+  runs for (`clause_ops`). In an arm of a `match` on the clause's call,
+  `R` is that case's operation's result (`Types.refined`, which `repr`
+  reads while the arm is checked: a link is never shortened to the
+  refined type, so nothing outside the arm learns it), and each copy
+  drops the arms of other cases, which can't be taken there. Only a
+  `match` whose result is wanted, the clause's, refines.
+- **A merge's clause, `call(c, a, b)`,** is copied for every operation,
+  as the fold `fold op` in its instance's record, which Core Lint checks
+  beside the operations; its operations that it doesn't write panic,
+  "`longest` folds two results of a call with its `call` clause, so it
+  isn't installed to run `Seen.see`". `c.fold(m, a, b)` makes `m`'s
+  instance for the fold and calls it. Whether `m` keeps state is checked
+  as the fold runs, a panic in the data stage's words, not by
+  Stateless: Stateless can't tell `Custom(m)`'s description from
+  `striped(h)`'s, both kept descriptions of `D`, and would refuse every
+  `striped` over a handler with state.
+- **`Call`'s fold members are `sum`, `max`, `min` and `concat`,** not
+  `add`, which is `+`'s method and takes one argument; the operations as
+  data are the prelude's `operations(h)`, `Operation`'s `gives` writing
+  `()` for `()`, since generic code can't name `D.Call`'s members.
+- **A handler `for D`,** `D` its type parameter, implements whatever
+  dependency a call of it gives it a description of: its type lists the
+  dependency `for` of `D` (`Ty.param_path`), which a call makes the one
+  dependency of `D` it's given, needing what both need
+  (Infer_expr.given_for, recording which variable is `D` for Lower,
+  `For_param`); Lower makes `striped$main.Hits` as it makes an `over any`
+  handler's function, `D` replaced by an implementation of `Hits` whose
+  needs and setup errors are rows of the function's. It writes one arm,
+  its `call` clause. A handler's parameters may now have defaults, as a
+  function's may.
+- **`Async.worker()` draws a task's worker from the tape the first time
+  it asks,** not when it's spawned, so a program that never asks draws
+  what it drew before and its seeds find what they found.
+- **The family is refused natively at the program's call of the
+  library that reaches it,** "`striped` uses the keyed instance family,
+  which isn't native yet" (to_mem's `reaches_family`).
+
+Chosen in step 6b, as built:
+
+- **`striped` writes no `release`:** its instance keeps no `var` and no
+  resource of the program's (its `Family` is the prelude's handle, its
+  `h` and `merge` descriptions and data), so it isn't exclusive and its
+  callers never queue on it; `release` is for an operation of a
+  dependency, and `Instances.call` is a member of one.
+- **`by: Worker` makes no stripe until a worker calls,** and a call with
+  no key makes the caller's first, so it runs on one at least; under
+  `single` that's one stripe, under `sim` two, and the merge erases
+  which (or doesn't: the split law's test fails under seed 5671).
+- **A key goes to stripe `((h % n) + n) % n`** of its first argument's
+  hash `h` (`Call.first_hash`, Walk.fixed_hash, as `keyed` hashed), any
+  first argument, whatever its type: the spec's "has a `key`" is read as
+  "has a first parameter".
+- **`Custom(m)` with state is refused where a fold first runs,** a panic
+  in the data stage's words, "`m` may be a description of `adding`,
+  which keeps state, so it isn't called as a method", said at the
+  program's call that needed the fold, not at the `with` (step 6a's
+  reason: Stateless can't tell `m` from `h`).
+- **`By` and `Fold`'s cases are found only where one is expected,** as
+  `D.Call`'s are (Infer_top's `visible`), so a program's own `Key`, `Max`
+  or `Min` constructor, examples have them, isn't made ambiguous by
+  them; `striped` writes `By.Worker` where nothing is expected.
+- **`striped`'s checks at the `with`** read `operations(h)`: fewer than 1
+  stripe under `Key(n)`, a keyless operation that gives a value with
+  `Unmerged`, and a fold that doesn't fit what one gives, `Sum` of what
+  isn't an `Int` or a `Float`, `Max` or `Min` of what isn't one or a
+  `Str`, `Concat` of what isn't an `Array` or a `Str`.
+- **A first argument is a key, whatever its type** (this section's
+  `first_hash`, "None for an operation with no parameters"), as 11a's
+  `keyed` routed; so language.md §11's `expire(now)`, which the prose
+  says runs on all sixteen, would go to one stripe by `now`: a keyless
+  sweep is written without one (test_calls.ml writes `expire()`). The
+  brief's "has a `key`", a type's `key` member, would make `hit(path:
+  Path)` keyless, which §11's `Worker` example needs keyed.
+- **`sync.keyed` is the ordinary missing member's error,** "`sync` has no
+  public `keyed`", not "has no `keyed`": a module's members can't be told
+  from its private ones.
+- **`hit: fn(path: Path) -> ()`** isn't parsed: a type isn't written
+  `()`; test_calls.ml's run of §11's `striped` lines writes `hit: fn(path:
+  Path)`.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -12406,7 +12449,8 @@ Chosen in step 4, as built:
 
 | 2b (state) | 81a56a1 | a service's state (language.md §4, rule 4): `let`, `var` and `finally` lines first (`parse_service`, `sstate`), the handler's state as written, failing with the service's `! E`; each member given the state after the parameters, a `var` `inout` and a `let` by value (`service_items`, `passes`), an arm passing `&n`, a member passing its own on; the state's type written or a literal's; a state that calls a member, a state taken apart and a state after a function refused with help; test_service.ml's state tests (a `var` counter and a list changed by members calling each other recursively, setup failing under `try with`, a test handler in its place, a block calling a member); natively bench/services/service's `Kv` with state and a `finally`; tree-sitter's `state` and `finally` in a service (service.txt); language.md's table, deps.md | steps 5 to 9 |
 | 5 | 1f11d2c | pull arguments: a parameter `fn() -> Option<T>` takes what `for` takes (Infer_expr's `pull_param`, `pulls`, `pull_arg`; Lower's `pull_block`, at `Infer.pulled_node`), `Async.map` and `Async.each` over one, pulled on the caller's task only when a slot frees (eval.ml's `all_of` asks for each call as there's room, `Sched.room`), `&r` a write held for the call (excl.ml, as any `&`); `for x in [try] f` over a block (`block_subject`, `block_loop`); a cursor's `next` that uses a dependency or fails (`cursor`, `next_call` at `Infer.next_node`); `Chan<T>`'s `items()` and `Items<T>` in std_lib.ml's `sync`, a member function through an alias resolved (Resolve's `alias_of`, `through`) and run with the alias's implementation (Infer's `through_alias`, Lower's `rebound`), "is pulled where it's written"; `Send<T>`, `Async.produce` and `Async.map_pull` in the prelude over `task_produce`, `task_map_pull`, `outbox_send` and `inbox_take` (sched.ml's streams, eval.ml), a stream given to a block failing with its function's errors (`streams_given`), unmarked calls of those last (solve.ml), defaults before the blocks given last; refused natively (to_mem.ml, bench/build.t); test_services.ml's s5 all on, with a test of each under `--seeds 1000`; examples/crawler on `Async.produce`, examples/server on `Async.each` over its connections; async.md (surface, table, server, crawler, "Later"), stdlib.md, language.md's table, the README | steps 6 to 9; the review's `produce` programs (a producer failing while the body is blocked, a body that breaks at `cap`); `for x in try &r` over a named cursor that can fail |
-| 6a | this commit | the runtime half: lib/eval/family.ml, the keyed instance family (partitions, pins, the order of release, lives, names by the one rule, eviction with its `finally` on the evicting task, teardown in reverse creation order), reached through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`) over `family_*` intrinsics that Core Lint lets only its members call (`Prelude.runtime_of`); `D.Call` for every dependency whose operations are all data (Resolve's `call_types`, `Doc.Call.Edit { op }` three-part paths in the parser and tree-sitter, `X.Call` as a type, "`Docs.Call` needs every operation of `Docs` to be data"); the `call(c)` clause and a merge's `call(c, a, b)`, checked once with a refined skolem result (`Types.refined`, Infer_handlers.call_clause) and copied per operation (Lower's `clause_ops`); handlers `for D`, made per dependency (`For_param`, Lower's `for_call`); generic code's `Call<D, R, E>` and its members `first_hash`, `sum`, `max`, `min`, `concat`, `fold`, and `operations(h)`; handler parameters with defaults; `Async.worker()` (sched.ml); the family refused natively (to_mem.ml); test/test_calls.ml; language.md's table | step 6b: `striped` in Ren, `sync.keyed` removed; step 7: `pin`, `post`, queues, the meter, setup's errors, `victim`, journal version 3, `D.Call<R ! E>` |
+| 6a | 261287d | the runtime half: lib/eval/family.ml, the keyed instance family (partitions, pins, the order of release, lives, names by the one rule, eviction with its `finally` on the evicting task, teardown in reverse creation order), reached through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`) over `family_*` intrinsics that Core Lint lets only its members call (`Prelude.runtime_of`); `D.Call` for every dependency whose operations are all data (Resolve's `call_types`, `Doc.Call.Edit { op }` three-part paths in the parser and tree-sitter, `X.Call` as a type, "`Docs.Call` needs every operation of `Docs` to be data"); the `call(c)` clause and a merge's `call(c, a, b)`, checked once with a refined skolem result (`Types.refined`, Infer_handlers.call_clause) and copied per operation (Lower's `clause_ops`); handlers `for D`, made per dependency (`For_param`, Lower's `for_call`); generic code's `Call<D, R, E>` and its members `first_hash`, `sum`, `max`, `min`, `concat`, `fold`, and `operations(h)`; handler parameters with defaults; `Async.worker()` (sched.ml); the family refused natively (to_mem.ml); test/test_calls.ml; language.md's table | step 6b: `striped` in Ren, `sync.keyed` removed; step 7: `pin`, `post`, queues, the meter, setup's errors, `victim`, journal version 3, `D.Call<R ! E>` |
+| 6b | this commit | `striped` in the prelude, plain Ren over the family's `Instances`, `Async.worker()` and `Call`'s members: `By` (`Key(n: Int = 16)`, `Worker`), `Fold<D>` (`Unmerged`, `Sum`, `Max`, `Min`, `Concat`, `Custom(m)`), its checks at the `with` reading `operations(h)`, a keyless call on every stripe folded left to right; `sync.keyed` removed with `Sync_keyed`, `VKeyed`, `VKeys` and their sites, its tests moved to test_services.ml as `striped`'s; test_services.ml's s6 all on, the split law failing under seed 5671; language.md §11's `striped` lines run (test_calls.ml); bench/services/refused as specified, natively refused; async.md, deps.md, handlers.md, language.md's table, the README | step 7: `actors`, `pin`, `post`, journal version 3; the review's stripes program (a merge whose result depends on stripe order) |
 
 ## The runtime model
 

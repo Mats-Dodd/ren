@@ -285,7 +285,7 @@ one fetch.
 ### What tasks share: `sync`
 
 The standard library's `sync`, found by `import sync`, is written in Ren
-over `Async.until`, but for `keyed`:
+over `Async.until`:
 
 | | What it is |
 |---|---|
@@ -293,7 +293,14 @@ over `Async.until`, but for `keyed`:
 | `sync.semaphore(n)` for `Semaphore` | `acquire` waits while no permit is free, `release` gives one back |
 | `sync.limit() over any` | each call takes a permit of the `Semaphore` outside it, is passed on, and gives it back in a `finally`, however it ends |
 | `sync.batcher()` for `Batcher<K, V>` | `get(k)` waits until a `flush` has fetched `k` through the `Fetch<K, V>` outside it, with every key asked for since the last |
-| `sync.keyed(n, h)` | `n` instances of the handler `h` describes, each call sent to one by its first argument's key: calls on keys in different instances overlap |
+
+Many instances of one handler are the prelude's `striped`, plain Ren
+over the runtime's keyed instance family (language.md §11): `with
+striped(counter(), by: Key(n: 4), merge: Sum)` sends each call with a
+key to one of 4 stripes by it, so calls on keys in different stripes
+overlap, and runs one with no key on every stripe, folding what they
+give with `merge:`; `by: Worker` sends a call to the stripe of the
+worker it runs on, `Async.worker()`.
 
 ```ren
 with sync.semaphore(16), sync.limit() over Web in crawl(root, 3)

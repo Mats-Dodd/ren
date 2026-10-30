@@ -225,7 +225,7 @@ let rec hash_shape v =
         (fun h (k, v) -> Int64.add h (mix (hash_shape k) (hash_shape v)))
         12L (Table.to_list t)
   | VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _ | VType _
-  | VDict _ | VCell _ | VEvidence _ | VSched _ | VKeyed _ | VKeys _ ->
+  | VDict _ | VCell _ | VEvidence _ | VSched _ ->
       failwith "bug: a hash of something with no `==`"
 
 (* [v]'s hash, as a value of type [t]: the same for two values [equal]
@@ -275,9 +275,8 @@ let unseeded f =
   Fun.protect ~finally:(fun () -> seed := s) f
 
 (* [v]'s hash as [hash] gives it, but with no seed: what has to be the
-   same in every run, which of `sync.keyed`'s instances a key goes to
-   (compiler.md, "The standard library (step 8)"), since what each instance
-   holds can be seen, and `x.hash()`, which a program can print or journal
+   same in every run, which of `striped`'s stripes a key goes to
+   (`Call.first_hash`), since what each instance holds can be seen, and `x.hash()`, which a program can print or journal
    (compiler.md, "Bytes stage"). A native build computes the same bits
    (ren_rt.c, [ren_hash_fixed]). *)
 let fixed_hash cx t v = unseeded (fun () -> hash cx t v)
@@ -313,7 +312,7 @@ let rec by_shape a b =
            xs ys
   | (VInt _ | VFloat _ | VBool _ | VStr _ | VBytes _ | VUnit), _ ->
       same_leaf a b
-  | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _ | VKeyed _ | VKeys _), _ ->
+  | (VClosure _ | VFn _ | VBuiltin _ | VHandler _ | VInstance _), _ ->
       failwith "bug: a comparison of functions"
   | (VCon _ | VTag _ | VRecord _ | VArray _ | VTuple _ | VTable _), _ -> false
   | (VType _ | VDict _ | VCell _ | VEvidence _ | VSched _), _ ->

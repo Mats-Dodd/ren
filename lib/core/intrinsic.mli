@@ -79,7 +79,6 @@ type t =
   | Sim_sleep
   | Sim_advance
   | Sim_alarm
-  | Sync_keyed
   | Async_worker
   | Family_open
   | Family_call
