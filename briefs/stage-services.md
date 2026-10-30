@@ -213,13 +213,13 @@ Each is decided; cite it in the spec, don't re-argue it.
    `evict_idle(d)`, `evict(k)`, `each` (live actors in creation order,
    pinning each, not use), `count()` and made and evicted counts;
    `finally` can't fail. **`post` is Erlang's cast:**
-   `Docs.post(k).op(args)` builds a `Doc.Call` from `op(args)`, its
-   arguments evaluated now, and puts it in k's queue; its only errors
-   are setup's, `try Docs.post(k).op(args)`. Keep that spelling through
-   a general rule any library can use (a last parameter of type
-   `D.Call` written as a trailing call, as a trailing block is); if
-   that can't be built as a general rule, use
-   `Docs.post(k, <call value>)` and record it. Posts from one task to
+   `Docs.post(k, Doc.Call.Edit { op })` puts a call value in k's
+   queue, its arguments evaluated now; its only errors are setup's,
+   `try Docs.post(k, Doc.Call.Edit { op })`. **Decided 2026-10-29:**
+   that explicit spelling, with no new rule; `Docs.post(k).edit(op)`
+   is not built (calls as data are designed properly with
+   dependency-as-protocol). Update any `Docs.post(k).op(args)` example
+   you meet in your spec and tests. Posts from one task to
    one actor run in order, each as one operation, on a task the
    family's `with` owns, the queue belonging to the key so order
    survives eviction; an actor names its own family in its handler's
