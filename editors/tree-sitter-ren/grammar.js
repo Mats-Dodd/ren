@@ -206,8 +206,13 @@ module.exports = grammar({
     // a word before a block parameter's type, and nowhere else
     block_mode: (_) => choice('concurrent', 'spawned'),
 
-    // a parameter's default is a literal
-    _default: ($) =>
+    // a parameter's default is a literal, or a variant written bare,
+    // `kill: Kill = Tree`, with no fields or a default for each
+    // (compiler.md, "Services stage", "The grammar")
+    _default: ($) => choice($._literal_default, $.constructor_ref),
+
+    // a variant's field's default is a literal
+    _literal_default: ($) =>
       choice(
         $.number,
         $.character,
@@ -362,7 +367,17 @@ module.exports = grammar({
         field('name', $.type_identifier),
         optional(
           choice(
-            seq('(', choice($.field_declaration, field('type', $._type)), ')'),
+            seq(
+              '(',
+              choice(
+                seq(
+                  $.field_declaration,
+                  optional(seq('=', field('default', $._literal_default))),
+                ),
+                field('type', $._type),
+              ),
+              ')',
+            ),
             field('fields', $.record_type),
           ),
         ),
@@ -726,6 +741,8 @@ module.exports = grammar({
         optional(alias('&', $.inout)),
         optional(seq(field('name', $.identifier), ':')),
         field('type', $._type),
+        // an operation's, in its dependency: `kill: Kill = Tree`
+        optional(seq('=', field('default', $._default))),
       ),
 
     // Plan, or another module's, billing.Plan. A capitalized name followed
@@ -855,6 +872,7 @@ module.exports = grammar({
         $.try_expression,
         $.attempt_expression,
         $.assert_expression,
+        $.release_expression,
         $._postfix,
       ),
 
@@ -962,6 +980,16 @@ module.exports = grammar({
       prec.right(
         PREC.prefix,
         seq('assert', field('operand', $._expression)),
+      ),
+
+    // release Next.get(id): in a handler's arm, the instance is let go of
+    // for that one call (foundations.md, decision 10). `release` is a word
+    // only here, before a name on its line, so `release()` and
+    // `s.release()` are the name they've always been
+    release_expression: ($) =>
+      prec.right(
+        PREC.prefix,
+        seq('release', field('call', $._postfix)),
       ),
 
     // -x, not b
@@ -1073,6 +1101,8 @@ module.exports = grammar({
         $.boolean,
         $.unit,
         $.identifier,
+        // `release` where it isn't a `release_expression`'s word
+        alias('release', $.identifier),
         $.self,
         $.lambda,
         $.inline_handler,

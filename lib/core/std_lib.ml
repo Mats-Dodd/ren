@@ -201,6 +201,9 @@ pub dep SimProc =
   // the commands cancelled while they ran, the first first: a real
   // `Proc.run` kills those
   killed: fn() -> Array<Command>
+  // how each of those was to be killed, in the same order: its process
+  // group, `Tree`, or itself, `Child`
+  kills: fn() -> Array<Kill>
 
 // programs that take time, for a test: each `Proc.run` of a command one
 // of `runs` names takes its `takes` of the scheduler's time and exits
@@ -212,7 +215,8 @@ pub fn proc(runs: Array<Run>) -> (Proc & TestProc & SimProc uses Async) = sim_pr
 handler sim_proc(runs: Array<Run>) for Proc, TestProc, SimProc uses Async =
   var commands: Array<Command> = []
   var cancelled: Array<Command> = []
-  run(cmd, args) =>
+  var kinds: Array<Kill> = []
+  run(cmd, args, kill) =>
     let c = Command { cmd: cmd, args: args }
     &commands.push(c)
     // what it exits with, and how long it takes to, in milliseconds
@@ -231,6 +235,7 @@ handler sim_proc(runs: Array<Run>) for Proc, TestProc, SimProc uses Async =
         Ok(code) => code
         Err(_) =>
           &cancelled.push(c)
+          &kinds.push(kill)
           0
     if takes > 0 then
       sim_alarm(done)
@@ -238,6 +243,7 @@ handler sim_proc(runs: Array<Run>) for Proc, TestProc, SimProc uses Async =
     code
   ran() => commands
   killed() => cancelled
+  kills() => kinds
 |}
 
 (* `sync`: what tasks share, written once (compiler.md, "The standard

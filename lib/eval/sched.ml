@@ -73,6 +73,11 @@ type deadline = { mutable due : float; dshield : int }
    many operations the task was in then ([holding]). *)
 type isolate = { base : int; depth : int }
 
+(* An instance a task is in an operation of: its number, the label of the
+   arm that's running, `gate.wait`, and the dependency it's installed as,
+   `Gate`, which the deadlock panic names. *)
+type held = { inst : int; label : string; dep : string }
+
 (* A task. [k] is its continuation while it's suspended. [wait] numbers
    its current wait, 0 when it isn't waiting, so that a waker of a wait
    that's over, a timer cancelled with it, is a no-op; [what] is what it
@@ -98,10 +103,13 @@ type task = {
   mutable queued : int option;
       (** the locked instance it's queued for, if it is ([holding]): what
           a call that would close a cycle of waits follows *)
-  mutable holding : (int * string) list;
-      (** the instances whose operations it's in, by number, the innermost
-          first, each with the label of the arm that's running, `gate.wait`:
-          what `Async.until` lets go of *)
+  mutable holding : held list;
+      (** the instances whose operations it's in, the innermost first: what
+          `Async.until` and `release` let go of *)
+  mutable let_go : int list;
+      (** the instances among those it has let go of for the call a
+          `release` covers, the innermost first ([let_go]): what it doesn't
+          hold meanwhile, though it's still in one of their operations *)
   mutable isolates : isolate list;
       (** the `Async.isolate`s whose bodies it's running, the innermost first *)
   mutable through : int list;
@@ -639,6 +647,7 @@ let task ?(context = []) ~path ~root scope =
     deadlines = [];
     queued = None;
     holding = [];
+    let_go = [];
     isolates = [];
     through = [];
     shield = 0;
@@ -652,6 +661,31 @@ let task ?(context = []) ~path ~root scope =
     pointed = false;
     randoms = Hashtbl.create 1;
   }
+
+(* What [t] waits for, [what] if it's about to, for the deadlock panic and
+   the cycle's: its path, its wait, and the instances it holds, those
+   whose operations it's in and hasn't let go of, the innermost first,
+   `main/main:0 waits in `Async.until` at test.ren:11:13, holding `A`
+   (a.go)` (foundations.md, decision 10: `sim` names the instances a
+   parked task holds). *)
+let waits_of ?what t =
+  let what = Option.value what ~default:t.what in
+  let held =
+    List.fold_left
+      (fun acc h ->
+        if List.mem h.inst t.let_go || List.exists (fun g -> g.inst = h.inst) acc
+        then acc
+        else acc @ [ h ])
+      [] t.holding
+  in
+  t.path ^ " " ^ what
+  ^
+  match held with
+  | [] -> ""
+  | hs ->
+      ", holding "
+      ^ String.concat ", "
+          (List.map (fun h -> Printf.sprintf "`%s` (%s)" h.dep h.label) hs)
 
 (* ---- errors from tasks ---- *)
 
@@ -802,13 +836,17 @@ let wait_exit ?at ~cancellable ?(late = fun () -> ()) ?(journaled = true) pid wh
 
 (* Wait for the program [pid] the task running started to exit, and give
    how it did. Cancelling the task kills it: SIGTERM, then, if it's still
-   running at the cleanup deadline, SIGKILL; and the task waits for it to
-   exit before it goes on being cancelled, so nothing it started is left
-   running (async.md, "Cancellation"). That last wait isn't a journal's:
+   running at the cleanup deadline, SIGKILL, sent to its process group if
+   [group], the one it was started in of its own (`kill: Tree`), which
+   kills what it started too, `sh -c "sleep 5; true"`'s `sleep`, or to it
+   alone (`kill: Child`); and the task waits for it to exit before it goes
+   on being cancelled, so nothing it started is left running (async.md,
+   "Cancellation"). That last wait isn't a journal's:
    a replay runs no program, so its cancelled call ends where the
    recording's `cancelled` line is, and has nothing to wait for. Without
    a scheduler, the thread waits. *)
-let wait_pid ?at pid =
+let wait_pid ?at ~group pid =
+  let target = if group then -pid else pid in
   let rec blocking () =
     match Unix.waitpid [] pid with
     | exception Unix.Unix_error (Unix.EINTR, _, _) -> blocking ()
@@ -820,13 +858,13 @@ let wait_pid ?at pid =
       match wait_exit ?at ~cancellable:true pid "waits for its program" with
       | status -> status
       | exception Cancelled ->
-          (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
+          (try Unix.kill target Sys.sigterm with Unix.Unix_error _ -> ());
           let by = now () +. cleanup in
           let killed = ref false in
           let late () =
             if (not !killed) && now () >= by then begin
               killed := true;
-              try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ()
+              try Unix.kill target Sys.sigkill with Unix.Unix_error _ -> ()
             end
           in
           ignore
@@ -1023,7 +1061,7 @@ let run ~root ~(deadlock : string list -> exn) (f : unit -> Value.t) =
               (* every task waits, and nothing can wake one: the root
                  too, or it would have ended *)
               let waits =
-                List.rev_map (fun u -> u.path ^ " " ^ u.what) s.alive
+                List.rev_map (fun u -> waits_of u) s.alive
               in
               t.wait <- 0;
               Queue.push (t, Raise (deadlock waits)) s.queue;
@@ -1391,13 +1429,21 @@ let point ?at () =
 
 (* ---- operations that don't interleave ---- *)
 
+(* How many of the operations of the instance numbered [inst] [t] is in. *)
+let depth_in t inst = List.length (List.filter (fun h -> h.inst = inst) t.holding)
+
+(* [xs] without the first [x] in it. *)
+let rec remove_first x = function
+  | [] -> []
+  | y :: rest -> if y = x then rest else y :: remove_first x rest
+
 (* The instance numbered [inst], exclusive if [excl], can be reached by a
    task being spawned (compiler.md, "Operations that don't interleave"):
    from now on, if it's exclusive, its operations keep it from each
    other's tasks, for good. A task in one of its operations now, which
    reached it before it was shared, holds it, as it would have; one
-   waiting in `Async.until` on it has let go of it. Without a scheduler,
-   nothing is spawned. *)
+   waiting in `Async.until` on it, or in a call a `release` covers, has
+   let go of it. Without a scheduler, nothing is spawned. *)
 let share inst ~excl =
   match !running with
   | Some s when excl && not (Hashtbl.mem s.locks inst) ->
@@ -1406,9 +1452,11 @@ let share inst ~excl =
           (fun w -> w.wt == t && w.wt.wait = w.id)
           (Option.value (Hashtbl.find_opt s.waiters inst) ~default:[])
       in
-      let depth t = List.length (List.filter (fun (i, _) -> i = inst) t.holding) in
+      let depth t = depth_in t inst in
       let holder =
-        List.find_opt (fun t -> depth t > 0 && not (waiting t)) s.alive
+        List.find_opt
+          (fun t -> depth t > 0 && not (waiting t || List.mem inst t.let_go))
+          s.alive
       in
       Hashtbl.replace s.locks inst
         {
@@ -1423,41 +1471,61 @@ let share inst ~excl =
 let locked inst =
   match !running with Some s -> Hashtbl.mem s.locks inst | None -> false
 
+(* Whether a released instance is the tape's to give: under `sim`, but
+   not while it follows a recording, which runs in `single`'s order
+   (decision 10, "The queue is fair, not first in first out"). *)
+let fair s = match s.policy with Sim _ -> not (following s) | Single -> false
+
 (* The instance numbered [inst], locked by [lk], has no task in its
-   operations now: it goes to the first of the tasks waiting in
-   `Async.until` on it whose condition holds now, back in as many
-   operations as it was, or else to the first caller still waiting for
-   it, which [holding] puts in one. Each is woken; the others go on
+   operations now. Under `single` it goes to the first of the tasks
+   waiting in `Async.until` on it whose condition holds now, back in as
+   many operations as it was, or else to the first caller still waiting
+   for it, which [holding] puts in one. Each is woken; the others go on
    waiting (compiler.md, "The rest of `Async`": a waiter whose condition
-   holds comes first, then the queue's first caller). A condition reads
-   only the instance's state, which only its operations change, so each
-   release is when one can have come to hold. It's evaluated as its
-   waiter's, so a panic in it is the waiter's, raised where it waits. *)
+   holds comes first, then the queue's first caller). Under `sim`
+   ([fair]) it goes to none: every waiter whose condition holds and
+   every queued caller is woken, and the first of them, or of the tasks
+   arriving meanwhile, that the tape runs takes it; the others queue
+   again ([take_back], [holding]). So the tape chooses among the waiters
+   and the arrivals, and none is passed over without bound but by its
+   odds (compiler.md, "Services stage", "`sim`'s fair choice"). A
+   condition reads only the instance's state, which only its operations
+   change, so each release is when one can have come to hold. It's
+   evaluated as its waiter's, so a panic in it is the waiter's, raised
+   where it waits. *)
 let rec released inst =
   match !running with
   | None -> ()
   | Some s -> (
       let lk = Hashtbl.find_opt s.locks inst in
-      let woke = wake_waiter s inst lk in
       match lk with
-      | Some lk when not woke ->
-          let rec next () =
-            match Queue.take_opt lk.callers with
-            | None -> ()
-            | Some (t, wake) ->
-                (* one cancelled meanwhile isn't waiting any more *)
-                if wake () then begin
-                  lk.holder <- Some t;
-                  lk.depth <- 0
-                end
-                else next ()
-          in
-          next ()
-      | _ -> ())
+      | Some lk when fair s ->
+          ignore (wake_waiter s inst None ~all:true);
+          let callers = List.of_seq (Queue.to_seq lk.callers) in
+          Queue.clear lk.callers;
+          List.iter (fun (_, wake) -> ignore (wake ())) callers
+      | _ -> (
+          let woke = wake_waiter s inst lk ~all:false in
+          match lk with
+          | Some lk when not woke ->
+              let rec next () =
+                match Queue.take_opt lk.callers with
+                | None -> ()
+                | Some (t, wake) ->
+                    (* one cancelled meanwhile isn't waiting any more *)
+                    if wake () then begin
+                      lk.holder <- Some t;
+                      lk.depth <- 0
+                    end
+                    else next ()
+              in
+              next ()
+          | _ -> ()))
 
 (* Wake the first task waiting in `Async.until` on [inst] whose condition
-   holds, if one does, giving it the instance if it's locked by [lk]. *)
-and wake_waiter s inst lk =
+   holds, or with [all] each one whose does, giving the one it wakes the
+   instance if it's locked by [lk]. *)
+and wake_waiter s inst lk ~all =
   match Hashtbl.find_opt s.waiters inst with
   | None | Some [] -> false
   | Some ws ->
@@ -1479,12 +1547,12 @@ and wake_waiter s inst lk =
             | true ->
                 ignore (wake s w.wt w.id Resume);
                 give w;
-                rest
+                if all then first rest else rest
             | false -> w :: first rest
             | exception e ->
                 (* it ends where it waits, so it's not in the instance *)
                 ignore (wake s w.wt w.id (Raise e));
-                rest)
+                first rest)
       in
       Hashtbl.replace s.waiters inst (first ws);
       !woke
@@ -1516,68 +1584,96 @@ let leave_lock s inst =
       end
   | None -> released inst
 
-(* [f ()], as the operation [label] of the instance numbered [inst]: the
-   task running is in it meanwhile, and once it returns, or fails, or is
-   cancelled, the instance is released ([released]). If the instance is
-   locked, shared and exclusive, the task waits first while another task
-   is in one of its operations, queued first in first out behind the
-   others waiting, and has it until it returns (compiler.md, "Operations
-   that don't interleave"); [what] is what the deadlock panic says it
-   waits for, and [at] the program's call. A call back into it from the
-   task in it could never go on, which [reentered] makes a panic of; and
-   so could one that would wait for a task that waits, through the tasks
-   each waits for, for this one, which [cycle] makes a panic of, given
-   what each task in the cycle waits for. It's raised at once, since
-   the deadlock panic comes only when every task waits, and a server's
-   accept loop never does.
+(* The task running, [t], takes back the instance numbered [inst], locked
+   by [lk], which it let go of in [depth] of its operations, in
+   `Async.until` or for a call a `release` covers: at once if it's free,
+   or if [released] gave it to it, and otherwise queued behind the
+   callers, as many times as it's woken and finds it taken (under `sim`,
+   where a release wakes them all). It can't be cancelled meanwhile: the
+   operation it's in goes on, its `finally` too, with the instance. *)
+let rec take_back ?at s t inst lk depth =
+  match lk.holder with
+  | None ->
+      lk.holder <- Some t;
+      lk.depth <- depth
+  | Some h when h == t -> lk.depth <- depth
+  | Some _ ->
+      t.queued <- Some inst;
+      Fun.protect
+        ~finally:(fun () -> t.queued <- None)
+        (fun () ->
+          wait ~cancellable:false ?at "waits for its instance back" (fun wake ->
+              Queue.push (t, wake) lk.callers));
+      take_back ?at s t inst lk depth
+
+(* [f ()], as the operation [label] of the instance numbered [inst],
+   installed as [dep]: the task running is in it meanwhile, and once it
+   returns, or fails, or is cancelled, the instance is released
+   ([released]). If the instance is locked, shared and exclusive, the
+   task waits first while another task is in one of its operations,
+   queued behind the others waiting (first in first out under `single`,
+   the tape's choice under `sim`), and has it until it returns
+   (compiler.md, "Operations that don't interleave"); [what] is what the
+   deadlock panic says it waits for, and [at] the program's call. A call
+   back into it from the task in it could never go on, which [reentered]
+   makes a panic of; and so could one that would wait for a task that
+   waits, through the tasks each waits for, for this one, which [cycle]
+   makes a panic of, given what each task in the cycle waits for. It's
+   raised at once, since the deadlock panic comes only when every task
+   waits, and a server's accept loop never does.
 
    A panic that leaves it notes that it did, for `Async.isolate`
    ([isolatable]), and leaves the lock taken for good: what it was
    changing may be half changed, and only an isolate inside its `with` can
    go on, whose tasks are all cancelled. Without a scheduler, as when a
    value is made, it's just [f ()]. *)
-let holding ?at ~what ~reentered ~cycle inst label f =
+let holding ?at ~what ~reentered ~cycle inst ~dep label f =
   match !running with
   | None -> f ()
   | Some s -> (
       let t = s.current in
-      (match Hashtbl.find_opt s.locks inst with
-      | Some { holder = None; _ } as lk ->
-          let lk = Option.get lk in
-          lk.holder <- Some t;
-          lk.depth <- 1
-      | Some { holder = Some h; _ } when h == t -> raise (reentered ())
-      | Some lk ->
-          (* the tasks this one would wait for, each queued for an
-             instance the next is in: if they come back to this one, none
-             of them can go on *)
-          let rec chain (h : task) seen =
-            if h == t then Some (List.rev seen)
-            else if List.memq h seen then None
-            else
-              match h.queued with
-              | Some i -> (
-                  match Hashtbl.find_opt s.locks i with
-                  | Some { holder = Some h'; _ } -> chain h' (h :: seen)
-                  | _ -> None)
-              | None -> None
-          in
-          (match chain (Option.get lk.holder) [] with
-          | Some others ->
-              raise (cycle ((t.path ^ " " ^ what) :: List.map (fun u -> u.path ^ " " ^ u.what) others))
-          | None -> ());
-          (* given it by [released] once it's this one's turn; or this
-             task is cancelled, and it stays where it was *)
-          t.queued <- Some inst;
-          Fun.protect
-            ~finally:(fun () -> t.queued <- None)
-            (fun () -> wait ?at what (fun wake -> Queue.push (t, wake) lk.callers));
-          lk.depth <- lk.depth + 1
-      | None -> ());
-      t.holding <- (inst, label) :: t.holding;
+      let rec take () =
+        match Hashtbl.find_opt s.locks inst with
+        | Some ({ holder = None; _ } as lk) ->
+            lk.holder <- Some t;
+            lk.depth <- 1
+        | Some { holder = Some h; _ } when h == t -> raise (reentered ())
+        | Some lk -> (
+            (* the tasks this one would wait for, each queued for an
+               instance the next is in: if they come back to this one,
+               none of them can go on *)
+            let rec chain (h : task) seen =
+              if h == t then Some (List.rev seen)
+              else if List.memq h seen then None
+              else
+                match h.queued with
+                | Some i -> (
+                    match Hashtbl.find_opt s.locks i with
+                    | Some { holder = Some h'; _ } -> chain h' (h :: seen)
+                    | _ -> None)
+                | None -> None
+            in
+            (match chain (Option.get lk.holder) [] with
+            | Some others ->
+                raise (cycle (waits_of ~what t :: List.map (fun u -> waits_of u) others))
+            | None -> ());
+            (* given it by [released] once it's this one's turn, or woken
+               to try again (under `sim`); or this task is cancelled, and
+               it stays where it was *)
+            t.queued <- Some inst;
+            Fun.protect
+              ~finally:(fun () -> t.queued <- None)
+              (fun () -> wait ?at what (fun wake -> Queue.push (t, wake) lk.callers));
+            match lk.holder with
+            | Some h when h == t -> lk.depth <- lk.depth + 1
+            | _ -> take ())
+        | None -> ()
+      in
+      take ();
+      t.holding <- { inst; label; dep } :: t.holding;
       let leave () =
         match t.holding with
-        | (i, _) :: rest when i = inst -> t.holding <- rest
+        | h :: rest when h.inst = inst -> t.holding <- rest
         | _ -> bug "an operation left out of turn"
       in
       match f () with
@@ -1590,21 +1686,24 @@ let holding ?at ~what ~reentered ~cycle inst label f =
           leave_lock s inst;
           raise Cancelled
       | exception e ->
-          (* the lock, if it has one, stays taken *)
+          (* the lock, if it has one, stays taken; and a panic out of a
+             call a `release` covers in it isn't letting go any more *)
           leave ();
+          if depth_in t inst = 0 then
+            t.let_go <- List.filter (fun i -> i <> inst) t.let_go;
           t.through <- inst :: t.through;
           raise e)
 
-(* The instance whose operation `Async.until` is written in, for the code
-   labelled [label]: the innermost the task running is in with that arm's
-   label, or else the innermost, if it's in one. *)
+(* The instance whose operation `Async.until` or `release` is written in,
+   for the code labelled [label]: the innermost the task running is in
+   with that arm's label, or else the innermost, if it's in one. *)
 let op_instance label =
   match current () with
   | None -> None
   | Some t -> (
-      match List.find_opt (fun (_, l) -> l = label) t.holding with
-      | Some (i, _) -> Some i
-      | None -> Option.map fst (List.nth_opt t.holding 0))
+      match List.find_opt (fun h -> h.label = label) t.holding with
+      | Some h -> Some h.inst
+      | None -> Option.map (fun h -> h.inst) (List.nth_opt t.holding 0))
 
 (* At the scheduler's time [ms], in milliseconds, the instance numbered
    [inst] is released, as if an operation of it had just ended, unless a
@@ -1632,7 +1731,7 @@ let alarm inst ms =
 (* Wait, as the task running, in `Async.until` on the instance numbered
    [inst], until it's released with [holds] holding. If the instance is
    locked, the task lets go of it while it waits, which releases it, and
-   has it back when it's woken ([wake_waiter]). *)
+   has it back once it's woken ([wake_waiter], [take_back]). *)
 let until ?at inst ~holds =
   let s = sched () in
   let t = s.current in
@@ -1659,23 +1758,60 @@ let until ?at inst ~holds =
           Hashtbl.replace s.waiters inst (now @ [ w ])
       | _ -> ())
   in
+  (* it holds nothing of it meanwhile, which the deadlock panic says *)
+  t.let_go <- inst :: t.let_go;
+  let back () =
+    (match lk with Some lk when depth > 0 -> take_back ?at s t inst lk depth | _ -> ());
+    t.let_go <- remove_first inst t.let_go
+  in
   match waiting () with
-  | () -> ()
-  | exception e when depth > 0 -> (
+  | () -> back ()
+  | exception e ->
       (* cancelled while it waited, or its condition panicked: it's still
          in the operation, whose `finally` runs with the instance, so it
          has it back first, once it's its turn *)
-      match lk with
+      back ();
+      raise e
+
+(* The task running lets go of the instance numbered [inst], whose
+   operation it's in, for the call a `release` covers (compiler.md,
+   "Services stage", step 4): if it's locked and this task holds it, it's
+   released, as if the operation had ended, and under `sim` the tape
+   chooses what runs next ([point]), so a stale read across a `release`
+   is found by a seed (decision 10). An instance no spawned task can
+   reach has no lock and nothing else to run: it's a plain call. *)
+let let_go ?at inst =
+  match !running with
+  | None -> ()
+  | Some s -> (
+      let t = s.current in
+      t.let_go <- inst :: t.let_go;
+      match Hashtbl.find_opt s.locks inst with
       | Some lk ->
           (match lk.holder with
-          | None -> lk.holder <- Some t
-          | Some h when h == t -> ()
-          | Some _ ->
-              wait ~cancellable:false ?at "waits for its instance back"
-                (fun wake -> Queue.push (t, wake) lk.callers));
-          lk.depth <- depth;
-          raise e
-      | None -> raise e)
+          | Some h when h == t ->
+              lk.holder <- None;
+              lk.depth <- 0;
+              released inst
+          | _ -> ());
+          point ?at ()
+      | None -> ())
+
+(* The task running takes back the instance it last let go of with
+   [let_go], however the call ended, queueing like any caller
+   ([take_back]), back in as many of its operations as it is. *)
+let retake ?at () =
+  match !running with
+  | None -> ()
+  | Some s -> (
+      let t = s.current in
+      match t.let_go with
+      | inst :: rest ->
+          (match Hashtbl.find_opt s.locks inst with
+          | Some lk -> take_back ?at s t inst lk (depth_in t inst)
+          | None -> ());
+          t.let_go <- rest
+      | [] -> bug "an instance taken back that wasn't let go of")
 
 (* ---- `Async.timeout` ---- *)
 
@@ -1761,6 +1897,6 @@ and isolatable () =
           (not (List.exists outside t.through))
           && not
                (List.exists
-                  (fun (n, _) -> outside n)
+                  (fun h -> outside h.inst)
                   (List.filteri (fun k _ -> k < inside) t.holding)))
 

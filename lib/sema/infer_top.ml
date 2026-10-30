@@ -119,6 +119,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Ref a
     | Try a
     | Attempt a
+    | Release a
     | Assert a
     | Inline_handler a ->
         expr a
@@ -993,14 +994,7 @@ let check_body env ~is_value m =
     (fun (p : Resolved.param) (t : Types.param) ->
       match p.pdefault with
       | Some (lit, loc, node) ->
-          let kind : expr_kind =
-            match lit with
-            | LInt k -> Int k
-            | LFloat x -> Float x
-            | LBool b -> Bool b
-            | LStr s -> Str s
-          in
-          check env m.cx { kind; loc; node } t.ty
+          check env m.cx { kind = literal_kind lit loc; loc; node } t.ty
       | None -> ())
     f.params m.ps;
   let why =
@@ -1971,7 +1965,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
             Option.iter (walk (Kept Elsewhere)) a.arm_guard;
             walk carried a.arm_body)
           arms
-    | Try a | Attempt a -> walk carried a
+    | Try a | Attempt a | Release a -> walk carried a
     | Binop ((Eq | Neq), a, b, _) when is_block a || is_block b ->
         say e.loc (Infer_msg.block_kept ~written:false e.loc Compared);
         List.iter (walk Said) [ a; b ]
@@ -2124,6 +2118,19 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
              | [] -> false)
            (Iface.defaults_of f.params)))
     fns;
+  (* and each dependency's operations', `Proc.run`'s `kill: Kill = Tree`,
+     by the operation's path, which its call is made through *)
+  Hashtbl.iter
+    (fun p (td : Iface.type_decl) ->
+      match td.body with
+      | Dep ops ->
+          List.iter
+            (fun (o : Iface.field) ->
+              if o.fdefaults <> [] then
+                Hashtbl.replace env.defaults_of (Path.member p o.fname) o.fdefaults)
+            ops
+      | _ -> ())
+    env.types;
   let values =
     List.concat_map
       (function

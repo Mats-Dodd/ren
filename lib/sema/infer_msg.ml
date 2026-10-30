@@ -714,6 +714,17 @@ let method_fails loc ~recv ~call =
     ~help:(sprintf "install it: `with %s in %s`" recv call)
     (sprintf "`%s` can fail to start, so it isn't called as a method" recv)
 
+(* `release twice(1)`: `release` covers one call of another dependency's
+   operation, and [written], the operand as written, isn't one
+   (compiler.md, "Services stage", step 4). *)
+let release_not_op loc ~written =
+  Diag.make loc
+    ~help:"write it on the operation's call: `release Next.get(id)`"
+    (sprintf
+       "`release` lets go of the instance for one call of another \
+        dependency's operation, and `%s` isn't one"
+       written)
+
 (* `c.get(1)`, where `c` goes over another implementation of [dep],
    which only a `with` can put under it. *)
 let method_over loc ~recv ~dep ~call =

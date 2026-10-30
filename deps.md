@@ -386,7 +386,7 @@ error: `with` installs only handlers
 | `Console` | `write(line: Str)`, `error(line: Str)` | stdout, and stderr for `error` | captured | `TestConsole.output() -> Array<Str>`, `TestConsole.errors() -> Array<Str>` |
 | `Fs` | `read(p) -> Bytes ! FsError`, `write(p, b) ! FsError`, `exists(p)` | files, through `Unix` | `mem_fs([])`: no files | none: read back through `Fs` |
 | `Os` | `args() -> Array<Str>` | what follows `--` in `ren run file.ren -- args` | `test_os([])`: no args | none |
-| `Proc` | `run(cmd, args) -> Int ! ProcError` | a process, with this one's stdin, stdout and stderr, waited for as the scheduler's wait; a cancelled one is killed | `test_proc([])`: runs nothing, exits with 0; or `sim.proc(runs)`, programs that take virtual time | `TestProc.ran() -> Array<Command>`; `sim.SimProc.killed()` |
+| `Proc` | `run(cmd, args, kill: Kill = Tree) -> Int ! ProcError` | a process, with this one's stdin, stdout and stderr, waited for as the scheduler's wait; a cancelled one is killed, with what it started (`Tree`, its process group) or alone (`Child`) | `test_proc([])`: runs nothing, exits with 0; or `sim.proc(runs)`, programs that take virtual time | `TestProc.ran() -> Array<Command>`; `sim.SimProc.killed()` and `kills()` |
 | `Net` | `listen(addr) -> Listener`, `accept(l) -> Conn`, `accept_until(l, stop) -> Option<Conn>`, `read(c, max) -> Bytes`, `write(c, b)`, `close(c)`, each but `close` `! NetError` | TCP, each wait the scheduler's; SIGTERM ends a waiting `accept_until` | `sim.net()`: connections in memory, in virtual time | `sim.SimNet`: `connect(addr) -> Conn`, `signal(s)` |
 
 - `print(x)` is an ordinary prelude function: `Console.write(show(x))`.

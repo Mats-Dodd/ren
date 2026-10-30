@@ -212,9 +212,22 @@ type mode = Read | Inout
 type block_mode = Ordinary | Concurrent | Spawned
 
 (* A parameter's default, `max: Int = 64`: a literal, a negative number
-   among them (compiler.md, "Stage 11a", "The surface"). A call may leave
-   the parameter out, and Lower fills it in. *)
-type literal = LInt of Int64.t | LFloat of float | LBool of bool | LStr of string
+   among them (compiler.md, "Stage 11a", "The surface"); or a variant
+   written bare, `kill: Kill = Tree`, with no fields or with a default for
+   each, [LCtor] (compiler.md, "Services stage", "The grammar"). A call may
+   leave the parameter out, and Lower fills it in. A variant's field may
+   have a default too, a literal of the others. *)
+type literal =
+  | LInt of Int64.t
+  | LFloat of float
+  | LBool of bool
+  | LStr of string
+  | LCtor of ctor_lit
+
+(* A variant written bare as a default: the type in front of it if
+   that's written, `Kill.Tree`, its name, and the sum it's a constructor
+   of, [csum], which Resolve finds from the parameter's type. *)
+and ctor_lit = { cqual : string option; cname : ident; csum : Path.t option }
 
 (* A parameter of a function or lambda; its type may be left out. Its
    default, if it has one, is the literal, where it's written, and a node
@@ -350,6 +363,13 @@ and ('v, 'b, 't) expr_kind =
   | Piped
       (** the value of the [Pipe]'s subject, the first argument of its step's
           call: only ever there *)
+  | Release of ('v, 'b, 't) expr
+      (** [release Next.get(id)], in a handler's arm: the instance running
+          the arm is let go of while that call, of another dependency's
+          operation, runs, and taken back after it, queueing like any
+          caller (foundations.md, decision 10; compiler.md, "Services
+          stage", step 4). Infer makes sure it covers such a call, Excl
+          that it's written in an arm *)
   | With of { items : ('v, 'b, 't) with_item list; body : ('v, 'b, 't) expr }
       (** [with a, b in body] (deps.md, "`with`"): a set of items, each
           installed once around [body], in an order inference works out
@@ -489,7 +509,18 @@ and ('v, 'b, 't) stmt =
 
 (* Type declarations. *)
 
-type 't field = { field_name : ident; field_ty : 't ty }
+(* A field of a record, a variant or a dependency (its operations). A
+   variant's field written in parentheses may have a default,
+   [field_default], `Key(n: Int = 16)`, a literal; an operation's
+   parameters may too, [op_defaults], `run: fn(cmd: Str, args: Array<Str>,
+   kill: Kill = Tree)`, by their place and name, as a function's are
+   (compiler.md, "Services stage", "The grammar"). *)
+type 't field = {
+  field_name : ident;
+  field_ty : 't ty;
+  field_default : (literal * Loc.t * int) option;
+  op_defaults : (int * string * (literal * Loc.t * int)) list;
+}
 (* A constructor as it's declared: [Free], [Flat(off: Money)] or
    [Flat(Money)], with one field, positional, whose name, if written, only
    documents it (an unwritten one is [""]); or [Rect { w: Int, h: Int }],
@@ -759,6 +790,7 @@ let children (e : ('v, 'b, 't) expr) =
   | Named (_, a)
   | Try a
   | Attempt a
+  | Release a
   | Assert a ->
       [ a ]
   | Binop (_, a, b, _)
@@ -999,6 +1031,8 @@ let show_literal = function
       else s ^ ".0"
   | LBool b -> string_of_bool b
   | LStr s -> Printf.sprintf "%S" s
+  | LCtor { cqual = Some q; cname; _ } -> q ^ "." ^ cname.name
+  | LCtor { cname; _ } -> cname.name
 
 let rec show_ty : ty -> string = function
   | TyName (name, []) -> show_tyname name
@@ -1184,6 +1218,7 @@ let rec show_expr (e : expr) =
   | Pipe { subject; step } -> parens [ "|>"; show_expr subject; show_expr step ]
   | Piped -> "_"
   | Assert a -> parens [ "assert"; show_expr a ]
+  | Release a -> parens [ "release"; show_expr a ]
   | Inline_handler a -> parens [ "handler"; show_expr a ]
   | Named (n, a) -> parens [ n.name ^ ":"; show_expr a ]
   | Tag_set es -> parens [ "tags"; show_errors es ]
@@ -1531,6 +1566,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         in
         subject ^ " |> " ^ step_src step
     | Assert a -> "assert " ^ go a
+    | Release a -> "release " ^ go a
     | Fail (t, []) -> "fail " ^ t.name
     | Fail (t, args) -> "fail " ^ t.name ^ "(" ^ con_args args ^ ")"
     | Call (f, args) -> left 8 f ^ "(" ^ list args ^ ")"

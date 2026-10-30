@@ -42,8 +42,12 @@ val run :
   Value.t * Value.t list
 
 (* The real `Proc.run` of [cmd] with [args], as the prelude's private
-   `ProcOutcome`: found on `PATH`, started, and waited for with [wait],
-   given its process, which the interpreter's scheduler does
-   (Sched.wait_pid). *)
+   `ProcOutcome`: found on `PATH`, started, in a process group of its own
+   if [group] (`kill: Tree`), and waited for with [wait], given its
+   process, which the interpreter's scheduler does (Sched.wait_pid). *)
 val run_program :
-  wait:(int -> Unix.process_status) -> string -> string list -> Value.t
+  wait:(int -> Unix.process_status) ->
+  group:bool ->
+  string ->
+  string list ->
+  Value.t

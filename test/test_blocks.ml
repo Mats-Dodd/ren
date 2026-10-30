@@ -1411,17 +1411,17 @@ fn each_mut(inout xs: Array<Int>, f: fn(Int) -> Int) =
 |}
 
 let%expect_test
-    "[s5 reject] row 31: handler state changed across a dependency call" =
-  (* target: "`cache` is changed across a dependency call", the note "other
-     tasks can run this handler at a dependency call", and the help "load
-     first: `let v = next.load(k)`, then `&cache.set(k, v)`" *)
+    "[s5 reject] row 31: handler state changed across a call that lets go of it" =
+  (* row 31, narrowed by the services stage (What's decided 10) to a call
+     marked `release`, `Async.until` and a block parameter's: a plain
+     dependency call holds none of the state *)
   run
     (store
    ^ {|
 handler cached() over Store =
   var cache: Map<Int, Int> = Map.empty
   load(k) =>
-    update(&cache, k, fn(v) => next.load(k))
+    update(&cache, k, fn(v) => release next.load(k))
     cache.get(k) orelse 0
   visit(f) => next.visit(f)
 
@@ -1432,13 +1432,13 @@ fn main() uses Console =
     );
   [%expect
     {|
-    error: `cache` is changed across a dependency call
-       ┌─ test.ren:19:32
-    19 │     update(&cache, k, fn(v) => next.load(k))
-       │                                ^^^^^^^^^^^^ a dependency call
+    error: `cache` is changed across a call that lets go of the handler
+       ┌─ test.ren:19:40
+    19 │     update(&cache, k, fn(v) => release next.load(k))
+       │                                        ^^^^^^^^^^^^ lets go of the handler
        │            ------ changed for the whole call
-       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
-       help: make the call first, `let v = next.load(k)`, then change `cache` with `v`
+       = at `release` and `Async.until` other tasks run the handler
+       help: make the call first, `let v = release next.load(k)`, then change `cache` with `v`
     |}]
 
 let%expect_test
@@ -2140,7 +2140,7 @@ fn main() uses Console =
     |}]
 
 let%expect_test
-    "[s5 reject] a block reads handler state across a dependency call" =
+    "[s5 reject] a block reads handler state across a call that lets go of it" =
   (* row 35's error: the dependency call is the other access *)
   run
     {|
@@ -2155,7 +2155,7 @@ handler base() for Store =
 handler counted() over Store uses Console =
   var count = 0
   load(k) => next.load(k)
-  visit(f) => next.visit(fn() => print(count))
+  visit(f) => release next.visit(fn() => print(count))
 
 fn main() uses Console =
   with counted() over base() in
@@ -2163,13 +2163,13 @@ fn main() uses Console =
 |};
   [%expect
     {|
-    error: `count` is read by this block across a dependency call
-       ┌─ test.ren:12:40
-    12 │   visit(f) => next.visit(fn() => print(count))
-       │                                        ^^^^^ read here
-       │               -------------------------------- the handler's state can change during this call
+    error: `count` is read by this block across a call that lets go of the handler
+       ┌─ test.ren:12:48
+    12 │   visit(f) => release next.visit(fn() => print(count))
+       │                                                ^^^^^ read here
+       │                       -------------------------------- the handler's state can change during this call
        = a block runs during the call it's passed to
-       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
+       = at `release` and `Async.until` other tasks run the handler
        help: copy it first: `let c = count`, and use `c` in the block
     |}]
 

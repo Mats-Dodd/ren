@@ -78,6 +78,8 @@ type t =
   | Task_join
   | Task_cancel
   | Task_until
+  | Arm_release
+  | Arm_retake
   | Task_timeout
   | Task_isolate
   | Task_map
@@ -218,6 +220,8 @@ let path x =
   | Task_join -> fn "task_join"
   | Task_cancel -> fn "task_cancel"
   | Task_until -> fn "task_until"
+  | Arm_release -> fn "arm_release"
+  | Arm_retake -> fn "arm_retake"
   | Task_timeout -> fn "task_timeout"
   | Task_isolate -> fn "task_isolate"
   | Task_map -> fn "task_map"

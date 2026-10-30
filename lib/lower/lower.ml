@@ -663,6 +663,7 @@ and expr_of cx (e : expr) : C.expr =
         (Assert_equal (a, b, C.describe cx.tys a.ty, dict cx "eq" a.ty))
         Ty.unit cmp.loc
   | Assert a -> here (Assert (expr cx a))
+  | Release a -> released cx (expr cx a)
   | Pipe { subject; step } ->
       (* `x |> f(a)` is `let s = x in f(s, a)`: the subject is evaluated
          first, then the step's call, which [Piped] gives [s] (language.md
@@ -744,10 +745,21 @@ and expr_of cx (e : expr) : C.expr =
           (* a tag, inside `Err(...)`: the error it holds *)
           let args = List.map (fun (_, a) -> expr cx a) args in
           here (Tag (tag.name.name, args, payload_descs cx args))
-      | Some (Ctor_of (p, c)) ->
+      | Some (Ctor_of (p, c)) -> (
           (* ctor_shape (infer_lookup.ml) made sure the arguments are in the
-             order of the fields *)
-          here (Con (p, c, List.map (fun (_, a) -> expr cx a) args))
+             order of the fields; a field left out has a default, which
+             inference checked at a node of its own (Infer_expr.infer_con) *)
+          match (args, ctor_decl cx p c) with
+          | [], [ { Iface.fdefault = Some lit; _ } ] ->
+              let d : expr =
+                {
+                  kind = Infer_env.literal_kind lit e.loc;
+                  loc = e.loc;
+                  node = Infer_env.default_node e.node 0;
+                }
+              in
+              here (Con (p, c, [ expr cx d ]))
+          | _ -> here (Con (p, c, List.map (fun (_, a) -> expr cx a) args)))
       | _ -> bug "a constructor inference didn't find")
   | Record (_, fields) -> (
       match ty () with
@@ -1512,6 +1524,46 @@ and until_released cx (c : C.expr) =
             | [] -> call
             | rs -> mk (Finally (call, seq_all loc rs)) call.ty loc) ])
   | _ -> c
+
+(* [c], a call marked `release` in a handler's arm (compiler.md,
+   "Services stage", step 4): as [until_released] does around
+   `Async.until`, the arm's copies of its state are written back to their
+   cells first, so the operations that run meanwhile see what it changed,
+   and read again after, however the call ends, since they may have
+   changed it; between, `arm_release()` lets go of the instance and
+   `arm_retake()` takes it back, queueing like any caller, also however
+   the call ends, so the rest of the arm and its `finally` run holding it.
+   With no other task, and natively, both do nothing and the reads give
+   back what the writes wrote: a plain call. *)
+and released cx (c : C.expr) =
+  let loc = c.loc in
+  let intrinsic x =
+    let a : Ty.args = { tys = []; rows = [ Ty.closed; Ty.closed ] } in
+    let fty = Ty.apply a (Prelude.scheme x).ty in
+    let f = mk (Intrinsic (x, a, [], [])) fty loc in
+    mk (Call (f, [], cx.ev)) Ty.unit loc
+  in
+  let written =
+    List.map
+      (fun ((v : C.var), (cell : C.var)) ->
+        mk (Prim (Set_cell, [ local cell loc; local v loc ])) Ty.unit loc)
+      cx.cells
+  and read_again =
+    List.map
+      (fun ((v : C.var), (cell : C.var)) ->
+        mk
+          (Assign (v, mk (Prim (Get_cell, [ local cell loc ])) v.ty loc))
+          Ty.unit loc)
+      cx.cells
+  in
+  seq_all loc
+    (written
+    @ [
+        intrinsic Arm_release;
+        mk
+          (Finally (c, seq_all loc (intrinsic Arm_retake :: read_again)))
+          c.ty loc;
+      ])
 
 (* [lam], a lambda of a handler, an arm or its `finally`s, made to keep
    [cells], the state's `var`s' cells, rather than the `var`s: it reads
@@ -2702,6 +2754,7 @@ let max_binder (f : fn_def) =
     | Ref a
     | Try a
     | Attempt a
+    | Release a
     | Assert a
     | Named (_, a)
     | Inline_handler a ->

@@ -93,6 +93,24 @@ type 'l found_ =
    one no expression has, since the parser numbers them from 1. *)
 let default_node node i = -((node * 256) + i + 1)
 
+(* A default, [lit], as the expression a call that leaves it out is
+   given, at [loc]: a literal, or a variant written bare, a constructor of
+   the sum Resolve found for it, given no fields, so those with defaults
+   are filled in as anywhere ([Infer_expr.infer_con]). *)
+let literal_kind (lit : literal) loc : expr_kind =
+  match lit with
+  | LInt k -> Int k
+  | LFloat x -> Float x
+  | LBool b -> Bool b
+  | LStr s -> Str s
+  | LCtor { csum; cname; _ } ->
+      Con
+        ( {
+            qual = Option.map (fun p -> { tref = Named p; tloc = loc }) csum;
+            name = { cname with loc };
+          },
+          [] )
+
 (* What inference keeps of it, while a group is checked: its labels are
    the checker's, whose type arguments it may still learn. *)
 type found = label found_

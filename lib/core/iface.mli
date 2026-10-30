@@ -8,7 +8,17 @@
    made from the module's declarations, and from what inference found each
    public function needs of its type parameters ([of_module]). *)
 
-type field = { fname : string; fty : Ty.ty }
+(* A field of a record or a variant, or an operation of a dependency:
+   its name and type; a variant's field's default, [fdefault], `Key(n:
+   Int = 16)`; and an operation's parameters' defaults, [fdefaults], by
+   their place and name, as a function's scheme keeps them (compiler.md,
+   "Services stage", "The grammar"). *)
+type field = {
+  fname : string;
+  fty : Ty.ty;
+  fdefault : Ast.literal option;
+  fdefaults : (int * string * Ast.literal) list;
+}
 
 (* One of a named error set's errors, as it's declared: a tag, with its
    payload's types, or another named set, which stands for all of its own. *)

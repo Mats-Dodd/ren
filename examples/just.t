@@ -54,20 +54,26 @@ ran the recipe, which it says:
   [1]
 
 And it stops the recipes running beside it: `ci` needs `broken` and `slow`,
-one level, and when `broken` fails, `slow`'s `sleep 5` is killed and waited
-for, so the run ends at once, and leaves nothing running:
+one level, and when `broken` fails, `slow`'s `sh -c "sleep 5.0; true"` is
+killed and waited for, so the run ends at once, and leaves nothing
+running: `Proc.run` starts each program in a process group of its own,
+`kill: Tree` by default, and kills the group, so the `sleep` the shell
+started goes with it:
 
   $ start=$(date +%s)
   $ ren run main.ren -- ci 2>&1 >/dev/null
   echo base
   echo trying
-  exec sleep 5
+  sleep 5.0; true
   exit 3
   error: RecipeFailed("broken", 3)
     = from the task main/run_all:1
   [1]
   $ [ $(( $(date +%s) - start )) -lt 4 ] && echo "at once"
   at once
+  $ ps -eo args | grep -c '^sleep 5.0$'
+  0
+  [1]
 
   $ ren run main.ren -- deploy
   error: UnknownRecipe("deploy")
@@ -117,15 +123,15 @@ says what it recorded, and that the journal holds what the program read:
   1 main Fs.read("justfile") → Ok("...")
   2 main Os.args() → ["build"]
   3 main/run_all:0 Console.error("echo base")
-  4 main/run_all:0 Proc.run("sh", ["-c", "echo base"]) …
+  4 main/run_all:0 Proc.run("sh", ["-c", "echo base"], Tree) …
   5 poll main/run_all:0
   6 main/run_all:0 → Ok(0)
   7 main/run_all:1 Console.error("echo building")
-  8 main/run_all:1 Proc.run("sh", ["-c", "echo building"]) …
+  8 main/run_all:1 Proc.run("sh", ["-c", "echo building"], Tree) …
   9 poll main/run_all:1
   10 main/run_all:1 → Ok(0)
   11 main/run_all:1 Console.error("echo built")
-  12 main/run_all:1 Proc.run("sh", ["-c", "echo built"]) …
+  12 main/run_all:1 Proc.run("sh", ["-c", "echo built"], Tree) …
   13 poll main/run_all:1
   14 main/run_all:1 → Ok(0)
   15 main exit 0
@@ -201,16 +207,16 @@ gave (and how long it took, which REN_NO_TIMINGS leaves out):
   sleep 0.5
   echo testing
   main
-  ├─ Fs.read("justfile")                        → 603 bytes
-  ├─ Os.args()                                  → ["test"]
+  ├─ Fs.read("justfile")                              → 606 bytes
+  ├─ Os.args()                                        → ["test"]
   ├─ main/run_all:0
   │  ├─ Console.error("echo base")
-  │  └─ Proc.run("sh", ["-c", "echo base"])     → 0
+  │  └─ Proc.run("sh", ["-c", "echo base"], Tree)     → 0
   └─ main/run_all:1
      ├─ Console.error("sleep 0.5")
-     ├─ Proc.run("sh", ["-c", "sleep 0.5"])     → 0
+     ├─ Proc.run("sh", ["-c", "sleep 0.5"], Tree)     → 0
      ├─ Console.error("echo testing")
-     └─ Proc.run("sh", ["-c", "echo testing"])  → 0
+     └─ Proc.run("sh", ["-c", "echo testing"], Tree)  → 0
   $ cd ..
 
 The journal checked in, tests/build.journal, is a test: `replay(file)`

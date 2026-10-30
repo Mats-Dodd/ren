@@ -3415,6 +3415,9 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
      nothing else to change it, is the deadlock (compiler.md, "Stage 11a",
      "Native"), at the program's call of it *)
   | (Async_yield | Async_tick), _, _ -> Unit
+  (* and a `release`'s letting go and taking back: with no other task,
+     a plain call (compiler.md, "Services stage", "Native") *)
+  | (Arm_release | Arm_retake), _, _ -> Unit
   (* and its policy, which natively is always `single`'s: there's nothing
      to set, and nothing to put back *)
   | Runtime_single, _, _ -> Int 0L

@@ -75,7 +75,7 @@ fn scaled(n: Int, by: Int = n) -> Int = n * by
 fn main() uses Console = print(scaled(2))
 |};
   [%expect {|
-    error: a parameter's default is a literal: a number, a `Bool` or a string
+    error: a parameter's default is a literal, or a variant written bare
       ┌─ test.ren:1:29
     1 │ fn scaled(n: Int, by: Int = n) -> Int = n * by
       │                             ^
@@ -3454,7 +3454,7 @@ fn main() uses Console, Clock, Async =
     19 │     X.run(fn() => ())
        │     ^^^^^^^^^^^^^^^^^
        = in the task main/main:1
-       = main/main:1 waits for `X`, which another task is in
-       = main/main:0 waits for `Y`, which another task is in at test.ren:27:37
+       = main/main:1 waits for `X`, which another task is in, holding `Y` (yh.poke)
+       = main/main:0 waits for `Y`, which another task is in at test.ren:27:37, holding `X` (xh.run)
        help: a block passed to an operation gets its dependencies only from its parameter's type: call it before the operation, outside the block
     |}]

@@ -1,0 +1,8 @@
+main.ren
+  ✓ failures in a row open it
+  ✓ a success closes it again
+  ✓ a slow answer doesn't hold up a fast one
+  ✓ failures at once all count
+
+4 passed
+exit 0

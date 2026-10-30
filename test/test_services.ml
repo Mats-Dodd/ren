@@ -1298,13 +1298,6 @@ fn main() uses Console, Async =
 (* ---- s4: `release`, deadlocks, `sim`'s fair choice, `Proc.run(kill:)` ---- *)
 
 let%expect_test "[s4 accept] `release` with no other task is a plain call" =
-  until "s4"
-    ~want:{|
-1
-2
-()
-|}
-    (fun () ->
       run
         {|
 dep Next =
@@ -1326,25 +1319,16 @@ fn main() uses Console =
   with next(), breaker() in
     print(Breaker.call(1))
     print(Breaker.call(1))
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `Next`
-       ┌─ test.ren:13:21
-    13 │     let v = release Next.get(id)
-       │                     ^^^^
+    1
+    2
+    ()
     |}]
 
 let%expect_test "[s4 accept] `release` lets other callers in while the call runs" =
   (* the slow call is in `Next.get`, released: the second caller's
      operation runs meanwhile, which it couldn't without `release` *)
-  until "s4"
-    ~want:{|
-fast 2
-slow 1
-()
-|}
-    (fun () ->
       run
         {|
 dep Next =
@@ -1363,29 +1347,21 @@ handler front() for Front uses Next =
     asked += 1
     release Next.get(id)
 
-fn main() uses Console, Async =
+fn main() uses Console, Async, Clock =
   with next(), front() in
     Async.scope fn(s) =>
       s.spawn fn() => print("slow " + show(Front.ask(1)))
       s.spawn fn() => print("fast " + show(Front.ask(2)))
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `Next`
-       ┌─ test.ren:15:13
-    15 │     release Next.get(id)
-       │             ^^^^
+    fast 2
+    slow 1
+    ()
     |}]
 
 let%expect_test "[s4 accept] state written before a `release` and read after it is the cells'" =
   (* the arm's copies are written back before the call and read again
      after, as `Async.until`'s are: the other caller's change is seen *)
-  until "s4"
-    ~want:{|
-2
-()
-|}
-    (fun () ->
       run
         {|
 dep Next =
@@ -1405,27 +1381,20 @@ handler front() for Front uses Next =
     let _ = release Next.get(id)
     asked
 
-fn main() uses Console, Async =
+fn main() uses Console, Async, Clock =
   with next(), front() in
     Async.scope fn(s) =>
       s.spawn fn() => print(Front.ask(100))
-      s.spawn fn() => Front.ask(1)
-|});
+      s.spawn fn() =>
+        let _ = Front.ask(1)
+        ()
+|};
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `Next`
-       ┌─ test.ren:15:21
-    15 │     let _ = release Next.get(id)
-       │                     ^^^^
+    2
+    ()
     |}]
 
 let%expect_test "[s4 accept] `try release` on a call that can fail" =
-  until "s4"
-    ~want:{|
-Err(Down)
-()
-|}
-    (fun () ->
       run
         {|
 dep Next =
@@ -1441,34 +1410,55 @@ handler front() for Front uses Next =
 
 fn main() uses Console =
   with next(), front() in print(attempt Front.ask(1))
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `Next`
-       ┌─ test.ren:10:26
-    10 │   ask(id) => try release Next.get(id)
-       │                          ^^^^
+    Err(Down)
+    ()
+    |}]
+
+let%expect_test "[s4 accept] `release` in a block inside an arm" =
+  (* the arm's state is the arm's locals, which the block captures: the
+     write-back and the reads again are the arm's, natively too *)
+  run
+    {|
+dep Next =
+  get: fn(id: Int) -> Int
+dep Front =
+  ask: fn(ids: Array<Int>) -> Int
+
+handler next() for Next =
+  get(id) => id
+
+handler front() for Front uses Next =
+  var total = 0
+  ask(ids) =>
+    let got = ids.map(fn(i) => release Next.get(i))
+    for g in got
+      total += g
+    total
+
+fn main() uses Console =
+  with next(), front() in
+    print(Front.ask([1, 2, 3]))
+    print(Front.ask([4]))
+|};
+  [%expect {|
+    6
+    10
+    ()
     |}]
 
 let%expect_test "[s4 accept] a stale read across `release` is found by a seed, and the fix holds" =
   (* decision 10: `sim` switches tasks at every `release`, so a value read
      from state before one and written after loses an update *)
-  until "s4"
-    ~says:
-      [
-        "✗ two counts both land";
-        "✓ the fix reads after";
-        "1 passed, 1 failed";
-      ]
-    (fun () ->
       test ~seeds:200
         (pub_all
          {|
 dep Next =
   get: fn() -> Int
 dep Count =
-  add: fn() -> Int
-  bad_add: fn() -> Int
+  add: fn()
+  bad_add: fn()
   total: fn() -> Int
 
 handler next() for Next =
@@ -1480,11 +1470,9 @@ handler count() for Count uses Next =
     let before = n
     let k = release Next.get()
     n = before + k
-    n
   add() =>
     let k = release Next.get()
     n += k
-    n
   total() => n
 
 test "two counts both land" =
@@ -1500,23 +1488,28 @@ test "the fix reads after" =
       s.spawn fn() => Count.add()
       s.spawn fn() => Count.add()
     assert Count.total() == 2
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `Next`
-       ┌─ test.ren:15:21
-    15 │     let k = release Next.get()
-       │                     ^^^^
+    test.ren
+      ✗ two counts both land
+      ✓ the fix reads after
+
+    ──── two counts both land ── test.ren:27
+       │
+    27 │     assert Count.total() == 2
+       │            ^^^^^^^^^^^^^^^^^^
+       │
+       left:  1
+       right: 2
+              ^ differs here
+
+       seed 2979 · rerun: ren test test.ren --only "two counts" --seed 2979
+
+    1 passed, 1 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s4 reject] `release` outside a handler's operation" =
-  until "s4"
-    ~says:
-      [
-        "error: `release` lets go of a handler's instance, so it's only written in one of its operations";
-        "help: call it without `release`";
-      ]
-    (fun () ->
       check_error
         {|
 dep Next =
@@ -1524,23 +1517,16 @@ dep Next =
 handler next() for Next =
   get() => 1
 fn main() -> Int = with next() in release Next.get()
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected a new line, found `Next`
-      ┌─ test.ren:5:43
+    error: `release` lets go of a handler's instance, so it's only written in one of its operations
+      ┌─ test.ren:5:35
     5 │ fn main() -> Int = with next() in release Next.get()
-      │                                           ^^^^
+      │                                   ^^^^^^^^^^^^^^^^^^
+      help: call it without `release`
     |}]
 
 let%expect_test "[s4 reject] `release` on what isn't a dependency's operation" =
-  until "s4"
-    ~says:
-      [
-        "error: `release` lets go of the instance for one call of another dependency's operation, and `twice(1)` isn't one";
-        "help: write it on the operation's call: `release Next.get(id)`";
-      ]
-    (fun () ->
       check_error
         {|
 dep Front =
@@ -1549,24 +1535,18 @@ fn twice(n: Int) -> Int = n * 2
 handler front() for Front =
   ask() => release twice(1)
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `twice`
+    error: `release` lets go of the instance for one call of another dependency's operation, and `twice(1)` isn't one
       ┌─ test.ren:5:20
     5 │   ask() => release twice(1)
-      │                    ^^^^^
+      │                    ^^^^^^^^
+      help: write it on the operation's call: `release Next.get(id)`
     |}]
 
 let%expect_test "[s4 accept] an actor-shaped handler loops over a reader in its state while it calls another service" =
   (* decision 2's row narrowed to `Async.until`, `release` and block
      parameters: a dependency call holds none of the handler's state *)
-  until "s4"
-    ~want:{|
-3
-()
-|}
-    (fun () ->
       run
         {|
 type Reader = { xs: Array<Int>, at: Int }
@@ -1595,25 +1575,15 @@ handler pump() for Pump uses Sink =
 
 fn main() uses Console =
   with sink(), pump() in print(Pump.run())
-|});
+|};
   [%expect {|
-    (until s4)
-    error: `r` is changed across a dependency call
-       ┌─ test.ren:21:7
-    20 │     for x in &r
-       │              -- changed for the whole loop
-    21 │       Sink.put(x)
-       │       ^^^^^^^^^^^ a dependency call
-       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
-       help: make the dependency call before or after the loop
+    3
+    ()
     |}]
 
 let%expect_test "[s4 accept] state borrowed across `release` is still refused" =
   (* `release` is one of the three in decision 2's row: the state can
      change during it *)
-  until "s4"
-    ~says:[ "error: `r` is changed across a call that lets go of the handler" ]
-    (fun () ->
       check_error
         {|
 type Reader = { xs: Array<Int>, at: Int }
@@ -1636,13 +1606,18 @@ handler pump() for Pump uses Sink =
   run() =>
     for x in &r
       release Sink.put(x)
-|});
+
+fn main() = 1
+|};
   [%expect {|
-    (until s4)
-    error: expected the end of the line, found `Sink`
+    error: `r` is changed across a call that lets go of the handler
        ┌─ test.ren:20:15
+    19 │     for x in &r
+       │              -- changed for the whole loop
     20 │       release Sink.put(x)
-       │               ^^^^
+       │               ^^^^^^^^^^^ lets go of the handler
+       = at `release` and `Async.until` other tasks run the handler
+       help: make the call before or after the loop
     |}]
 
 let%expect_test "[s4 reject] a task taking an instance it already holds panics, not hangs" =
@@ -1680,13 +1655,6 @@ fn main() uses Console, Async =
 let%expect_test "[s4 reject] `until`'s deadlock names the instances each parked task holds" =
   (* decision 10's "other waits can still deadlock": an operation of `A`
      calls `B`, whose `until` waits for a task that must go through `A` *)
-  until "s4"
-    ~says:
-      [
-        "panic: every task is waiting, and nothing can wake one";
-        "holding `A`";
-      ]
-    (fun () ->
       run_error
         {|
 dep A =
@@ -1715,15 +1683,14 @@ fn main() uses Async =
     Async.scope fn(s) =>
       s.spawn fn() => A.go()
       s.spawn fn() => A.poke()
-|});
+|};
   [%expect {|
-    (until s4)
     error: panic: every task is waiting, and nothing can wake one
        ┌─ test.ren:24:5
     24 │     Async.scope fn(s) =>
        │     ^^^^^^^^^^^^^^^^^^^^
        = main waits for its scope's tasks at test.ren:24:5
-       = main/main:0 waits in `Async.until` at test.ren:10:13
+       = main/main:0 waits in `Async.until` at test.ren:10:13, holding `A` (a.go)
        = main/main:1 waits for `A`, which another task is in at test.ren:26:23
     |}]
 
@@ -1733,9 +1700,6 @@ let%expect_test "[s4 accept] `sim` chooses fairly among an instance's waiters an
      is released from its tape. Task 4 arrives just as task 1 lets go,
      after 2 and 3 have queued: first in first out it's never second, and
      under some seed it is *)
-  until "s4"
-    ~says:[ "✗ a caller arriving as it's released never overtakes the queue" ]
-    (fun () ->
       test ~seeds:200
         (pub_all
          {|
@@ -1764,25 +1728,26 @@ test "a caller arriving as it's released never overtakes the queue" =
         Clock.sleep(Duration.ms(10))
         Gate.enter(4, 0)
     assert Gate.second() != 4
-|}));
+|});
   [%expect {|
-    (until s4)
     test.ren
-      ✓ a caller arriving as it's released never overtakes the queue
+      ✗ a caller arriving as it's released never overtakes the queue
 
-    1 passed, each under 200 seeds
-    [exit 0]
+    ──── a caller arriving as it's released never overtakes the queue ── test.ren:25
+       │
+    25 │     assert Gate.second() != 4
+       │            ^^^^^^^^^^^^^^^^^^
+       │
+       this is false
+
+       seed 2364 · rerun: ren test test.ren --only "a caller" --seed 2364
+
+    0 passed, 1 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s4 accept] a default that's a variant with no fields" =
   (* What's decided 11: `kill: Kill = Tree` *)
-  until "s4"
-    ~want:{|
-Gentle
-Hard
-()
-|}
-    (fun () ->
       run
         {|
 type Mode = | Gentle | Hard
@@ -1792,27 +1757,16 @@ fn stop(n: Int, how: Mode = Gentle) -> Mode = how
 fn main() uses Console =
   print(stop(1))
   print(stop(1, how: Hard))
-|});
+|};
   [%expect {|
-    (until s4)
-    error: a parameter's default is a literal: a number, a `Bool` or a string
-      ┌─ test.ren:3:29
-    3 │ fn stop(n: Int, how: Mode = Gentle) -> Mode = how
-      │                             ^^^^^^
-      help: give it where it's called instead
+    Gentle
+    Hard
+    ()
     |}]
 
 let%expect_test "[s4 accept] a default that's a variant whose fields all have defaults" =
   (* What's decided 11: `by: By = Key` is `Key(n: 16)`; a field with a
      default is left out, or given by name *)
-  until "s4"
-    ~want:{|
-Gentle(5)
-Gentle(9)
-Gentle(5)
-()
-|}
-    (fun () ->
       run
         {|
 type Mode = | Gentle(ms: Int = 5) | Hard
@@ -1823,38 +1777,23 @@ fn main() uses Console =
   print(stop(1))
   print(stop(1, how: Gentle(ms: 9)))
   print(Gentle)
-|});
+|};
   [%expect {|
-    (until s4)
-    error: expected `,` or `)`, found `=`
-      ┌─ test.ren:1:30
-    1 │ type Mode = | Gentle(ms: Int = 5) | Hard
-      │                              ^
-
-    error: a parameter's default is a literal: a number, a `Bool` or a string
-      ┌─ test.ren:3:29
-    3 │ fn stop(n: Int, how: Mode = Gentle) -> Mode = how
-      │                             ^^^^^^
-      help: give it where it's called instead
+    Gentle(5)
+    Gentle(9)
+    Gentle(5)
+    ()
     |}]
 
 let%expect_test "[s4 reject] a default that's a variant written with arguments" =
-  until "s4"
-    ~says:
-      [
-        "error: a parameter's default is a literal, or a variant written bare";
-        "help: give it where it's called instead";
-      ]
-    (fun () ->
       check_error
         {|
 type Mode = | Gentle | After(ms: Int)
 fn stop(n: Int, how: Mode = After(5)) -> Mode = how
 fn main() = 1
-|});
+|};
   [%expect {|
-    (until s4)
-    error: a parameter's default is a literal: a number, a `Bool` or a string
+    error: a parameter's default is a literal, or a variant written bare
       ┌─ test.ren:2:29
     2 │ fn stop(n: Int, how: Mode = After(5)) -> Mode = how
       │                             ^^^^^
@@ -1862,9 +1801,6 @@ fn main() = 1
     |}]
 
 let%expect_test "[s4 accept] `Proc.run(kill:)`: `sim.proc()` says how each cancelled run was killed" =
-  until "s4"
-    ~says:[ "✓ a cancelled run is killed with its process group" ]
-    (fun () ->
       test
         (pub_all
          {|
@@ -1878,14 +1814,13 @@ test "a cancelled run is killed with its process group" =
       try Proc.run("sleep", ["9"], kill: Child)
     assert SimProc.killed().len() == 2
     assert SimProc.kills() == [Tree, Child]
-|}));
+|});
   [%expect {|
-    (until s4)
-    error: `SimProc` has no public `kills`
-       ┌─ test.ren:10:20
-    10 │     assert SimProc.kills() == [Tree, Child]
-       │                    ^^^^^
-       help: if it's defined in `sim`, mark it `pub`
+    test.ren
+      ✓ a cancelled run is killed with its process group
+
+    1 passed
+    [exit 0]
     |}]
 
 (* ---- s5: pull arguments, channels and producers (streams.md) ---- *)
@@ -3483,10 +3418,43 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s7)
-    error: expected the end of the line, found `Instances`
+    error: there's no constructor named `Instances`
+       ┌─ test.ren:16:13
+    16 │   let fam = Instances.open(count, parts: 1, cap: 2, mailbox: 16)
+       │             ^^^^^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
+
+    error: there's no constructor named `Instances`
+       ┌─ test.ren:17:17
+    17 │   finally(_) => Instances.close(fam)
+       │                 ^^^^^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
+
+    error: `release` lets go of the instance for one call of another dependency's operation, and `it` isn't one
+       ┌─ test.ren:18:26
+    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
+       │                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       help: write it on the operation's call: `release Next.get(id)`
+
+    error: there's no constructor named `Instances`
        ┌─ test.ren:18:26
     18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
        │                          ^^^^^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
+
+    error: a block passed to `Shards.at` can't use `Console`, which its parameter's type doesn't list
+       ┌─ test.ren:25:26
+    25 │     Shards.at(B) fn() => print(Count.total())
+       │                          ^^^^^^^^^^^^^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: list it in the parameter's type, `fn() uses Console, Count`, or call it before `Shards.at`, outside the block
+
+    error: a block passed to `Shards.at` can't use `Console`, which its parameter's type doesn't list
+       ┌─ test.ren:26:26
+    26 │     Shards.at(A) fn() => print(Count.total())
+       │                          ^^^^^^^^^^^^^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: list it in the parameter's type, `fn() uses Console, Count`, or call it before `Shards.at`, outside the block
     |}]
 
 let%expect_test "[s7 reject] a third library's `at` inside its own `at`: the family's check on `pin`" =
@@ -3503,10 +3471,36 @@ fn main() =
 |}));
   [%expect {|
     (until s7)
-    error: expected the end of the line, found `Instances`
+    error: there's no constructor named `Instances`
+       ┌─ test.ren:16:13
+    16 │   let fam = Instances.open(count, parts: 1, cap: 2, mailbox: 16)
+       │             ^^^^^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
+
+    error: there's no constructor named `Instances`
+       ┌─ test.ren:17:17
+    17 │   finally(_) => Instances.close(fam)
+       │                 ^^^^^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
+
+    error: `release` lets go of the instance for one call of another dependency's operation, and `it` isn't one
+       ┌─ test.ren:18:26
+    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
+       │                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       help: write it on the operation's call: `release Next.get(id)`
+
+    error: there's no constructor named `Instances`
        ┌─ test.ren:18:26
     18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
        │                          ^^^^^^^^^
+       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
+
+    error: a block passed to `Shards.at` can't use `Shards`, which it would wait for while `Shards.at` runs it
+       ┌─ test.ren:23:7
+    23 │       Shards.at(B) fn() => Count.add(1)
+       │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = a block passed to an operation gets its dependencies only from its parameter's type
+       help: call it before `Shards.at`, outside the block
     |}]
 
 let%expect_test "[s7 accept] a journal of a run that evicts and remakes a key names each life, and replays" =

@@ -260,7 +260,7 @@ let rec walk cx (e : expr) =
                 loop changes";
              ]
            "`&` can't be used here")
-  | Unop (_, a, _) | Try a | Attempt a | Assert a -> walk cx a
+  | Unop (_, a, _) | Try a | Attempt a | Release a | Assert a -> walk cx a
   | With { items; body } ->
       List.iter (walk cx) (with_links items);
       walk cx body

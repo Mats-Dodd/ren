@@ -121,7 +121,7 @@ again:
   account> print("once")
   once
   account> attempt Proc.run("sh", ["-c", "echo ran >> log.txt"])
-    Proc.run("sh", ["-c", "echo ran >> log.txt"]) → Ok(0)
+    Proc.run("sh", ["-c", "echo ran >> log.txt"], Tree) → Ok(0)
   Ok(0) : Result<Int, ! CantRun(Str, Str) | Killed(Str) | NoSuchProgram(Str)>
   account> let n = 2
   account> n + 1

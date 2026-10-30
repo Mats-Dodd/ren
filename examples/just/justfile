@@ -27,5 +27,5 @@ broken: base
 ci: broken slow
 
 slow: base
-  exec sleep 5
+  sleep 5.0; true
   echo never

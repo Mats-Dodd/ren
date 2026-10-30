@@ -75,6 +75,8 @@
 (todo) @keyword
 ; how a block parameter's block runs: `concurrent`, `spawned`
 (block_mode) @keyword
+; a word only before the call it lets go of the instance for
+(release_expression "release" @keyword)
 
 ; something changes here
 (reference "&" @keyword.mutation)

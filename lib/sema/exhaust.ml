@@ -654,7 +654,8 @@ let rec check_expr env (e : expr) =
   | Pipe _ -> List.iter (check_expr env) (children e)
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
-  | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Assert a ->
+  | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Release a
+  | Assert a ->
       check_expr env a
   | Fail (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Binop (_, a, b, _) | Index (a, b) ->

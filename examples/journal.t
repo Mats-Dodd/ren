@@ -365,19 +365,19 @@ tenth of a second apart, so the order they end in is the same each run;
   7 main/main:2 Clock.sleep(200) …
   8 poll main/main:1
   9 main/main:1 →
-  10 main/main:1 Proc.run("sh", ["-c", "exit 0"]) …
+  10 main/main:1 Proc.run("sh", ["-c", "exit 0"], Tree) …
   11 poll main/main:1
   12 main/main:1 → Ok(0)
   13 main/main:1 Console.write("ran exit 0")
   14 poll main/main:2
   15 main/main:2 →
-  16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"]) …
+  16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"], Tree) …
   17 poll main/main:2
   18 main/main:2 → Ok(0)
   19 main/main:2 Console.write("ran test 1 = 1")
   20 poll main/main:0
   21 main/main:0 →
-  22 main/main:0 Proc.run("sh", ["-c", "true"]) …
+  22 main/main:0 Proc.run("sh", ["-c", "true"], Tree) …
   23 poll main/main:0
   24 main/main:0 → Ok(0)
   25 main/main:0 Console.write("ran true")
@@ -406,7 +406,7 @@ recording did:
   $ sed -n '9,16p' failed.journal
   8 poll main/main:1
   9 main/main:1 →
-  10 main/main:1 Proc.run("sh", ["-c", "false"]) …
+  10 main/main:1 Proc.run("sh", ["-c", "false"], Tree) …
   11 poll main/main:1
   12 main/main:1 → Ok(1)
   13 main/main:0 cancelled

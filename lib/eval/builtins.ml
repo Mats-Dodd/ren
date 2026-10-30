@@ -113,19 +113,22 @@ let find_program cmd =
 let proc_outcome name args =
   VCon { ty = Path.prelude "ProcOutcome"; name; args }
 
+(* The child of ren_spawn.c, which `fork`s, puts it in a process group of
+   its own if asked, and `execv`s [path] with [argv], giving its pid, or
+   raising the `Unix_error` of a `fork` or `execv` that failed. *)
+external spawn : string -> string array -> bool -> int = "ren_spawn"
+
 (* Run the program at [path] as [cmd], with [args], and wait for its exit
    code. It writes to, and reads from, what this program does, so what
-   this program has written so far goes out first. A program the system
-   won't start, or one killed by a signal, is said so, for `Proc` to fail
-   with. *)
-let start_program path cmd args =
+   this program has written so far goes out first. With [group], it's in a
+   process group of its own, which a cancel kills (Sched.wait_pid); else
+   it's in this program's, as `Unix.create_process` would start it. A
+   program the system won't start, or one killed by a signal, is said so,
+   for `Proc` to fail with. *)
+let start_program ~group path cmd args =
   flush stdout;
   flush stderr;
-  match
-    Unix.create_process path
-      (Array.of_list (cmd :: args))
-      Unix.stdin Unix.stdout Unix.stderr
-  with
+  match spawn path (Array.of_list (cmd :: args)) group with
   | exception Unix.Unix_error (e, _, _) ->
       Error (proc_outcome "ProcNotStarted" [ VStr (Unix.error_message e) ])
   | pid -> Ok pid
@@ -138,11 +141,11 @@ let exit_outcome = function
 (* The real `Proc.run`: [cmd], found, started and waited for, by [wait],
    which the interpreter's scheduler does (Sched.wait_pid), so other
    tasks run meanwhile. *)
-let run_program ~wait cmd args =
+let run_program ~wait ~group cmd args =
   match find_program cmd with
   | None -> proc_outcome "ProcMissing" []
   | Some path -> (
-      match start_program path cmd args with
+      match start_program ~group path cmd args with
       | Error outcome -> outcome
       | Ok pid -> exit_outcome (wait pid))
 
@@ -547,7 +550,8 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Journal_load
   (* and the scheduler's, which run blocks, and wait (eval.ml, [tasks]) *)
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-  | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+  | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
+  | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
   | Background_spawn | Async_yield | Async_tick
   | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep

@@ -12,12 +12,17 @@
 ;            the C it's written out as, and runtime/, the C runtime every
 ;            binary is built with, embedded as a string
 ; `unqualified` means the folders only organize files: every module keeps
-; its plain name (Parser, not Syntax.Parser).
+; its plain name (Parser, not Syntax.Parser). eval/ren_spawn.c is the one
+; C stub: the real `Proc.run`'s child in a process group of its own, which
+; OCaml's `Unix` can't start.
 
 (include_subdirs unqualified)
 
 (library
  (name ren)
  (libraries unix)
+ (foreign_stubs
+  (language c)
+  (names ren_spawn))
  (preprocess
   (pps ppx_deriving.show)))

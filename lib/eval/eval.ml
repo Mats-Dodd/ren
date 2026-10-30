@@ -743,7 +743,7 @@ let rec eval cx env (e : expr) =
                 if Sched.locked inst then Sched.point ?at ();
                 Sched.holding ?at
                   ~what:(Printf.sprintf "waits for `%s`, which another task is in" dep.name)
-                  ~reentered ~cycle inst cx.site
+                  ~reentered ~cycle inst ~dep:dep.name cx.site
                   (fun () -> fst (call_at cx e.loc f args (VEvidence outer)))
               in
               match cx.trace with
@@ -1460,7 +1460,8 @@ and builtin ?loc cx f args =
       (Ok (journal cx x tys args), args)
   | VBuiltin
       ( (( Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-         | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+         | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
+         | Task_isolate | Task_map
          | Task_each | Task_both | Task_race | Task_beside | Task_background
          | Background_spawn | Async_yield | Async_tick
          | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
@@ -1472,13 +1473,21 @@ and builtin ?loc cx f args =
       (* the real `Proc.run`: the task waits for its program, and the
          others run *)
       match args with
-      | [ VStr cmd; VArray xs ] ->
+      | [ VStr cmd; VArray xs; VCon { name = kill; _ } ] ->
           let strs =
             List.map
               (function VStr s -> s | _ -> bug "a program's argument that isn't a string")
               (Array.to_list (Value.items xs))
           in
-          (Ok (Builtins.run_program ~wait:(Sched.wait_pid ?at:(at_call cx)) cmd strs), args)
+          (* `kill: Tree`, the default, starts it in a process group of
+             its own, which a cancel kills whole; `Child`, as 11a did,
+             only the program *)
+          let group = kill = "Tree" in
+          ( Ok
+              (Builtins.run_program
+                 ~wait:(Sched.wait_pid ?at:(at_call cx) ~group)
+                 ~group cmd strs),
+            args )
       | _ -> bug "a call of `proc_run` with the wrong values")
   | VBuiltin (Clock_sleep, _, _) -> (
       (* the real `Clock.sleep`: the task waits, and the others run *)
@@ -1798,7 +1807,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
   | Task_random, [ VInt seed; VInt below ] -> (
       match Sched.current () with
       | Some t when not t.root ->
-          let inst = match t.holding with (i, _) :: _ -> i | [] -> -1 in
+          let inst = match t.holding with h :: _ -> h.inst | [] -> -1 in
           let state =
             match Hashtbl.find_opt t.randoms inst with
             | Some st -> st
@@ -1825,6 +1834,15 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       while not (holds ()) do
         Sched.until ?at inst ~holds
       done;
+      (Ok VUnit, args)
+  (* a `release`'s, around the call it covers (Lower.released): the
+     instance of the arm it's written in is let go of, and taken back *)
+  | Arm_release, [] ->
+      let inst = Option.value (Sched.op_instance cx.site) ~default:(-1) in
+      Sched.let_go ?at inst;
+      (Ok VUnit, args)
+  | Arm_retake, [] ->
+      Sched.retake ?at ();
       (Ok VUnit, args)
   | Task_timeout, [ VInt ms; body ] -> (
       match Sched.timeout ms (fun () -> fst (call_at cx loc body [] (VEvidence []))) with

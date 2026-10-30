@@ -1052,6 +1052,28 @@ let note_type sc (b : binder) (t : Resolved.ty option) =
       sc.fn.typed <- (b.id, p) :: sc.fn.typed
   | _ -> ()
 
+(* A default, [d], of a parameter whose type is [t]: a variant written
+   bare is a constructor of that type, which its sum is then, so a call in
+   any module finds it, as `Kill.Tree` (Infer_env.literal_kind). One
+   written after another type is refused; one of a type that isn't
+   written, or isn't a sum, is inference's to refuse, where it checks the
+   default against the parameter's type. *)
+let default_of env (t : Resolved.ty option) ((lit, loc, node) as d) =
+  match lit with
+  | Ast.LCtor c -> (
+      match t with
+      | Some (TyName ({ tref = Named sum; _ }, _)) ->
+          (match c.cqual with
+          | Some q when q <> Path.local sum ->
+              report env loc
+                ~help:(sprintf "write `%s.%s`, or give it where it's called" (Path.local sum) c.cname.name)
+                (sprintf "a default is a value of its parameter's type, `%s`, and `%s.%s` isn't one"
+                   (Path.local sum) q c.cname.name)
+          | _ -> ());
+          (LCtor { c with csum = Some sum }, loc, node)
+      | _ -> d)
+  | _ -> d
+
 let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
     Resolved.param * scope =
   let rows = Option.value rows ~default:(Body sc.rows) in
@@ -1081,7 +1103,7 @@ let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
       pty;
       pmode = p.pmode;
       pblock;
-      pdefault = (if top then p.pdefault else None);
+      pdefault = (if top then Option.map (default_of env pty) p.pdefault else None);
     },
     sc )
 
@@ -2318,6 +2340,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         Pipe { subject; step = go step }
     | Piped -> Piped
     | Assert a -> Assert (go a)
+    | Release a -> Release (go a)
     | With { items; body } ->
         let item (i : Parsed.with_item) : Resolved.with_item =
           {
@@ -3516,7 +3539,17 @@ let type_def env (td : Parsed.type_def) :
   | Opaque _ | Errors _ | Dep_alias _ | Builtin -> ());
   let params = List.map (fun (p : ident) -> p.name) td.type_params in
   let field (f : Parsed.field) : Resolved.field =
-    { field_name = f.field_name; field_ty = ty env ~params f.field_ty }
+    let field_ty = ty env ~params f.field_ty in
+    (* an operation's defaults are its parameters', at their types *)
+    let op_defaults =
+      match field_ty with
+      | TyFn (ps, _, _, _, _) ->
+          List.map
+            (fun (i, n, d) -> (i, n, default_of env (List.nth_opt ps i) d))
+            f.op_defaults
+      | _ -> []
+    in
+    { field_name = f.field_name; field_ty; field_default = f.field_default; op_defaults }
   in
   let type_body : tname type_body =
     match td.type_body with
@@ -4660,6 +4693,8 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                                  {
                                    fname = f.field_name.name;
                                    fty = Ty.Error;
+                                   fdefault = None;
+                                   fdefaults = [];
                                  })
                                c.ctor_fields;
                          })

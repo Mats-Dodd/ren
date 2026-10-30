@@ -100,7 +100,8 @@ end of a connection to what the program listens at, and
 (examples/server). A test whose programs take time installs
 `sim.proc(runs)`: each `Run { command, code, takes }` exits with its
 `code` after its `takes` of virtual time, two tasks' programs at once,
-and `SimProc.killed()` is the commands cancelled while they ran
+and `SimProc.killed()` is the commands cancelled while they ran, and
+`SimProc.kills()` how each was to be killed, `Tree` or `Child`
 (examples/just). The same seed runs the same way every time:
 
 ```

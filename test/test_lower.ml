@@ -893,7 +893,7 @@ let%expect_test "Core Lint reports a type said to show itself that can't" =
     {
       path = box;
       params = [ "T" ];
-      body = Record [ { fname = "v"; fty = Var 0 } ];
+      body = Record [ { fname = "v"; fty = Var 0; fdefault = None; fdefaults = [] } ];
       members = Ren.Path.Map.empty;
       numeric = None;
       opaque = false;

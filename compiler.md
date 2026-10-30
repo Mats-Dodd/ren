@@ -11895,6 +11895,73 @@ Chosen in step 2, as built:
   where a block's dependencies are found, so they stay, with a note that
   a helper that only installs is better a wiring.
 
+Chosen in step 4, as built:
+
+- **`release` covers a call of `D.op(...)` or `next.op(...)`,** an
+  operation of a dependency installed outside the handler: `next`'s is
+  one. Infer's check is on the resolved callee (`Dep_op`, `Next_op`).
+- **Its scheduling point is the operation call's:** under `sim` the
+  task switches at `release` only when the instance is locked, shared
+  with a spawned task, as a call of one is a point only then; an
+  instance no other task can reach has nothing to switch to. So
+  `arm_release` and `arm_retake` aren't `Intrinsic.waits`, and a
+  function that writes `release` needn't use `Async`: like an
+  operation's own queueing, it waits only where a spawned task, which
+  needs `Async` somewhere above, can reach the instance.
+- **A task keeps the instances it has let go of, `task.let_go`,** for
+  `Async.until`'s wait as for `release`'s call: the deadlock panic and
+  the cycle panic name what each task holds, which is what it's in and
+  hasn't let go of, `holding \`A\` (a.go)`, and `share` doesn't make
+  such a task the holder of a lock made meanwhile. Taking one back is
+  one function, `Sched.take_back`, for both, uncancellable, as 11a's
+  waiter getting its instance back was.
+- **`sim`'s fair choice applies only while it isn't following a
+  recording,** which runs in `single`'s order, first in first out, so a
+  journal replays as it ran.
+- **An operation passed as a block, `xs.each(Sink.put)`, holds
+  nothing:** it's a plain dependency call where it's called, which the
+  narrowed row no longer counts.
+- **`kill: Child`** parses as `retry`'s `on: Declined` does, a set of
+  tags; given to a parameter that isn't of `Tags`, it's the constructor
+  it names (Infer's `with_defaults`).
+- **A field's default is only a one-field variant's,** in parentheses,
+  `Key(n: Int = 16)`, since a variant with several is by name and
+  `parse_field_decl` is a record's too; one in braces is still "expected
+  `,` or `}`". Its type is checked where the variant is left without it,
+  at a node of its own (`default_node` of the constructor, 0), which
+  Lower lowers.
+- **A variant written bare as a default takes its sum from the
+  parameter's written type** (`Resolve.default_of`), so another module's
+  call finds it; one written after another type, `kill: Kill =
+  Mode.Tree`, is Resolve's error.
+- **An operation's defaults are collected while its type is parsed**
+  (`parse_fn_ty_param ~collect`), into `Ast.field.op_defaults`, then
+  `Iface.field.fdefaults`, by the operation's path in `defaults_of`; a
+  default on a function type's parameter anywhere else is a parse
+  error. `Ast.field` and `Iface.field` gain the field's default too.
+- **The C stub `execv`s the program `find_program` found,** not
+  `execvp`, which would search `PATH` again; an `execv` that fails says
+  why through a pipe closed on `exec`, raised as `Unix.create_process`
+  would raise it; the child clears the signal mask it inherited, and the
+  parent calls `setpgid` too, so a kill right after the start reaches
+  the group. A `Tree` program isn't in the terminal's foreground group,
+  so one that reads the terminal stops (SIGTTIN): `kill: Child` is for
+  an interactive program.
+- **examples/just's `slow` recipe is `sleep 5.0; true`,** not `sleep 5;
+  true`, so just.t's check that no `sleep` is left, `ps`, can't count a
+  `sleep 5` something else on the machine runs.
+- **examples/just/tests/build.journal isn't recorded again:** its three
+  `Proc.run` lines gain `, Tree`; the justfile it read stays the one it
+  read then.
+- **Decision 2's row 31 tests** (test_blocks.ml, test_deps.ml) mark
+  their call `release`, so they still show the error, which a plain
+  call no longer is; step 0's s4 programs that weren't Ren were mended,
+  their targets unchanged (`Clock` in `main`'s `uses`, a spawned block
+  giving `()`, `fn main` where the refusal is Excl's).
+- **The circuit breaker is examples/breaker,** in bench/tasks.t and THE
+  CHECKS; bench/services/breaker_held is it without `release`, whose
+  "a slow answer doesn't hold up a fast one" a seed fails.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -11903,7 +11970,8 @@ Chosen in step 2, as built:
 | 1 | 5f9409d | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
 | 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
 | 2 | 7b18441 | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
-| 3 | this commit | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
+| 3 | d5f31e2 | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
+| 4 | this commit | `release` through the whole pipeline: the word in `parse_unary`, `Release` (ast.ml), Infer's check and Excl's (outside an operation), Lower's write-back, `arm_release`, the call in a `Finally` with `arm_retake` and the reads again (`Lower.released`), `Sched.let_go`, `retake`, `take_back`, natively nothing (bench/services/release in the loops); decision 2's row narrowed in excl.ml (`Lets_go`: `release` and `Async.until`, and block parameters' calls); the deadlock and cycle panics naming what each task holds (`waits_of`); `sim`'s fair choice in `released`; defaults that are variants written bare, a one-field variant's field default, an operation's parameters' defaults; `Kill`, `Proc.run(kill:)`, lib/eval/ren_spawn.c, the group killed, `SimProc.kills()`; examples/breaker and bench/services/breaker_held (bench/tasks.t); the journals' `Proc.run` lines; tree-sitter's `release_expression`, defaults, corpus (release.txt), highlights; test_services.ml's s4 all on; language.md's table, deps.md, testing.md | steps 5 to 9; the review's `release` programs (state read across it, `release` inside `until`'s condition) |
 
 ## The runtime model
 

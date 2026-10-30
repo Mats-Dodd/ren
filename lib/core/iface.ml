@@ -17,7 +17,17 @@
    the declaration it clashes with; those move out when interfaces are
    cached (stage 13). *)
 
-type field = { fname : string; fty : Ty.ty }
+(* A field of a record or a variant, or an operation of a dependency:
+   its name and type; a variant's field's default, [fdefault], `Key(n:
+   Int = 16)`; and an operation's parameters' defaults, [fdefaults], by
+   their place and name, as a function's scheme keeps them (compiler.md,
+   "Services stage", "The grammar"). *)
+type field = {
+  fname : string;
+  fty : Ty.ty;
+  fdefault : Ast.literal option;
+  fdefaults : (int * string * Ast.literal) list;
+}
 
 (* One of a named error set's errors, as it's declared: a tag, with its
    payload's types, or another named set, which stands for all of its own.
@@ -560,7 +570,12 @@ let signature ?(closed = false) ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
 (* A type declared in module [home]. *)
 let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
   let field (f : Ast.Resolved.field) =
-    { fname = f.field_name.name; fty = of_written ~sets f.field_ty }
+    {
+      fname = f.field_name.name;
+      fty = of_written ~sets f.field_ty;
+      fdefault = Option.map (fun (l, _, _) -> l) f.field_default;
+      fdefaults = List.map (fun (i, n, (l, _, _)) -> (i, n, l)) f.op_defaults;
+    }
   in
   let body =
     match td.type_body with

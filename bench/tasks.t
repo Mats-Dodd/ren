@@ -73,6 +73,28 @@ was recorded by `ren run --record v1.journal hello.ren -- a b` before
   >  rm -f spec.out)
   v1.journal: as specified
 
+The services stage's circuit breaker (step 4, examples/breaker, where
+THE CHECKS run its tests): it lets go of its instance while the backend
+answers, `release Backend.fetch(id)`, so its tests pass under a thousand
+seeds; in services/breaker_held, the same breaker without `release`,
+which keeps its instance across the answer, "a slow answer doesn't hold
+up a fast one" fails under some seed, which `--seed` fails again.
+
+  $ spec ../examples/breaker
+  ../examples/breaker: as specified
+  $ (cd ../examples/breaker && ren test --seeds 1000 | tail -n 1)
+  4 passed, each under 1000 seeds
+  $ (cd services/breaker_held &&
+  >  ren test --seeds 1000 --only "a slow answer" > seeds.out 2>&1; found=$?
+  >  seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
+  >  ren test --seed "${seed:-0}" --only "a slow answer" > again.out 2>&1; again=$?
+  >  if [ "$found" = 1 ] && [ -n "$seed" ] && [ "$again" = 1 ]
+  >  then echo "without release, a seed finds it"
+  >  else echo "without release: not found"
+  >  fi
+  >  rm -f seeds.out again.out)
+  without release, a seed finds it
+
 The services stage's milestone (compiler.md, "Services stage", "The
 tests"; foundations.md, Staging, item 6), in services/ until step 8
 moves `docs` to examples/docs, where THE CHECKS run its tests: the

@@ -762,16 +762,23 @@ fn proc_checked(o: ProcOutcome, cmd: Str) -> Int ! ProcError =
     ProcNotStarted(reason) => fail CantRun(cmd, reason)
     ProcKilled => fail Killed(cmd)
 
+// how a cancelled `Proc.run` kills its program: `Tree`, the program and
+// whatever it started, its process group, which it was started in on
+// its own; or `Child`, the program alone, which leaves what it started
+// running, but keeps it in this program's group, where it can read the
+// terminal
+pub type Kill = | Tree | Child
+
 pub dep Proc =
   // runs the program `cmd`, found on `PATH` unless it has a `/` in it,
   // with what this program prints to and reads from, and gives back its
-  // exit code
-  run: fn(cmd: Str, args: Array<Str>) -> Int ! ProcError
+  // exit code; cancelled, it kills it as `kill` says
+  run: fn(cmd: Str, args: Array<Str>, kill: Kill = Tree) -> Int ! ProcError
 
   let real: Proc = real_proc()
 
 handler real_proc() for Proc =
-  run(cmd, args) => try proc_checked(proc_run(cmd, args), cmd)
+  run(cmd, args, kill) => try proc_checked(proc_run(cmd, args, kill), cmd)
 
 // ---- the network (compiler.md, "Stage 11a", "`Net`") ----
 //
@@ -1047,7 +1054,7 @@ pub dep TestProc =
 // `Exit` in `exits` gives, or 0 if none does
 pub handler test_proc(exits: Array<Exit>) for Proc, TestProc =
   var commands: Array<Command> = []
-  run(cmd, args) =>
+  run(cmd, args, _) =>
     let c = Command { cmd: cmd, args: args }
     &commands.push(c)
     var code = 0
@@ -1098,8 +1105,8 @@ handler replaying(j: Journal) for Clock, Random, Console, Fs, Os, Proc, Net =
     try r
   exists(p) => journal_answer(j, "Fs.exists", p)
   args() => journal_answer(j, "Os.args", ())
-  run(cmd, args) =>
-    let r: Result<Int, ! ProcError> = journal_answer(j, "Proc.run", (cmd, args))
+  run(cmd, args, kill) =>
+    let r: Result<Int, ! ProcError> = journal_answer(j, "Proc.run", (cmd, args, kill))
     try r
   listen(addr) =>
     let r: Result<Listener, ! NetError> = journal_answer(j, "Net.listen", addr)
@@ -1197,9 +1204,11 @@ let scheme (x : Intrinsic.t) =
   | Fs_exists -> fn [ read str ] bool
   (* fn() -> Array<Str> *)
   | Os_args -> fn [] (array str)
-  (* fn(Str, Array<Str>) -> ProcOutcome, the real `Proc.run` *)
+  (* fn(Str, Array<Str>, Kill) -> ProcOutcome, the real `Proc.run` *)
   | Proc_run ->
-      fn [ read str; read (array str) ] (Con (Path.prelude "ProcOutcome", []))
+      fn
+        [ read str; read (array str); read (Con (Path.prelude "Kill", [])) ]
+        (Con (Path.prelude "ProcOutcome", []))
   (* The real `Net`'s, each giving a [NetOutcome] of what it gives, a
      listener and a connection as their numbers. fn(host: Str, port: Int)
      -> NetOutcome<Int> *)
@@ -1463,6 +1472,13 @@ let scheme (x : Intrinsic.t) =
      it's in is released with [cond] holding; the caller has checked it
      doesn't hold now (compiler.md, "The rest of `Async`") *)
   | Task_until -> fn [ read (Fun ([], bool, open_row 2, open_row 3)) ] unit
+  (* fn(): the arm running lets go of its instance, for the one call a
+     `release` covers, and takes it back after, queueing like any caller
+     (compiler.md, "Services stage", step 4). Lower writes them around
+     the call; neither waits for `Async`, as an operation's call of a
+     shared instance doesn't: a task switches at one only when another
+     task can reach the instance *)
+  | Arm_release | Arm_retake -> fn [] unit
   (* fn<T>(ms: Int, body: fn() -> T) -> Option<T>: [body], under a
      deadline [ms] from now or the one it's under, if that's sooner;
      [None] if the deadline cancelled it. What [body] fails with and
@@ -1596,8 +1612,8 @@ let reaches (x : Intrinsic.t) =
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
-  | Task_until | Task_timeout | Task_isolate | Task_map | Task_each | Task_both
-  | Task_race | Task_beside | Task_background | Background_spawn | Async_yield
+  | Task_until | Arm_release | Arm_retake | Task_timeout | Task_isolate | Task_map
+  | Task_each | Task_both | Task_race | Task_beside | Task_background | Background_spawn | Async_yield
   | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
@@ -1636,7 +1652,8 @@ let caller (x : Intrinsic.t) =
   | ( None,
       ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
       | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-      | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+      | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
+      | Task_isolate | Task_map
       | Task_each | Task_both | Task_race | Task_beside | Task_background
       | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
@@ -1690,6 +1707,8 @@ let fns : Intrinsic.t list =
     Task_join;
     Task_cancel;
     Task_until;
+    Arm_release;
+    Arm_retake;
     Task_timeout;
     Task_isolate;
     Task_map;

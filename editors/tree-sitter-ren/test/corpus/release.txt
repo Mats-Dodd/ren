@@ -1,0 +1,126 @@
+================================================================================
+release on one call, and release as a name
+================================================================================
+
+handler front() for Front uses Next =
+  ask(id) =>
+    let v = try release Next.get(id)
+    release next.put(v)
+  release() => s.release()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (identifier)
+    (parameters)
+    (dependency
+      (type_identifier))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (handler_arm
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)))
+      (block
+        (let_statement
+          (identifier)
+          (try_expression
+            (release_expression
+              (call_expression
+                (item_expression
+                  (type_name
+                    (type_identifier))
+                  (identifier))
+                (arguments
+                  (identifier))))))
+        (release_expression
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (identifier))))))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments)))))
+
+================================================================================
+defaults that are variants written bare, a field's, and an operation's
+================================================================================
+
+type By = | Key(n: Int = 16) | Worker
+dep Proc =
+  run: fn(cmd: Str, args: Array<Str>, kill: Kill = Tree) -> Int
+fn stop(how: Mode = Mode.Gentle, by: By = Key) = how
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier)
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (number))
+      (variant
+        (type_identifier))))
+  (dependency_definition
+    (type_identifier)
+    (operation
+      (identifier)
+      (function_type
+        (function_type_parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (function_type_parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier))))))
+        (function_type_parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))
+          (constructor_ref
+            (type_identifier)))
+        (named_type
+          (type_name
+            (type_identifier))))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (constructor_ref
+          (type_name
+            (type_identifier))
+          (type_identifier)))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (constructor_ref
+          (type_identifier))))
+    (identifier)))

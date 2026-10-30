@@ -32,14 +32,19 @@
    Two overlapping accesses, at least one a write, are an error, but
    blocks passed to the same call don't conflict with each other: the
    callee runs one at a time, and rule A below keeps one from running
-   inside another. Inside a handler's arm, a dependency call, or a call of
-   a block parameter, is a write of all the handler's `var`s for that
-   call (foundations.md, decision 2): at a dependency call, `Async.until`,
-   other tasks can run the handler, and a block parameter can call into
-   it again. An operation otherwise keeps its instance across its own
-   dependency calls (decision 10), so this is more than tasks need; it's
-   what the decision says, and natively it's what keeps a borrow of the
-   state from being changed under it at `Async.until`.
+   inside another. Inside a handler's arm, a call that lets go of the
+   instance, `Async.until` or one marked `release`, or a call of a block
+   parameter, is a write of all the handler's `var`s for that call
+   (foundations.md, decision 2, its row narrowed by the services stage's
+   What's decided 10): at the first two other tasks run the handler, and
+   a block parameter can call into it again. A plain dependency call
+   holds none of the state: an operation keeps its instance across it
+   (decision 10), and calls only handlers installed outside it, so
+   nothing it calls can come back into the instance running it
+   (research/decision-11/'s model found no two writers, no lost update
+   and no stale read). So an actor loops over a reader kept in its
+   state while each step calls another service, and natively a borrow
+   of the state across such a call is sound for the same reason.
 
    Rule A: a block parameter, or a block that captures one, can't be
    passed to a call of a block parameter. Otherwise a block could run
@@ -102,9 +107,10 @@ type why =
       (** a counted value passed to a parameter that only reads it, for the call
       *)
   | Looped of string  (** `for x in &p`, for the loop; the element's name *)
-  | Dep_call of string option
-      (** in a handler's arm, a dependency call, which changes all its `var`s:
-          the call, as it's written *)
+  | Lets_go of string option
+      (** in a handler's arm, a call that lets go of its instance,
+          `Async.until` or one marked `release`, which changes all its
+          `var`s: the call, as it's written *)
   | Block_call of string
       (** in a handler's arm, a call of the block parameter of that name, which
           changes all its `var`s *)
@@ -314,11 +320,11 @@ let rec overlap a b =
   | SField f :: a, SField g :: b -> f = g && overlap a b
   | _ -> false
 
-(* A dependency call, or a block parameter's, in a handler's arm: it
-   stands for what other code might do to the state, so two of them
-   don't conflict with each other. *)
+(* A call that lets go of the instance, or a block parameter's, in a
+   handler's arm: it stands for what other code might do to the state, so
+   two of them don't conflict with each other. *)
 let state_write a =
-  match a.why with Dep_call _ | Block_call _ -> true | _ -> false
+  match a.why with Lets_go _ | Block_call _ -> true | _ -> false
 
 let clash a b =
   a.var.id = b.var.id
@@ -376,13 +382,12 @@ let lasting a =
 
 let read_or_changed a = if a.kind = Write then "changed" else "read"
 
-(* Why a dependency call in an arm is a change of its handler's state. *)
-let dep_call_note =
-  "a dependency call in an arm counts as a change of the handler's state: \
-   at one, `Async.until`, other tasks run the handler"
+(* Why a call that lets go of the instance is a change of its handler's
+   state. *)
+let lets_go_note = "at `release` and `Async.until` other tasks run the handler"
 
-(* [o] happens while [f], which lasts, holds a handler's state: a
-   dependency call, or a block parameter's. *)
+(* [o] happens while [f], which lasts, holds a handler's state: a call
+   that lets go of the instance, or a block parameter's. *)
 let across cx f o =
   let x = f.var.ident.name in
   let label =
@@ -411,20 +416,22 @@ let across cx f o =
   | _ ->
       let help =
         match (o.why, f.why) with
-        | Dep_call (Some code), Passed ->
+        | Lets_go (Some code), Passed ->
             sprintf
               "make the call first, `let v = %s`, then change `%s` with `v`"
               code x
-        | _ -> help ~during:"make the dependency call"
+        | _ -> help ~during:"make the call"
       in
-      report cx o.loc ~says:"a dependency call"
+      report cx o.loc ~says:"lets go of the handler"
         ~labels:[ (f.loc, label) ]
-        ~notes:[ dep_call_note ]
+        ~notes:[ lets_go_note ]
         ~help
-        (sprintf "`%s` is %s across a dependency call" x (read_or_changed f))
+        (sprintf "`%s` is %s across a call that lets go of the handler" x
+           (read_or_changed f))
 
-(* [a], made by a block, happens during [call]: a dependency call, or a
-   block parameter's, in a handler's arm, which the block is passed to. *)
+(* [a], made by a block, happens during [call]: a call that lets go of
+   the instance, or a block parameter's, in a handler's arm, which the
+   block is passed to. *)
 let block_across cx a call =
   let x = a.var.ident.name in
   let across, note =
@@ -432,8 +439,7 @@ let block_across cx a call =
     | Block_call g ->
         (sprintf "a call of `%s`" g, sprintf "`%s` can run this handler again" g)
     | _ ->
-        ( "a dependency call",
-          dep_call_note )
+        ("a call that lets go of the handler", lets_go_note)
   in
   let help =
     if a.kind = Read then
@@ -472,7 +478,7 @@ let conflict cx (a, va) (b, vb) =
     report cx ?says ?help ?notes ~labels:(labels @ runs) loc msg
   in
   match (f.why, vf, o.why, vo) with
-  | _, None, (Dep_call _ | Block_call _), _ when lasting f -> across cx f o
+  | _, None, (Lets_go _ | Block_call _), _ when lasting f -> across cx f o
   | _, _, _, Some _ when state_write f -> block_across cx o f
   | _, Some _, _, _ when state_write o -> block_across cx f o
   | Looped elem, None, _, None ->
@@ -1040,6 +1046,17 @@ let rec walk cx (e : expr) =
   | For _ | While _ | Fail _ | Try _ | Attempt _ | Assert _
   | Named _ | Tag_set _ | Pipe _ ->
       List.iter (walk cx) (children e)
+  | Release a -> (
+      (* it lets go of the instance of the arm it's written in, so there
+         has to be one (Infer makes sure it covers a dependency's
+         operation) *)
+      if not cx.in_op then
+        report cx e.loc ~help:"call it without `release`"
+          "`release` lets go of a handler's instance, so it's only written \
+           in one of its operations";
+      match a.kind with
+      | Call (f, args) -> call ~released:true cx a f args ~changed:false
+      | _ -> walk cx a)
 
 and stmt cx = function
   | Let { name; value = { kind = Lambda _; _ } as value; mut = false; _ } ->
@@ -1101,9 +1118,10 @@ and walk_indices cx (e : expr) =
   | _ -> ()
 
 (* A call, [e], of [f] with [args]; [changed] if its receiver is passed
-   with `&`, `&s.push(1)`. Its arguments are evaluated in order, each
-   checked as it's made; then every access that lasts the call starts. *)
-and call cx (e : expr) (f : expr) args ~changed =
+   with `&`, `&s.push(1)`, and [released] if it's marked `release`. Its
+   arguments are evaluated in order, each checked as it's made; then
+   every access that lasts the call starts. *)
+and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
   let state_writes why loc =
     match cx.state with
     | Some vars ->
@@ -1113,7 +1131,15 @@ and call cx (e : expr) (f : expr) args ~changed =
           vars
     | None -> []
   in
-  let why = Dep_call (cx.source e) in
+  let until_call = call_is (async_member "until") f cx.nodes cx.schemes in
+  (* the call lets go of the instance, so other tasks may change the state
+     during it; written as `release` would write it *)
+  let lets_go = released || until_call in
+  let why =
+    Lets_go
+      (if released then Option.map (fun c -> "release " ^ c) (cx.source e)
+       else cx.source e)
+  in
   (* the block parameter called, if it's one *)
   let param =
     match f.kind with
@@ -1125,7 +1151,7 @@ and call cx (e : expr) (f : expr) args ~changed =
   let callee, receiver =
     match f.kind with
     | Field (r, _) when is_method cx f ->
-        let held = if dep_call cx f then state_writes why e.loc else [] in
+        let held = if lets_go then state_writes why e.loc else [] in
         ({ none with held }, Some r)
     | Var (Local b) when is_block cx f -> (
         match Hashtbl.find_opt cx.blocks b.id with
@@ -1137,7 +1163,7 @@ and call cx (e : expr) (f : expr) args ~changed =
     | Lambda _ -> ({ none with held = block cx f; via = Some f.loc }, None)
     | _ ->
         walk cx f;
-        let held = if dep_call cx f then state_writes why e.loc else [] in
+        let held = if lets_go then state_writes why e.loc else [] in
         ({ none with held }, None)
   in
   (* the callee's parameters' modes (rule B), the scope a spawn's receiver
@@ -1156,7 +1182,6 @@ and call cx (e : expr) (f : expr) args ~changed =
     |> Option.map (fun m -> "Async." ^ m)
   in
   inner_spawn cx f receiver args;
-  let until_call = call_is (async_member "until") f cx.nodes cx.schemes in
   let isolate_call = call_is (async_member "isolate") f cx.nodes cx.schemes in
   if until_call && not cx.in_op then until_outside cx e;
   let callee_name = Option.value (cx.source f) ~default:"this" in
@@ -1247,13 +1272,9 @@ and call cx (e : expr) (f : expr) args ~changed =
               if isolate_call then not_written_here cx a ~callee:"Async.isolate";
               if m <> Ordinary then passed_on b a.loc m;
               none)
-      | Var (Dep_op _ | Next_op _) ->
-          {
-            held = state_writes (Dep_call (cx.source a)) a.loc;
-            via = Some a.loc;
-            sibling;
-          }
       | _ ->
+          (* an operation passed as a block, `xs.each(Sink.put)`, is a
+             plain dependency call where it's called: it holds nothing *)
           walk cx a;
           none)
     else

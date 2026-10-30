@@ -145,6 +145,9 @@
                                                      up to a `|>`)
               |  "attempt" add                      (stops at a comparison)
               |  "assert" expr
+              |  "release" postfix                  (a word only before a
+                                                     name on its line: one
+                                                     call, in a handler's arm)
      postfix  := primary { "." IDENT | "[" expr "]"
                          | "(" expr, ... ")" [lambda] | lambda }
                                                     (a trailing lambda is
@@ -215,6 +218,9 @@ type t = {
   mutable tags : string list;
       (** the parameters of the function being parsed written of type `Tags`,
           which `fail on` can name *)
+  mutable op_defaults : (int * string * (literal * Loc.t * int)) list ref option;
+      (** while an operation's type is parsed, in its dependency's
+          declaration, where the defaults of its parameters go ([parse_ty]) *)
 }
 
 let peek p = fst p.toks.(p.i)
@@ -398,6 +404,57 @@ let parse_ctor_ref p : ctor_ref =
       })
     else { qual = None; name = first }
 
+(* A default, after its `=`: a literal, a negative number among them;
+   or, unless it's a field's, [~field], a variant written bare, `Tree` or
+   `Kill.Tree`, with no `(` or `{` after it (compiler.md, "Services stage",
+   "The grammar"), whose sum Resolve finds from the parameter's type. Its
+   place, and a node of its own, at which inference checks its type. *)
+let parse_default ?(field = false) p =
+  let at = loc p in
+  let neg = peek p = MINUS in
+  if neg then advance p;
+  let lit =
+    match (peek p, neg) with
+    | INT n, _ when n <> Int64.min_int ->
+        advance p;
+        Some (LInt (if neg then Int64.neg n else n))
+    | FLOAT f, _ ->
+        advance p;
+        Some (LFloat (if neg then -.f else f))
+    | TRUE, false ->
+        advance p;
+        Some (LBool true)
+    | FALSE, false ->
+        advance p;
+        Some (LBool false)
+    | STR s, false ->
+        advance p;
+        Some (LStr s)
+    | IDENT q, false when is_upper q && not field -> (
+        let first = ident p in
+        let cqual, cname =
+          match (peek p, peek2 p) with
+          | DOT, IDENT c when is_upper c ->
+              advance p;
+              (Some q, ident p)
+          | _ -> (None, first)
+        in
+        match peek p with
+        | LPAREN | LBRACE -> None
+        | _ -> Some (LCtor { cqual; cname; csum = None }))
+    | _ -> None
+  in
+  match lit with
+  | Some l ->
+      p.node <- p.node + 1;
+      (l, Loc.span at (last_loc p), p.node)
+  | None when field ->
+      Diag.error at ~help:"give it where it's made instead"
+        "a field's default is a literal: a number, a `Bool` or a string"
+  | None ->
+      Diag.error at ~help:"give it where it's called instead"
+        "a parameter's default is a literal, or a variant written bare"
+
 (* A function type's `! ...` and `uses ...` belong to the innermost
    function type they can: in `fn f() -> fn() ! Bad`, the `fn()` returned
    can fail with `Bad`. After `->`, a `uses` is the function's, never what
@@ -426,7 +483,17 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
       let start = loc p in
       advance p;
       expect p LPAREN;
-      let params = sep_list p ~close:RPAREN parse_fn_ty_param in
+      (* an operation's own parameters may have defaults, which its
+         dependency's declaration collects; a function type among them
+         can't *)
+      let collect = p.op_defaults in
+      p.op_defaults <- None;
+      let index = ref (-1) in
+      let params =
+        sep_list p ~close:RPAREN (fun p ->
+            incr index;
+            parse_fn_ty_param ?collect ~index:!index p)
+      in
       let ret =
         if peek p = ARROW then (
           advance p;
@@ -545,18 +612,23 @@ and impl_rest p ~uses ~arg ~start ~over names =
     }
 
 (* A parameter in a function type may be named for documentation, as in
-   `fn(id: UserId) -> User`. The name doesn't affect the type. *)
-and parse_fn_ty_param p =
+   `fn(id: UserId) -> User`. The name doesn't affect the type. An
+   operation's, the [index]th of its type, may have a default, which goes
+   in [collect], by its place and name. *)
+and parse_fn_ty_param ?collect ~index p =
   let start = loc p in
   (* one the function changes is written as a call passes it, `&Int`
      (compiler.md, "Blocks with `inout` parameters") *)
   let inout = peek p = AMP in
   if inout then advance p;
-  (match (peek p, peek2 p) with
-  | IDENT name, COLON when not (is_upper name) ->
-      advance p;
-      advance p
-  | _ -> ());
+  let name =
+    match (peek p, peek2 p) with
+    | IDENT name, COLON when not (is_upper name) ->
+        advance p;
+        advance p;
+        Some name
+    | _ -> None
+  in
   if peek p = INOUT then (
     let at = loc p in
     advance p;
@@ -565,7 +637,17 @@ and parse_fn_ty_param p =
       ~help:(Printf.sprintf "write `&%s`" (show_ty t))
       "a function type's parameter that it changes is written `&T`");
   let t = parse_ty p in
-  if inout then TyInout (t, Loc.span start (last_loc p)) else t
+  let t = if inout then TyInout (t, Loc.span start (last_loc p)) else t in
+  (if peek p = EQ then
+     match (collect, name) with
+     | Some defaults, Some name ->
+         advance p;
+         defaults := !defaults @ [ (index, name, parse_default p) ]
+     | _ ->
+         Diag.error (loc p) ~help:"give it where it's called instead"
+           "only an operation's named parameter, in its dependency, has a \
+            default");
+  t
 
 (* What a function type or an implementation uses, after `uses`: `Clock,
    store.Users`, and last, a named row, `..d`. [greedy] says a comma always
@@ -727,32 +809,12 @@ let parse_param p : param =
       Some (parse_ty p))
     else None
   in
-  (* a default, `max: Int = 64`, is a literal (Resolve checks where it
-     may be) *)
+  (* a default, `max: Int = 64` or `kill: Kill = Tree`, is a literal or
+     a variant written bare (Resolve checks where it may be) *)
   let pdefault =
     if peek p = EQ && pty <> None then (
       advance p;
-      let at = loc p in
-      let neg = peek p = MINUS in
-      if neg then advance p;
-      let lit =
-        match (peek p, neg) with
-        | INT n, _ when n <> Int64.min_int ->
-            Some (LInt (if neg then Int64.neg n else n))
-        | FLOAT f, _ -> Some (LFloat (if neg then -.f else f))
-        | TRUE, false -> Some (LBool true)
-        | FALSE, false -> Some (LBool false)
-        | STR s, false -> Some (LStr s)
-        | _ -> None
-      in
-      match lit with
-      | Some l ->
-          advance p;
-          p.node <- p.node + 1;
-          Some (l, Loc.span at (last_loc p), p.node)
-      | None ->
-          Diag.error at ~help:"give it where it's called instead"
-            "a parameter's default is a literal: a number, a `Bool` or a string")
+      Some (parse_default p))
     else None
   in
   { pname; pty; pmode; pblock; pdefault }
@@ -760,7 +822,7 @@ let parse_param p : param =
 let parse_field_decl p =
   let field_name = ident p in
   expect p COLON;
-  { field_name; field_ty = parse_ty p }
+  { field_name; field_ty = parse_ty p; field_default = None; op_defaults = [] }
 
 (* A constructor's declaration: `Free`; `Flat(off: Money)` or
    `Flat(Money)`, one field, positional, whose name only documents it; or
@@ -797,22 +859,38 @@ let parse_ctor_decl p =
         in
         let i = p.i in
         let field_ty = parse_ty p in
-        (label, field_ty, spelled p i (p.i - 1))
+        let shown = spelled p i (p.i - 1) in
+        (* a default, `Key(n: Int = 16)`, a literal, so `Key` alone is
+           `Key(n: 16)` (compiler.md, "Services stage", "The grammar") *)
+        let default =
+          if peek p = EQ then (
+            advance p;
+            Some (parse_default ~field:true p))
+          else None
+        in
+        (label, field_ty, shown, default)
+      in
+      let plain field_name field_ty =
+        { field_name; field_ty; field_default = None; op_defaults = [] }
       in
       match sep_list p ~close:RPAREN field with
-      | [ (label, field_ty, _) ] ->
+      | [ (label, field_ty, _, field_default) ] ->
           let field_name =
             match label with
             | Some f -> f
             | None -> { name = ""; loc = ctor_name.loc }
           in
-          { ctor_name; ctor_fields = [ { field_name; field_ty } ]; ctor_named = false }
+          {
+            ctor_name;
+            ctor_fields = [ { (plain field_name field_ty) with field_default } ];
+            ctor_named = false;
+          }
       | [] -> { ctor_name; ctor_fields = []; ctor_named = false }
       | fields ->
           (* each unnamed field gets the first letter no field is named *)
           let taken =
             List.filter_map
-              (fun (l, _, _) -> Option.map (fun (f : ident) -> f.name) l)
+              (fun (l, _, _, _) -> Option.map (fun (f : ident) -> f.name) l)
               fields
           in
           let letters =
@@ -822,13 +900,13 @@ let parse_ctor_decl p =
           in
           let _, named =
             List.fold_left_map
-              (fun free (label, field_ty, shown) ->
+              (fun free (label, field_ty, shown, _) ->
                 match (label, free) with
-                | Some (f : ident), _ -> (free, ({ field_name = f; field_ty }, shown))
+                | Some (f : ident), _ -> (free, (plain f field_ty, shown))
                 | None, l :: rest ->
                     ( rest,
-                      ({ field_name = { name = l; loc = ctor_name.loc }; field_ty }, shown) )
-                | None, [] -> (free, ({ field_name = ctor_name; field_ty }, shown)))
+                      (plain { name = l; loc = ctor_name.loc } field_ty, shown) )
+                | None, [] -> (free, (plain ctor_name field_ty, shown)))
               letters fields
           in
           let written =
@@ -839,7 +917,7 @@ let parse_ctor_decl p =
                     named))
           in
           let help =
-            if List.for_all (fun (l, _, _) -> l <> None) fields then
+            if List.for_all (fun (l, _, _, _) -> l <> None) fields then
               Printf.sprintf "write `%s`" written
             else Printf.sprintf "give each field a name, in braces: `%s`" written
           in
@@ -1707,6 +1785,16 @@ and parse_unary p =
       advance p;
       let e = parse_expr p in
       mk (Assert e) start p
+  | IDENT "release" when (match peek2 p with IDENT _ -> true | _ -> false) ->
+      (* `release Next.get(id)`: a word only before a name on its line, so
+         `release()`, an arm `release() =>` and an operation `release:`
+         are the name they've always been. It covers one call, so its
+         operand is a postfix expression, and `try release ...` marks it
+         through `try`'s *)
+      let start = loc p in
+      advance p;
+      let e = parse_postfix p in
+      mk (Release e) start p
   | _ -> parse_postfix p
 
 (* Field access and calls bind tightest: `-user.age` is `-(user.age)`. *)
@@ -2753,7 +2841,12 @@ and parse_dep_ops p ~pub ~(type_name : ident) ~type_params =
            "`%s` is an operation, so its type is a function's, but this is %s"
            field_name.name
            (describe (peek p)));
-    { field_name; field_ty = parse_ty p }
+    let defaults = ref [] in
+    p.op_defaults <- Some defaults;
+    let field_ty =
+      Fun.protect ~finally:(fun () -> p.op_defaults <- None) (fun () -> parse_ty p)
+    in
+    { field_name; field_ty; field_default = None; op_defaults = !defaults }
   in
   if not (at_op p) then
     Diag.error (loc p)
@@ -3322,7 +3415,7 @@ let skip_to_item p ~start =
     done)
 
 let parse_program ?(prelude = false) sink toks =
-  let p = { toks; i = 0; node = 0; sink; tags = [] } in
+  let p = { toks; i = 0; node = 0; sink; tags = []; op_defaults = None } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else
@@ -3356,7 +3449,7 @@ let parse_program ?(prelude = false) sink toks =
    so the whole session numbers them once; the last one this line used is
    returned with it. *)
 let parse_session_line sink toks ~node =
-  let p = { toks; i = 0; node; sink; tags = [] } in
+  let p = { toks; i = 0; node; sink; tags = []; op_defaults = None } in
   let s = parse_stmt p in
   if peek p = NEWLINE then advance p;
   if peek p <> EOF then fail_expected p "the end of the line";

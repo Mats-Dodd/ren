@@ -55,6 +55,8 @@ type t =
   | Task_join
   | Task_cancel
   | Task_until
+  | Arm_release
+  | Arm_retake
   | Task_timeout
   | Task_isolate
   | Task_map

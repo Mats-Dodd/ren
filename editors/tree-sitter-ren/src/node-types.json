@@ -108,6 +108,10 @@
         "named": true
       },
       {
+        "type": "release_expression",
+        "named": true
+      },
+      {
         "type": "self",
         "named": true
       },
@@ -566,6 +570,10 @@
             "named": true
           },
           {
+            "type": "release_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -703,6 +711,10 @@
           },
           {
             "type": "reference",
+            "named": true
+          },
+          {
+            "type": "release_expression",
             "named": true
           },
           {
@@ -907,6 +919,10 @@
           },
           {
             "type": "reference",
+            "named": true
+          },
+          {
+            "type": "release_expression",
             "named": true
           },
           {
@@ -2021,6 +2037,40 @@
     "type": "function_type_parameter",
     "named": true,
     "fields": {
+      "default": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "constructor_ref",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "negative",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": false,
@@ -3326,6 +3376,10 @@
             "named": true
           },
           {
+            "type": "constructor_ref",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -3775,6 +3829,10 @@
             "named": true
           },
           {
+            "type": "release_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -3796,6 +3854,122 @@
           },
           {
             "type": "unary_expression",
+            "named": true
+          },
+          {
+            "type": "unit",
+            "named": true
+          },
+          {
+            "type": "with_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "release_expression",
+    "named": true,
+    "fields": {
+      "call": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_expression",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "break",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "constructor_expression",
+            "named": true
+          },
+          {
+            "type": "fail_expression",
+            "named": true
+          },
+          {
+            "type": "field_expression",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expression",
+            "named": true
+          },
+          {
+            "type": "index_expression",
+            "named": true
+          },
+          {
+            "type": "inline_handler",
+            "named": true
+          },
+          {
+            "type": "item_expression",
+            "named": true
+          },
+          {
+            "type": "lambda",
+            "named": true
+          },
+          {
+            "type": "match_expression",
+            "named": true
+          },
+          {
+            "type": "method_call_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "record_expression",
+            "named": true
+          },
+          {
+            "type": "self",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "todo",
+            "named": true
+          },
+          {
+            "type": "tuple_expression",
             "named": true
           },
           {
@@ -4092,6 +4266,10 @@
           },
           {
             "type": "reference",
+            "named": true
+          },
+          {
+            "type": "release_expression",
             "named": true
           },
           {
@@ -4489,6 +4667,10 @@
             "named": true
           },
           {
+            "type": "release_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -4559,6 +4741,36 @@
     "type": "variant",
     "named": true,
     "fields": {
+      "default": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "negative",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      },
       "fields": {
         "multiple": false,
         "required": false,
@@ -5133,6 +5345,10 @@
   },
   {
     "type": "provides",
+    "named": false
+  },
+  {
+    "type": "release",
     "named": false
   },
   {

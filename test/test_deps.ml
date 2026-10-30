@@ -145,7 +145,7 @@ let lint_evidence body =
                   {
                     path = d;
                     params = [];
-                    body = Dep [ { fname = "op"; fty = int_fn } ];
+                    body = Dep [ { fname = "op"; fty = int_fn; fdefault = None; fdefaults = [] } ];
                     members = Path.Map.empty;
                     numeric = None;
                     opaque = false;
@@ -2157,9 +2157,10 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "an arm changes its state across a dependency call" =
-  (* row 31 of exclusivity.md: the block makes a dependency call while
-     the call it's passed to changes `cache` *)
+let%expect_test "an arm changes its state across a call that lets go of it" =
+  (* row 31 of exclusivity.md, narrowed to a call marked `release` (the
+     services stage's What's decided 10): the block makes one while the
+     call it's passed to changes `cache` *)
   types
     {|
 dep A =
@@ -2171,20 +2172,20 @@ fn update(inout m: Map<Int, Int>, k: Int, f: fn() -> Int) =
 handler cached() over A =
   var cache: Map<Int, Int> = Map.empty
   load(k) =>
-    update(&cache, k, fn() => next.load(k))
+    update(&cache, k, fn() => release next.load(k))
     cache.get(k) orelse 0
 
 fn main() = 1
 |};
   [%expect
     {|
-    error: `cache` is changed across a dependency call
-       ┌─ test.ren:10:31
-    10 │     update(&cache, k, fn() => next.load(k))
-       │                               ^^^^^^^^^^^^ a dependency call
+    error: `cache` is changed across a call that lets go of the handler
+       ┌─ test.ren:10:39
+    10 │     update(&cache, k, fn() => release next.load(k))
+       │                                       ^^^^^^^^^^^^ lets go of the handler
        │            ------ changed for the whole call
-       = a dependency call in an arm counts as a change of the handler's state: at one, `Async.until`, other tasks run the handler
-       help: make the call first, `let v = next.load(k)`, then change `cache` with `v`
+       = at `release` and `Async.until` other tasks run the handler
+       help: make the call first, `let v = release next.load(k)`, then change `cache` with `v`
     |}]
 
 let%expect_test "an arm changes its state across a call of a block parameter" =

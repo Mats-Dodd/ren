@@ -1,0 +1,84 @@
+// A circuit breaker over a backend that can be slow and can be down
+// (foundations.md, decision 10, "`release` lets go for one call"): after
+// `limit` failures in a row it opens, and fails with `Open` at once,
+// without asking the backend, until a success closes it again.
+//
+// It lets go of its instance while the backend answers, `release
+// Backend.fetch(id)`, so a slow answer doesn't hold up the other callers:
+// each queues for the breaker only to read and change its count. What
+// they changed meanwhile is read again after, so `failures += 1` counts
+// every failure; a count read before the call and written after it
+// would lose one, which a seed finds.
+
+pub dep Backend =
+  fetch: fn(id: Int) -> Str ! Down
+
+pub dep Breaker =
+  // the backend's answer, or `Open` while it's open
+  fetch: fn(id: Int) -> Str ! Down | Open
+  // the failures in a row so far
+  failures: fn() -> Int
+
+pub handler breaker(limit: Int) for Breaker uses Backend =
+  var failures = 0
+  fetch(id) =>
+    if failures >= limit then fail Open
+    let r = attempt release Backend.fetch(id)
+    match r
+      Ok(_) => failures = 0
+      Err(_) => failures += 1
+    try r
+  failures() => failures
+
+// a backend that's down for a negative id
+handler flaky() for Backend =
+  fetch(id) => if id < 0 then fail Down else "item " + show(id)
+
+pub fn main() uses Console =
+  with flaky(), breaker(2) in
+    print(attempt Breaker.fetch(1))
+    print(attempt Breaker.fetch(-1))
+    print(attempt Breaker.fetch(-2))
+    print(attempt Breaker.fetch(3))
+
+// ---- tests ----
+
+// a backend that takes `id` milliseconds to answer, and is down for an
+// odd one
+test handler timed() for Backend uses Clock =
+  fetch(id) =>
+    Clock.sleep(Duration.ms(id))
+    if id % 2 == 1 then fail Down else "item " + show(id)
+
+test "failures in a row open it" =
+  with timed(), breaker(2) in
+    assert attempt Breaker.fetch(1) == Err(Down)
+    assert attempt Breaker.fetch(3) == Err(Down)
+    assert attempt Breaker.fetch(2) == Err(Open)
+    assert Breaker.failures() == 2
+
+test "a success closes it again" =
+  with timed(), breaker(2) in
+    assert attempt Breaker.fetch(1) == Err(Down)
+    assert attempt Breaker.fetch(2) == Ok("item 2")
+    assert attempt Breaker.fetch(3) == Err(Down)
+    assert Breaker.failures() == 1
+
+// the slow call lets go of the breaker while the backend answers, so the
+// fast one, which comes second or first as the seed says, answers first
+test "a slow answer doesn't hold up a fast one" =
+  with timed(), breaker(5) in
+    Async.scope fn(s) =>
+      s.spawn fn() => print("slow " + show(attempt Breaker.fetch(100)))
+      s.spawn fn() => print("fast " + show(attempt Breaker.fetch(2)))
+  assert TestConsole.output() == ["fast Ok(\"item 2\")", "slow Ok(\"item 100\")"]
+
+// failures that overlap each count, since the count is read again after
+// the call
+test "failures at once all count" =
+  with timed(), breaker(5) in
+    Async.scope fn(s) =>
+      s.spawn fn() => print(attempt Breaker.fetch(3))
+      s.spawn fn() => print(attempt Breaker.fetch(5))
+      s.spawn fn() => print(attempt Breaker.fetch(7))
+    assert Breaker.failures() == 3

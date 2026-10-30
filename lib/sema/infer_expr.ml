@@ -1067,6 +1067,17 @@ and synth env cx (e : expr) : ty =
   | Assert a ->
       want_bool env Asserted a (infer env cx a);
       unit
+  | Release a ->
+      (* the call it covers, which is what it gives and fails with: one of
+         an operation called through its dependency's name, or `next`'s,
+         so of one installed outside the handler (a description's
+         operation called as a method installs it for the call, inside) *)
+      (match a.kind with
+      | Call ({ kind = Var (Dep_op _ | Next_op _); _ }, _) -> ()
+      | _ ->
+          let written = Option.value (env.source a) ~default:"it" in
+          report env (Infer_msg.release_not_op a.loc ~written));
+      infer env cx a
   | Handler { deps; over; any; _ } ->
       let needs = fresh_row env.st and fails = fresh_row env.st in
       let own = own_deps env cx ~any deps in
@@ -2190,7 +2201,13 @@ and call_with env cx (e : expr) (f : expr) tf args =
     | _ -> None
   in
   let callee = match f.kind with Var (Global p) -> Some p | _ -> None in
-  apply env cx e ~name ?target ?callee f tf args
+  (* an operation's defaults are found by its path, as a function's are *)
+  let defaults =
+    match f.kind with
+    | Var (Dep_op (d, o) | Next_op (d, o)) -> Some (Path.member d o)
+    | _ -> callee
+  in
+  apply env cx e ~name ?target ?callee ?defaults f tf args
 
 (* `r.m(args)`, the call [e] of [f], where [m] is the member [o] of
    [r]'s type [td]: a method is called with [r] as its `self`. [tr] is
@@ -2348,13 +2365,15 @@ and blame_at cx node args =
    [callee] which top-level function it is, if it's one. [written] says
    which of its parameters have a type written, if the caller knows
    better than [tf] (Infer_written.written_params). *)
-and apply env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args =
+and apply env cx (e : expr) ~name ?target ?callee ?defaults ?written (f : expr) tf
+    args =
+  let defaults = match defaults with Some _ -> defaults | None -> callee in
   let ds =
-    match callee with
+    match defaults with
     | Some p -> Option.value (Hashtbl.find_opt env.defaults_of p) ~default:[]
     | None -> []
   in
-  match (ds, reveal env.st tf, callee) with
+  match (ds, reveal env.st tf, defaults) with
   | _ :: _, TFun (ps, _, _, _), Some p -> (
       match with_defaults env cx e ~name ~callee:p ds ps args with
       | Some args -> applied env cx e ~name ?target ?callee ?written f tf args
@@ -2457,16 +2476,21 @@ and with_defaults env cx (e : expr) ~name ~callee ds (ps : Types.param list)
                    match
                      List.find_opt (fun (_, (nm : ident), _) -> nm.name = d) named
                    with
+                   | Some (_, _, ({ kind = Tag_set { errs = [ Tag (c, []) ]; _ }; _ } as v))
+                     when not (tags_at i) ->
+                       (* `kill: Child`, parsed as `retry`'s `on: Declined`
+                          is, given to a parameter that isn't of `Tags`: the
+                          constructor it names *)
+                       [ { v with kind = Con ({ qual = None; name = c }, []) } ]
                    | Some (_, _, v) -> [ v ]
                    | None ->
-                       let kind : expr_kind =
-                         match lit with
-                         | LInt k -> Int k
-                         | LFloat x -> Float x
-                         | LBool b -> Bool b
-                         | LStr s -> Str s
-                       in
-                       [ { kind; loc = e.loc; node = default_node e.node i } ])
+                       [
+                         {
+                           kind = literal_kind lit e.loc;
+                           loc = e.loc;
+                           node = default_node e.node i;
+                         };
+                       ])
                | None when tags_at i ->
                    List.filter_map
                      (fun ((a : expr), (nm : ident), _) ->
@@ -2967,6 +2991,15 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
       let source (a : expr) = Option.value (env.source a) ~default:"..." in
       (* still check the arguments, for errors of their own *)
       let unchecked () = List.iter (fun (_, a) -> ignore (infer env cx a)) args in
+      (* its one field's default, if it has one, `Key(n: Int = 16)`: then
+         `Key` alone is `Key(n: 16)`, and the field may be given by name,
+         `Key(n: 64)`, as a parameter with a default is (compiler.md,
+         "Services stage", "The grammar") *)
+      let default =
+        match ctor.cfields with
+        | [ ({ fdefault = Some lit; _ } as f) ] when not ctor.cnamed -> Some (f, lit)
+        | _ -> None
+      in
       if ctor.cnamed then (
         (* by name, in braces (compiler.md, "Data stage", "By-name
            variants") *)
@@ -2976,9 +3009,17 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
                (by_name shown ctor.cfields
                   (List.map (fun (_, a) -> source a) args)));
         unchecked ())
+      else if default <> None && args = [] then (
+        (* the default, at a node of its own, which Lower lowers *)
+        let f, lit = Option.get default in
+        check env cx
+          { kind = literal_kind lit e.loc; loc = e.loc; node = default_node e.node 0 }
+          (field_type ~tvars f)
+          ~why:(explain ~notes:[ part_of c.name "field" f.fname ] ()))
       else if ctor_shape env e.loc c ctor (List.length args) then (
-        (match args with
-        | [ (Some _, a) ] ->
+        (match (args, default) with
+        | [ (Some l, _) ], Some (f, _) when l.name = f.fname -> ()
+        | [ (Some _, a) ], _ ->
             (* a label on one field only documents it *)
             report env
               (by_position e.loc shown ~fields:1 ~pattern:false
