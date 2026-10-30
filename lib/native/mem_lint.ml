@@ -219,6 +219,10 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
   | Str_of_code -> ([ Int ], str)
   | Str_join -> ([ Boxed; str ], str)
   | Panic_str -> ([ str ], Unit)
+  | Str_find -> ([ str; str ], Int)
+  | Str_has _ -> ([ str; str ], Bool)
+  | Str_upper -> ([ str ], str)
+  | Line_col _ -> ([ str; Int ], Int)
 
 (* Whether [rt] only reads what it's given as a word, keeping nothing of
    it, so a release build's `Str` may be given as its two words, which the

@@ -85,6 +85,7 @@ let rt h (r : rt) : rt =
     | Set_add_taking | Map_remove | Map_remove_taking | Map_of _ | Set_of
     | Map_entries _ | Map_keys | Map_values | Hash_fixed | Array_sort _
     | Str_lower | Char_bound _ | Str_code | Str_of_code | Str_join | Panic_str
+    | Str_find | Str_has _ | Str_upper | Line_col _
     | Str_box | Str_unbox ) as r ->
       r
 

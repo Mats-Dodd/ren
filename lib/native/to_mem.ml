@@ -3465,8 +3465,62 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
       | Some (_, loc, compound) when not fs.prelude ->
           runtime ~site:(new_site cx ~kind:(Appends compound) loc) Str_concat
       | _ -> runtime Str_concat)
-  | Str_split, _, _ -> runtime ~site:(site ()) Str_split
-  | Str_trim, _, _ -> runtime Str_trim
+  | (Str_split | Bytes_split), _, _ -> runtime ~site:(site ()) Str_split
+  | (Str_trim | Bytes_trim), _, _ -> runtime Str_trim
+  (* the rest of strings.md's table (compiler.md, "Bytes stage, part two",
+     step 5), `Bytes`' the same functions as `Str`'s *)
+  | (Str_starts_with | Bytes_starts_with), _, _ -> runtime (Str_has false)
+  | (Str_ends_with | Bytes_ends_with), _, _ -> runtime (Str_has true)
+  | (Str_ascii_upper | Bytes_ascii_upper), _, _ -> runtime Str_upper
+  (* `Some` of the offset, if it's there, made as Core's constructor
+     would be, of a variable of its own, as `Map.get`'s value is *)
+  | (Str_index | Bytes_index), _, _ -> (
+      match values () with
+      | [ s; t ] ->
+          let i = borrowed fs "$at" Int (Runtime (Str_find, [ s; t ], None)) in
+          List.iter (drop fs env) [ s; t ];
+          let found = borrowed fs "$found" Bool (Compare (Ge, i, Int 0L)) in
+          let opt = match e.ty with Con (p, _) -> p | _ -> bug "an `index` not of an `Option`" in
+          let r = fresh fs "$index" (lay e.ty) in
+          emit fs (Decl r);
+          let arm f =
+            block fs (fun () ->
+                branch env (fun () ->
+                    let a = f () in
+                    consume env a;
+                    emit fs (Set (r, a))))
+          in
+          let at : C.var = { id = -1 - fs.next_id; name = "$at"; ty = Ty.int } in
+          let m = match i with Var m -> m | _ -> bug "an offset that isn't a variable" in
+          let yes =
+            arm (fun () ->
+                expr fs (bind env at m)
+                  { e with kind = Con (opt, "Some", [ { e with kind = Local at; ty = Ty.int } ]) })
+          in
+          let no = arm (fun () -> expr fs env { e with kind = Con (opt, "None", []) }) in
+          emit fs (If (found, yes, no));
+          own env r;
+          Var r
+      | _ -> bug "an `index` of no string")
+  (* the line and the column, each a call that panics as the
+     interpreter does, the first checking [at], made a tuple as Core's
+     would be; the help names the receiver, if it has one *)
+  | Str_line_col, _, _ -> (
+      match values () with
+      | [ s; at ] ->
+          let recv = match args with C.Value r :: _ -> Some r.loc | _ -> None in
+          let site = new_site cx ~help:"\001" ?recv e.loc in
+          let part col name =
+            let v = borrowed fs name Int (Runtime (Line_col col, [ s; at ], Some site)) in
+            let m = match v with Var m -> m | _ -> bug "a line that isn't a variable" in
+            ({ C.id = -1 - fs.next_id; name; ty = Ty.int }, m)
+          in
+          let line, ml = part false "$line" in
+          let col, mc = part true "$col" in
+          List.iter (drop fs env) [ s; at ];
+          let local (v : C.var) : C.expr = { e with kind = Local v; ty = Ty.int } in
+          expr fs (bind (bind env line ml) col mc) { e with kind = Tuple [ local line; local col ] }
+      | _ -> bug "a `line_col` of no string")
   | Array_copy, _, _ -> runtime (Copied Of_array_elems)
   | Str_copy, _, _ -> runtime (Copied Of_str)
   | Bytes_copy, _, _ -> runtime (Copied Of_bytes)

@@ -199,6 +199,17 @@ type t =
   | Str_code
   | Str_of_code
   | Array_join
+  | Str_ends_with
+  | Str_ascii_upper
+  | Str_line_col
+  | Bytes_index
+  | Bytes_starts_with
+  | Bytes_ends_with
+  | Bytes_split
+  | Bytes_trim
+  | Bytes_ascii_upper
+  | Pulled_count
+  | Pulled_count_by
   | Hash
 
 (* Its path in the prelude (path.ml): a function's, [show], or a built-in
@@ -370,9 +381,23 @@ let path x =
   | Str_code -> member "Str" "code"
   | Str_of_code -> member "Str" "of_code"
   | Array_join -> member "Array" "join"
+  (* the rest of strings.md's table (compiler.md, "Bytes stage, part two",
+     step 5): `Bytes` has `Str`'s search, split and trim names *)
+  | Str_ends_with -> member "Str" "ends_with"
+  | Str_ascii_upper -> member "Str" "ascii_upper"
+  | Str_line_col -> member "Str" "line_col"
+  | Bytes_index -> member "Bytes" "index"
+  | Bytes_starts_with -> member "Bytes" "starts_with"
+  | Bytes_ends_with -> member "Bytes" "ends_with"
+  | Bytes_split -> member "Bytes" "split"
+  | Bytes_trim -> member "Bytes" "trim"
+  | Bytes_ascii_upper -> member "Bytes" "ascii_upper"
   (* `x.hash()` on a value of any type with `hash`, which the checker finds
      for a type with no `hash` of its own (compiler.md, "Bytes stage") *)
   | Hash -> fn "hash_of"
+  (* a cursor's `c.count()` and `c.count(f)`, which no program names *)
+  | Pulled_count -> fn "pulled_count"
+  | Pulled_count_by -> fn "pulled_count_by"
 
 let name x = Path.local (path x)
 let member_name x = Path.short (path x)

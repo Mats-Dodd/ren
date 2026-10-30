@@ -431,102 +431,58 @@ fn main() uses Console = print(Bytes.of([1, 2, 3]).len())
 (* ---- s5: the rest of the API ---- *)
 
 let%expect_test "[s5] `len`'s help compiles: `chars().count()`" =
-  until "s5"
-    ~want:{|
-5
-5
-true
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   let name = "héllo"
   print(name.chars().count())
   print(name.chars().count(fn(c) => c != "x"))
   print(name.byte_len() == 6)
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `Chars` has no method named `count`
-      ┌─ test.ren:3:22
-    3 │   print(name.chars().count())
-      │                      ^^^^^
-      help: its methods: `next`
-
-    error: `Chars` has no method named `count`
-      ┌─ test.ren:4:22
-    4 │   print(name.chars().count(fn(c) => c != "x"))
-      │                      ^^^^^
-      help: its methods: `next`
+    5
+    5
+    true
+    ()
     |}]
 
 let%expect_test "[s5] `line_col` of an offset outside the string, or inside a character, panics" =
-  until "s5"
-    ~says:[ "error: panic: `line_col` 30 is out of bounds for a string of length 23" ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console =
   let text = "first\nsé😀cond\nthird"
   print(text.line_col(0))
   print(text.line_col(30))
-|});
-  until "s5"
-    ~says:
-      [
-        "error: panic: `line_col` 8 is inside a character";
-        "help: the character it's in starts at `text.char_floor(8)`";
-      ]
-    (fun () ->
-      run_error
-        {|
+|};
+  run_error
+    {|
 fn main() uses Console =
   let text = "first\nsé😀cond\nthird"
   print(text.line_col(7))
   print(text.line_col(8))
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `Str` has no method named `line_col`
-      ┌─ test.ren:3:14
-    3 │   print(text.line_col(0))
-      │              ^^^^^^^^
-      help: its methods: `byte_len`, `index`, `split`, `trim`, `starts_with`, `add`, `bytes`, `ascii_lower`, `copy`, `split_at`, `char_floor`, `char_ceil`, `code`, `is_empty`, `chars`
-
-    error: `Str` has no method named `line_col`
-      ┌─ test.ren:4:14
+    (1, 1)
+    error: panic: `line_col` 30 is out of bounds for a string of length 23
+      ┌─ test.ren:4:9
     4 │   print(text.line_col(30))
-      │              ^^^^^^^^
-      help: its methods: `byte_len`, `index`, `split`, `trim`, `starts_with`, `add`, `bytes`, `ascii_lower`, `copy`, `split_at`, `char_floor`, `char_ceil`, `code`, `is_empty`, `chars`
-    (until s5)
-    error: `Str` has no method named `line_col`
-      ┌─ test.ren:3:14
-    3 │   print(text.line_col(7))
-      │              ^^^^^^^^
-      help: its methods: `byte_len`, `index`, `split`, `trim`, `starts_with`, `add`, `bytes`, `ascii_lower`, `copy`, `split_at`, `char_floor`, `char_ceil`, `code`, `is_empty`, `chars`
-
-    error: `Str` has no method named `line_col`
-      ┌─ test.ren:4:14
+      │         ^^^^^^^^^^^^^^^^^
+    (2, 2)
+    error: panic: `line_col` 8 is inside a character
+      ┌─ test.ren:4:9
     4 │   print(text.line_col(8))
-      │              ^^^^^^^^
-      help: its methods: `byte_len`, `index`, `split`, `trim`, `starts_with`, `add`, `bytes`, `ascii_lower`, `copy`, `split_at`, `char_floor`, `char_ceil`, `code`, `is_empty`, `chars`
+      │         ^^^^^^^^^^^^^^^^
+      help: the character it's in starts at `text.char_floor(8)`
     |}]
 
 let%expect_test "[s5] `replace` of the empty string panics, as `split` of it does" =
-  until "s5"
-    ~says:[ "error: panic: `replace` needs a string to replace that isn't empty" ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 fn main() uses Console = print("abc".replace("", "-"))
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `Str` has no method named `replace`
-      ┌─ test.ren:1:38
+    error: panic: `replace` needs a string to replace that isn't empty
+      ┌─ test.ren:1:32
     1 │ fn main() uses Console = print("abc".replace("", "-"))
-      │                                      ^^^^^^^
-      help: its methods: `byte_len`, `index`, `split`, `trim`, `starts_with`, `add`, `bytes`, `ascii_lower`, `copy`, `split_at`, `char_floor`, `char_ceil`, `code`, `is_empty`, `chars`
+      │                                ^^^^^^^^^^^^^^^^^^^^^^
     |}]

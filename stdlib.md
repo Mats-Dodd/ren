@@ -131,6 +131,24 @@ A function that changes parts of an array in place takes them as places, `&xs.sp
 
 A `Str`'s size is `s.byte_len()`, and `s.is_empty()` asks whether it has any; it has no `len` and no `s[i]`, since a reader can't tell bytes from characters, and each is a compile error whose help names the choices ([strings.md](strings.md#length-and-indexing)). `Bytes` keeps `len`. `s.char_floor(i)` and `s.char_ceil(i)` are the character boundaries at or before and at or after `i`, for cutting at most so many bytes, and a slice that cuts a character panics with a help that names `char_floor`. `s.chars()` is a cursor of one-code-point `Str` slices, `c.code()` the code point of one (it panics on any other string), and `Str.of_code(n)` makes one. `'a'` is an `Int` literal, its code point; a non-ASCII one can't be stored in a `UInt8`. `s.ascii_lower()`, on `Str` and `Bytes`, changes `A` to `Z` and nothing else (`lower` was renamed so that a Unicode one, `unicode.lower(s)`, can't be mistaken for it).
 
+Searching, splitting and trimming have the same names on `Str` and `Bytes`, with the same meaning, so code that moves between the two keeps it; whitespace is ASCII on both, `trim`'s (space, `\t`, `\n`, `\r`, form feed: [strings.md](strings.md#characters)). What gives part of the receiver gives a slice of it:
+
+| Name | What it gives |
+|---|---|
+| `s.index(t)` | `Some` of where `t` first starts, or `None` |
+| `s.includes(t)`, `s.starts_with(t)`, `s.ends_with(t)` | whether `t` is in it, at its start, at its end |
+| `s.strip_prefix(t)`, `s.strip_suffix(t)` | `Some` of what's after `t` at its start, or before `t` at its end, or `None` |
+| `s.split(sep)` | the parts between each `sep`; an empty `sep` panics |
+| `s.split_once(sep)` | `Some` of the parts before and after the first `sep`, or `None` |
+| `s.lines()` | an array of its lines: the parts between each `\n`, a `\r` just before it dropped, with no empty last line (Rust's `lines`) |
+| `s.fields()` | an array of the runs between ASCII whitespace, none empty |
+| `s.trim()` | without the ASCII whitespace at its ends |
+| `s.replace(from, to)` | each `from`, left to right and not overlapping, made `to`; an empty `from` panics |
+| `s.ascii_lower()`, `s.ascii_upper()` | `A` to `Z` made `a` to `z`, or the other way, and nothing else |
+| `s.line_col(at)` | on `Str`: the line and column of the offset `at`, `(Int, Int)`, from 1, the column in code points; panics if `at` is past the end or inside a character |
+
+`count()` with no predicate is how many there are, on every receiver: an array, a map, a set, and a cursor, whose items a copy of it gives, so `name.chars().count()` counts code points and a named cursor stays where it was; `count(f)` counts those `f` is true of, on each of them ([operators.md](operators.md#the-collection-methods)). `ren run` and native builds agree on every result and panic here.
+
 `xs.index(x)` is `Some` of the first index where `x` is, or `None`. **When it's hashed:** where `xs` is an array literal of string literals, written there or bound by a `let`, `keys.index(s)` is a string `match` of `s` with an arm for each key, so a release build looks it up through the same perfect hash, about one lookup whatever the number of keys (compiler.md, "Patterns stage"); a debug build runs the method as written, with the same answer. A shape's field names, which a library only knows from `T.shape`, get it once release builds fold them to constants (stage 12).
 
 Strings are built three ways: interpolation, `"jobs/\{job}: \{n * 2}"`, each hole any expression shown through its type's `show`, and `\{x=}` writing `x=` before `x`'s value; `a + b` and `s += t`, on `Str` and `Bytes` (`concat` is gone); and `xs.join(sep)` on an `Array<Str>`. A native build's `s += t` (and `a + b` where `a` isn't used after) appends in place when nothing else holds the string, its buffer doubling when it's full, so a loop of appends is linear; where something else holds it, it copies. A debug build reports, once at a normal exit, on stderr, each `+=` (or `o = o + x`) that copied its string on more than one pass, as a `note:` with the help `build the string once: join, or keep it unique`; `REN_NOTES=0` silences it, and a release build has no report. The capacity and the report are native only: `ren run`'s `+=` copies, and reports nothing, since only meaning has to agree ([compiler.md](compiler.md#bytes-stage-part-two)).

@@ -1,0 +1,5 @@
+// `Bytes`' `split` of no bytes panics, as `Str`'s does.
+
+fn main() uses Console =
+  print("a,b".bytes().split(",".bytes()))
+  print("ab".bytes().split("".bytes()))

@@ -178,6 +178,21 @@ type t =
   | Str_code
   | Str_of_code
   | Array_join
+  | Str_ends_with
+  | Str_ascii_upper
+  | Str_line_col
+      (** `s.line_col(at)`: the line and column of an offset, 1-based, the
+          column in code points *)
+  | Bytes_index
+  | Bytes_starts_with
+  | Bytes_ends_with
+  | Bytes_split
+  | Bytes_trim
+  | Bytes_ascii_upper
+  | Pulled_count
+  | Pulled_count_by
+      (** a cursor's `count()` and `count(f)`, its items pulled, which
+          lowering writes out *)
   | Hash
       (** `x.hash()`, the derived hash a program can call: unseeded, the same
           on every run *)

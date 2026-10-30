@@ -1,0 +1,8 @@
+// `s.line_col(at)` panics on an offset inside a character, its help
+// naming `char_floor` on the string as it's written (test_strs.ml has
+// the help).
+
+fn main() uses Console =
+  let text = "first\nsé😀cond\nthird"
+  print(text.line_col(7))
+  print(text.line_col(10))

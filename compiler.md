@@ -10202,6 +10202,75 @@ in pages, 0.3 to 0.6 ms of its 1.1 ms over `_r`, measured by skipping
 it); an array header that knew every element holds one root could drop
 it once, but every element write would have to keep that true.
 
+### Step 5, as built
+
+**What's built in, and what's Ren.** New intrinsics, each a member:
+`Str.ends_with`, `ascii_upper` and `line_col`, and on `Bytes` `index`,
+`starts_with`, `ends_with`, `split`, `trim` and `ascii_upper`. Each
+`Bytes` one is its `Str` twin in both builds: builtins.ml runs the same
+OCaml on a `VBytes`, and to_mem.ml calls the same runtime function,
+since the two types are laid out alike. The rest is the prelude's Ren,
+on both types: `includes` over `index`; `strip_prefix` and
+`strip_suffix` over `starts_with` and `ends_with` and a slice;
+`split_once` over `index` and two slices; `lines` over `split` of `\n`,
+dropping a byte 13 at the end of every part but the last, and the last
+part if it's empty; `fields` a loop over the bytes keeping the runs
+between `ascii_space`'s five bytes, a slice each; `replace` a check for
+the empty string, then `split(from).join(to)` on `Str`, and on `Bytes`
+(which has no `join`) the parts appended with `+=`. Every slice these
+make is at an ASCII byte or at the ends of a match of valid UTF-8, so a
+`Str`'s never cuts a character, and its check never panics. `Str.index`
+and `starts_with` were interpreter-only until now; they're native here,
+as the rest needs them.
+
+**Natively,** four runtime functions of A strings, each only reading
+what it's given, so a release build passes its two words as an A view
+on the stack (`REN_SV_VIEW`, the `str_args` list of emit_c.ml), and none
+touches B's code: `ren_str_find` (`memchr` for the first byte, then
+`memcmp`; -1 if it isn't there), `ren_str_has` (a prefix or a suffix),
+`ren_str_upper` (a new owner, as `ren_str_lower`), and `ren_line_col`.
+Mem has them as `Str_find`, `Str_has`, `Str_upper` and `Line_col`. An
+`index`'s `Option` is made as `Map.get`'s value is: the offset in a
+variable, `Some` of it or `None` built through Core's constructor in two
+arms. `line_col` is two calls, the line and then the column, at one site
+that names the receiver for the help, the first checking `at`; the
+tuple is built through Core's, as `Some` is. Each panics with the
+interpreter's message and help (builtins.ml, `line_col`).
+
+**`count()`.** On an `Array`, a `Map` or a `Set`, Infer takes
+`xs.count()` with no argument as `xs.len()` (infer_expr.ml, a case
+before `method_call`): a method can't have two arities, and the prelude's
+`count(f)` keeps its signature. On a cursor, a type with a `next` and
+no `count` of its own, `c.count()` and `c.count(f)` are the built-ins
+`pulled_count(items)` and `pulled_count_by(items, f)`
+(`Intrinsic.Pulled_count`), which no program names, as `x.hash()` is
+`hash_of(x)`: `items` is a pull parameter, `fn() -> Option<T>`, and the
+receiver is given to it as `for` would take it (`pull_arg ~known`, the
+receiver's type inferred already), so a named cursor's copy is counted
+and the cursor stays where it was, and `f`'s errors and uses are the
+call's, as any block argument's are. Lowering pulls the receiver
+(`plain_call`) and writes the call out as a loop
+(lower.ml, `pulled_count`): the pull block called until `None`, `f`
+held and called on each item, so neither build has an intrinsic to run.
+A type with a `count` of its own keeps it.
+
+**Choices where the spec is silent.** `split_once("")` is
+`Some(("", s))` and `includes("")` true, as `index("")` is `Some(0)`
+(Rust's). `lines` drops a `\r` only before a `\n`, so a last line's own
+`\r` stays (Rust's since 1.77). `Bytes.replace` of no bytes panics with
+"`replace` needs bytes to replace that aren't empty". `ren run`'s
+`Bytes.replace` appends with `+=`, so it's quadratic in the number of
+matches there, as the interpreter's `+=` is (the brief's "Decided").
+
+**Tests.** rest.ren as specified and the same in every build; strs.t
+adds rest_count.ren (a prelude cursor and a program's, a named one left
+where it was, `zip`'s, a map's and a set's with and without `f`, a
+predicate that fails, one that changes a `var`) and five panics:
+`line_col` past the end and inside a character, `replace` of the empty
+string on `Str` and `Bytes`, and `Bytes.split` of no bytes. test_strs.ml's
+s5 is on, no `until "s5"` left. rest.ren and its `.expected` agreed with
+the spec as written, and are unchanged.
+
 ### Progress log
 
 | step | commit | what's done | what's left |
@@ -10211,6 +10280,7 @@ it once, but every element write would have to keep that true.
 | 3 | "Bytes stage, part two, step 3: appending in place" | the owner's `cap` and `REN_STR_SLICE`; `ren_str_concat_taking` (in place, doubling, copying with room) where the left side dies, `Bytes` too; the debug report with `REN_NOTES`; append_count and the report's block on; `+=` 1.06× Rust on logfmt, linear on both | json's `+=` at 1.41× of Rust, not 1.1×: A's slice objects and `show`'s strings, not the appending (step 4 makes the slices values) |
 | 4, part 1 | "Bytes stage, part two, step 4 (part 1): representation B" | `Str` and `Bytes` two words in release builds (`ren_sv`), inline in locals, small records, arrays and declared fields; boxed (A) at words, blocks, handlers, tuples' and errors' fields and map values; walks given a stack view; `ren_map_set_sv`; literals uncounted; `lend_parts`; tok 0.65, sort 0.35, map 0.85, group 1.00, logs 0.62 of step 3; slices_count's objects on | the uncounted view, the 4 GiB escape (a value past it panics), unboxed map entries, the 16-byte owner experiment; slices json and pages at 1.2× and 1.2 to 1.6× of `_r` and pages 2.8× of Rust, from counting the root on each element read and free |
 | 4, part 2 | "Bytes stage, part two, step 4 (part 2): the uncounted view" | the uncounted view (`Str_view`, `ren_sv_view_slice`), a slice a part of what it's of; lent element reads (`Array_peek`, `Buf_peek`) of arrays nothing takes, in both builds; `lend_parts` to a fixpoint and through calls that take nothing counted; Mem Lint's lent parts and `unlend`; a run of one root dropped at once when an array is freed; strs_lent.t; slices json 1.11 and logs 1.07 of their `_r` forms, json 0.73 and pages 0.61 of part one's instructions | pages at 1.23 of `_r` and 1.97 to 2.15 of Rust, from the free walk; json_r at 2.0 to 2.1 of Rust, its own; the 4 GiB escape (a view of one), unboxed map entries, the 16-byte owner experiment |
+| 5 | "Bytes stage, part two, step 5: the rest of the API" | `includes`, `ends_with`, `strip_prefix`, `strip_suffix`, `split_once`, `lines`, `fields`, `replace`, `ascii_upper`, `line_col` with its panics, on `Str` and `Bytes` alike (`Bytes` given `index`, `starts_with`, `split` and `trim`), in the interpreter and natively, `Str.index` and `starts_with` native too; `count()` on arrays, maps and sets, and `count()` and `count(f)` on every cursor, pulled; rest.ren, rest_count.ren and five panics the same in every build; s5 on; stdlib.md's table | `ren run`'s `Bytes.replace` quadratic in its matches, as its `+=` is |
 
 ## Services stage
 

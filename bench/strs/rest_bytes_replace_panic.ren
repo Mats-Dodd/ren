@@ -1,0 +1,5 @@
+// `Bytes`' `replace` of no bytes panics, as `Str`'s does.
+
+fn main() uses Console =
+  print("abc".bytes().replace("b".bytes(), "".bytes()))
+  print("abc".bytes().replace("".bytes(), "-".bytes()))

@@ -398,6 +398,17 @@ type rt =
   | Panic_str
       (** panic at its site with this [Str]: a failed `assert` of the
           prelude's, whose message shows values ([assert_message]) *)
+  | Str_find
+      (** `s.index(t)`'s offset: an [Int], where [t] first starts in [s], or
+          -1; `Bytes`' too *)
+  | Str_has of bool
+      (** `s.starts_with(t)`, or `s.ends_with(t)` if [true]: a [Bool];
+          `Bytes`' too *)
+  | Str_upper  (** `s.ascii_upper()`, as [Str_lower]; `Bytes`' too *)
+  | Line_col of bool
+      (** `s.line_col(at)`'s line, or its column if [true]: an [Int], from
+          1, the column in code points, which panics at its site if [at]
+          isn't in [s] or is inside a character *)
   | Show_int
   | Show_float
   | Show_bool
@@ -1013,6 +1024,10 @@ let show_rt = function
   | Str_of_code -> "str-of-code"
   | Str_join -> "str-join"
   | Panic_str -> "panic-str"
+  | Str_find -> "str-find"
+  | Str_has suffix -> if suffix then "str-has-suffix" else "str-has-prefix"
+  | Str_upper -> "str-upper"
+  | Line_col col -> if col then "line-col-col" else "line-col-line"
 
 let atoms xs = List.map (fun a -> Core.Atom (show_atom a)) xs
 let a x = Core.Atom x

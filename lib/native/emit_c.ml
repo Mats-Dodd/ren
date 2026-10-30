@@ -437,7 +437,8 @@ let rec runtime ?result rt args site_arg =
   let str_args =
     match rt with
     | Console_write | Console_error | Utf8_error | Utf8_incomplete | Utf8_lossy
-    | Char_bound _ | Str_code | Str_lower | Splice _ | Panic_str ->
+    | Char_bound _ | Str_code | Str_lower | Splice _ | Panic_str | Str_find
+    | Str_has _ | Str_upper | Line_col _ ->
         true
     | _ -> false
   in
@@ -457,7 +458,7 @@ let rec runtime ?result rt args site_arg =
       let fresh =
         match rt with
         | Show_int | Show_float | Show_bool | Bytes_zeros | Bytes_of
-        | Str_of_code | Str_lower | Splice _ ->
+        | Str_of_code | Str_lower | Str_upper | Splice _ ->
             true
         | _ -> false
       in
@@ -818,6 +819,10 @@ let rec runtime ?result rt args site_arg =
   | Str_of_code -> sprintf "ren_str_of_code(%s, %s)" (a 0) (site ())
   | Str_join -> sprintf "ren_strs_join(%s, %s)" (a 0) (a 1)
   | Panic_str -> sprintf "ren_panic_str(%s, %s)" (site ()) (a 0)
+  | Str_find -> sprintf "ren_str_find(%s, %s)" (a 0) (a 1)
+  | Str_has suffix -> sprintf "ren_str_has(%s, %s, %b)" (a 0) (a 1) suffix
+  | Str_upper -> sprintf "ren_str_upper(%s)" (a 0)
+  | Line_col col -> sprintf "ren_line_col(%s, %s, %b, %s)" (a 0) (a 1) col (site ())
   | Str_box | Str_unbox -> bug "a box of a string that isn't two words"
   | Str_view _ -> bug "a view of a string that isn't two words"
   | New_desc _ -> bug "a descriptor built outside a Let"

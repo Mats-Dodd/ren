@@ -51,8 +51,14 @@ don't change:
 
 Step 5, the rest of the API:
 
-  $ spec strs/rest.ren
-  strs/rest.ren: not yet
+  $ for f in rest rest_count rest_line_col_panic rest_line_col_inside_panic rest_replace_panic rest_bytes_replace_panic rest_bytes_split_panic; do spec strs/$f.ren; done
+  strs/rest.ren: as specified
+  strs/rest_count.ren: as specified
+  strs/rest_line_col_panic.ren: as specified
+  strs/rest_line_col_inside_panic.ren: as specified
+  strs/rest_replace_panic.ren: as specified
+  strs/rest_bytes_replace_panic.ren: as specified
+  strs/rest_bytes_split_panic.ren: as specified
 
 Each program built natively prints what `ren run` prints, to stdout and
 stderr, and exits as it does: debug, with Perceus's counting and the
@@ -181,8 +187,49 @@ line of what `ren build` said.
   strs/slices_count.ren, release: the same, exit 0, objects live at exit 0
   strs/slices_count.ren, tcc: the same, exit 0, objects live at exit 0
   strs/slices_count.ren, ren run --release: the same
-  $ native strs/rest.ren
-  strs/rest.ren: not native yet: error: `Str` has no method named `includes`
+  $ for f in rest rest_count rest_line_col_panic rest_line_col_inside_panic rest_replace_panic rest_bytes_replace_panic rest_bytes_split_panic; do native strs/$f.ren; done
+  strs/rest.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/rest.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 31 copies, 1 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest.ren, release: the same, exit 0, objects live at exit 0
+  strs/rest.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/rest.ren, ren run --release: the same
+  strs/rest_count.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/rest_count.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 17 copies, 3 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest_count.ren, release: the same, exit 0, objects live at exit 0
+  strs/rest_count.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/rest_count.ren, ren run --release: the same
+  strs/rest_line_col_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  strs/rest_line_col_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest_line_col_panic.ren, release: the same, exit 1, objects live at exit 2
+  strs/rest_line_col_panic.ren, tcc: the same, exit 1, objects live at exit 2
+  strs/rest_line_col_panic.ren, ren run --release: the same
+  strs/rest_line_col_inside_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  strs/rest_line_col_inside_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest_line_col_inside_panic.ren, release: the same, exit 1, objects live at exit 2
+  strs/rest_line_col_inside_panic.ren, tcc: the same, exit 1, objects live at exit 2
+  strs/rest_line_col_inside_panic.ren, ren run --release: the same
+  strs/rest_replace_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/rest_replace_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 4 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest_replace_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/rest_replace_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/rest_replace_panic.ren, ren run --release: the same
+  strs/rest_bytes_replace_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/rest_bytes_replace_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest_bytes_replace_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/rest_bytes_replace_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/rest_bytes_replace_panic.ren, ren run --release: the same
+  strs/rest_bytes_split_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  strs/rest_bytes_split_panic.ren, naive: the same, exit 1, objects live at exit 1
+  ren specialized: 2 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/rest_bytes_split_panic.ren, release: the same, exit 1, objects live at exit 1
+  strs/rest_bytes_split_panic.ren, tcc: the same, exit 1, objects live at exit 1
+  strs/rest_bytes_split_panic.ren, ren run --release: the same
 
 What a build allocates (`--stats`), which `ren run` can't show. Step 3:
 20,000 appends to a string nothing else holds, and to `Bytes`, grow
