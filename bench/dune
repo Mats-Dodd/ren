@@ -19,6 +19,7 @@
 (cram
  (applies_to build)
  (deps
+  (env_var PATH)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files *.ren)
@@ -66,6 +67,7 @@
 (cram
  (applies_to tasks)
  (deps
+  (env_var PATH)
   %{bin:ren}
   (glob_files %{project_root}/examples/crawler/*.ren)
   (glob_files %{project_root}/examples/just/*.ren)
@@ -98,6 +100,7 @@
 (cram
  (applies_to bytes)
  (deps
+  (env_var PATH)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files bytes/*.ren)
@@ -111,6 +114,7 @@
 (cram
  (applies_to strs)
  (deps
+  (env_var PATH)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files strs/*.ren)
@@ -121,6 +125,7 @@
  (enabled_if
   (= %{env:REN_BIG_TESTS=0} 1))
  (deps
+  (env_var PATH)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files strs/*.ren)
@@ -134,6 +139,7 @@
 (cram
  (applies_to patterns)
  (deps
+  (env_var PATH)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files patterns/*.ren)

@@ -6,7 +6,11 @@
 
 (cram
  (deps
+  (env_var PATH)
   %{bin:ren}
+  %{bin:perl}
+  %{bin:ps}
+  %{bin:python3}
   (glob_files *.ren)
   (glob_files two/*.ren)
   (glob_files shop/*.ren)
