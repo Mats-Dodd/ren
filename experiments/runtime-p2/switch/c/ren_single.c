@@ -651,10 +651,12 @@ int main(int argc, char **argv) {
   }
   double mn = ns[0];
   for (int i = 1; i < a.reps; i++) mn = ns[i] < mn ? ns[i] : mn;
+  char rl[64 * 24];
+  double mx = reps_list(ns, a.reps, rl, sizeof rl);
   printf("SWITCH lang=ren_c bench=%s n=%llu max=%llu reps=%d ns_per_op=%.2f min_ns_per_op=%.2f "
          "extra_ns=%.2f heap_allocs_per_op=%.4f sys_allocs_per_op=%.5f bytes_per_task=%.1f "
-         "footprint_per_task=%.1f task_header=%zu check=%s\n",
+         "footprint_per_task=%.1f task_header=%zu max_ns_per_op=%.2f reps_ns=%s check=%s\n",
          a.bench, (unsigned long long)a.n, (unsigned long long)a.max, a.reps, median(ns, a.reps), mn,
-         median(ex, a.reps), r0.objs, r0.sys, r0.bytes, r0.fp_bytes, sizeof(task), ok ? "ok" : "FAIL");
+         median(ex, a.reps), r0.objs, r0.sys, r0.bytes, r0.fp_bytes, sizeof(task), mx, rl, ok ? "ok" : "FAIL");
   return ok ? 0 : 1;
 }

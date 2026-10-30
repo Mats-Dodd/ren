@@ -1,0 +1,6 @@
+cmd: flock -s /tmp/ren-bench/lock bin/mem_c --layout packed --n 50000 --state 32
+cmd: flock -s /tmp/ren-bench/lock bin/mem_c --layout packed --n 50000 --state 256
+cmd: flock -s /tmp/ren-bench/lock bin/mem_c --layout line --n 50000 --state 32
+cmd: flock -s /tmp/ren-bench/lock bin/mem_c --layout line --n 50000 --state 256
+cmd: flock -s /tmp/ren-bench/lock bin/mem_c --layout line_header --n 50000 --state 32
+cmd: flock -s /tmp/ren-bench/lock bin/mem_c --layout line_header --n 50000 --state 256

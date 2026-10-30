@@ -227,3 +227,22 @@ by microseconds with load.
   overestimates the wait slightly.
 - **C only.** P1 showed the C and Rust versions agree. The question here
   is policy, not language.
+
+## Cloud machine (Linux) port
+
+On Linux `c/spin.c` uses `clock_gettime(CLOCK_MONOTONIC)` (ticks are ns),
+`FUTEX_WAIT/WAKE_PRIVATE` for the sleeping word, `pause` as the spin hint,
+timer slack 1 ns (the 50 µs default would stretch every timed park), and pins
+worker i to CPU i when there are at least as many CPUs as workers, so a caller
+and its owner are never on one core. With more workers than CPUs nothing is
+pinned (`pin=0` on the line). The cloud machine has 4 vCPUs, so
+`measure-cloud.sh` runs the matrix with workers {2, 4, 8} and section 2 at 4
+workers; 8 is oversubscribed by construction. See `results/README.md`.
+
+```
+./build.sh                                   # under flock -s
+./measure.sh --quick                         # under flock -s; TSan log -> results/cloud/tsan.log
+./measure-cloud.sh --shard 0/2               # each config under flock -x, 7 reps, re-runs, NOISY
+./measure-cloud.sh --shard 1/2 --resume <stamp>
+python3 analyze.py results/cloud/full-<stamp>.txt --wait-workers 4
+```

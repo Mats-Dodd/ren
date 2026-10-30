@@ -19,9 +19,13 @@ cd "$(dirname "$0")"
 [ -x bin/spin ] && [ -x bin/spin_tsan ] || ./build.sh >&2
 mkdir -p results
 if [ "${1:-}" = "--quick" ]; then
+  # results/tsan.log is the macOS reference; other machines write results/cloud/tsan.log.
+  tlog=results/tsan.log; [ "$(uname -s)" = Darwin ] && : > "$tlog"
+  [ "$(uname -s)" = Darwin ] || { mkdir -p results/cloud; tlog=results/cloud/tsan.log
+    echo "# machine=cloud $(date '+%F %T') bin/spin_tsan --check (see experiments/MACHINE-cloud.md)" > "$tlog"; }
   ./bin/spin --check
-  ./bin/spin_tsan --check >/dev/null 2>results/tsan.log || { echo "TSAN check failed" >&2; exit 1; }
-  if grep -q ThreadSanitizer results/tsan.log; then echo "TSAN: races, see results/tsan.log" >&2; exit 1; fi
+  ./bin/spin_tsan --check >/dev/null 2>>"$tlog" || { echo "TSAN check failed" >&2; exit 1; }
+  if grep -q ThreadSanitizer "$tlog"; then echo "TSAN: races, see $tlog" >&2; exit 1; fi
   echo "TSAN ok"
   npi=$(./bin/spin --calibrate)
   for a in "--budget-ns 0 --gap-ns 20000 --workers 2" "--budget-ns 2000 --gap-ns 0 --workers 8" \

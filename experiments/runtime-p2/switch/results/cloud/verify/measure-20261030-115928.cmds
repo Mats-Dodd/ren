@@ -1,0 +1,3 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 1 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-20261030-115928.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 2 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-20261030-115928.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 3 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-20261030-115928.err ren_c pingpong 1000000 7 64

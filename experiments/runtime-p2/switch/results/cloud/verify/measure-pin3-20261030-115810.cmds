@@ -1,0 +1,1 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one fanout_yield_ren_c 1 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-pin3-20261030-115810.err ren_c fanout_yield 1000 63 64

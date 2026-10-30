@@ -31,17 +31,16 @@
 // pin either blocks the claim, sees EV, or sees the new key. A reader that
 // misses spuriously falls into the miss path, which rechecks under the lock.
 #include "common.h"
-#include <mach/mach_time.h>
-#include <os/lock.h>
+#include "plat.h" // clock, os lock, QoS, cpu_relax: macOS or Linux
 #include <pthread.h>
-#include <pthread/qos.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <unistd.h>
 
-#define LINE 128 // M4 cache line
+// 128: the M4's line. On x86 the line is 64 B but the L2 spatial prefetcher
+// pulls line pairs, and keeping 128 keeps the layout identical to macOS.
+#define LINE 128
 #define STREAM (1u << 19)
-#define HBUCKETS 65536
 #define EV 0x80000000u
 
 enum { V_A = 0, V_B = 1, V_C = 2 };
@@ -49,24 +48,23 @@ static const char *VNAMES[] = {"a_lru", "b_sampled", "c_clock"};
 
 // ---- locks: phase 1's two kinds -------------------------------------------
 typedef struct { _Atomic uint32_t v; } spin_t;
-static inline void cpu_relax(void) { __asm__ volatile("isb" ::: "memory"); }
-typedef union { spin_t spin; os_unfair_lock os; } lock_t;
-static int lock_os; // 0 = spin (TTAS), 1 = os_unfair_lock; one predictable branch
+typedef union { spin_t spin; oslock_t os; } lock_t;
+static int lock_os; // 0 = spin (TTAS), 1 = OS lock (plat.h); one predictable branch
 
 static inline void lk(lock_t *l) {
-    if (lock_os) { os_unfair_lock_lock(&l->os); return; }
+    if (lock_os) { oslock_lock(&l->os); return; }
     for (;;) {
         if (!atomic_exchange_explicit(&l->spin.v, 1, memory_order_acquire)) return;
         while (atomic_load_explicit(&l->spin.v, memory_order_relaxed)) cpu_relax();
     }
 }
 static inline int trylk(lock_t *l) {
-    if (lock_os) return os_unfair_lock_trylock(&l->os);
+    if (lock_os) return oslock_trylock(&l->os);
     return !atomic_load_explicit(&l->spin.v, memory_order_relaxed) &&
            !atomic_exchange_explicit(&l->spin.v, 1, memory_order_acquire);
 }
 static inline void unlk(lock_t *l) {
-    if (lock_os) { os_unfair_lock_unlock(&l->os); return; }
+    if (lock_os) { oslock_unlock(&l->os); return; }
     atomic_store_explicit(&l->spin.v, 0, memory_order_release);
 }
 
@@ -163,6 +161,7 @@ static void build(uint32_t parts, uint32_t max) {
     for (uint32_t i = 0; i < max; i++) {
         ST(&I[i].ctl, variant == V_A ? 0 : EV, relaxed); // b, c: unallocated slots are claimed
         I[i].prev = I[i].next = -1;
+        if (lock_os) oslock_init(&I[i].lock.os);
     }
     S = aligned_alloc(LINE, sizeof(shard_t) * parts);
     memset(S, 0, sizeof(shard_t) * parts);
@@ -172,6 +171,7 @@ static void build(uint32_t parts, uint32_t max) {
         S[j].t.keys = calloc(sz, sizeof(uint64_t));
         S[j].t.idx = calloc(sz, sizeof(int32_t));
         S[j].head = S[j].tail = -1;
+        if (lock_os) oslock_init(&S[j].lock.os);
         S[j].cap = max / parts + (j < max % parts); // a only; the caps sum to max
     }
     ST(&nalloc, 0, relaxed);
@@ -353,24 +353,19 @@ static inline void at(worker_t *w, uint64_t k) {
 static _Atomic int ready, go, stop;
 static int qos_mode;
 
-static void set_qos(void) {
-    if (qos_mode == 0) pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-    else if (qos_mode == 1) pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
-}
-
 static void *worker(void *arg) {
     worker_t *w = arg;
-    set_qos();
+    set_qos(qos_mode);
     const uint32_t *st = w->stream;
     uint64_t pos = w->pos;
     uint64_t ops = 0;
     atomic_fetch_add(&ready, 1);
     while (!LD(&go, acquire)) cpu_relax();
     while (!LD(&stop, relaxed)) {
-        uint64_t t0 = mach_absolute_time();
+        uint64_t t0 = clk_now();
         w->now = t0; // the runtime's per-worker clock, refreshed every 16 calls
         at(w, st[pos++ & (STREAM - 1)]);
-        uint64_t dt = mach_absolute_time() - t0;
+        uint64_t dt = (clk_now() - t0) >> HSHIFT;
         w->hist[dt < HBUCKETS ? dt : HBUCKETS - 1]++;
         for (int j = 1; j < 16; j++) at(w, st[pos++ & (STREAM - 1)]);
         ops += 16;
@@ -380,7 +375,6 @@ static void *worker(void *arg) {
     return NULL;
 }
 
-static uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static int cmp_d(const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
     return x < y ? -1 : x > y;
@@ -459,9 +453,8 @@ int main(int argc, char **argv) {
     uint32_t U = (uint32_t)(atof(uf) * (double)max + 0.5);
     workload_t wl;
     workload_init(&wl, di, U, (uint32_t)max);
-    mach_timebase_info_data_t tb;
-    mach_timebase_info(&tb);
-    double tick_ns = (double)tb.numer / tb.denom;
+    double tick_ns = clk_tick_ns();      // one clock tick
+    double bucket_ns = tick_ns * (double)(1u << HSHIFT); // one histogram bucket
 
     // One key stream per worker, made before timing. Scan cursors start
     // spread over the loop so workers don't walk it in step.
@@ -521,19 +514,19 @@ int main(int argc, char **argv) {
         if (r < 0) continue;
         t_hits += hits; t_misses += misses; t_ops += total;
         mops[r] = (double)total / (double)(t1 - t0) * 1e3;
-        p50[r] = hist_pct(h, hn, 0.50) * tick_ns;
-        p99[r] = hist_pct(h, hn, 0.99) * tick_ns;
+        p50[r] = hist_pct(h, hn, 0.50) * bucket_ns;
+        p99[r] = hist_pct(h, hn, 0.99) * bucket_ns;
     }
     qsort(mops, reps, sizeof(double), cmp_d);
     qsort(p50, reps, sizeof(double), cmp_d);
     qsort(p99, reps, sizeof(double), cmp_d);
     printf("k1b lang=c variant=%s k=%d lock=%s dist=%s max=%ld universe=%s parts=%ld workers=%d reps=%ld ms=%ld "
            "mops_median=%.2f mops_min=%.2f mops_max=%.2f at_p50_ns=%.0f at_p99_ns=%.0f hit_rate=%.4f "
-           "hits=%llu misses=%llu evictions=%llu retries=%llu ok=1\n",
+           "hits=%llu misses=%llu evictions=%llu retries=%llu clock=%s tick_ns=%.4f bucket_ns=%.2f oslock=%s ok=1\n",
            VNAMES[variant], variant == V_B ? K : 0, lock_os ? "os" : "spin", dist, max, uf, parts, nw, reps, ms,
            mops[reps / 2], mops[0], mops[reps - 1], p50[reps / 2], p99[reps / 2],
            t_ops ? (double)t_hits / (double)t_ops : 0.0, (unsigned long long)t_hits, (unsigned long long)t_misses,
            (unsigned long long)LD(&evictions, relaxed),
-           (unsigned long long)t_retries);
+           (unsigned long long)t_retries, CLOCK_NAME, tick_ns, bucket_ns, OSLOCK_NAME);
     return 0;
 }

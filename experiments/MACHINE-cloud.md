@@ -25,9 +25,14 @@ Results from the owner's laptop stay labelled `macOS` (Apple M4 Max, 12P+4E).
 | rustc / cargo | 1.97.0 stable (2026-07-07) | preinstalled; targets x86_64/aarch64 `-linux-musl`, `wasm32-unknown-unknown` added |
 | rustc nightly | 1.101.0-nightly (92b5b8c87 2026-10-29), Miri 0.1.0 | `rustup toolchain install nightly`, for Miri only |
 | go | 1.24.7 linux/amd64 | preinstalled |
-| zig | **0.14.1, pinned** | official tarball `zig-x86_64-linux-0.14.1.tar.xz` in `/opt/zig`, linked as `/usr/local/bin/zig` |
+| zig | **0.17.0, pinned** (the version research/native-lang/SYNTHESIS.md §3 names) | official tarball `zig-x86_64-linux-0.17.0.tar.xz`, sha256 `1cbe9df9…2026` checked, in `/opt/zig`, linked as `/usr/local/bin/zig`. (0.14.1 was installed first and is unused.) |
 | node | 22.22.0 (no JSPI: `WebAssembly.Suspending` undefined without flags) | preinstalled |
 | python3 | 3.13 | preinstalled |
+| qemu-user-static | 8.2.2 (runs aarch64 musl binaries) | apt |
+| wasmtime | 25.0.3 | release tarball in `/opt/wasmtime` |
+| hyperfine | 1.18.0 | apt |
+| bindgen | 0.66.1 (CLI) | apt |
+| cloc | 1.98 (tokei not packaged; cloc counts lines) | apt |
 | valgrind | 3.22.0 | preinstalled |
 
 ## Measurement rules on this machine

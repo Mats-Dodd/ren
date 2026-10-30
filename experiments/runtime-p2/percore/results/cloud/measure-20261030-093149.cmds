@@ -1,0 +1,48 @@
+b_pc_spin_g95_uniform_w1: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g95_uniform_w1: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g95_uniform_w1: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g95_uniform_w1: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g95_uniform_w2: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g95_uniform_w2: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g95_uniform_w2: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g95_uniform_w2: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g95_uniform_w4: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g95_uniform_w4: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g95_uniform_w4: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g95_uniform_w4: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g95_uniform_w8: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g95_uniform_w8: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g95_uniform_w8: ./bin/percore --variant pc_spin --get-pct 95 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g95_uniform_w8: ./bin/percore --variant pc_park --get-pct 95 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g50_uniform_w1: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g50_uniform_w1: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g50_uniform_w1: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g50_uniform_w1: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g50_uniform_w2: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g50_uniform_w2: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g50_uniform_w2: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g50_uniform_w2: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g50_uniform_w4: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g50_uniform_w4: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g50_uniform_w4: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g50_uniform_w4: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g50_uniform_w8: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g50_uniform_w8: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g50_uniform_w8: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g50_uniform_w8: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g5_uniform_w1: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g5_uniform_w1: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g5_uniform_w1: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g5_uniform_w1: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 1 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g5_uniform_w2: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g5_uniform_w2: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g5_uniform_w2: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g5_uniform_w2: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 2 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g5_uniform_w4: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g5_uniform_w4: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g5_uniform_w4: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g5_uniform_w4: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_spin_g5_uniform_w8: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42
+b_pc_park_g5_uniform_w8: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42
+b_pc_spin_if4_g5_uniform_w8: ./bin/percore --variant pc_spin --get-pct 5 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --inflight 4
+b_pc_park_if4_g5_uniform_w8: ./bin/percore --variant pc_park --get-pct 5 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --inflight 4

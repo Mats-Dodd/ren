@@ -1,0 +1,25 @@
+o_ws_one_g50_uniform_w3_pinauto: ./bin/percore --variant ws_one --get-pct 50 --dist uniform --workers 3 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_ws_one_g50_uniform_w4_pinoff: ./bin/percore --variant ws_one --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --pin off
+o_ws_one_g50_uniform_w5_pinauto: ./bin/percore --variant ws_one --get-pct 50 --dist uniform --workers 5 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_ws_one_g50_uniform_w6_pinauto: ./bin/percore --variant ws_one --get-pct 50 --dist uniform --workers 6 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_ws_one_g50_uniform_w8_pinon: ./bin/percore --variant ws_one --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --pin on
+o_ws_sharded_g50_uniform_w3_pinauto: ./bin/percore --variant ws_sharded --get-pct 50 --dist uniform --workers 3 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_ws_sharded_g50_uniform_w4_pinoff: ./bin/percore --variant ws_sharded --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --pin off
+o_ws_sharded_g50_uniform_w5_pinauto: ./bin/percore --variant ws_sharded --get-pct 50 --dist uniform --workers 5 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_ws_sharded_g50_uniform_w6_pinauto: ./bin/percore --variant ws_sharded --get-pct 50 --dist uniform --workers 6 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_ws_sharded_g50_uniform_w8_pinon: ./bin/percore --variant ws_sharded --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --pin on
+o_pc_spin_g50_uniform_w3_pinauto: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 3 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_pc_spin_g50_uniform_w4_pinoff: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --pin off
+o_pc_spin_g50_uniform_w5_pinauto: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 5 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_pc_spin_g50_uniform_w6_pinauto: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 6 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_pc_spin_g50_uniform_w8_pinon: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --pin on
+o_pc_park_g50_uniform_w3_pinauto: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 3 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_pc_park_g50_uniform_w4_pinoff: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --pin off
+o_pc_park_g50_uniform_w5_pinauto: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 5 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_pc_park_g50_uniform_w6_pinauto: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 6 --ops 200000 --keys 1048576 --seed 42 --pin auto
+o_pc_park_g50_uniform_w8_pinon: ./bin/percore --variant pc_park --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --pin on
+o_pc_spin_if4_g50_uniform_w3_pinauto: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 3 --ops 200000 --keys 1048576 --seed 42 --pin auto --inflight 4
+o_pc_spin_if4_g50_uniform_w4_pinoff: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 4 --ops 200000 --keys 1048576 --seed 42 --pin off --inflight 4
+o_pc_spin_if4_g50_uniform_w5_pinauto: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 5 --ops 200000 --keys 1048576 --seed 42 --pin auto --inflight 4
+o_pc_spin_if4_g50_uniform_w6_pinauto: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 6 --ops 200000 --keys 1048576 --seed 42 --pin auto --inflight 4
+o_pc_spin_if4_g50_uniform_w8_pinon: ./bin/percore --variant pc_spin --get-pct 50 --dist uniform --workers 8 --ops 200000 --keys 1048576 --seed 42 --pin on --inflight 4

@@ -1,0 +1,28 @@
+# switch measure-pin3 on machine: cloud (claude.ai cloud container; experiments/MACHINE-cloud.md)
+# date: 2026-10-30T11:59:08+00:00  host: Linux 6.18.44-fc-v185 x86_64
+# cpu: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 vCPUs
+# toolchains: Ubuntu clang version 18.1.3 (1ubuntu1); go version go1.24.7 linux/amd64; rustc 1.97.0 (2d8144b78 2026-07-07)
+# GOMAXPROCS=1, pinned to cpu 3 (taskset -c 3); PROCS=7 processes a config; in-process reps as measure-p2.sh
+# memory: peak_rss = child ru_maxrss (not macOS phys_footprint); see the script header
+# load1 at script start: 4.19
+cfg=park_switch_go try=1 proc=1 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=778.99 min_ns_per_op=679.65 extra_ns=1313.50 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2661.8 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=934.24 reps_ns=679.65,813.91,718.18,723.71,778.99,934.24,820.99 check=ok peak_rss=889999360
+cfg=park_switch_go try=1 proc=2 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=817.53 min_ns_per_op=755.11 extra_ns=1351.15 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2669.4 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=1044.79 reps_ns=1044.79,755.11,783.26,793.23,817.53,882.09,821.70 check=ok peak_rss=889999360
+cfg=park_switch_go try=1 proc=3 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=803.57 min_ns_per_op=679.17 extra_ns=1411.18 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2662.2 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=848.72 reps_ns=679.17,803.57,751.63,794.18,848.72,816.60,831.88 check=ok peak_rss=890048512
+cfg=park_switch_go try=1 proc=4 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=810.61 min_ns_per_op=756.52 extra_ns=1344.68 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2670.3 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=1048.44 reps_ns=1048.44,874.29,756.52,767.70,775.12,810.61,818.48 check=ok peak_rss=889999360
+cfg=park_switch_go try=1 proc=5 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=796.03 min_ns_per_op=732.81 extra_ns=1425.93 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2669.9 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=964.71 reps_ns=909.31,732.81,796.03,748.97,770.74,964.71,832.96 check=ok peak_rss=889999360
+cfg=park_switch_go try=1 proc=6 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=821.97 min_ns_per_op=735.01 extra_ns=1335.01 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2662.5 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=1199.02 reps_ns=1199.02,735.01,753.09,836.67,799.81,891.25,821.97 check=ok peak_rss=889995264
+cfg=park_switch_go try=1 proc=7 SWITCH lang=go bench=park n=100000 max=64 reps=7 ns_per_op=818.98 min_ns_per_op=621.02 extra_ns=1416.59 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2661.3 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=898.46 reps_ns=621.02,721.27,759.31,818.98,898.46,873.54,858.94 check=ok peak_rss=889999360
+BASE cfg=park_switch_go try=1 park_n1_peak_rss=2379776
+LOAD cfg=park_switch_go try=1 load1_start=4.19 load1_end=3.49 steal_ticks=16 secs=16.4
+CFG name=park_switch_go lang=switch_go bench=park n=100000 max=64 reps=7 used_try=1 tries=1 noisy=0 procs=7 ns_per_op_med=810.61 ns_per_op_min=778.99 ns_per_op_max=821.97 spread=0.053 extra_ns_med=1351.15 extra_ns_min=1313.50 extra_ns_max=1425.93 heap_allocs_per_op=3.0003 sys_allocs_per_op=0 bytes_per_task=2661.3 footprint_per_task=0 peak_rss_med=889999360 check=ok park_n1_peak_rss=2379776 ext_rss_per_task=8876.2 load1_start=4.19 load1_end=3.49 steal_ticks=16 secs=16.4
+# ---- report (machine: cloud). value = median over processes of each process's in-process median
+# config                                    value   spread  noisy  PLAN predicted verdict
+# park switch_go                         810.61ns    0.053         150-300        ABOVE prediction
+# park_extra switch_go                  1351.15ns                  300-700        ABOVE prediction
+# park_bytes switch_go                  2661.30B                   2500-3500      in range
+# park_ext_rss switch_go                8876.20B                                  
+# falsifier: ren_c/raw_c pingpong = nanx, park wake = nanx (PLAN: design falsified if either > 3x)
+# falsifier: ren_c parked task = nan B (PLAN: falsified if > 256 B)
+# NOISY configs (not headlines): none
+# check failures: none
+# load1 at script end: 3.49

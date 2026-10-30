@@ -1,5 +1,5 @@
 // K1b's hit-rate simulator: one recorded trace, every eviction policy,
-// single-threaded and deterministic. rust/src/bin/sim.rs mirrors it bit for
+// single-threaded and deterministic. rust/src/sim.rs mirrors it bit for
 // bit, and measure.sh fails if their lines differ. See ../PLAN.md.
 //
 //   lru      exact LRU with one global cap of max (the reference)

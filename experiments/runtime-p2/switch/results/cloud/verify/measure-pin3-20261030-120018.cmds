@@ -1,0 +1,3 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_raw_c 1 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-pin3-20261030-120018.err raw_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_raw_c 2 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-pin3-20261030-120018.err raw_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_raw_c 3 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-pin3-20261030-120018.err raw_c park 100000 7 64

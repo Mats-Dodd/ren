@@ -2,9 +2,21 @@
 name = "k1b"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 
-# No dependencies: locks, QoS and the clock are the same macOS calls the C uses.
+# No dependencies: locks, QoS and the clock are the same OS calls the C uses
+# (src/plat.rs mirrors c/plat.h: macOS and Linux).
 [dependencies]
+
+# The binaries live in src/, not src/bin/: experiments/.gitignore ignores bin/,
+# which also matched src/bin/ and kept the original sources out of git.
+[[bin]]
+name = "k1b"
+path = "src/k1b.rs"
+
+[[bin]]
+name = "sim"
+path = "src/sim.rs"
 
 [profile.release]
 opt-level = 3

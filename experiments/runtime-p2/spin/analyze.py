@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Summarise a spin-sweep results file.
 
-    python3 analyze.py results/full-<stamp>.txt [--x 0.05]
+    python3 analyze.py results/full-<stamp>.txt [--x 0.05] [--wait-workers 8] [--keep-noisy]
+
+--wait-workers is the worker count of section 2 (reply-only / idle-only);
+the cloud matrix (measure-cloud.sh) uses 4. Lines marked noisy=1 (the
+config's spread stayed above 10% after re-runs) are dropped unless
+--keep-noisy is given.
 
 X is the CPU allowance: a budget is admissible at a config if its waste
 (util - work_util, a fraction of all workers' capacity) is at most X above
@@ -17,9 +22,10 @@ METRICS = ["hop_p50_ns", "hop_p99_ns", "hop_p999_ns", "reach_p99_ns", "hops_per_
            "util", "work_util", "waste", "spin_hit", "parks_per_hop", "wakes_per_hop"]
 
 
-def parse(path):
+def parse(path, keep_noisy=False):
     rows = defaultdict(list)
     fails = 0
+    noisy = set()
     for line in open(path):
         if not line.startswith("SPIN "):
             continue
@@ -27,10 +33,16 @@ def parse(path):
             fails += 1
             continue
         kv = dict(t.split("=", 1) for t in line.split()[1:] if "=" in t)
+        if kv.get("noisy") == "1" and not keep_noisy:
+            noisy.add(tuple(sorted((k, kv[k]) for k in ("policy", "reply_spin_ns", "idle_spin_ns",
+                                                         "service_ns", "gap_ns", "workers"))))
+            continue
         key = (kv["policy"], kv["reply_spin_ns"], kv["idle_spin_ns"], int(float(kv["service_ns"])),
                int(float(kv["gap_ns"])), int(kv["workers"]))
         rows[key].append({m: float(kv[m]) for m in METRICS})
     med = {k: {m: statistics.median(r[m] for r in v) for m in METRICS} for k, v in rows.items()}
+    if noisy:
+        print(f"dropped {len(noisy)} NOISY configs (use --keep-noisy to include them)")
     return med, fails
 
 
@@ -45,10 +57,18 @@ def main():
         i = args.index("--x")
         x = float(args[i + 1])
         del args[i:i + 2]
+    ww = 8
+    if "--wait-workers" in args:
+        i = args.index("--wait-workers")
+        ww = int(args[i + 1])
+        del args[i:i + 2]
+    keep_noisy = "--keep-noisy" in args
+    if keep_noisy:
+        args.remove("--keep-noisy")
     if not args:
         print(__doc__)
         sys.exit(2)
-    d, fails = parse(args[0])
+    d, fails = parse(args[0], keep_noisy)
     print(f"configs={len(d)} failed_lines={fails} X={x}")
     services = sorted({k[3] for k in d})
     gaps = sorted({k[4] for k in d})
@@ -97,13 +117,13 @@ def main():
                 idle_ok += good
         print(f"budget={b:>6}: {ok}/{tot} all, {idle_ok}/{idle_tot} idle-ish")
 
-    print("\n## Which wait the spin pays on (service=1000ns, workers=8): p99 us (waste)")
+    print(f"\n## Which wait the spin pays on (service=1000ns, workers={ww}): p99 us (waste)")
     print("gap_us   budget   both          reply-only    idle-only")
     for g in gaps:
         for b in BUDGETS[:-1]:
-            both = fixed(b, 1000, g, 8)
-            ro = d.get(("fixed", b, "0", 1000, g, 8))
-            io = d.get(("fixed", "0", b, 1000, g, 8))
+            both = fixed(b, 1000, g, ww)
+            ro = d.get(("fixed", b, "0", 1000, g, ww))
+            io = d.get(("fixed", "0", b, 1000, g, ww))
             f = lambda r: f"{us(r['hop_p99_ns']):>6}({r['waste']:.2f})" if r else f"{'-':>12}"
             print(f"{g / 1000:>6g}  {b:>7}  {f(both)}  {f(ro)}  {f(io)}")
 

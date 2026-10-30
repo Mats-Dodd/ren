@@ -1,0 +1,1 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one spawn_join_switch_go 1 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-pin3-20261030-115608.err switch_go spawn_join 1000000 7 64

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -196,11 +197,16 @@ func main() {
 		}
 		ns[i], ex[i], ok = r.ns, r.extra, ok && r.ok
 	}
-	mn := ns[0]
-	for _, v := range ns {
+	mn, mx := ns[0], ns[0]
+	rl := make([]string, len(ns))
+	for i, v := range ns {
 		if v < mn {
 			mn = v
 		}
+		if v > mx {
+			mx = v
+		}
+		rl[i] = fmt.Sprintf("%.2f", v)
 	}
 	med := func(v []float64) float64 {
 		s := append([]float64(nil), v...)
@@ -216,8 +222,9 @@ func main() {
 	}
 	fmt.Printf("SWITCH lang=go bench=%s n=%d max=%d reps=%d ns_per_op=%.2f min_ns_per_op=%.2f "+
 		"extra_ns=%.2f heap_allocs_per_op=%.4f sys_allocs_per_op=0 bytes_per_task=%.1f "+
-		"footprint_per_task=0 task_header=0 gomaxprocs=%d check=%s\n",
-		*bench, *n, *max, *reps, med(ns), mn, med(ex), r0.objs, r0.bytes, runtime.GOMAXPROCS(0), st)
+		"footprint_per_task=0 task_header=0 gomaxprocs=%d max_ns_per_op=%.2f reps_ns=%s check=%s\n",
+		*bench, *n, *max, *reps, med(ns), mn, med(ex), r0.objs, r0.bytes, runtime.GOMAXPROCS(0),
+		mx, strings.Join(rl, ","), st)
 	if !ok {
 		os.Exit(1)
 	}

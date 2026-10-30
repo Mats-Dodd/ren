@@ -25,7 +25,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 LIST=0
 FAILS=0
 
-load1() { sysctl -n vm.loadavg | awk '{print $2}'; }
+load1() { if [[ -r /proc/loadavg ]]; then awk '{print $1}' /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi; }
 wait_load() {
   local waited=0
   while awk -v l="$(load1)" -v m="$LOAD_MAX" 'BEGIN{exit !(l>m)}' && (( waited < LOAD_WAIT )); do

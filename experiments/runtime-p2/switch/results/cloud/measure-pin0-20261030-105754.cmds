@@ -1,0 +1,9 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 1 7 results/cloud/measure-pin0-20261030-105754.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 2 7 results/cloud/measure-pin0-20261030-105754.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 3 7 results/cloud/measure-pin0-20261030-105754.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_raw_c 1 7 results/cloud/measure-pin0-20261030-105754.err raw_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_raw_c 2 7 results/cloud/measure-pin0-20261030-105754.err raw_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_raw_c 3 7 results/cloud/measure-pin0-20261030-105754.err raw_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_ren_c 1 7 results/cloud/measure-pin0-20261030-105754.err ren_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_ren_c 2 7 results/cloud/measure-pin0-20261030-105754.err ren_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_ren_c 3 7 results/cloud/measure-pin0-20261030-105754.err ren_c park 100000 7 64

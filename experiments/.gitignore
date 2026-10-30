@@ -14,3 +14,4 @@ zig-out/
 /many-cores/k3/verify/k3_hybrid_tsan
 /many-cores/p3/verify/p3_fixed
 /many-cores/p3/verify/p3_fixed_tsan
+build-verify/

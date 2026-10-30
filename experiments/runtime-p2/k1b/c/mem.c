@@ -6,18 +6,35 @@
 //   line_header  the header alone on its line, the state in a separate packed
 //                array (what you'd do if the state were large)
 // Prints sizeof, the bytes the layout should take, and the phys_footprint
-// growth when n are allocated and written (mach task_info), plus the family
-// table's bytes per instance at the default parts. One line per run.
+// growth when n are allocated and written (macOS: mach task_info
+// phys_footprint; Linux: resident set size from /proc/self/statm, so it moves
+// in whole 4 KiB pages), plus the family table's bytes per instance at the
+// default parts. One line per run.
 #include "common.h"
+#if defined(__APPLE__)
 #include <mach/mach.h>
+#define FOOTPRINT_SRC "phys_footprint"
+#else
+#include <unistd.h>
+#define FOOTPRINT_SRC "rss"
+#endif
 
 #define LINE 128
 
 static uint64_t footprint(void) {
+#if defined(__APPLE__)
     task_vm_info_data_t info;
     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) != KERN_SUCCESS) return 0;
     return info.phys_footprint;
+#else
+    FILE *f = fopen("/proc/self/statm", "r");
+    unsigned long size = 0, res = 0;
+    if (!f) return 0;
+    if (fscanf(f, "%lu %lu", &size, &res) != 2) res = 0;
+    fclose(f);
+    return (uint64_t)res * (uint64_t)sysconf(_SC_PAGESIZE);
+#endif
 }
 
 static size_t round_up(size_t x, size_t a) { return (x + a - 1) / a * a; }
@@ -57,10 +74,10 @@ int main(int argc, char **argv) {
     uint32_t parts = default_parts((uint32_t)n);
     size_t tab = (size_t)parts * pow2_at_least((uint32_t)(n / parts) * 2 + 256) * (8 + 4);
     printf("k1b_mem lang=c layout=%s n=%ld state=%ld sizeof=%zu side=%zu bytes=%zu per_instance=%.1f "
-           "over_packed_bytes=%zu over_packed_pct=%.1f footprint_delta=%llu table_bytes=%zu table_per_instance=%.1f "
-           "ok=%d\n",
+           "over_packed_bytes=%zu over_packed_pct=%.1f footprint_delta=%llu footprint_src=%s table_bytes=%zu "
+           "table_per_instance=%.1f ok=%d\n",
            layout, n, state, per, side, want, (double)want / n, want - packed, 100.0 * (double)(want - packed) / packed,
-           (unsigned long long)(after - before), tab, (double)tab / n, ok);
+           (unsigned long long)(after - before), FOOTPRINT_SRC, tab, (double)tab / n, ok);
     free(inst);
     free(st);
     return ok ? 0 : 1;

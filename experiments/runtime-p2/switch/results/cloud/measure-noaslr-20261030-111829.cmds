@@ -1,0 +1,13 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 1 7 results/cloud/measure-noaslr-20261030-111829.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 2 7 results/cloud/measure-noaslr-20261030-111829.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_ren_c 3 7 results/cloud/measure-noaslr-20261030-111829.err ren_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_raw_c 1 7 results/cloud/measure-noaslr-20261030-111829.err raw_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_raw_c 2 7 results/cloud/measure-noaslr-20261030-111829.err raw_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one pingpong_raw_c 3 7 results/cloud/measure-noaslr-20261030-111829.err raw_c pingpong 1000000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one spawn_batch_m1000_ren_c 1 7 results/cloud/measure-noaslr-20261030-111829.err ren_c spawn_batch 1000000 7 1000
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_ren_c 1 7 results/cloud/measure-noaslr-20261030-111829.err ren_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_ren_c 2 7 results/cloud/measure-noaslr-20261030-111829.err ren_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_ren_c 3 7 results/cloud/measure-noaslr-20261030-111829.err ren_c park 100000 7 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one fanout_switch_rust 1 7 results/cloud/measure-noaslr-20261030-111829.err switch_rust fanout 1000 63 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one fanout_switch_rust 2 7 results/cloud/measure-noaslr-20261030-111829.err switch_rust fanout 1000 63 64
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one fanout_switch_rust 3 7 results/cloud/measure-noaslr-20261030-111829.err switch_rust fanout 1000 63 64

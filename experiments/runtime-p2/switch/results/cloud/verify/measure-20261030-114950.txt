@@ -1,0 +1,24 @@
+# switch measure on machine: cloud (claude.ai cloud container; experiments/MACHINE-cloud.md)
+# date: 2026-10-30T11:49:50+00:00  host: Linux 6.18.44-fc-v185 x86_64
+# cpu: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 vCPUs
+# toolchains: Ubuntu clang version 18.1.3 (1ubuntu1); go version go1.24.7 linux/amd64; rustc 1.97.0 (2d8144b78 2026-07-07)
+# GOMAXPROCS=1, unpinned; PROCS=7 processes a config; in-process reps as measure-p2.sh
+# memory: peak_rss = child ru_maxrss (not macOS phys_footprint); see the script header
+# load1 at script start: 2.94
+cfg=pingpong_switch_rust try=1 proc=1 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=387.49 min_ns_per_op=381.78 extra_ns=387.49 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=427.98 reps_ns=414.03,387.49,381.78,383.78,383.48,427.98,390.87 check=ok peak_rss=2236416
+cfg=pingpong_switch_rust try=1 proc=2 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=404.93 min_ns_per_op=371.82 extra_ns=404.93 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=436.33 reps_ns=427.64,426.28,436.33,404.93,372.24,371.82,388.57 check=ok peak_rss=2301952
+cfg=pingpong_switch_rust try=1 proc=3 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=416.20 min_ns_per_op=351.96 extra_ns=416.20 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=436.55 reps_ns=407.82,416.20,398.58,434.72,434.23,351.96,436.55 check=ok peak_rss=2236416
+cfg=pingpong_switch_rust try=1 proc=4 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=400.07 min_ns_per_op=369.54 extra_ns=400.07 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=439.81 reps_ns=439.81,406.90,369.54,428.33,397.90,396.90,400.07 check=ok peak_rss=2232320
+cfg=pingpong_switch_rust try=1 proc=5 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=404.94 min_ns_per_op=315.80 extra_ns=404.94 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=440.38 reps_ns=439.95,379.23,440.38,359.58,315.80,404.94,411.99 check=ok peak_rss=2236416
+cfg=pingpong_switch_rust try=1 proc=6 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=402.11 min_ns_per_op=374.77 extra_ns=402.11 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=418.90 reps_ns=380.17,406.78,411.91,374.77,375.35,418.90,402.11 check=ok peak_rss=2236416
+cfg=pingpong_switch_rust try=1 proc=7 SWITCH lang=rust_tokio bench=pingpong n=1000000 max=64 reps=7 ns_per_op=390.58 min_ns_per_op=374.54 extra_ns=390.58 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 task_header=0 max_ns_per_op=423.79 reps_ns=390.58,388.61,386.32,398.92,412.28,423.79,374.54 check=ok peak_rss=2433024
+LOAD cfg=pingpong_switch_rust try=1 load1_start=3.27 load1_end=2.69 steal_ticks=26 secs=19.7
+CFG name=pingpong_switch_rust lang=switch_rust bench=pingpong n=1000000 max=64 reps=7 used_try=1 tries=1 noisy=0 procs=7 ns_per_op_med=402.11 ns_per_op_min=387.49 ns_per_op_max=416.20 spread=0.071 extra_ns_med=402.11 extra_ns_min=387.49 extra_ns_max=416.20 heap_allocs_per_op=0.0000 sys_allocs_per_op=0.0000 bytes_per_task=0.0 footprint_per_task=0 peak_rss_med=2236416 check=ok  load1_start=3.27 load1_end=2.69 steal_ticks=26 secs=19.7
+# ---- report (machine: cloud). value = median over processes of each process's in-process median
+# config                                    value   spread  noisy  PLAN predicted verdict
+# pingpong switch_rust                   402.11ns    0.071         150-300        ABOVE prediction
+# falsifier: ren_c/raw_c pingpong = nanx, park wake = nanx (PLAN: design falsified if either > 3x)
+# falsifier: ren_c parked task = nan B (PLAN: falsified if > 256 B)
+# NOISY configs (not headlines): none
+# check failures: none
+# load1 at script end: 2.69

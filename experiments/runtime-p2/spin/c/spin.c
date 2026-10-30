@@ -1,7 +1,8 @@
 // Runtime phase 2: spin budget for hops to a parked owner.
 //
 // Built on phase 1's P1 hop harness (../../many-cores/p1/c/p1.c): the same
-// instance, op_run, Vyukov MPSC inbox, Dekker-style sleeping flag and ulock.
+// instance, op_run, Vyukov MPSC inbox, Dekker-style sleeping flag and ulock
+// (futex on Linux).
 //
 // The model is `per_core` with N workers. Each worker owns one instance
 // (its home) and runs one task. The task loops: sleep for an arrival gap
@@ -30,13 +31,22 @@
 // check: replies, per-instance op counts and token sums, served == sent,
 // empty inboxes, no hang.
 
+#ifndef __APPLE__
+#define _GNU_SOURCE /* sched_setaffinity, CPU_SET */
+#endif
 #include <errno.h>
-#include <mach/mach_time.h>
 #include <math.h>
-#include <os/os_sync_wait_on_address.h>
 #include <pthread.h>
-#include <pthread/qos.h>
 #include <sched.h>
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#include <os/os_sync_wait_on_address.h>
+#include <pthread/qos.h>
+#else
+#include <linux/futex.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -46,16 +56,109 @@
 #include <time.h>
 #include <unistd.h>
 
-#define LINE 128 /* Apple M-series cache line */
+#define LINE 128 /* Apple M-series cache line; on x86 two 64 B lines (adjacent-line prefetch) */
 #define SEED 0x9E3779B97F4A7C15ull
 #define MAXW 64
 #define NB 512 /* histogram buckets */
 
+/* ---------- platform: spin hint, clock, park/wake on a 32-bit word, pinning ----------
+   macOS: isb, mach_absolute_time (tick_ns from the timebase), os_sync_wait_on_address
+   (the ulock), QoS user-interactive. Linux: pause, clock_gettime(CLOCK_MONOTONIC) in ns
+   (tick_ns = 1), FUTEX_WAIT/WAKE_PRIVATE, and each worker pinned to its own CPU when
+   there are at least as many CPUs as workers (so a caller and its owner are never on
+   one core); with more workers than CPUs nothing is pinned (pin=0 on the line). */
+#if defined(__aarch64__)
 static inline void cpu_relax(void) { __asm__ volatile("isb" ::: "memory"); }
+#elif defined(__x86_64__) || defined(__i386__)
+static inline void cpu_relax(void) { __builtin_ia32_pause(); }
+#else
+static inline void cpu_relax(void) { __asm__ volatile("" ::: "memory"); }
+#endif
 
 /* ---------- time ---------- */
 static double tick_ns;
+#ifdef __APPLE__
 static inline uint64_t now(void) { return mach_absolute_time(); }
+static void time_init(void) {
+  mach_timebase_info_data_t tb;
+  mach_timebase_info(&tb);
+  tick_ns = (double)tb.numer / (double)tb.denom;
+}
+#else
+static inline uint64_t now(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+static void time_init(void) { tick_ns = 1.0; }
+#endif
+
+/* ---------- park / wake ---------- */
+#ifdef __APPLE__
+static inline void park_wake_one(_Atomic uint32_t *a) {
+  os_sync_wake_by_address_any(a, 4, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+}
+/* Wait while *a == v. timeout_ns 0 = no timeout. Returns 1 on timeout. */
+static inline int park_wait(_Atomic uint32_t *a, uint32_t v, uint64_t timeout_ns) {
+  if (!timeout_ns) {
+    os_sync_wait_on_address(a, v, 4, OS_SYNC_WAIT_ON_ADDRESS_NONE);
+    return 0;
+  }
+  int rc = os_sync_wait_on_address_with_timeout(a, v, 4, OS_SYNC_WAIT_ON_ADDRESS_NONE,
+                                                OS_CLOCK_MACH_ABSOLUTE_TIME, timeout_ns);
+  return rc < 0 && errno == ETIMEDOUT;
+}
+#else
+static inline void park_wake_one(_Atomic uint32_t *a) {
+  syscall(SYS_futex, (uint32_t *)a, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+}
+static inline int park_wait(_Atomic uint32_t *a, uint32_t v, uint64_t timeout_ns) {
+  struct timespec ts, *tp = NULL;
+  if (timeout_ns) {
+    ts.tv_sec = (time_t)(timeout_ns / 1000000000ull);
+    ts.tv_nsec = (long)(timeout_ns % 1000000000ull);
+    tp = &ts;
+  }
+  long rc = syscall(SYS_futex, (uint32_t *)a, FUTEX_WAIT_PRIVATE, v, tp, NULL, 0);
+  return rc < 0 && errno == ETIMEDOUT;
+}
+#endif
+
+/* ---------- thread placement ---------- */
+static int g_pin;          /* 1 if workers are pinned one per CPU, 2 if wrapped (i mod CPUs) */
+static int g_pin_mode;     /* --pin: 0 auto (pin iff workers <= CPUs), 1 off, 2 wrap */
+static int g_cpus[MAXW];   /* CPU for worker i when pinned */
+#ifdef __APPLE__
+static void place_init(int n) { (void)n; g_pin = 0; }
+static void place_self(int id) {
+  (void)id;
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+}
+#else
+static void place_init(int n) {
+  cpu_set_t s;
+  int k = 0;
+  g_pin = 0;
+  if (sched_getaffinity(0, sizeof s, &s) != 0) return;
+  for (int c = 0; c < CPU_SETSIZE && k < MAXW; c++)
+    if (CPU_ISSET(c, &s)) g_cpus[k++] = c;
+  if (g_pin_mode == 1) g_pin = 0;
+  else if (g_pin_mode == 2) g_pin = n <= k ? 1 : 2;
+  else g_pin = n <= k;
+  if (g_pin == 2)
+    for (int i = k; i < n && i < MAXW; i++) g_cpus[i] = g_cpus[i % k];
+}
+static void place_self(int id) {
+  if (!g_pin) return;
+  cpu_set_t s;
+  CPU_ZERO(&s);
+  CPU_SET(g_cpus[id], &s);
+  if (pthread_setaffinity_np(pthread_self(), sizeof s, &s) != 0) {
+    fprintf(stderr, "FAIL pin worker %d to cpu %d\n", id, g_cpus[id]);
+    _exit(1);
+  }
+}
+#endif
 static inline uint64_t ns_to_ticks(double ns) { return (uint64_t)ceil(ns / tick_ns); }
 
 static inline uint64_t mix64(uint64_t x) { /* splitmix64 finaliser */
@@ -200,7 +303,7 @@ static inline int q_empty(worker_t *h) {
 static inline void wake(worker_t *me, worker_t *w) {
   if (atomic_load_explicit(&w->sleeping, memory_order_seq_cst) == 1 &&
       atomic_exchange_explicit(&w->sleeping, 0, memory_order_seq_cst) == 1) {
-    os_sync_wake_by_address_any(&w->sleeping, 4, OS_SYNC_WAKE_BY_ADDRESS_NONE);
+    park_wake_one(&w->sleeping);
     stat_inc(&me->wakes, 1);
   }
 }
@@ -329,12 +432,10 @@ static void wait_for(worker_t *me, msg_t *m, uint64_t deadline, enum kind k) {
       if (lim) {
         uint64_t tn = now();
         if (tn >= lim) break;
-        int rc = os_sync_wait_on_address_with_timeout(&me->sleeping, 1, 4, OS_SYNC_WAIT_ON_ADDRESS_NONE,
-                                                      OS_CLOCK_MACH_ABSOLUTE_TIME,
-                                                      (uint64_t)((double)(lim - tn) * tick_ns));
-        if (rc < 0 && errno == ETIMEDOUT) break;
+        uint64_t tmo = (uint64_t)((double)(lim - tn) * tick_ns);
+        if (park_wait(&me->sleeping, 1, tmo ? tmo : 1)) break;
       } else {
-        os_sync_wait_on_address(&me->sleeping, 1, 4, OS_SYNC_WAIT_ON_ADDRESS_NONE);
+        park_wait(&me->sleeping, 1, 0);
       }
     }
     atomic_store_explicit(&me->sleeping, 0, memory_order_relaxed);
@@ -381,7 +482,7 @@ static void hop(worker_t *me) {
 
 static void *worker_main(void *arg) {
   worker_t *me = arg;
-  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  place_self((int)me->id);
   while (!atomic_load_explicit(&g_start, memory_order_acquire)) sched_yield();
   while (!atomic_load_explicit(&g_stop, memory_order_acquire)) {
     if (C.gap_ticks > 0) {
@@ -476,9 +577,12 @@ static int run(const char *tag, double reply_ns, double idle_ns, double service_
     w->head = &w->stub;
     W[i] = w;
   }
+  place_init(C.n);
   pthread_attr_t a;
   pthread_attr_init(&a);
+#ifdef __APPLE__
   pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
   for (int i = 0; i < C.n; i++) pthread_create(&W[i]->th, &a, worker_main, W[i]);
   pthread_attr_destroy(&a);
 
@@ -547,13 +651,13 @@ static int run(const char *tag, double reply_ns, double idle_ns, double service_
   double csw = (double)(r1.ru_nvcsw - r0.ru_nvcsw + r1.ru_nivcsw - r0.ru_nivcsw);
   double hd = hops > 0 ? hops : 1;
   char b1[32], b2[32];
-  printf("SPIN tag=%s policy=%s reply_spin_ns=%s idle_spin_ns=%s service_ns=%g iters=%u gap_ns=%g workers=%d "
+  printf("SPIN tag=%s policy=%s reply_spin_ns=%s idle_spin_ns=%s service_ns=%g iters=%u gap_ns=%g workers=%d pin=%d "
          "window_ms=%.0f hops=%.0f hops_per_s=%.0f hop_p50_ns=%.0f hop_p99_ns=%.0f hop_p999_ns=%.0f "
          "reach_p50_ns=%.0f reach_p99_ns=%.0f cpu_ns_per_hop=%.0f util=%.4f work_util=%.4f waste=%.4f "
          "spin_ns_per_hop=%.0f spin_hit=%.3f parks_per_hop=%.3f wakes_per_hop=%.3f csw_per_hop=%.3f "
          "checked_hops=%llu %s\n",
          tag, pname[C.pol], fmt_budget(reply_ns, b1), fmt_budget(idle_ns, b2), service_ns, C.iters, gap_ns,
-         C.n, wall / 1e6, hops, hops / (wall / 1e9), hist_pct(hh, 0.5), hist_pct(hh, 0.99),
+         C.n, g_pin, wall / 1e6, hops, hops / (wall / 1e9), hist_pct(hh, 0.5), hist_pct(hh, 0.99),
          hist_pct(hh, 0.999), hist_pct(hr, 0.5), hist_pct(hr, 0.99), cpu / hd, util, work, util - work,
          (double)(s1.spin_ticks - s0.spin_ticks) * tick_ns / hd,
          (s1.stretches - s0.stretches) ? (double)(s1.spin_hits - s0.spin_hits) / (double)(s1.stretches - s0.stretches) : 0,
@@ -570,10 +674,14 @@ static double parse_ns(const char *s) {
 }
 
 int main(int argc, char **argv) {
-  mach_timebase_info_data_t tb;
-  mach_timebase_info(&tb);
-  tick_ns = (double)tb.numer / (double)tb.denom;
+  time_init();
+#ifdef __APPLE__
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#else
+  /* Default timer slack is 50 us, which would stretch every timed park (the gap
+     timer) by up to 50 us. 1 ns, inherited by the workers, keeps gaps near the mean. */
+  prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
+#endif
 
   double reply = 0, idle = 0, service = 1000, gap = 0, warm = 50, window = 400, npi = 0;
   int check = 0, calib = 0, budget_set = 0;
@@ -593,6 +701,14 @@ int main(int argc, char **argv) {
     else if (ARG("--warm-ms")) warm = atof(v);
     else if (ARG("--window-ms")) window = atof(v);
     else if (ARG("--ns-per-iter")) npi = atof(v);
+    else if (ARG("--pin")) {
+      /* auto: pin worker i to CPU i iff workers <= CPUs; off: never pin;
+         wrap: pin worker i to CPU i mod CPUs (the oversubscription control). */
+      if (!strcmp(v, "auto")) g_pin_mode = 0;
+      else if (!strcmp(v, "off")) g_pin_mode = 1;
+      else if (!strcmp(v, "wrap")) g_pin_mode = 2;
+      else { fprintf(stderr, "--pin auto|off|wrap\n"); return 2; }
+    }
     else if (ARG("--policy")) {
       int k = -1;
       for (int p = 0; p < 4; p++)
@@ -603,7 +719,7 @@ int main(int argc, char **argv) {
       fprintf(stderr,
               "usage: %s [--check] [--calibrate] [--policy fixed|ema|pred|go] [--budget-ns N|inf]\n"
               "  [--reply-spin-ns N|inf] [--idle-spin-ns N|inf] [--service-ns N] [--gap-ns N]\n"
-              "  [--workers N] [--warm-ms N] [--window-ms N] [--ns-per-iter X]\n",
+              "  [--workers N] [--warm-ms N] [--window-ms N] [--ns-per-iter X] [--pin auto|off|wrap]\n",
               argv[0]);
       return 2;
     }

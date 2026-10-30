@@ -1,0 +1,24 @@
+# switch measure-pin3 on machine: cloud (claude.ai cloud container; experiments/MACHINE-cloud.md)
+# date: 2026-10-30T11:56:08+00:00  host: Linux 6.18.44-fc-v185 x86_64
+# cpu: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 vCPUs
+# toolchains: Ubuntu clang version 18.1.3 (1ubuntu1); go version go1.24.7 linux/amd64; rustc 1.97.0 (2d8144b78 2026-07-07)
+# GOMAXPROCS=1, pinned to cpu 3 (taskset -c 3); PROCS=7 processes a config; in-process reps as measure-p2.sh
+# memory: peak_rss = child ru_maxrss (not macOS phys_footprint); see the script header
+# load1 at script start: 3.84
+cfg=spawn_join_switch_go try=1 proc=1 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=447.74 min_ns_per_op=437.60 extra_ns=447.74 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=518.90 reps_ns=471.53,447.74,508.66,443.60,518.90,437.60,438.29 check=ok peak_rss=6705152
+cfg=spawn_join_switch_go try=1 proc=2 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=432.08 min_ns_per_op=355.77 extra_ns=432.08 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=494.57 reps_ns=376.26,355.77,419.52,494.57,468.64,447.86,432.08 check=ok peak_rss=6836224
+cfg=spawn_join_switch_go try=1 proc=3 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=442.65 min_ns_per_op=393.41 extra_ns=442.65 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=520.31 reps_ns=406.85,442.65,520.31,486.39,450.24,440.54,393.41 check=ok peak_rss=6705152
+cfg=spawn_join_switch_go try=1 proc=4 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=445.23 min_ns_per_op=403.60 extra_ns=445.23 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=535.44 reps_ns=534.37,453.41,535.44,445.23,403.60,440.90,424.74 check=ok peak_rss=6705152
+cfg=spawn_join_switch_go try=1 proc=5 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=428.95 min_ns_per_op=347.56 extra_ns=428.95 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=476.44 reps_ns=476.44,426.08,374.80,445.94,428.95,429.03,347.56 check=ok peak_rss=6705152
+cfg=spawn_join_switch_go try=1 proc=6 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=417.49 min_ns_per_op=392.83 extra_ns=417.49 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=461.01 reps_ns=417.49,392.83,401.04,403.99,440.92,435.36,461.01 check=ok peak_rss=6705152
+cfg=spawn_join_switch_go try=1 proc=7 SWITCH lang=go bench=spawn_join n=1000000 max=64 reps=7 ns_per_op=436.36 min_ns_per_op=417.12 extra_ns=436.36 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 task_header=0 gomaxprocs=1 max_ns_per_op=535.69 reps_ns=474.14,535.69,417.12,430.79,436.36,490.26,426.87 check=ok peak_rss=6705152
+LOAD cfg=spawn_join_switch_go try=1 load1_start=3.85 load1_end=3.11 steal_ticks=24 secs=21.8
+CFG name=spawn_join_switch_go lang=switch_go bench=spawn_join n=1000000 max=64 reps=7 used_try=1 tries=1 noisy=0 procs=7 ns_per_op_med=436.36 ns_per_op_min=417.49 ns_per_op_max=447.74 spread=0.069 extra_ns_med=436.36 extra_ns_min=417.49 extra_ns_max=447.74 heap_allocs_per_op=1.0000 sys_allocs_per_op=0 bytes_per_task=0.0 footprint_per_task=0 peak_rss_med=6705152 check=ok  load1_start=3.85 load1_end=3.11 steal_ticks=24 secs=21.8
+# ---- report (machine: cloud). value = median over processes of each process's in-process median
+# config                                    value   spread  noisy  PLAN predicted verdict
+# spawn_join switch_go                   436.36ns    0.069         200-350        ABOVE prediction
+# falsifier: ren_c/raw_c pingpong = nanx, park wake = nanx (PLAN: design falsified if either > 3x)
+# falsifier: ren_c parked task = nan B (PLAN: falsified if > 256 B)
+# NOISY configs (not headlines): none
+# check failures: none
+# load1 at script end: 3.11

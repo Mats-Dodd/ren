@@ -1,0 +1,46 @@
+# switch measure-pin3 on machine: cloud (claude.ai cloud container; experiments/MACHINE-cloud.md)
+# date: 2026-10-30T12:00:18+00:00  host: Linux 6.18.44-fc-v185 x86_64
+# cpu: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 vCPUs
+# toolchains: Ubuntu clang version 18.1.3 (1ubuntu1); go version go1.24.7 linux/amd64; rustc 1.97.0 (2d8144b78 2026-07-07)
+# GOMAXPROCS=1, pinned to cpu 3 (taskset -c 3); PROCS=7 processes a config; in-process reps as measure-p2.sh
+# memory: peak_rss = child ru_maxrss (not macOS phys_footprint); see the script header
+# load1 at script start: 1.55
+cfg=park_raw_c try=1 proc=1 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.10 min_ns_per_op=7.55 extra_ns=7.82 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.80 reps_ns=8.01,8.20,7.55,8.10,8.80,8.12,7.96 check=ok peak_rss=5783552
+cfg=park_raw_c try=1 proc=2 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=7.39 min_ns_per_op=6.82 extra_ns=6.85 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.21 reps_ns=6.86,7.45,7.41,7.39,6.94,6.82,9.21 check=ok peak_rss=5783552
+cfg=park_raw_c try=1 proc=3 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=7.35 min_ns_per_op=6.67 extra_ns=7.73 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.36 reps_ns=7.27,7.94,7.50,6.67,8.36,7.07,7.35 check=ok peak_rss=5783552
+cfg=park_raw_c try=1 proc=4 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=6.49 min_ns_per_op=5.62 extra_ns=6.32 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=7.19 reps_ns=6.95,6.49,5.62,6.65,7.19,6.34,6.28 check=ok peak_rss=5783552
+cfg=park_raw_c try=1 proc=5 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.26 min_ns_per_op=7.84 extra_ns=7.67 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.58 reps_ns=7.84,8.01,7.96,8.58,8.33,8.49,8.26 check=ok peak_rss=5783552
+cfg=park_raw_c try=1 proc=6 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=9.14 min_ns_per_op=8.24 extra_ns=8.14 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.98 reps_ns=9.98,8.91,9.14,9.57,9.63,8.24,8.40 check=ok peak_rss=5783552
+cfg=park_raw_c try=1 proc=7 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=6.52 min_ns_per_op=5.96 extra_ns=6.58 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=7.55 reps_ns=6.87,5.96,6.52,7.55,6.03,6.13,7.43 check=ok peak_rss=5783552
+BASE cfg=park_raw_c try=1 park_n1_peak_rss=1851392
+LOAD cfg=park_raw_c try=1 load1_start=1.55 load1_end=1.55 steal_ticks=1 secs=0.2
+cfg=park_raw_c try=2 proc=1 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=6.50 min_ns_per_op=5.92 extra_ns=6.22 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=7.93 reps_ns=6.76,5.97,5.92,6.94,6.50,6.06,7.93 check=ok peak_rss=5783552
+cfg=park_raw_c try=2 proc=2 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.04 min_ns_per_op=7.47 extra_ns=7.99 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.36 reps_ns=8.21,7.85,7.72,8.36,8.36,7.47,8.04 check=ok peak_rss=5783552
+cfg=park_raw_c try=2 proc=3 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.08 min_ns_per_op=7.48 extra_ns=7.64 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.83 reps_ns=8.40,8.83,8.01,7.48,8.08,8.76,8.07 check=ok peak_rss=5783552
+cfg=park_raw_c try=2 proc=4 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=7.61 min_ns_per_op=6.86 extra_ns=7.71 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.86 reps_ns=9.86,6.86,7.61,7.05,7.02,9.77,7.99 check=ok peak_rss=5783552
+cfg=park_raw_c try=2 proc=5 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.30 min_ns_per_op=7.97 extra_ns=7.62 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=10.82 reps_ns=10.82,8.20,9.82,7.97,8.25,8.59,8.30 check=ok peak_rss=5779456
+cfg=park_raw_c try=2 proc=6 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=7.72 min_ns_per_op=6.39 extra_ns=7.72 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.48 reps_ns=7.47,7.94,7.72,9.48,7.15,7.76,6.39 check=ok peak_rss=5783552
+cfg=park_raw_c try=2 proc=7 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.34 min_ns_per_op=7.93 extra_ns=8.00 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.26 reps_ns=7.98,8.34,7.97,8.53,9.26,7.93,9.03 check=ok peak_rss=5783552
+BASE cfg=park_raw_c try=2 park_n1_peak_rss=1851392
+LOAD cfg=park_raw_c try=2 load1_start=1.55 load1_end=1.55 steal_ticks=0 secs=0.2
+cfg=park_raw_c try=3 proc=1 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=7.69 min_ns_per_op=6.65 extra_ns=7.14 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.50 reps_ns=8.50,6.65,7.40,7.48,7.88,7.69,8.06 check=ok peak_rss=5783552
+cfg=park_raw_c try=3 proc=2 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.23 min_ns_per_op=6.86 extra_ns=8.00 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.14 reps_ns=6.86,7.54,7.10,8.26,8.58,9.14,8.23 check=ok peak_rss=5783552
+cfg=park_raw_c try=3 proc=3 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=6.77 min_ns_per_op=6.48 extra_ns=6.34 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=6.99 reps_ns=6.48,6.97,6.54,6.67,6.99,6.77,6.84 check=ok peak_rss=5783552
+cfg=park_raw_c try=3 proc=4 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.52 min_ns_per_op=6.86 extra_ns=8.04 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.16 reps_ns=8.52,6.86,8.73,9.16,8.20,8.64,7.46 check=ok peak_rss=5783552
+cfg=park_raw_c try=3 proc=5 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.82 min_ns_per_op=5.98 extra_ns=7.74 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.38 reps_ns=9.25,8.82,5.98,9.38,9.19,6.64,6.78 check=ok peak_rss=5783552
+cfg=park_raw_c try=3 proc=6 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=7.72 min_ns_per_op=6.50 extra_ns=7.13 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=8.35 reps_ns=7.50,7.80,7.95,7.59,8.35,7.72,6.50 check=ok peak_rss=5783552
+cfg=park_raw_c try=3 proc=7 SWITCH lang=raw_c bench=park n=100000 max=64 reps=7 ns_per_op=8.04 min_ns_per_op=7.16 extra_ns=7.70 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 task_header=40 max_ns_per_op=9.14 reps_ns=8.04,7.16,8.60,9.14,8.12,7.79,7.66 check=ok peak_rss=5783552
+BASE cfg=park_raw_c try=3 park_n1_peak_rss=1851392
+LOAD cfg=park_raw_c try=3 load1_start=1.55 load1_end=1.55 steal_ticks=0 secs=0.2
+CFG name=park_raw_c lang=raw_c bench=park n=100000 max=64 reps=7 used_try=2 tries=3 noisy=1 procs=7 ns_per_op_med=8.04 ns_per_op_min=6.50 ns_per_op_max=8.34 spread=0.229 extra_ns_med=7.71 extra_ns_min=6.22 extra_ns_max=8.00 heap_allocs_per_op=1.0000 sys_allocs_per_op=0.00098 bytes_per_task=40.0 footprint_per_task=0 peak_rss_med=5783552 check=ok park_n1_peak_rss=1851392 ext_rss_per_task=39.3 load1_start=1.55 load1_end=1.55 steal_ticks=0 secs=0.2
+# ---- report (machine: cloud). value = median over processes of each process's in-process median
+# config                                    value   spread  noisy  PLAN predicted verdict
+# park raw_c                               8.04ns    0.229  NOISY  2-5            ABOVE prediction
+# park_extra raw_c                         7.71ns           NOISY  5-10           in range
+# park_bytes raw_c                        40.00B                   40-40          in range
+# park_ext_rss raw_c                      39.30B                                  
+# falsifier: ren_c/raw_c pingpong = nanx, park wake = nanx (PLAN: design falsified if either > 3x)
+# falsifier: ren_c parked task = nan B (PLAN: falsified if > 256 B)
+# NOISY configs (not headlines): park_raw_c
+# check failures: none
+# load1 at script end: 1.55

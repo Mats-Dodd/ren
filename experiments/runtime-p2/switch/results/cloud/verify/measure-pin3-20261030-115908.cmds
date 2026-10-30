@@ -1,0 +1,1 @@
+flock -x /tmp/ren-bench/lock ./measure-cloud.sh --one park_switch_go 1 7 /home/user/ren/experiments/runtime-p2/switch/results/cloud/verify/measure-pin3-20261030-115908.err switch_go park 100000 7 64

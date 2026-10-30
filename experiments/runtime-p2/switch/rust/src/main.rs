@@ -302,11 +302,13 @@ fn main() {
             ok &= r.ok;
         }
         let mn = ns.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = ns.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let rl = ns.iter().map(|v| format!("{v:.2}")).collect::<Vec<_>>().join(",");
         println!(
             "SWITCH lang=rust_tokio bench={bench} n={n} max={max} reps={reps} ns_per_op={:.2} min_ns_per_op={:.2} \
              extra_ns={:.2} heap_allocs_per_op={:.4} sys_allocs_per_op={:.4} bytes_per_task={:.1} \
-             footprint_per_task=0 task_header=0 check={}",
-            median(&mut ns), mn, median(&mut ex), r0.objs, r0.objs, r0.bytes, if ok { "ok" } else { "FAIL" }
+             footprint_per_task=0 task_header=0 max_ns_per_op={:.2} reps_ns={} check={}",
+            median(&mut ns), mn, median(&mut ex), r0.objs, r0.objs, r0.bytes, mx, rl, if ok { "ok" } else { "FAIL" }
         );
         if ok { 0 } else { 1 }
     });

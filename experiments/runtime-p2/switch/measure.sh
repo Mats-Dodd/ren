@@ -10,6 +10,7 @@
 #   ./measure.sh            full run   -> results/measure-<ts>.txt
 #   ./measure.sh --smoke    every config at n/1000 (min 10), 1 rep, no load wait
 #   ./measure.sh --check    every binary's --check, the ASan/UBSan builds included
+# macOS only (sysctl, /usr/bin/time -l) except --check; on Linux use ./measure-cloud.sh.
 set -u
 cd "$(dirname "$0")"
 [ -x build/ren_c ] && [ -x build/raw_c ] && [ -x build/switch_go ] && [ -x build/switch_rust ] || ./build.sh >&2
