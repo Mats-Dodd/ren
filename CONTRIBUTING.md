@@ -48,7 +48,7 @@ CI additionally checks that no tracked files changed.
 
 The environment supplies OCaml 5.5.2, Dune 3.24.2, ppx_deriving 6.2.0,
 ppx_expect 0.17.3, OCaml LSP 1.28.0, OCamlFormat 0.29.0, Node 26 LTS,
-Python 3.14, and LLVM/Clang 23. The exact package revisions are locked.
+Python 3.15, and LLVM/Clang 23. The exact package revisions are locked.
 Tree-sitter CLI 0.27.1 is pinned separately by the npm lockfile; generation
 explicitly targets ABI 14 for editor compatibility.
 
@@ -65,14 +65,15 @@ REN_CC=cc dune exec ren -- build --debug examples/fib.ren -o /tmp/ren-fib
 /tmp/ren-fib
 ```
 
-The existing macOS debug-symbol step uses `/usr/bin/dsymutil` when present;
-Linux binaries carry their debug information directly. The optional NEON
+The macOS debug-symbol step finds `dsymutil` on PATH; the environment
+supplies the matching LLVM tool. Linux binaries carry their debug
+information directly. The optional NEON
 cross-test reports a skip if its Linux cross-compiler and QEMU are absent.
 That skip is not a claim that cross-emulation was tested.
 
 ## Benchmarks
 
-Rust and Go are optional tools:
+Rust 1.99.1 and Go 1.27.3 are optional tools:
 
 ```sh
 ./.devenv-cli/bin/devenv --profile benchmarks shell --clean

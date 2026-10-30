@@ -9,9 +9,3 @@ devenv.local.yaml
 
 # direnv
 .direnv
-
-# pre-commit
-.pre-commit-config.yaml
-
-# Pinned CLI installed by tools/bootstrap-devenv.sh
-.devenv-cli

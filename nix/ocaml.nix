@@ -1,13 +1,13 @@
 { pkgs }:
 let
   # Keep the compiler and every library in the same package scope.
-  ocaml = pkgs.ocaml-ng.ocamlPackages_5_5.ocaml.overrideAttrs (old: {
+  ocaml = pkgs.ocaml-ng.ocamlPackages_5_5.ocaml.overrideAttrs {
     version = "5.5.2";
     src = pkgs.fetchurl {
       url = "https://caml.inria.fr/pub/distrib/ocaml-5.5/ocaml-5.5.2.tar.xz";
       hash = "sha256-VQPhuq2LYl2jXx/nHUdVgBT6NiU65fGiLMOhj6sEHg0=";
     };
-  });
+  };
   dune = pkgs.dune_3.overrideAttrs {
     version = "3.24.2";
     src = pkgs.fetchurl {
