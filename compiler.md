@@ -5833,6 +5833,64 @@ every build (Perceus and naive debug and release under the sanitizers,
 tcc, `ren run --release`), with no object alive at the end but in the
 panics, which leave their program's as `ren run` does.
 
+Chosen in step 3, as built:
+
+- **A task's `context` stays,** though "Background work" says it goes:
+  the run time's check needs it, since a task spawned into a scope
+  inside the `with` that spawns into one outside it spawns from inside
+  the `with` too, and without its spawner's frames that task could
+  outlive the handler. `frame.bg` and `leave_with`'s cancelling went;
+  `leave_with` only marks the frame over (`Sched.inner`).
+- **What a task can reach is counted the same way at compile time and at
+  the spawn, and generously:** the dependencies its block calls an
+  operation of, those of each function it calls by its *scheme* (not by
+  the nodes' types, whose `uses` rows are joined to the rows around
+  them, so every call there would look like it reaches everything), a
+  `let`-bound block's, a block parameter's given ones (a block passed in
+  was written outside, so it reaches nothing installed here but those);
+  at the spawn, the closure's Core body and every closure it captured
+  (eval.ml, `reaching`; excl.ml, `reach`). A dependency a `with` inside
+  the block installs counts too. **`Async` is always reached:** every
+  task is run by the runtime installed around it, so a task can't be
+  spawned out of a `sim.scheduler`'s `with` (which `Sched.leave`
+  relies on, as it relied on 11a's rule).
+- **A task outside a `with` that reaches nothing it installs is
+  allowed,** and outlives it, the scope waiting for it (test_tasks.ml's
+  s9 "outlives it"): 11a cancelled every task spawned outside a `with`
+  from its body.
+- **The compile error's help writes the `with` as the program does,** its
+  items, an alias as `as Names`, a wiring by its name, and the scope's
+  opener with its parameter's name, `Async.scope fn(o) =>`; it labels
+  the outermost `with` inside the scope that installs what's reached.
+  `Async.background`'s body counts as a scope for it.
+- **`Background<E>` is a builtin type whose argument is an error set,**
+  as `Result`'s second is (infer_top.ml, infer_written.ml), and
+  `bg.spawn` is an intrinsic member whose block's errors are that set:
+  so `Async.background<T>(body: fn(bg: Background<! ..e>) -> T) -> T !
+  ..e` passes them out with no `try` on `bg.spawn`, and its scheme marks
+  the block `spawned` for Excl.
+- **A background failure cuts the body through a deadline,** pushed when
+  the body starts and moved to now by the first failure, so the body
+  sees a cancel where a timeout's would (`Sched.background`, `fail`,
+  `cut_off`); an infinite deadline sets no timer. The body's own error
+  wins over a background task's; a background failure while the body
+  returned, or while its tasks were being cancelled, is the call's
+  error; any after the first is said on stderr, as a scope's second
+  failure is. A background task that hasn't started when the body ends
+  never runs, as a cancelled task never does.
+- **bench/build.t refuses `beside` and `background` natively** in a cram
+  of their own, since `refused` reaches stripes first and waits for step 6.
+- **Step 0's programs that weren't Ren, mended:** the pool test's
+  `finally(_) => print(...)` gave `()` for the body's value; it's
+  `finally(r) => print(...); try r`. Its target is unchanged.
+- **test_tasks.ml's 11a tests moved:** s2's ticker is beside its body
+  with `Async.background`; the batcher's flusher is `Async.beside`; s9's
+  two spawns outside a `with` are the compile error where it's lexical,
+  and through helpers the panic at the spawn, by a task's task too; a
+  task outside a `with` that reaches nothing in it outliving it is new;
+  s1's help names `Async.beside`. stdlib.md and testing.md name no
+  background work, so they're unchanged.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -10425,8 +10483,9 @@ body is still running in the spawning task, the spawn panics with the
 same headline as the compile error, "panic: this task can reach
 `Ticks`, installed inside the scope it's spawned into", and "help: open
 the scope inside the `with`" (decided after the draft: a panic at the
-spawn). What was `beside`'s registration becomes this check; `frame.bg`,
-`leave_with`'s cancelling and the tasks' `context` go.
+spawn). What was `beside`'s registration becomes this check; `frame.bg`
+and `leave_with`'s cancelling go (the tasks' `context` stays: "Chosen in
+step 3").
 
 **`Async.beside` and `Async.background`** are members of `Async` in the
 prelude, over intrinsics, as `scope` is:
@@ -11730,7 +11789,8 @@ Chosen in step 2, as built:
 | 0 | 7a624b2 | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
 | 1 | 5f9409d | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
 | 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
-| 2 | this commit | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
+| 2 | 7b18441 | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
+| 3 | this commit | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
 
 ## The runtime model
 

@@ -22,7 +22,7 @@ cd examples/crawler && ren test --seeds 1000
 | `crawler` | a crawler: each page's links crawled at once, every url claimed once through a handler, and at most 16 requests at a time, with `sync.semaphore` and `sync.limit` | step 8, landed: [examples/crawler](../../../examples/crawler) |
 | `just` | `run_all`, a plan's levels one after another and each level's recipes at once, the first failure killing the rest; tests on `sim.proc` | step 8, landed: folded into [examples/just](../../../examples/just), whose `main` runs a justfile's levels so |
 | `transfer` | a transfer under `Async.timeout`, inside a transaction installed with `try with`, whose commit in its `finally` overruns the timeout and is still reported | step 5, landed: [examples/transfer](../../../examples/transfer) |
-| `refresh` | prices refreshed by a task spawned beside the `with`, which cancels it when its body ends | step 5, landed (it needed only virtual time): [examples/refresh](../../../examples/refresh) |
+| `refresh` | prices refreshed by a task beside the `with`'s body, `Async.beside`, cancelled when the body ends | step 5, landed (it needed only virtual time): [examples/refresh](../../../examples/refresh) |
 | `lost_update` | the milestone: two deposits, each a read and then a write, one of them lost under some seeds, which `ren test --sim --seeds 200` finds and `--seed` replays; the same with one operation, which can't lose one; and the README's `cached`, which can't race any more | holds since step 5 (bench/tasks.t's `milestone`); it stays here, since its first test fails on purpose |
 | `journal` | a version 1 journal, refused once journals are version 2 | step 6 (as specified) |
 
@@ -32,10 +32,12 @@ cd examples/crawler && ren test --seeds 1000
 own errors with `match attempt handle(conn)`, so one connection's
 failure never stops another.
 
-**A task beside a `with` is its background work.** In `refresh`, the
-refresher is spawned in the `with`'s body into the scope outside it, so
-it can call `Prices.refresh()`, and the `with` cancels it when its body
-ends.
+**A task beside a `with`'s body is its background work.** In
+`refresh`, the refresher runs beside the body with `Async.beside`, so it
+can call `Prices.refresh()`, and it's cancelled and waited for when the
+body ends, before the `with`'s `finally` (the services stage replaced
+11a's rule, which cancelled a task spawned into a scope outside the
+`with`: that's a compile error now).
 
 **Tests run in virtual time.** `Clock.sleep` takes no real time under
 `sim`, and the tests check when things happened: the transfer reported

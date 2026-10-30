@@ -58,7 +58,8 @@ let rec starts_tasks fns (p : Path.t) =
   &&
   match p.member with
   | Some { mname; _ } ->
-      List.mem mname [ "scope"; "map"; "each"; "both"; "race"; "timeout"; "isolate" ]
+      List.mem mname
+        [ "scope"; "map"; "each"; "both"; "race"; "timeout"; "isolate"; "beside"; "background" ]
   | None -> false)
   ||
   (* or a release build's copy of one *)

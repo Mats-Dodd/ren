@@ -478,7 +478,7 @@ fn main() = ()
       ┌─ test.ren:7:3
     7 │   task =>
       │   ^^^^
-      help: spawn one beside the `with`, into an `Async.scope` outside it, that calls one of the handler's operations
+      help: run one beside the `with`'s body that calls one of the handler's operations: `with h() in Async.beside(task) fn() => ...`
     |}]
 
 (* ---- s2: scopes and tasks ---- *)
@@ -635,12 +635,14 @@ fn main() uses Console, Async, Clock =
     ()
     |}]
 
-let%expect_test "[s2 accept] a task beside a `with` is cancelled when its body ends" =
-  (* decision 7's background work: the ticker is spawned in the `with`'s
-     body into the scope outside it, so when the body ends the `with`
-     cancels it, then runs its `finally`: three ticks, at 100, 200 and
-     300 ms, then the body ends at 350. In virtual time, since a real
-     timer can wake tens of milliseconds late (macOS coalesces them) *)
+let%expect_test "[s2 accept] a task beside a `with`'s body is cancelled when it ends" =
+  (* decision 7's background work: the ticker is spawned into the
+     background of the `with`'s body, so when the body ends it's
+     cancelled, and then the `with` runs its `finally`: three ticks, at
+     100, 200 and 300 ms, then the body ends at 350. In virtual time,
+     since a real timer can wake tens of milliseconds late (macOS
+     coalesces them). Spawned into a scope outside the `with` instead,
+     it's the compile error of test_services.ml's s3 *)
   run
     {|
 import sim
@@ -661,9 +663,9 @@ fn main() uses Console =
       ticking()
 
 fn ticking() uses Console, Async, Clock =
-  Async.scope fn(s) =>
-    with ticks() in
-      s.spawn fn() =>
+  with ticks() in
+    Async.background fn(bg) =>
+      bg.spawn fn() =>
         while true
           Clock.sleep(Duration.ms(100))
           Ticks.tick()
@@ -2746,15 +2748,17 @@ test handler names() for Fetch<Int, Str> uses Asked =
       if k != 13 then &m.set(k, "n" + show(k))
     m
 
+// the flusher, beside the body of the batcher's `with`
+pub fn flushing() uses Names, Async =
+  while true
+    Names.asked()
+    Async.tick()
+    Names.flush()
+
 test "what's asked for in one round is fetched in one call" =
   with asked(), names() in
-    Async.scope fn(s) =>
-      with sync.batcher() as Names in
-        s.spawn fn() =>
-          while true
-            Names.asked()
-            Async.tick()
-            Names.flush()
+    with sync.batcher() as Names in
+      Async.beside(fn() => flushing()) fn() =>
         let got = Async.map([3, 1, 2, 1]) fn(k) => Names.get(k)
         assert got == ["n3", "n1", "n2", "n1"]
         assert Names.get(2) == "n2"
@@ -2764,13 +2768,8 @@ test "what's asked for in one round is fetched in one call" =
 
 test "a key the fetch doesn't give panics" =
   with asked(), names() in
-    Async.scope fn(s) =>
-      with sync.batcher() as Names in
-        s.spawn fn() =>
-          while true
-            Names.asked()
-            Async.tick()
-            Names.flush()
+    with sync.batcher() as Names in
+      Async.beside(fn() => flushing()) fn() =>
         assert Names.get(13) == "n13"
 |};
   [%expect {|
@@ -2778,9 +2777,9 @@ test "a key the fetch doesn't give panics" =
       ✓ what's asked for in one round is fetched in one call
       ✗ a key the fetch doesn't give panics
 
-    ──── a key the fetch doesn't give panics ── test.ren:49
+    ──── a key the fetch doesn't give panics ── test.ren:46
        │
-    49 │         assert Names.get(13) == "n13"
+    46 │         assert Names.get(13) == "n13"
        │                ^^^^^^^^^^^^^
        │
        panic: `Fetch.fetch` didn't give a value for a key it was asked for
@@ -3224,13 +3223,8 @@ fn main() uses Async =
        help: list it in the parameter's type, `fn() uses Y`, or call it before `X.run`, outside the block
     |}]
 
-let%expect_test "[s9 accept] a task spawned beside a `with` by a task inside its body is cancelled when it ends" =
-  (* the `with`'s body is main's, but the spawn into `o` is made by a task
-     of `i`, and by a task of a task's: each is beside the `with`, whose
-     instance its block can reach, so it's cancelled before `h`'s
-     `finally`, not left to call `D.op` after it *)
-  run
-    {|
+let d_handler =
+  {|
 dep D =
   op: fn() -> Int
 
@@ -3242,7 +3236,16 @@ handler h() for D uses Console =
   op() =>
     n += 1
     n
+|}
 
+let%expect_test "[s9 reject] a task spawned outside a `with` by a task inside its body can't reach it" =
+  (* the `with`'s body is main's, but the spawn into `o` is made by a task
+     of `i`, and by a task of a task's: each is in the `with`'s body, and
+     its block can reach `D`, so it could call `D.op` after `h`'s
+     `finally` (decision 7). 11a cancelled them when the body ended *)
+  check_error
+    (d_handler
+   ^ {|
 fn main() uses Console, Async, Clock =
   Async.scope fn(o) =>
     with h() in
@@ -3259,33 +3262,93 @@ fn main() uses Console, Async, Clock =
       print("with body done")
     print("with done")
   print("outer done")
-|};
+|});
+  [%expect {|
+    error: this task can reach `D`, installed inside the scope it's spawned into
+       ┌─ test.ren:18:11
+    15 │     with h() in
+       │     ----------- `D` is installed here, inside the scope
+    18 │           o.spawn fn() =>
+       │           ^^^^^^^
+       help: open the scope inside the `with`: `with h() in Async.scope fn(o) => ...`, or run it beside the body with `Async.beside`
+
+    error: this task can reach `D`, installed inside the scope it's spawned into
+       ┌─ test.ren:23:15
+    15 │     with h() in
+       │     ----------- `D` is installed here, inside the scope
+    23 │               o.spawn fn() =>
+       │               ^^^^^^^
+       help: open the scope inside the `with`: `with h() in Async.scope fn(o) => ...`, or run it beside the body with `Async.beside`
+    |}]
+
+let%expect_test "[s9 reject] a task's task spawned through helpers outside a `with` panics at the spawn" =
+  (* the same spawns made by helpers that are handed `o`, which only the
+     run time sees: the spawn is in the `with`'s body all the same, its
+     spawner's spawner's, so it's refused there (Sched.inner's
+     [context]) *)
+  run_error
+    (d_handler
+   ^ {|
+fn later(o: Scope) uses D, Clock, Console, Async =
+  o.spawn fn() =>
+    Clock.sleep(Duration.ms(50))
+    print(D.op())
+
+fn main() uses Console, Async, Clock =
+  Async.scope fn(o) =>
+    with h() in
+      Async.scope fn(i) =>
+        i.spawn fn() =>
+          Async.scope fn(j) =>
+            j.spawn fn() => later(o)
+      print("with body done")
+    print("with done")
+  print("outer done")
+|});
+  [%expect {|
+    error: panic: this task can reach `D`, installed inside the scope it's spawned into
+       ┌─ test.ren:14:3
+    14 │   o.spawn fn() =>
+       │   ^^^^^^^^^^^^^^^
+       = in the task main/main:0/main:0
+       help: open the scope inside the `with`
+    |}]
+
+let%expect_test "[s9 accept] a task spawned outside a `with` that can't reach it outlives it" =
+  (* what it can reach is installed outside the scope, so it may: the
+     scope waits for it, after the `with` has ended *)
+  run
+    (d_handler
+   ^ {|
+fn later(o: Scope) uses Clock, Console, Async =
+  o.spawn fn() =>
+    Clock.sleep(Duration.ms(50))
+    print("later")
+
+fn main() uses Console, Async, Clock =
+  Async.scope fn(o) =>
+    with h() in
+      Async.scope fn(i) =>
+        i.spawn fn() => later(o)
+      print("with body done")
+    print("with done")
+  print("outer done")
+|});
   [%expect {|
     with body done
     h ends
     with done
+    later
     outer done
     ()
     |}]
 
-let%expect_test "[s9 accept] a task's task spawned outside a `with` it was spawned beside is cancelled with it" =
-  (* `sa`'s task is beside the `with`, and so is the task it spawns into
-     `sc`, though that task's spawner has ended by the time the `with`'s
-     body does *)
-  run
-    {|
-dep D =
-  op: fn() -> Int
-
-handler h() for D uses Console =
-  var n = 0
-  finally(r) =>
-    print("h ends")
-    try r
-  op() =>
-    n += 1
-    n
-
+let%expect_test "[s9 reject] a task's task spawned outside a `with` it was spawned beside" =
+  (* `sa`'s task could reach `D` through the task it spawns into `sc`,
+     so its own spawn is refused; and so is that one *)
+  check_error
+    (d_handler
+   ^ {|
 fn main() uses Console, Async, Clock =
   Async.scope fn(sc) =>
     Async.scope fn(sa) =>
@@ -3298,13 +3361,51 @@ fn main() uses Console, Async, Clock =
         print("with body done")
       print("with done")
   print("outer done")
-|};
+|});
   [%expect {|
-    with body done
-    h ends
-    with done
-    outer done
-    ()
+    error: this task can reach `D`, installed inside the scope it's spawned into
+       ┌─ test.ren:17:9
+    16 │       with h() in
+       │       ----------- `D` is installed here, inside the scope
+    17 │         sa.spawn fn() =>
+       │         ^^^^^^^^
+       help: open the scope inside the `with`: `with h() in Async.scope fn(sa) => ...`, or run it beside the body with `Async.beside`
+
+    error: this task can reach `D`, installed inside the scope it's spawned into
+       ┌─ test.ren:18:11
+    16 │       with h() in
+       │       ----------- `D` is installed here, inside the scope
+    18 │           sc.spawn fn() =>
+       │           ^^^^^^^^
+       help: open the scope inside the `with`: `with h() in Async.scope fn(sc) => ...`, or run it beside the body with `Async.beside`
+    |}]
+
+let%expect_test "[s9 reject] a helper that spawns a task that spawns: refused at the first spawn" =
+  run_error
+    (d_handler
+   ^ {|
+fn start(sa: Scope, sc: Scope) uses D, Clock, Console, Async =
+  sa.spawn fn() =>
+    sc.spawn fn() =>
+      Clock.sleep(Duration.ms(50))
+      print(D.op())
+
+fn main() uses Console, Async, Clock =
+  Async.scope fn(sc) =>
+    Async.scope fn(sa) =>
+      with h() in
+        start(sa, sc)
+        Clock.sleep(Duration.ms(10))
+        print("with body done")
+      print("with done")
+  print("outer done")
+|});
+  [%expect {|
+    error: panic: this task can reach `D`, installed inside the scope it's spawned into
+       ┌─ test.ren:14:3
+    14 │   sa.spawn fn() =>
+       │   ^^^^^^^^^^^^^^^^
+       help: open the scope inside the `with`
     |}]
 
 let%expect_test "[s9 reject] a wait that closes a cycle is a panic at once, though another task runs" =

@@ -2103,3 +2103,22 @@ lands.
   >  if cmp -s explain.out wiring.explain; then echo "explain-wiring: as specified"; else echo "explain-wiring: not yet"; fi;
   >  rm -f explain.out)
   explain-wiring: as specified
+
+`Async.beside` and `Async.background` (step 3) start tasks, so `ren
+build` refuses them as it refuses `Async.scope`, until `refused`'s line
+says so of the stripes it reaches first:
+
+  $ cat > beside.ren <<'EOF'
+  > fn main() uses Console, Async =
+  >   Async.beside(fn() => print("beside")) fn() => print("body")
+  > EOF
+  $ ren build beside.ren -o ./beside.bin 2>&1 | head -n 1
+  error: `Async.beside` runs tasks, and tasks aren't native yet
+  $ cat > background.ren <<'EOF'
+  > fn main() uses Console, Async =
+  >   Async.background fn(bg) =>
+  >     bg.spawn fn() => print("beside")
+  >     print("body")
+  > EOF
+  $ ren build --release background.ren -o ./background.bin 2>&1 | head -n 1
+  error: `Async.background` runs tasks, and tasks aren't native yet

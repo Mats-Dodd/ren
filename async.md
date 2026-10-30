@@ -42,6 +42,8 @@ Async.scope(max: n) fn(s) => ...                  // spawn waits while n run
 Async.map(xs) fn(x) => ...                         // results, in order
 Async.each(xs) fn(x) => ...                        // no results
 Async.produce(cap: n, fn() => ...) fn(items) => ... // a producer task; its sends are a stream
+Async.beside(fn() => task) fn() => ...             // a task beside the body, stopped when it ends
+Async.background fn(bg) => bg.spawn fn() => ...    // the same, for tasks spawned as the body goes
 Async.both(fn() => a, fn() => b)                   // a pair
 Async.race(fn() => a, fn() => b)                   // the first to finish
 Async.timeout(d) fn() => ...                       // ! Timeout
@@ -61,6 +63,7 @@ with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at 
 | `Async.race` | the first to finish | its branches can't fail |
 | `Async.timeout` | the body's | `! Timeout`, and the body is cancelled |
 | `Async.isolate` | the body's | a panic becomes `! Panicked(msg)` |
+| `Async.beside`, `Async.background` | the body's | a background task may fail: the first failure cancels the body and is the call's |
 
 `Async` is a dependency like `Clock`, so a signature says `uses Async`
 and the code says `Async.map`. Its two operations are `yield` and
@@ -283,14 +286,14 @@ over `Async.until`, but for `keyed`:
 ```ren
 with sync.semaphore(16), sync.limit() over Web in crawl(root, 3)
 
-Async.scope fn(s) =>
-  with sync.batcher() as Users in
-    s.spawn fn() =>
-      while true
-        Users.asked()
-        Async.tick()
-        Users.flush()
-    serve()
+with sync.batcher() as Users in
+  Async.beside(fn() => flushing()) fn() => serve()
+
+fn flushing() =
+  while true
+    Users.asked()
+    Async.tick()
+    Users.flush()
 ```
 
 `limit` keeps no state, so it takes no lock; the semaphore's `acquire`
@@ -358,15 +361,15 @@ where it's isolated, and can't call a block it was given, which could
 change its caller's variables. (A panic in a task spawned inside it
 still ends the program, for now.)
 
-## Background work is a task beside the `with`
+## Background work is a task beside the body
 
 A handler has no task of its own. A cache's refresh, a pool's checks
-and a metrics flush are a task spawned beside the `with`: in its body,
-into a scope outside it, calling one of the handler's operations. **When
-the body ends, the `with` cancels the tasks that can reach its handler
-and were spawned into a scope outside it, and waits for them,** before
-its `finally` runs. So the task lives exactly as long as the `with`,
-and never calls a handler that's gone:
+and a metrics flush are a task beside the `with`'s body, calling one of
+the handler's operations. **`Async.beside(task) fn() => body` runs
+`task` beside `body`: when the body ends, by returning, failing or being
+cancelled, the task is cancelled and waited for,** and then the `with`
+around it runs its `finally`. So the task lives exactly as long as the
+body, and never calls a handler that's gone:
 
 ```ren
 pub dep Metrics =
@@ -384,27 +387,54 @@ pub handler batched() for Metrics uses Exporter =
     pending = []
 
 fn serve_with_metrics() uses Exporter, Clock, Async =
-  Async.scope fn(s) =>
-    with batched() in
-      s.spawn fn() =>
-        while true
-          Clock.sleep(Duration.seconds(10))
-          Metrics.flush()
+  with batched() in
+    Async.beside(fn() => flushing()) fn() =>
       serve()
+
+fn flushing() =
+  while true
+    Clock.sleep(Duration.seconds(10))
+    Metrics.flush()
 ```
 
-**What happens, in order:** the `with` installs the handler; its body
-starts the flusher in the scope outside, beside the rest of the body;
-when `serve` returns, the `with` cancels the flusher, which stops at its
-next call, and waits for it; then its `finally` sends what's left, and
-the scope ends. A `flush` holds the instance until it returns, so no
-sample is lost between `Exporter.send(pending)` and `pending = []`.
-A task spawned into the scope from outside any `with`, as a server's
-connections are, isn't cancelled when the scope's body ends: the scope
-waits for it. It's the same for a spawn made by a task of a scope inside
-the `with`'s body, or by that task's tasks: their spawn is in the body
-too, so what they spawn into a scope outside it, able to reach the
-handler, is cancelled with the rest.
+**What happens, in order:** the `with` installs the handler; `beside`
+starts the flusher as a task and runs `serve()`; when `serve` returns,
+the flusher is cancelled, stops at its next call, and is waited for;
+then the `with`'s `finally` sends what's left. A `flush` holds the
+instance until it returns, so no sample is lost between
+`Exporter.send(pending)` and `pending = []`. A pool's order is the same:
+in `with pool() in Async.beside(health) fn() => Async.scope ...`, the
+scope's work drains, then the health check stops, then the pool's
+`finally` runs.
+
+**`Async.background fn(bg) => body`** is `beside` for tasks the body
+starts as it goes, `bg.spawn fn() => ...`, all cancelled and waited for
+when it ends.
+
+**A background task may fail,** unlike a spawned one: its failure
+cancels the body, and is the call's error, the first one's if several
+fail. A lease that's lost stops the work that needed it:
+
+```ren
+attempt Async.beside(fn() => try keep_lease()) fn() => work()   // Err(LeaseLost)
+```
+
+**A task can't reach a handler installed inside the scope it's spawned
+into.** Spawned there, it could outlive the `with`, so it's a compile
+error whose help opens the scope inside the `with`, or runs the task
+beside the body:
+
+```
+error: this task can reach `Ticks`, installed inside the scope it's spawned into
+  help: open the scope inside the `with`: `with ticks() in Async.scope fn(s) => ...`, or run it beside the body with `Async.beside`
+```
+
+A scope opened inside the `with`, as a server's connections' is, waits
+for its tasks before the `with` ends, so they may reach anything it
+installs. Where a scope is passed to a helper, which scope is inner
+is the run time's to see, and the spawn panics with the same words. A
+task spawned outside the `with` that reaches nothing installed inside
+it is fine: the scope waits for it, after the `with` has ended.
 
 ## Tests are deterministic
 
@@ -601,23 +631,24 @@ pub handler refreshing() for Prices ! PricesDown uses Supplier =
   refresh() => table = try Supplier.all()
 
 fn shop() ! PricesDown uses Supplier, Clock, Async =
-  Async.scope fn(s) =>
-    try with refreshing() in
-      s.spawn fn() =>
-        while true
-          Clock.sleep(Duration.minutes(1))
-          match attempt Prices.refresh()
-            Ok(_) => ()
-            Err(_) => ()       // keep the table we have
+  try with refreshing() in
+    Async.beside(fn() => refresher()) fn() =>
       serve_customers()
+
+fn refresher() =
+  while true
+    Clock.sleep(Duration.minutes(1))
+    match attempt Prices.refresh()
+      Ok(_) => ()
+      Err(_) => ()       // keep the table we have
 ```
 
 `get` never sees a half-updated table: `refresh` holds the instance
 while it asks the supplier and swaps the table in. The refresher is a
-task beside the `with`, so it stops when the shop's work is done. A
+task beside the body, so it stops when the shop's work is done. A
 refresh that fails keeps the stale table here; one that should stop the
-shop would make the failure the body's, say through an operation the
-body waits on. It runs, with its tests, in
+shop would let the failure out of the refresher, `try Prices.refresh()`,
+and a background task's failure cancels the body and is its error. It runs, with its tests, in
 [examples/refresh](examples/refresh).
 
 ## How it runs
@@ -660,7 +691,7 @@ body waits on. It runs, with its tests, in
 | `Effect.makeSemaphore`, `withPermits` | `sync.semaphore(n)`, `sync.limit() over Dep` |
 | `Queue.bounded` | `sync.channel(n)` |
 | interruption, `onInterrupt`, `ensuring`, `acquireRelease` | `finally`, which sees `Err(Cancelled)` |
-| `Layer.scoped` with `forkScoped` | a task spawned beside the `with` |
+| `Layer.scoped` with `forkScoped` | `Async.beside` or `Async.background` inside the `with` |
 | `Ref`, `SynchronizedRef` | handler state |
 | `Layer`, `provide` | `with`, `over` |
 | `TestClock` | virtual time in every test |
@@ -721,8 +752,10 @@ This document was first written before foundations.md, which changed it
 - **`Async.group(max:, drain:)` is `Async.scope(max:)`,** and a drain is
   the cleanup deadline after `accept_until` stops.
 - **A handler has no task of its own.** `task =>` in a handler is gone;
-  background work is a task spawned beside the `with`, into a scope
-  outside it, which the `with` cancels when its body ends.
+  background work is a task beside the `with`'s body, `Async.beside` or
+  `Async.background`, cancelled when the body ends. (Stage 11a built it
+  as a task spawned into a scope outside the `with`, which the `with`
+  cancelled; that spawn is a compile error now.)
 - **Operations don't interleave.** Another task's operation could once
   run on a handler at each dependency call, and a warning caught state
   read before a call and written after it. Now an operation keeps its

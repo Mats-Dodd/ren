@@ -548,7 +548,8 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   (* and the scheduler's, which run blocks, and wait (eval.ml, [tasks]) *)
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-  | Task_each | Task_both | Task_race | Async_yield | Async_tick
+  | Task_each | Task_both | Task_race | Task_beside | Task_background
+  | Background_spawn | Async_yield | Async_tick
   | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
   | Sim_advance | Sim_alarm | Task_random | Task_drain
   (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,

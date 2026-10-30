@@ -1079,39 +1079,30 @@ handler ticks() for Ticks uses Console =
 let%expect_test "[s3 reject] a task that reaches a handler installed inside its scope" =
   (* what 11a cancelled when the `with`'s body ended is a compile error
      now, whose help opens the scope inside the `with` *)
-  until "s3"
-    ~says:
-      [
-        "error: this task can reach `Ticks`, installed inside the scope it's spawned into";
-        "help: open the scope inside the `with`: `with ticks() in Async.scope fn(s) => ...`, or run it beside the body with `Async.beside`";
-      ]
-    (fun () ->
-      check_error
-        (ticks_dep
-       ^ {|
+  check_error
+    (ticks_dep
+   ^ {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
     with ticks() in
       s.spawn fn() => Ticks.tick()
-|}));
+|});
   [%expect {|
-    (until s3)
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: this task can reach `Ticks`, installed inside the scope it's spawned into
+       ┌─ test.ren:14:7
+    13 │     with ticks() in
+       │     --------------- `Ticks` is installed here, inside the scope
+    14 │       s.spawn fn() => Ticks.tick()
+       │       ^^^^^^^
+       help: open the scope inside the `with`: `with ticks() in Async.scope fn(s) => ...`, or run it beside the body with `Async.beside`
     |}]
 
 let%expect_test "[s3 reject] a helper hides which scope is inner: the run time's check" =
   (* `start` is handed the scope from outside the `with`, which only the
      run time can see: a panic at the spawn *)
-  until "s3"
-    ~says:
-      [
-        "panic: this task can reach `Ticks`, installed inside the scope it's spawned into";
-        "help: open the scope inside the `with`";
-      ]
-    (fun () ->
-      run_error
-        (ticks_dep
-       ^ {|
+  run_error
+    (ticks_dep
+   ^ {|
 fn start(s: Scope) uses Ticks, Async =
   s.spawn fn() => Ticks.tick()
 
@@ -1119,25 +1110,19 @@ fn main() uses Console, Async =
   Async.scope fn(s) =>
     with ticks() in
       start(s)
-|}));
+|});
   [%expect {|
-    (until s3)
-    ticks: 0
-    ()
-    raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
+    error: panic: this task can reach `Ticks`, installed inside the scope it's spawned into
+       ┌─ test.ren:12:3
+    12 │   s.spawn fn() => Ticks.tick()
+       │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       help: open the scope inside the `with`
     |}]
 
 let%expect_test "[s3 accept] `Async.beside` cancels its task when the body ends, before the `finally`" =
-  until "s3"
-    ~want:{|
-ticks: 3
-after
-()
-|}
-    (fun () ->
-      run
-        ("import sim\n" ^ ticks_dep
-       ^ {|
+  run
+    ("import sim\n" ^ ticks_dep
+   ^ {|
 
 fn main() uses Console =
   with sim.scheduler(1) in
@@ -1154,29 +1139,18 @@ fn tick_forever() uses Ticks, Clock =
   while true
     Clock.sleep(Duration.ms(100))
     Ticks.tick()
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: `Async` has no operation or member named `beside`
-       ┌─ test.ren:21:11
-    21 │     Async.beside(fn() => tick_forever()) fn() =>
-       │           ^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+    ticks: 3
+    after
+    ()
     |}]
 
 let%expect_test "[s3 accept] a pool's order: the work drains, the background stops, then `finally`" =
   (* decision 7: `with pool() in Async.beside(health) fn() =>
      Async.scope ...` *)
-  until "s3"
-    ~want:{|
-work done
-health stopped
-pool closed
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sim
 
 dep Pool =
@@ -1194,7 +1168,9 @@ dep Probe =
   probe: fn()
 
 handler probe() for Probe uses Pool, Console =
-  finally(_) => print("health stopped")
+  finally(r) =>
+    print("health stopped")
+    try r
   probe() => Pool.check()
 
 fn health() uses Pool, Clock, Console =
@@ -1214,26 +1190,17 @@ fn main() uses Console =
                 Clock.sleep(Duration.ms(25))
                 Pool.use()
           print("work done")
-|});
+|};
   [%expect {|
-    (until s3)
-    error: `Async` has no operation or member named `beside`
-       ┌─ test.ren:31:15
-    31 │         Async.beside(fn() => health()) fn() =>
-       │               ^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+    work done
+    health stopped
+    pool closed
+    ()
     |}]
 
 let%expect_test "[s3 accept] a background failure cancels the body and is its error" =
-  until "s3"
-    ~want:{|
-body cancelled
-Err(LeaseLost)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sim
 
 fn keep_lease() ! LeaseLost uses Clock =
@@ -1258,27 +1225,17 @@ fn main() uses Console =
   with sim.scheduler(1) in
     with sim.clock() in
       print(attempt Async.beside(fn() => try keep_lease()) fn() => work())
-|});
+|};
   [%expect {|
-    (until s3)
-    error: `Async` has no operation or member named `beside`
-       ┌─ test.ren:24:27
-    24 │       print(attempt Async.beside(fn() => try keep_lease()) fn() => work())
-       │                           ^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+    body cancelled
+    Err(LeaseLost)
+    ()
     |}]
 
 let%expect_test "[s3 accept] `Async.background`: tasks spawned as the body goes, stopped when it ends" =
-  until "s3"
-    ~want:{|
-body done
-ticks: 2
-()
-|}
-    (fun () ->
-      run
-        ("import sim\n" ^ ticks_dep
-       ^ {|
+  run
+    ("import sim\n" ^ ticks_dep
+   ^ {|
 
 fn main() uses Console =
   with sim.scheduler(1) in
@@ -1294,25 +1251,16 @@ fn every(d: Duration) uses Ticks, Clock =
   while true
     Clock.sleep(d)
     Ticks.tick()
-|}));
+|});
   [%expect {|
-    (until s3)
-    error: `Async` has no operation or member named `background`
-       ┌─ test.ren:18:15
-    18 │         Async.background fn(bg) =>
-       │               ^^^^^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+    body done
+    ticks: 2
+    ()
     |}]
 
 let%expect_test "[s3 accept] `Async.background`'s first failure cancels the body" =
-  until "s3"
-    ~want:{|
-Err(Gone)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sim
 
 fn fails_later() ! Gone uses Clock =
@@ -1325,14 +1273,10 @@ fn main() uses Console =
       print(attempt Async.background fn(bg) =>
         bg.spawn fn() => try fails_later()
         Clock.sleep(Duration.seconds(5)))
-|});
+|};
   [%expect {|
-    (until s3)
-    error: `Async` has no operation or member named `background`
-       ┌─ test.ren:10:27
-    10 │       print(attempt Async.background fn(bg) =>
-       │                           ^^^^^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+    Err(Gone)
+    ()
     |}]
 
 let%expect_test "[s3 accept] a scope opened inside the `with` waits for its tasks, as before" =
@@ -2247,7 +2191,7 @@ fn main() uses Console, Async =
       ┌─ test.ren:6:9
     6 │   Async.produce(cap: 2, fn() => count_to(3)) fn(items) =>
       │         ^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
     |}]
 
 let%expect_test "[s5 accept] a `break` in `produce`'s body cancels and waits for the producer" =
@@ -2295,7 +2239,7 @@ fn main() uses Console, Async =
        ┌─ test.ren:16:9
     16 │   Async.produce(fn() => forever()) fn(items) =>
        │         ^^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
     |}]
 
 let%expect_test "[s5 accept] a producer blocked at `cap` makes progress as the consumer takes" =
@@ -2330,7 +2274,7 @@ test "a slow consumer still gets everything, in order" =
       ┌─ test.ren:7:9
     7 │   Async.produce(cap: 1, fn() => many()) fn(items) =>
       │         ^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
     |}]
 
 let%expect_test "[s5 accept] a failure in the producer ends the stream with it" =
@@ -2367,7 +2311,7 @@ fn main() uses Console, Async = print(attempt consume())
       ┌─ test.ren:6:9
     6 │   Async.produce(fn() => try one_then_fail()) fn(items) =>
       │         ^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
     |}]
 
 let%expect_test "[s5 accept] `Async.map_pull`: results as a stream, in order" =
@@ -2392,7 +2336,7 @@ fn main() uses Console, Async =
       ┌─ test.ren:3:9
     3 │   Async.map_pull([1, 2, 3], max: 2, fn(x) => x * x) fn(results) =>
       │         ^^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
+      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
     |}]
 
 (* ---- s6: `striped`, plain Ren over the keyed instance family (decisions 18 and 20, language.md §11) ---- *)

@@ -208,12 +208,15 @@ let option_path = Path.prelude "Option"
    once can be an `Option<Int>`, and elsewhere an `Option<Bool>`. *)
 let instance env (td : Iface.type_decl) =
   let tvars = List.map (fun _ -> fresh_var env.st) td.params in
-  (* a [Result]'s second argument is always an error set *)
+  (* a [Result]'s second argument is always an error set, and so is a
+     [Background]'s only one, what its tasks fail with *)
   let tvars =
     if td.path = result_path then
       List.mapi
         (fun i t -> if i = 1 then TErrors (fresh_row env.st) else t)
         tvars
+    else if td.path = Path.prelude "Background" then
+      List.map (fun _ -> TErrors (fresh_row env.st)) tvars
     else tvars
   in
   match td.body with

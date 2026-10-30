@@ -160,14 +160,28 @@ type ctx = {
   tasks : frame list;
       (** the `Async.scope` calls whose bodies are being walked, innermost
           first *)
+  withs : (Ty.label list * Loc.t * string) list;
+      (** the `with`s whose bodies are being walked, innermost first, each
+          with the dependencies it installs, and how it's written, `with
+          ticks() in` *)
+  reaches : (int, Ty.label list) Hashtbl.t;
+      (** what each block bound by `let` can reach, by its binder ([reach]) *)
 }
 
 (* An `Async.scope` call whose body is being walked: its body's parameter,
    the scope, by binder; how deep its body is, so that the variables of
-   the frame that called it are those bound less deep (rule C); and the
+   the frame that called it are those bound less deep (rule C); the
    places the tasks spawned into it so far read by reference, until it
-   ends. *)
-and frame = { sid : int; sdepth : int; reads : access list ref }
+   ends; and how many `with`s were around it ([ctx.withs]), so that those
+   since are inside it (decision 7). `Async.background`'s body is one
+   too, its parameter the background. *)
+and frame = {
+  sid : int;
+  sdepth : int;
+  reads : access list ref;
+  swiths : int;
+  sopen : string;  (** how it's opened, `Async.scope fn(s) =>` *)
+}
 
 let ty cx (e : expr) =
   match Infer.Nodes.find_opt e.node cx.nodes with
@@ -831,6 +845,106 @@ let instant cx (a : access) =
 let param_use cx (b : binder) loc why =
   record cx { var = b; path = []; kind = Read; loc; why; block_param = true }
 
+(* ---- what a task can reach (foundations.md, decision 7) ---- *)
+
+(* The dependencies a `with` with [items] installs: each link's, as
+   inference found it. *)
+let installs cx items =
+  List.concat_map
+    (fun (it : with_item) ->
+      List.concat_map
+        (fun (lk : with_link) ->
+          match Infer.Nodes.find_opt lk.knode cx.nodes with
+          | Some { found = Some (Installs { key; _ }); _ } -> [ key ]
+          | Some { found = Some (Installs_handler keys); _ } -> keys
+          | _ -> [])
+        it.chain)
+    items
+
+(* What the block [e] can reach when it runs: the dependencies it calls an
+   operation of, those each function it calls uses, by its scheme, those
+   each block bound by `let` it calls can reach, and those each block
+   parameter it calls is given, by its type; and the runtime, `Async`,
+   which runs every task. A block passed in was written outside, so it
+   reaches nothing a `with` here installs but what it's given. Counted
+   generously: a dependency a `with` inside [e] installs is counted too.
+   Not by the types of the nodes, whose rows are joined to the rows
+   around them. The interpreter counts the same at a spawn (eval.ml,
+   [reaching]). *)
+let reach cx (e : expr) =
+  let found = ref [ Ty.label (Ty.dep_label (Path.prelude "Async")) ] in
+  let add (l : Ty.label) =
+    if not (List.exists (fun (k : Ty.label) -> k.name = l.name) !found) then
+      found := l :: !found
+  in
+  let uses = function
+    | Some (Ty.Fun (_, _, _, u)) -> List.iter add u.labels
+    | _ -> ()
+  in
+  let scheme p = Option.map (fun (s : Ty.scheme) -> s.ty) (Hashtbl.find_opt cx.schemes p) in
+  let rec go (e : expr) =
+    (match e.kind with
+    | Var (Dep_op (p, _)) -> add (Ty.label (Ty.dep_label p))
+    | Var (Global p) -> uses (scheme p)
+    | Field _ when is_method cx e -> (
+        match Infer.Nodes.find_opt e.node cx.nodes with
+        | Some { found = Some (Method_of p); _ } -> uses (scheme p)
+        | _ -> ())
+    | Var (Local b) -> (
+        match Hashtbl.find_opt cx.reaches b.id with
+        | Some ls -> List.iter add ls
+        | None -> uses (List.assoc_opt b.id cx.own_tys))
+    | _ -> ());
+    List.iter go (children e)
+  in
+  go e;
+  !found
+
+(* [f] with [args] is a spawn, `s.spawn(body)`, `s.start(body)`,
+   `s.replace(k, body)` or `bg.spawn(body)`, into the scope [receiver] of
+   an `Async.scope` or `Async.background` being walked: its task can't
+   reach what a `with` inside that scope installs, since it could outlive
+   it. Decision 7's compile error, where the scope is seen; a scope
+   passed to a helper is the run time's (eval.ml, [spawn]). *)
+let inner_spawn cx (f : expr) receiver args =
+  let spawns =
+    List.map (Path.member (Path.prelude "Scope")) [ "spawn"; "start"; "replace" ]
+    @ [ Path.member (Path.prelude "Background") "spawn" ]
+  in
+  match (callee_of cx.nodes cx.schemes f, receiver, List.rev args) with
+  | Some (p, _), Some ({ kind = Var (Local s); _ } : expr), body :: _
+    when List.mem p spawns -> (
+      match List.find_opt (fun fr -> fr.sid = s.id) cx.tasks with
+      | None -> ()
+      | Some fr -> (
+          let inside = List.filteri (fun i _ -> i < List.length cx.withs - fr.swiths) cx.withs in
+          let reached = reach cx body in
+          let hit (l : Ty.label) =
+            List.exists (fun (k : Ty.label) -> k.name = l.name) reached
+          in
+          (* the outermost: opening the scope inside it fixes them all *)
+          match
+            List.find_map
+              (fun (ls, wloc, written) ->
+                Option.map (fun l -> (l, wloc, written)) (List.find_opt hit ls))
+              (List.rev inside)
+          with
+          | Some (l, wloc, written) ->
+              let d = cx.names (Ty.of_label l).dpath in
+              report cx f.loc
+                ~labels:[ (wloc, sprintf "`%s` is installed here, inside the scope" d) ]
+                ~help:
+                  (sprintf
+                     "open the scope inside the `with`: `with %s in %s ...`, or \
+                      run it beside the body with `Async.beside`"
+                     written fr.sopen)
+                (sprintf
+                   "this task can reach `%s`, installed inside the scope it's \
+                    spawned into"
+                   d)
+          | None -> ()))
+  | _ -> ()
+
 let rec walk cx (e : expr) =
   match e.kind with
   | Int _ | Float _ | Bool _ | Str _ | Unit | Break | Todo -> ()
@@ -891,10 +1005,39 @@ let rec walk cx (e : expr) =
         (function Finally f -> body { arm with in_op = false } f | _ -> ())
         state;
       List.iter (fun (a : handler_arm) -> body arm a.arm_impl) arms
+  | With { items; body } ->
+      List.iter (walk cx) (with_links items);
+      (* how it's written: each item's chain, or the wiring it came
+         from, once ([...] where it can't be printed) *)
+      let item (it : with_item) =
+        match List.rev it.from with
+        | v :: _ -> v.wiring
+        | [] -> (
+            String.concat " over "
+              (List.map
+                 (fun (lk : with_link) ->
+                   Option.value (cx.source lk.link) ~default:"...")
+                 it.chain)
+            ^
+            match it.alias with
+            | Some { dep = { tref = Named p; _ }; _ } -> " as " ^ cx.names p
+            | _ -> "")
+      in
+      let written =
+        String.concat ", "
+          (List.fold_left
+             (fun acc it ->
+               let w = item it in
+               if List.mem w acc then acc else acc @ [ w ])
+             [] items)
+      in
+      walk
+        { cx with withs = (installs cx items, e.loc, written) :: cx.withs }
+        body
   | Unop _ | Binop _ | If _ | Con _ | Con_named _ | Record _ | Update _
   | Match _ | Array _ | Interp _
   | Tuple _
-  | For _ | While _ | Fail _ | Try _ | Attempt _ | With _ | Assert _
+  | For _ | While _ | Fail _ | Try _ | Attempt _ | Assert _
   | Named _ | Tag_set _ | Pipe _ ->
       List.iter (walk cx) (children e)
 
@@ -902,7 +1045,8 @@ and stmt cx = function
   | Let { name; value = { kind = Lambda _; _ } as value; mut = false; _ } ->
       (* no access where it's bound: its captures are made where it's
          called or passed *)
-      Hashtbl.replace cx.blocks name.id (block cx value)
+      Hashtbl.replace cx.blocks name.id (block cx value);
+      Hashtbl.replace cx.reaches name.id (reach cx value)
   | Let { value; _ } -> walk cx value
   | Let_pattern { value; else_; _ } ->
       walk cx value;
@@ -914,20 +1058,27 @@ and stmt cx = function
   | Finally f -> walk cx f
 
 (* A block, checked on its own, and what it accesses of the variables
-   from outside it, its captures, nested blocks' included. *)
-and block ?(scope = false) cx (e : expr) =
+   from outside it, its captures, nested blocks' included. [scope], if
+   it's the body of `Async.scope` or `Async.background`, is which. *)
+and block ?scope cx (e : expr) =
   match e.kind with
   | Lambda (ps, body) ->
       let inner = { cx with depth = cx.depth + 1; loops = []; seen = ref [] } in
       (* the body of an `Async.scope` call: its parameter is the scope its
          tasks are spawned into *)
       let inner =
-        match ps with
-        | [ s ] when scope ->
+        match (ps, scope) with
+        | [ s ], Some opener ->
             {
               inner with
               tasks =
-                { sid = s.pname.id; sdepth = inner.depth; reads = ref [] }
+                {
+                  sid = s.pname.id;
+                  sdepth = inner.depth;
+                  reads = ref [];
+                  swiths = List.length cx.withs;
+                  sopen = sprintf "%s fn(%s) =>" opener s.pname.ident.name;
+                }
                 :: inner.tasks;
             }
         | _ -> inner
@@ -998,7 +1149,13 @@ and call cx (e : expr) (f : expr) args ~changed =
     | Some (p, off) when i >= 0 -> mode_of cx.schemes p (i + off)
     | _ -> Ty.Ordinary
   in
-  let scope_call = call_is (async_member "scope") f cx.nodes cx.schemes in
+  let scope_call =
+    List.find_opt
+      (fun m -> call_is (async_member m) f cx.nodes cx.schemes)
+      [ "scope"; "background" ]
+    |> Option.map (fun m -> "Async." ^ m)
+  in
+  inner_spawn cx f receiver args;
   let until_call = call_is (async_member "until") f cx.nodes cx.schemes in
   let isolate_call = call_is (async_member "isolate") f cx.nodes cx.schemes in
   if until_call && not cx.in_op then until_outside cx e;
@@ -1077,7 +1234,7 @@ and call cx (e : expr) (f : expr) args ~changed =
           walk cx a;
           none
       | Lambda _ ->
-          let caps = block ~scope:scope_call cx a in
+          let caps = block ?scope:scope_call cx a in
           if isolate_call then isolated_changes cx caps;
           { held = as_task caps; via = Some a.loc; sibling }
       | Var (Local b) -> (
@@ -1316,6 +1473,8 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
               s.modes;
           own_tys;
           tasks = [];
+          withs = [];
+          reaches = Hashtbl.create 8;
         }
         f.body)
     (Ast.functions r.prog);

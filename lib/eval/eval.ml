@@ -543,6 +543,45 @@ let share_reach v =
   in
   value v
 
+(* What the block [v], about to run as a task, can reach of the
+   instances installed where it was written, its evidence: those of the
+   dependencies it can call, and the runtime's, `Async`, which runs every
+   task. It can call the dependencies its body calls an operation of,
+   those each function it calls uses, by its scheme in [fns], and those
+   of each block it captured, in turn, a block parameter's among them:
+   what Excl finds for it ([reach]), counted as generously, a dependency
+   a `with` inside it installs counted too. Sched.inner asks for it, to
+   refuse a task that could outlive what it reaches (foundations.md,
+   decision 7). *)
+let reaching (fns : (Path.t, fn_def) Hashtbl.t) v =
+  let deps = ref [ Path.prelude "Async" ] and seen = ref [] in
+  let add (p : Path.t) = if not (List.mem p !deps) then deps := p :: !deps in
+  let rec expr (e : Core.expr) =
+    (match e.kind with
+    | Dep_call { dep; next = false; _ } -> add dep
+    | Global (p, _, _, _) -> (
+        match Hashtbl.find_opt fns p with
+        | Some { scheme = { ty = Fun (_, _, _, uses); _ }; _ } ->
+            List.iter (fun l -> add (Ty.of_label l).dpath) uses.labels
+        | _ -> ())
+    | _ -> ());
+    List.iter expr (Core.children e)
+  and value = function
+    | VClosure { body; env; _ } when not (List.memq body !seen) ->
+        seen := body :: !seen;
+        expr body;
+        Env.iter (fun _ r -> value !r) env
+    | _ -> ()
+  in
+  value v;
+  match v with
+  | VClosure { outer; env; _ } -> (
+      match Option.map ( ! ) (Env.find_opt outer env) with
+      | Some (VEvidence installed) ->
+          List.filter (fun (i : installed) -> List.mem i.dep !deps) installed
+      | _ -> [])
+  | _ -> []
+
 (* Where [loc] is, `server.ren:9:3`, as the deadlock panic says a task
    waits there (Sched.wait). *)
 let where (loc : Loc.t) = sprintf "%s:%d:%d" loc.file loc.start.line loc.start.col
@@ -1188,24 +1227,13 @@ and instance cx (h : handler) outer what =
    `finally` gives is thrown away, and the cancellation goes on. So is a
    panic an `Async.isolate` around will make a value (Sched.isolatable),
    which the `finally` sees as `Err(Cancelled)` too, before the panic goes
-   on to the isolate (foundations.md, decision 8). When the body ends,
-   and before the `finally` runs, the tasks spawned beside the `with` are
-   cancelled and waited for (Sched.leave_with). *)
+   on to the isolate (foundations.md, decision 8). While the body runs,
+   no task is spawned from it into a scope outside the `with` that can
+   reach [installed] (Sched.inner), so none is left to call it once the
+   `finally` has run. *)
 and ending cx env (loc : Loc.t) finally desc outer installed body =
   let frame = Sched.enter_with installed in
-  let at = if loc.file = Prelude.file then at_call cx else Some (where loc) in
-  let body () =
-    match body () with
-    | v ->
-        Sched.leave_with ?at frame;
-        v
-    | exception ((Failed _ | Sched.Cancelled) as e) ->
-        Sched.leave_with ?at frame;
-        raise e
-    | exception (Panic _ as p) when Sched.isolatable () ->
-        Sched.leave_with ?at frame;
-        raise p
-  in
+  let body () = Fun.protect ~finally:(fun () -> Sched.leave_with frame) body in
   match finally with
   | None -> body ()
   | Some f -> (
@@ -1433,7 +1461,8 @@ and builtin ?loc cx f args =
   | VBuiltin
       ( (( Scope_run | Task_spawn | Task_start | Task_replace | Task_join
          | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-         | Task_each | Task_both | Task_race | Async_yield | Async_tick
+         | Task_each | Task_both | Task_race | Task_beside | Task_background
+         | Background_spawn | Async_yield | Async_tick
          | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
          | Sim_advance | Sim_alarm | Task_random | Task_drain ) as x),
         tys,
@@ -1502,19 +1531,23 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
   let some v = VCon { ty = Path.prelude "Option"; name = "Some"; args = [ v ] }
   and none = VCon { ty = Path.prelude "Option"; name = "None"; args = [] } in
   (* [body], a block, started as a task of [sc]: copied, and run with a
-     count of calls of its own. A spawned block can't fail (infer), so
-     it never gives an error *)
-  let spawn ?key sc body =
+     count of calls of its own. It can't reach what a `with` inside [sc]
+     installed, whose body the spawn is in, or it could call it after the
+     `with` has ended: that's the compile error of decision 7 where Excl
+     can see which scope is inner, and otherwise this panic at the spawn
+     (compiler.md, "Services stage", "Background work"). A spawned block
+     can't fail (infer), so it never gives an error, but a background's
+     can, which [failed] is given *)
+  let spawn ?key ?(failed = fun _ -> bug "a spawned block that failed") sc body =
     share_reach body;
     let body = copied body in
-    let evidence =
-      match body with
-      | VClosure { outer; env; _ } -> (
-          match Option.map ( ! ) (Env.find_opt outer env) with
-          | Some (VEvidence installed) -> installed
-          | _ -> [])
-      | _ -> []
-    in
+    (match Sched.inner sc ~reaching:(fun () -> reaching cx.fns body) with
+    | Some i ->
+        raise
+          (panic_at loc ~help:"open the scope inside the `with`"
+             (sprintf "this task can reach `%s`, installed inside the scope it's spawned into"
+                (Path.short i.dep)))
+    | None -> ());
     (* a task that captured [sc] in its body, of a scope outside it, can
        still call this once [sc] has ended (Sched.spawn) *)
     let ended () =
@@ -1523,8 +1556,42 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         ~help:"spawn it in a scope that's still running: the task's own, or one outside it"
         "a task is started in a scope that has ended"
     in
-    Sched.spawn ?key ?at sc ~label:cx.site ~evidence ~ended (fun () ->
-        ok (fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence []))))
+    Sched.spawn ?key ?at sc ~label:cx.site ~ended (fun () ->
+        match fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) with
+        | Ok v -> v
+        | Error err ->
+            failed err;
+            VUnit)
+  in
+  (* [run b], [b] a background: the body of `Async.beside` or
+     `Async.background`, run in this task beside [b]'s tasks, which are
+     cancelled and waited for once it ends, however it does. What it gives
+     or fails with, unless a task of [b] failed first: then that failure,
+     the first, is the call's (Sched.fail), which cancelled the body. One
+     that fails after the body has failed is said, as a scope's second
+     failure is *)
+  let beside_body (b : Sched.background) run =
+    let result =
+      match run () with
+      | r ->
+          Sched.stop_background ?at b;
+          r
+      | exception Sched.Cancelled ->
+          Sched.stop_background ?at b;
+          if Sched.cut_off b then Error (Option.get b.failure) else raise Sched.Cancelled
+      | exception (Panic _ as p) when Sched.isolatable () ->
+          Sched.stop_background ?at b;
+          raise p
+    in
+    match (result, b.failure) with
+    | Ok _, Some err -> Error err
+    | r, _ -> r
+  in
+  (* a task of the background [b] failed with [err], in the task at [path] *)
+  let failed_beside (b : Sched.background) err =
+    let path = Sched.current_path () in
+    if Sched.fail b err then Sched.came_from err path
+    else failed_too cx path err
   in
   (* [calls] made by tasks of a scope of their own, which lets [max] of
      them run at once: started in order, and one more each time one ends,
@@ -1559,7 +1626,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         (fun i call ->
           if Option.is_none !first then begin
             let t =
-              Sched.spawn ?at sc ~label:cx.site ~evidence:[] ~ended:mine (fun () ->
+              Sched.spawn ?at sc ~label:cx.site ~ended:mine (fun () ->
                   (match call () with
                   | Ok v -> results.(i) <- v
                   | Error err -> failed err);
@@ -1594,7 +1661,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
     List.iter
       (fun call ->
         ignore
-          (Sched.spawn ?at sc ~label:cx.site ~evidence:[] ~ended:mine (fun () ->
+          (Sched.spawn ?at sc ~label:cx.site ~ended:mine (fun () ->
                (match call () with
                | Ok v when Option.is_none !winner ->
                    winner := Some v;
@@ -1810,6 +1877,27 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       share_reach b;
       let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
       (Ok (race [ call a; call b ]), args)
+  (* `Async.beside`: [task], concurrent, runs while [body] does, as a task
+     of the background's scope *)
+  | Task_beside, [ task; body ] ->
+      share_reach task;
+      let b = Sched.background () in
+      ignore
+        (Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
+             (match fst (call_at { cx with depth = ref 0 } loc task [] (VEvidence [])) with
+             | Ok _ -> ()
+             | Error err -> failed_beside b err);
+             VUnit));
+      (beside_body b (fun () -> fst (call_at cx loc body [] (VEvidence []))), args)
+  (* `Async.background`: the body spawns its tasks with `bg.spawn` *)
+  | Task_background, [ body ] ->
+      let b = Sched.background () in
+      ( beside_body b (fun () ->
+            fst (call_at cx loc body [ VSched (Sched.Background b) ] (VEvidence []))),
+        args )
+  | Background_spawn, [ VSched (Sched.Background b); body ] ->
+      ignore (spawn ~failed:(failed_beside b) b.tasks body);
+      (Ok VUnit, args)
   | _ -> bug ("`" ^ Intrinsic.name x ^ "` with the wrong values")
 
 (* ---- the journal (journal.ml) ----

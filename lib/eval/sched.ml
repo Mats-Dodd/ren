@@ -123,7 +123,7 @@ type task = {
   context : frame list;
       (** the `with`s whose bodies the code that spawned it was running
           then, the innermost first: its spawner's [frames], then its
-          spawner's [context] ([beside]) *)
+          spawner's [context] ([inner]) *)
   mutable pointed : bool;
       (** it's suspended at a scheduling point ([point]), where it hasn't
           waited, only let the tape choose what runs next *)
@@ -142,7 +142,7 @@ and scope = {
   owner : task;
   began : int;
       (** when it began, in the order scopes and `with`s begin ([begun]):
-          a `with` whose body began after it is beside it (see [frame]) *)
+          a `with` whose body began after it is inside it (see [frame]) *)
   mutable running : task list;
   mutable room : (unit -> bool) list;
   mutable empty : (unit -> bool) list;
@@ -157,21 +157,31 @@ and scope = {
 
 (* A `with` whose body a task is running, numbered in the order scopes
    and `with`s begin ([begun]), with what it installed: a task spawned in
-   its body into a scope that began before it, whose block's evidence
-   holds what it installed, is its background task ([bg]), which it
-   cancels and waits for when its body ends (compiler.md, "A task spawned
-   beside a `with` is its background task"). Its body is [over] once it
-   has. *)
+   its body into a scope that began before it can't reach what it
+   installed, since the task could outlive it ([inner]; foundations.md,
+   decision 7). Its body is [over] once it has. *)
 and frame = {
   num : int;
   installed : Value.installed list;
-  mutable bg : task list;
   mutable over : bool;
 }
 
-(* A scope and a task's handle, as values a program holds (value.ml,
-   [sched]). *)
-type Value.sched += Scope of scope | Handle of task
+(* What `Async.beside` and `Async.background` run their body beside
+   (compiler.md, "Services stage", "Background work"): the scope its
+   tasks are in, [tasks], of the task running the body, [body]; the
+   deadline the body is under, [cut], which a task's failure moves to
+   now, so that the body sees a cancel there as at a timeout's deadline
+   ([cancel_due]); and that failure, the first, if one has. *)
+type background = {
+  tasks : scope;
+  body : task;
+  cut : deadline;
+  mutable failure : Value.t option;
+}
+
+(* A scope, a task's handle, and a background, as values a program
+   holds (value.ml, [sched]). *)
+type Value.sched += Scope of scope | Handle of task | Background of background
 
 (* What the queue holds: a task to start, with what it runs; one to
    resume where it waited; one to resume by raising [Cancelled] where it
@@ -372,7 +382,13 @@ let cancel_due t =
   List.fold_left
     (fun due d ->
       let at = if t.shield <= d.dshield then d.due else d.due +. cleanup in
-      match due with Some x -> Some (Float.min x at) | None -> Some at)
+      match due with
+      | _ when d.due = Float.infinity ->
+          (* a background's, with no timeout around, before it's cut
+             ([background]): nothing's due *)
+          due
+      | Some x -> Some (Float.min x at)
+      | None -> Some at)
     asked t.deadlines
 
 (* The root [t], replaying, is cancelled where the recording's was by a
@@ -1099,31 +1115,36 @@ let join ?at t =
     wait ?at ("waits for " ^ t.path ^ " to end") (fun wake ->
         t.joiners <- wake :: t.joiners)
 
-(* The `with` a task spawned into [sc] now, whose block's evidence is
-   [evidence], is the background task of: the innermost whose body the
-   spawn is in, and is still running, that began after [sc] did, and
-   installed something [evidence] holds. The spawn is in the bodies of
-   the running task's `with`s, and of those its own spawn was in, its
-   [context], all the way up: a task spawned in a scope inside a `with`'s
-   body that spawns into a scope outside it is beside that `with` too,
-   though another task is running its body. *)
-let beside sc evidence =
+(* What a task spawned into [sc] now can reach that a `with` installed
+   inside [sc], whose body is still running: the first of them, if any,
+   which is the run time's half of decision 7, a panic at the spawn
+   (compiler.md, "Services stage", "Background work"). [reaching] gives
+   what the task's block can reach, asked only if a `with` began inside
+   [sc]. The spawn is in the bodies of the running task's `with`s, and of
+   those its own spawn was in, its [context], all the way up: a task
+   spawned in a scope inside a `with`'s body that spawns into a scope
+   outside it spawns from inside that `with` too, though another task is
+   running its body. *)
+let inner sc ~(reaching : unit -> Value.installed list) =
   let t = (sched ()).current in
-  List.find_opt
-    (fun f ->
-      (not f.over) && f.num > sc.began
-      && List.exists (fun i -> List.memq i evidence) f.installed)
-    (t.frames @ t.context)
+  match
+    List.filter (fun f -> (not f.over) && f.num > sc.began) (t.frames @ t.context)
+  with
+  | [] -> None
+  | inside ->
+      let reached = reaching () in
+      List.find_map
+        (fun f -> List.find_opt (fun i -> List.memq i reached) f.installed)
+        inside
 
 (* Start [thunk] as a task of [sc], labelled [label], once [sc] has room
-   for it, under [key] if it's given; [evidence] is its block's, the
-   evidence where it was written. The task goes on the queue's end, and
+   for it, under [key] if it's given. The task goes on the queue's end, and
    the task running goes on. A scope that has ended starts nothing: it's
    [ended ()], a panic. Only a task of a scope outside [sc] can still
    hold it then, one spawned in [sc]'s body that it captured [sc] in, and
    a task started now would outlive the scope, and the frame whose
    variables it reads (foundations.md, decision 7). *)
-let rec spawn ?key ?at sc ~label ~evidence ~ended thunk =
+let rec spawn ?key ?at sc ~label ~ended thunk =
   let s = sched () in
   let parent = s.current in
   while List.length sc.running >= sc.max && not sc.ended do
@@ -1146,11 +1167,11 @@ let rec spawn ?key ?at sc ~label ~evidence ~ended thunk =
   | Some old ->
       cancel old;
       join ?at old;
-      spawn ?key ?at sc ~label ~evidence ~ended thunk
-  | None -> started ?key sc ~parent ~label ~evidence thunk
+      spawn ?key ?at sc ~label ~ended thunk
+  | None -> started ?key sc ~parent ~label thunk
 
 (* [spawn]'s task, started now. *)
-and started ?key sc ~parent ~label ~evidence thunk =
+and started ?key sc ~parent ~label thunk =
   let s = sched () in
   let n = Option.value (Hashtbl.find_opt parent.ordinals label) ~default:0 in
   Hashtbl.replace parent.ordinals label (n + 1);
@@ -1168,7 +1189,6 @@ and started ?key sc ~parent ~label ~evidence thunk =
         (ty, k, t) :: List.filter (fun (_, _, u) -> u.state <> Ended) sc.keyed)
     key;
   t.drained <- sc.drain;
-  Option.iter (fun f -> f.bg <- t :: f.bg) (beside sc evidence);
   Queue.push (t, Start thunk) s.queue;
   t
 
@@ -1180,26 +1200,69 @@ let enter_with installed =
   match current () with
   | None -> None
   | Some t ->
-      let f = { num = begun (); installed; bg = []; over = false } in
+      let f = { num = begun (); installed; over = false } in
       t.frames <- f :: t.frames;
       Some f
 
-(* The body of the `with` [f] has ended: its background tasks still
-   running are cancelled, and waited for. *)
-let leave_with ?at = function
+(* The body of the `with` [f] has ended. No task can reach what it
+   installed any more but through a scope inside it, whose tasks have all
+   ended ([inner]). *)
+let leave_with = function
   | None -> ()
   | Some f ->
       let t = (sched ()).current in
       f.over <- true;
-      t.frames <- List.filter (fun g -> g != f) t.frames;
-      let live = List.filter (fun u -> u.state <> Ended) f.bg in
-      List.iter cancel live;
-      List.iter
-        (fun u ->
-          if u.state <> Ended then
-            wait ~cancellable:false ?at ("waits for " ^ u.path ^ " to stop")
-              (fun wake -> u.joiners <- wake :: u.joiners))
-        live
+      t.frames <- List.filter (fun g -> g != f) t.frames
+
+(* ---- background work ----
+
+   `Async.beside` and `Async.background` (compiler.md, "Services stage",
+   "Background work"): a body run in the calling task, beside tasks of a
+   scope of its own, which are cancelled and waited for once the body
+   ends, and the first of which to fail cancels the body. *)
+
+(* A background for a body the task running is about to run: its scope,
+   which never waits for room, and the deadline the body is under, which
+   carries the one the task is under already, as a timeout's does, until
+   a failure moves it to now ([fail]). *)
+let background () =
+  let t = (sched ()).current in
+  let tasks = scope ~max:max_int in
+  let due = match t.deadlines with d :: _ -> d.due | [] -> Float.infinity in
+  let cut = { due; dshield = t.shield } in
+  t.deadlines <- cut :: t.deadlines;
+  { tasks; body = t; cut; failure = None }
+
+(* A task of [b] failed with [err]: if it's the first, it's kept, and the
+   body is cut, seeing a cancel now, or at once if it's waiting. Gives
+   whether it was the first. *)
+let fail b err =
+  match b.failure with
+  | Some _ -> false
+  | None ->
+      b.failure <- Some err;
+      b.cut.due <- now ();
+      interrupt_when (sched ()) b.body;
+      true
+
+(* [b]'s body has ended, however it did: it's no longer under [b]'s
+   deadline, and [b]'s tasks are cancelled and waited for, whatever the
+   task is asked meanwhile. *)
+let stop_background ?at b =
+  let t = b.body in
+  t.deadlines <- List.filter (fun d -> d != b.cut) t.deadlines;
+  Fun.protect ~finally:(fun () -> closed b.tasks) (fun () -> cancel_all ?at b.tasks)
+
+(* Whether [Cancelled], raised out of [b]'s body, was [b]'s own: a task
+   of it failed, and the task running the body wasn't asked to stop
+   itself (as [timeout] tells its deadline's cancel from the task's). *)
+let cut_off b =
+  let t = b.body in
+  let asked =
+    (t.asked && (t.shield = 0 || now () >= t.cleanup_by))
+    || match t.drained with Some by -> now () >= by | None -> false
+  in
+  (not asked) && Option.is_some b.failure
 
 (* ---- time ---- *)
 
@@ -1253,9 +1316,9 @@ let install p ~busy =
       List.length s.before
 
 (* The `with` of the runtime that [install] gave [n] ends: the policy
-   before it is put back. Its tasks have all ended (a task spawned in its
-   body into a scope outside it is its background task, cancelled and
-   waited for first), so again only the task running keeps a time. *)
+   before it is put back. Its tasks have all ended (every task reaches
+   the runtime that runs it, so none was spawned in its body into a scope
+   outside it: [inner]), so again only the task running keeps a time. *)
 let leave n =
   match !running with
   | Some s when n > 0 ->

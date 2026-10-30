@@ -208,6 +208,11 @@ let check_written sink ~sets ~names (prog : program) =
         match arg with
         | TyErrors _ -> ()
         | arg -> report (result_needs_set (written_loc arg)))
+    (* `Async.background`'s scope, whose argument is the set its tasks
+       fail with (prelude.ml) *)
+    | TyName ({ tref = Named p; _ }, [ TyErrors _ ])
+      when p = Path.prelude "Background" ->
+        ()
     | TyName ({ tref = Named p; _ }, args)
     | TyVariant ({ tref = Named p; _ }, _, args) ->
         List.iter

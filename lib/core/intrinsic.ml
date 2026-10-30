@@ -84,6 +84,9 @@ type t =
   | Task_each
   | Task_both
   | Task_race
+  | Task_beside
+  | Task_background
+  | Background_spawn
   | Async_yield
   | Async_tick
   | Runtime_single
@@ -221,6 +224,9 @@ let path x =
   | Task_each -> fn "task_each"
   | Task_both -> fn "task_both"
   | Task_race -> fn "task_race"
+  | Task_beside -> fn "task_beside"
+  | Task_background -> fn "task_background"
+  | Background_spawn -> member "Background" "spawn"
   | Async_yield -> fn "async_yield"
   | Async_tick -> fn "async_tick"
   | Runtime_single -> fn "runtime_single"
@@ -321,6 +327,7 @@ let member_name x = Path.short (path x)
 let waits = function
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-  | Task_each | Task_both | Task_race | Async_yield | Async_tick | Sim_sleep ->
+  | Task_each | Task_both | Task_race | Task_beside | Task_background
+  | Async_yield | Async_tick | Sim_sleep ->
       true
   | _ -> false

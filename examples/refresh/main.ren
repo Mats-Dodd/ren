@@ -1,6 +1,6 @@
 // Prices, refreshed in the background (async.md, "Prices, refreshed in
-// the background"): a task beside the `with` asks the supplier again
-// every minute, and the table is never seen half-updated, since
+// the background"): a task beside the `with`'s body asks the supplier
+// again every minute, and the table is never seen half-updated, since
 // `refresh` keeps the instance until it has swapped the new one in.
 
 pub dep Supplier =
@@ -18,22 +18,24 @@ pub handler refreshing() for Prices ! PricesDown uses Supplier =
   refresh() => table = try Supplier.all()
 
 // prints each of `items`' prices four times, 25 seconds apart, while a
-// task beside the `with` refreshes them every minute. The `with`
-// cancels the refresher when its body ends: it was spawned into the
-// scope outside it, and can reach its handler
+// task beside the body refreshes them every minute. When the body ends
+// the refresher is cancelled and waited for, and then the `with` ends
 pub fn shop(items: Array<Str>) ! PricesDown uses Supplier, Clock, Console, Async =
-  try Async.scope fn(s) =>
-    try with refreshing() in
-      s.spawn fn() =>
-        while true
-          Clock.sleep(Duration.minutes(1))
-          match attempt Prices.refresh()
-            Ok(_) => ()
-            Err(_) => Console.error("the refresh failed, so the table is kept")
+  try with refreshing() in
+    Async.beside(fn() => refresher()) fn() =>
       for _ in 0..4
         for item in items
           print(Prices.get(item))
         Clock.sleep(Duration.seconds(25))
+
+// refreshes the prices every minute, keeping the table when a refresh
+// fails
+fn refresher() =
+  while true
+    Clock.sleep(Duration.minutes(1))
+    match attempt Prices.refresh()
+      Ok(_) => ()
+      Err(_) => Console.error("the refresh failed, so the table is kept")
 
 // ---- tests ----
 

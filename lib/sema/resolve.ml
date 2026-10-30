@@ -2656,11 +2656,13 @@ let rec handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
             (fun (a : Parsed.handler_arm) ->
               if any_arm a && a.arm_name.name = "task" then
                 (* async.md's `task =>` is gone: a handler's background work
-                   is a task beside its `with` (foundations.md, decision 7) *)
+                   is a task beside its `with`'s body (foundations.md,
+                   decision 7) *)
                 report env a.arm_name.loc
                   ~help:
-                    "spawn one beside the `with`, into an `Async.scope` \
-                     outside it, that calls one of the handler's operations"
+                    "run one beside the `with`'s body that calls one of the \
+                     handler's operations: `with h() in Async.beside(task) \
+                     fn() => ...`"
                   "a handler has no task of its own"
               else if any_arm a then
                 report env a.arm_name.loc

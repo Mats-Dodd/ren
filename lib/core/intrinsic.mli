@@ -61,6 +61,9 @@ type t =
   | Task_each
   | Task_both
   | Task_race
+  | Task_beside
+  | Task_background
+  | Background_spawn
   | Async_yield
   | Async_tick
   | Runtime_single

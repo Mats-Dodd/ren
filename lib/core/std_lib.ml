@@ -336,10 +336,13 @@ pub dep Batcher<K, V> =
 
 // a batcher over the `Fetch` installed outside it. Each value fetched is
 // kept, so a key asked for again is answered at once. Its flushes are
-// a task's, spawned beside the `with`, which waits for a key to be asked
+// a task's, beside the `with`'s body, which waits for a key to be asked
 // for, lets every task that can run ask for theirs, and fetches them:
 //
-//   s.spawn fn() =>
+//   with sync.batcher() in
+//     Async.beside(fn() => flushing()) fn() => ...
+//
+//   fn flushing() uses Batcher<K, V>, Async =
 //     while true
 //       Batcher.asked()
 //       Async.tick()

@@ -897,6 +897,16 @@ pub dep Async =
   // `f` of each element, `max` at once
   pub fn each<T>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T)) uses Async =
     try task_each(xs, max, f)
+  // runs `task` beside `body`: once `body` ends, by returning, failing
+  // or being cancelled, `task` is cancelled and waited for. `task` may
+  // fail: then `body` is cancelled, and that failure is the call's
+  pub fn beside<T>(task: concurrent fn(), body: fn() -> T) -> T uses Async =
+    try task_beside(task, body)
+  // runs `body` with a scope its background tasks are spawned into as it
+  // goes, `bg.spawn`: once `body` ends they're cancelled and waited for,
+  // and the first of them to fail cancels `body` and is the call's error
+  pub fn background<T>(body: fn(bg: Background<! ..e>) -> T) -> T ! ..e uses Async =
+    try task_background(body)
   // `a` and `b` at once
   pub fn both<A, B>(a: concurrent fn() -> A, b: concurrent fn() -> B) -> (A, B) uses Async =
     try task_both(a, b)
@@ -929,6 +939,12 @@ pub type Scope = builtin
   // if it's still running, and waiting for it to stop
   pub fn replace<K has hash>(self, key: K, body: spawned fn()) uses Async =
     task_replace(self, key, body)
+
+// what `Async.background` gives its body: a scope whose tasks may fail,
+// with the errors `E` says, which are the body's. Passed and called,
+// never kept, as `Scope` is. Its `spawn`, `bg.spawn(body)`, is built in:
+// `body` runs as a task until the background's body ends
+pub type Background<E> = builtin
 
 // a task's handle (rule D, as `Scope`)
 pub type Task<T> = builtin
@@ -1487,6 +1503,32 @@ let scheme (x : Intrinsic.t) =
           read (Fun ([], Var 0, open_row 2, open_row 3));
         ]
         (Var 0)
+  (* fn<T>(task: fn(), body: fn() -> T) -> T: [body], with [task] a task
+     of a scope of its own beside it, cancelled and waited for once
+     [body] ends; a failure of [task] cancels [body] and is the call's.
+     What either fails with and uses, the call does (compiler.md,
+     "Services stage", "Background work") *)
+  | Task_beside ->
+      fn
+        [
+          read (Fun ([], unit, open_row 0, open_row 1));
+          read (Fun ([], Var 0, open_row 0, open_row 1));
+        ]
+        (Var 0)
+  (* fn<T>(body: fn(bg: Background<! E>) -> T) -> T ! E: the same, the
+     tasks [body] spawns with `bg.spawn` beside it. What they fail with is
+     the [Background]'s type argument, so [body]'s errors, and the call's *)
+  | Task_background ->
+      let bg = Con (Path.prelude "Background", [ Errors (open_row 0) ]) in
+      fn [ read (Fun ([ read bg ], Var 0, open_row 0, open_row 1)) ] (Var 0)
+  (* fn(self: Background<! E>, body: spawned fn() ! E): [body] as a task of
+     the background, which may fail with what the background's type says *)
+  | Background_spawn ->
+      let bg = Con (Path.prelude "Background", [ Errors (open_row 2) ]) in
+      {
+        (fn [ read bg; read (Fun ([], unit, open_row 2, open_row 3)) ] unit) with
+        modes = [ (1, Spawned) ];
+      }
   (* fn(): `single`'s `yield` and `tick` (sched.ml) *)
   | Async_yield | Async_tick -> fn [] unit
   (* The runtime's policy, which its handler sets for its `with`'s body
@@ -1555,7 +1597,8 @@ let reaches (x : Intrinsic.t) =
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
   | Task_until | Task_timeout | Task_isolate | Task_map | Task_each | Task_both
-  | Task_race | Async_yield | Async_tick | Runtime_single | Runtime_sim
+  | Task_race | Task_beside | Task_background | Background_spawn | Async_yield
+  | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
@@ -1594,7 +1637,8 @@ let caller (x : Intrinsic.t) =
       ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
       | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
       | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
-      | Task_each | Task_both | Task_race | Async_yield | Async_tick
+      | Task_each | Task_both | Task_race | Task_beside | Task_background
+      | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
       | Sim_advance | Sim_alarm | Sync_keyed | Task_drain | Hash ) ) ->
       Internal
@@ -1652,6 +1696,8 @@ let fns : Intrinsic.t list =
     Task_each;
     Task_both;
     Task_race;
+    Task_beside;
+    Task_background;
     Async_yield;
     Async_tick;
     Runtime_single;
@@ -1762,6 +1808,10 @@ let types =
        the source's *)
     t "Scope";
     t "Task" ~arity:1;
+    (* what `Async.background` gives its body, a scope whose tasks may
+       fail, with what its type argument, an error set, says (compiler.md,
+       "Services stage", "Background work") *)
+    t "Background" ~arity:1 ~methods:[ Background_spawn ];
     t "Map" ~arity:2
       ~methods:
         [
