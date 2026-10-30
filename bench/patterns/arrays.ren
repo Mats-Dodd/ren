@@ -1,0 +1,47 @@
+// Sequence patterns on `Array` (rule 1): every form, nested in tuples,
+// records, constructors, or-patterns and `as`, and slices kept.
+
+type Method = Get | Put
+type Req = { method: Method, segs: Array<Str> }
+
+fn route(r: Req) -> Str =
+  match (r.method, r.segs)
+    (Get, ["v1", "keys", k]) => "get " + k
+    (Put, ["v1" | "v2", "keys", k]) => "put " + k
+    (Get, ["v1", "stats", ..]) => "stats"
+    (_, []) => "root"
+    _ => "not found"
+
+fn shape(xs: Array<Int>) -> Str =
+  match xs
+    [] => "empty"
+    [a] => "one " + show(a)
+    [a, b] => "two " + show(a + b)
+    [0, ..rest] => "zero then " + show(rest)
+    [..init, 0] => show(init) + " then zero"
+    [a, .., z] => "ends " + show(a) + " " + show(z)
+
+fn firsts(o: Option<Array<Int>>) -> Int =
+  match o
+    Some([a, ..]) => a
+    Some([]) => -1
+    None => -2
+
+fn tails(xss: Array<Array<Int>>) -> Array<Array<Int>> =
+  var out: Array<Array<Int>> = []
+  for xs in xss
+    match xs
+      [_, ..rest] as all if all.len() > 2 => &out.push(rest)
+      _ => ()
+  out
+
+fn main() uses Console =
+  print(route({ method: Get, segs: ["v1", "keys", "k1"] }))
+  print(route({ method: Put, segs: ["v2", "keys", "k2"] }))
+  print(route({ method: Get, segs: ["v1", "stats", "a"] }))
+  print(route({ method: Put, segs: [] }))
+  print(route({ method: Get, segs: ["v3"] }))
+  for xs in [[], [5], [5, 6], [0, 1, 2], [1, 2, 0], [1, 2, 3], [0, 0]]
+    print(shape(xs))
+  print([firsts(Some([7, 8])), firsts(Some([])), firsts(None)])
+  print(tails([[1, 2, 3], [4], [5, 6, 7, 8]]))

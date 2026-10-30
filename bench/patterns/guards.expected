@@ -1,0 +1,31 @@
+0 ab: literal ab
+0 abc: prefix bc
+0 a: prefix 
+0 x: literal x
+0 : any 
+0 b: any b
+1 ab: guarded prefix b
+1 abc: guarded prefix bc
+1 a: guarded prefix 
+1 x: literal x
+1 : any 
+1 b: any b
+2 ab: literal ab
+2 abc: guarded ab..
+2 a: prefix 
+2 x: literal x
+2 : any 
+2 b: any b
+3 ab: literal ab
+3 abc: prefix bc
+3 a: prefix 
+3 x: guarded x
+3 : any 
+3 b: any b
+4 ab: literal ab
+4 abc: prefix bc
+4 a: prefix 
+4 x: literal x
+4 : guarded empty
+4 b: any b
+exit 0

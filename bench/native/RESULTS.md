@@ -1865,3 +1865,46 @@ scalar fields, toward 1.25× Rust's memory; a stackless free walk for
 binary-trees, whose time is half freeing; H6's backend and cache; and
 for tasks, frozen handler state and a per-thread heap with delayed
 frees.
+
+## Patterns stage: the keyword kernel (compiler.md, "Patterns stage")
+
+bench/native/keywords: identifiers classified against a key set, 65,536
+queries a round, 90% keys and 10% near misses (a key with `_` added or
+its last byte made `#`), the sets of research/perfect-hash/code/keys:
+Ren's 35 keywords (`renkw`), JS's 45 reserved words (`jsreserved`), 9
+HTTP methods, 20 header names, 24 JSON field names. gen.py writes the
+Ren (an `==` chain per set, and from step 1 a `match` of literal arms),
+its Rust twin (a plain `match`, rmatch.rs's shape) and its Go twin (a
+`switch`); all three build the same queries from one LCG and print the
+same check.
+
+**Machine:** `cloud` (experiments/MACHINE-cloud.md): Intel Xeon @ 2.10
+GHz, 4 vCPUs, a KVM guest with shared cores. rustc 1.97 `-C
+opt-level=3 -C codegen-units=1`, Go 1.24, Ren release with gcc 13 `-O2`
+(cc). The research's numbers are hand-written C on an M4 Max; compare
+these with each other and with its ratios, never its nanoseconds.
+
+**Method:** `R=200 sh build.sh <out>` then `R=200 python3 -I measure.py
+<out> 11 <out>.jsonl`: each binary at 200 rounds and at 0, the two
+forms and the twins interleaved and rotated, 11 runs each; a lookup is
+(median at 200 − median at 0) / (200 × 65,536), and the range is the 11
+runs' least and most at 200 less the median at 0. A lookup includes the
+loop that walks the queries, which is each language's own: Ren's
+counts each `Str` it reads.
+
+### The baseline (step 0): Ren's `==` chain
+
+ns per lookup, median (least to most):
+
+| set | keys | Ren chain | Rust `match` | Go `switch` | chain / Rust |
+|---|---:|---:|---:|---:|---:|
+| renkw | 35 | 57.4 (55.4 to 59.8) | 19.4 (18.0 to 21.5) | 27.6 (26.4 to 30.5) | 3.0 |
+| jsreserved | 45 | 66.3 (62.4 to 74.2) | 22.3 (21.4 to 26.3) | 26.7 (25.7 to 28.6) | 3.0 |
+| methods | 9 | 25.6 (24.4 to 29.5) | 16.4 (15.4 to 18.0) | 15.8 (15.1 to 19.7) | 1.6 |
+| headers | 20 | 25.3 (24.3 to 28.3) | 12.6 (11.8 to 14.2) | 13.6 (13.2 to 14.6) | 2.0 |
+| json24 | 24 | 28.5 (27.5 to 30.5) | 11.4 (10.1 to 12.5) | 12.2 (11.7 to 12.9) | 2.5 |
+
+The chain is a function per set, `if s == "fn" then 0 else if ...`,
+each `==` a call of `ren_str_eq`. Its emitted C, release, is 317 KB per
+set's program (most of it the runtime's and the prelude's; `wc -c` of
+`build.sh`'s `<set>-chain.c`).

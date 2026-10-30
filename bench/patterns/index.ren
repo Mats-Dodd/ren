@@ -1,0 +1,19 @@
+// `keys.index(s)` on a build-time constant (owner decision 3, option a):
+// an array literal of string literals, bound by a `let` or written as
+// the receiver, which a release build looks up through the perfect
+// hash. A key that's repeated keeps its first index.
+
+fn method(s: Str) -> Int =
+  let methods = ["GET", "HEAD", "POST", "PUT", "DELETE", "GET", "", "OPTIONS"]
+  match methods.index(s)
+    Some(i) => i
+    None => -1
+
+fn scheme(s: Str) -> Option<Int> = ["http", "https", "ws", "wss"].index(s)
+
+fn main() uses Console =
+  var found: Array<Int> = []
+  for s in ["GET", "HEAD", "PUT", "DELETE", "", "OPTIONS", "get", "GETS", "PATCH"]
+    &found.push(method(s))
+  print(found)
+  print([scheme("https"), scheme("ftp"), scheme("wss")])

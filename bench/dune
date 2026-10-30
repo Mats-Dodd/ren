@@ -121,3 +121,17 @@
   (env_var REN_TCC)
   (glob_files strs/*.ren)
   (glob_files strs/*.expected)))
+
+; patterns.t runs the patterns stage's programs, in patterns/, through
+; `ren run` and, once each step lands them, natively, and says which are
+; as specified yet, and which string `match`es are hashed (compiler.md,
+; "Patterns stage", "The tests"). It needs cc and tcc, as build.t does.
+
+(cram
+ (applies_to patterns)
+ (deps
+  %{bin:ren}
+  (env_var REN_TCC)
+  (glob_files patterns/*.ren)
+  (glob_files patterns/*.expected)
+  (glob_files native/keywords/*.ren)))
