@@ -603,10 +603,93 @@ Tested on 2026-10-28:
 | A layer is memoized within a provide | one instance per `with`, shared by every item that needs it |
 | `Layer.scoped` | `finally` |
 | A layer that fails to build | a handler whose state can fail to start (`!`) |
+| `Context.Service` whose shape comes from `make` | a `service`, below (decided after this table was tested) |
 
 Ren is ahead in two places: **a `with` is a set the compiler orders**, so
 there are no `provide`-versus-`provideMerge` ordering puzzles; and calls
 are direct, `Users.name(id)`, with no `yield* Users` first.
+
+### A service: a dep and its implementation, written once
+
+Decided on 2026-10-29. What Effect had and Ren lacked was the other
+half of `Context.Service`: its interface is taken from its `make`, so a
+service with one real implementation is one declaration. Without that,
+closing over requirements meant writing a `dep` and a handler, which was
+enough ceremony that request-path code skipped it, and every `pub fn`
+on the path repeated its requirements, its config and its errors:
+
+```ren
+pub fn get(c: ClientCfg, k: Key) -> Option<Entry> ! ClientError | Conflict | StoreFull uses Http, Clock, Random = ...
+pub fn put(c: ClientCfg, k: Key, v: Bytes, cond: Cond) -> Version ! ClientError | NotFound | Conflict | StoreFull
+    uses Http, Clock, Random = ...
+```
+
+A service writes them once:
+
+```ren
+pub type KvError = ! ClientError | NotFound | Conflict | StoreFull
+
+pub service Kv(c: ClientCfg) uses Http, Clock, Random =
+  pub fn get(k: Key) -> Option<Entry> ! ClientError | Conflict | StoreFull =
+    match call(Request.get(url("/v1/keys/{k}")), idempotent: true)
+      resp => Some(try to_entry(try json.decode<EntryOut>(resp.body.bytes())))
+      fail NotFound => None
+  pub fn put(k: Key, v: Bytes, cond: Cond) -> Version ! KvError = ...
+  fn call(req: Request, idempotent: Bool) -> Response ! KvError = ...   // reads c.token, c.retries
+
+fn sync_all(keys: Array<Key>) uses Kv = ...try Kv.get(k)...           // all a caller sees
+fn main() uses Net, Console, Clock, Random = with http.live(), Kv(cfg.client) in run()
+test handler fake_kv() for Kv = get(_) => None, put(..) => Version.of(1)
+```
+
+The rules:
+
+1. **`service S(params) uses R ! E = members` declares the dependency
+   `S` and its one implementation.** Its operations are its `pub fn`s,
+   whose signatures are written in full: they're the interface. The
+   compiler lowers it to exactly a `dep` and a handler, so nothing is
+   new underneath.
+2. **Members share the service's `uses` and parameters.** A member
+   doesn't write `uses`, and can't add one: what it needs goes on the
+   service, required where the service is installed (deps.md's rule
+   that what an implementation needs is required at its `with`).
+   Members call each other directly.
+3. **Callers see only `S`.** Its requirements and parameters never
+   reach a caller's signature.
+4. **It's installed like a handler,** `with Kv(cfg.client)`, in a
+   `with` or a wiring, one instance per scope. A `with` item is never a
+   value, so `Kv(...)` there can't be read as a constructor. `! E` is
+   what it fails to start with, and it may keep state in `var`s.
+5. **It's still a dependency,** so any `handler ... for S` replaces it,
+   in a test or anywhere else.
+
+**When to write which.** A service is a dependency whose interface
+comes from its one implementation: an API client, the request path,
+an application's use cases. A dependency with a real choice of
+implementations stays a `dep` with handlers: `Orders` in
+examples/checkout, `Fs`, `Sql`, `Clock`. A port a domain declares and
+infrastructure implements is a `dep` too, so the domain never imports
+its adapter.
+
+**Two rules written down with it:**
+
+- **A function's `uses` is the most it may use; its errors are exact.**
+  Listing an error a function never raises forces an arm that can't
+  run at every call site, so errors are exact (errors.md). Listing a
+  dependency a function never uses costs one item at the composition
+  root, met once, and tests get test implementations by default. So
+  the bound that a stored description's `uses` already was holds for
+  every signature, and one name can cover a path whose functions use
+  different parts of it.
+- **A private function doesn't write `uses`.** It's inferred; writing
+  it is clutter that hides the few signatures that must say it. `ren
+  fmt` removes it.
+
+This replaces the named `uses` row stage 12 proposed (G3, `pub type Req
+= uses Store, Log, Clock`): a request path that needs `Store`, `Log` and
+`Clock` becomes `pub service Api(cfg) uses Store, Log, Clock` with one
+`pub fn handle(req)`, and callers write `uses Api`. One mechanism, not
+two.
 
 ## 5. Wirings: the composition root, named
 

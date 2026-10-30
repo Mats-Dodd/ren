@@ -251,6 +251,22 @@ Each is decided; cite it in the spec, don't re-argue it.
 
 Record these in the spec; don't reopen them.
 
+- **2026-10-29: `service`, a dependency and its one implementation
+  written once** (language.md §4, "A service"). It lands as step 2b,
+  right after wirings, through the whole pipeline: the parser and
+  tree-sitter, the checker (operations from the `pub fn`s, members
+  sharing the service's `uses` and parameters, a member that writes
+  `uses` refused with help), lowering to exactly a `dep` and a handler,
+  installing in a `with` or a wiring, a test handler replacing it, and
+  natively as a handler is. Its errors, each with help: a member's own
+  `uses`; a service used as a value; `S(...)` outside a `with` or
+  wiring. With it: **a signature's `uses` is a bound** (today's
+  behaviour, now the rule: listing a dependency the body doesn't use
+  is accepted), and **private functions don't write `uses`**: remove
+  them from examples where step 2 or 2b touches the file. *Done when*
+  a test installs a service, replaces it with a test handler, and a
+  service in a wiring builds natively.
+
 - **2026-10-29: decision 20 moved actors and striped to std over a
   runtime primitive; re-read steps 6 and 7.** What's decided 5 to 8
   are rewritten: the keyed instance family is the runtime's, `D.Call`

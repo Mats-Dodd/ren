@@ -54,6 +54,14 @@ handler frozen_clock(at: Time) for Clock =
   error, so `Clock.x` means exactly one thing.
 - An operation can fail: `save: fn(u: User) ! Conflict`. Its errors are part
   of the interface, and a call marks them as usual: `try Users.save(u)`.
+- **A dependency with one implementation is declared with it,** as a
+  `service`: `pub service Kv(c: ClientCfg) uses Http, Clock = pub fn
+  get(k: Key) -> ...`, whose operations are its `pub fn`s and whose
+  needs are met where it's installed, `with Kv(cfg)`. It lowers to a
+  `dep` and a handler ([language.md §4](language.md#a-service-a-dep-and-its-implementation-written-once)).
+- **A signature's `uses` is the most the function may use,** and its
+  errors are exact. A private function's `uses` is inferred and isn't
+  written.
 
 ## Calling one
 
