@@ -1,0 +1,35 @@
+bytes per parked task, N=100000
+  static     footprint_B_per_task     median=  251.80 min=  251.80 max=  252.70
+  static     malloc_size_B_per_task   median=  240.00 min=  240.00 max=  240.00
+  static     ok=True
+  static     resident_B_per_task      median=  244.60 min=  244.60 max=  245.10
+  static     zone_B_per_task          median=  240.00 min=  240.00 max=  240.00
+  static_x   footprint_B_per_task     median=  252.70 min=  251.80 max=  253.50
+  static_x   malloc_size_B_per_task   median=  240.00 min=  240.00 max=  240.00
+  static_x   ok=True
+  static_x   resident_B_per_task      median=  245.40 min=  244.60 max=  245.80
+  static_x   zone_B_per_task          median=  240.10 min=  240.00 max=  240.10
+  static_xk  footprint_B_per_task     median= 4369.30 min= 4368.20 max= 4370.30
+  static_xk  malloc_size_B_per_task   median= 4336.00 min= 4336.00 max= 4336.00
+  static_xk  ok=True
+  static_xk  resident_B_per_task      median= 4359.80 min= 4358.80 max= 4360.40
+  static_xk  zone_B_per_task          median= 4336.00 min= 4336.00 max= 4336.00
+  today      footprint_B_per_task     median= 4230.20 min= 4229.70 max= 4230.20
+  today      malloc_size_B_per_task   median= 4208.00 min= 4208.00 max= 4208.00
+  today      ok=True
+  today      resident_B_per_task      median= 4226.90 min= 4226.90 max= 4227.10
+  today      zone_B_per_task          median= 4208.00 min= 4208.00 max= 4208.00
+chunk boundary, ns a call (register convention)
+  clang              free   median=   22.25 min=   21.90 max=   22.74 ok=True
+  clang              inseg  median=    1.16 min=    1.15 max=    1.17 ok=True
+  clang              spare  median=    4.22 min=    4.21 max=    4.22 ok=True
+  clang_growinline   free   median=   20.34 min=   20.02 max=   30.29 ok=True
+  clang_growinline   inseg  median=    1.15 min=    1.15 max=    1.16 ok=True
+  clang_growinline   spare  median=    2.68 min=    2.68 max=    2.68 ok=True
+  tcc                free   median=   31.88 min=   31.72 max=   33.80 ok=True
+  tcc                inseg  median=    8.43 min=    8.42 max=    8.49 ok=True
+  tcc                spare  median=   13.79 min=   13.41 max=   13.80 ok=True
+chunk boundary, prototype convention (fastpath.c `ren`, depth 1)
+  free   median=   23.63 min=   23.09 max=   26.57 ok=True
+  inseg  median=    5.27 min=    5.25 max=    5.35 ok=True
+  spare  median=    6.64 min=    6.56 max=    6.95 ok=True

@@ -1,0 +1,17 @@
+same checksum at 1 worker, REQS=20000 x 16 connections:
+strategy=park chk=15a9f1167f7e0 check=ok 
+strategy=handoff chk=15a9f1167f7e0 check=ok 
+strategy=unfair chk=15a9f1167f7e0 check=ok 
+strategy=spin chk=15a9f1167f7e0 check=ok 
+asan park 8 16 0 0: parks=63044 handoffs=0 reqs=64000 check=ok 
+asan park 8 8 20 1: parks=31259 handoffs=0 reqs=32000 check=ok 
+asan handoff 8 16 0 0: parks=63561 handoffs=9 reqs=64000 check=ok 
+asan handoff 8 8 20 1: parks=31972 handoffs=24707 reqs=32000 check=ok 
+asan unfair: reqs=64000 check=ok 
+asan spin: reqs=64000 check=ok 
+tsan park 8 16 0 0: parks=63930 handoffs=0 reqs=64000 check=ok 
+tsan park 8 8 20 1: parks=31887 handoffs=0 reqs=32000 check=ok 
+tsan handoff 8 16 0 0: parks=63884 handoffs=6681 reqs=64000 check=ok 
+tsan handoff 8 8 20 1: parks=31993 handoffs=30039 reqs=32000 check=ok 
+tsan unfair: reqs=64000 check=ok 
+tsan spin: reqs=64000 check=ok 

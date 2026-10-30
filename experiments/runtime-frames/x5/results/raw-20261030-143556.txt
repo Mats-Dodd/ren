@@ -1,0 +1,94 @@
+# machine: Apple M4 Max 16 cpus, macOS 15.1
+# correctness (ASan+UBSan):
+# asan PARK policy=today N=5000 seg=64 task_alloc=112 chunk_mallocs=15000 zone_B_per_task=4208.0 malloc_size_B_per_task=4208.0 footprint_B_per_task=6019.5 resident_B_per_task=5986.7 check=ok
+# asan PARK policy=static N=5000 seg=192 task_alloc=240 chunk_mallocs=0 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=393.2 resident_B_per_task=376.8 check=ok
+# asan PARK policy=static_x N=5000 seg=192 task_alloc=240 chunk_mallocs=5000 zone_B_per_task=4336.0 malloc_size_B_per_task=240.0 footprint_B_per_task=6219.4 resident_B_per_task=6186.6 check=ok
+# asan PARK policy=static_xk N=5000 seg=192 task_alloc=240 chunk_mallocs=5000 zone_B_per_task=4336.0 malloc_size_B_per_task=4336.0 footprint_B_per_task=6183.4 resident_B_per_task=6150.6 check=ok
+# asan BOUND policy=inseg n=20000 reps=7 ns_per_call=2.70 min=2.70 max=2.93 mallocs_per_call=0.0000 check=ok
+# asan BOUND policy=free n=20000 reps=7 ns_per_call=482.13 min=351.22 max=743.90 mallocs_per_call=1.0000 check=ok
+# asan BOUND policy=spare n=20000 reps=7 ns_per_call=10.19 min=9.79 max=13.85 mallocs_per_call=0.0001 check=ok
+# round 1 load: 3.34 2.57 3.08
+RUN round=1 PARK policy=today N=100000 seg=64 task_alloc=112 chunk_mallocs=300000 zone_B_per_task=4208.0 malloc_size_B_per_task=4208.0 footprint_B_per_task=4230.2 resident_B_per_task=4227.1 check=ok
+RUN round=1 PARK policy=static N=100000 seg=192 task_alloc=240 chunk_mallocs=0 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=251.8 resident_B_per_task=244.6 check=ok
+RUN round=1 PARK policy=static_x N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=251.8 resident_B_per_task=244.6 check=ok
+RUN round=1 PARK policy=static_xk N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=4336.0 malloc_size_B_per_task=4336.0 footprint_B_per_task=4369.3 resident_B_per_task=4359.8 check=ok
+RUN round=1 build=clang BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.17 min=1.15 max=1.18 mallocs_per_call=0.0000 check=ok
+RUN round=1 build=clang_growinline BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.16 min=1.15 max=1.19 mallocs_per_call=0.0000 check=ok
+RUN round=1 build=tcc BOUND policy=inseg n=1000000 reps=7 ns_per_call=8.49 min=8.42 max=9.48 mallocs_per_call=0.0000 check=ok
+RUN round=1 build=clang BOUND policy=free n=5000000 reps=7 ns_per_call=21.90 min=21.48 max=22.52 mallocs_per_call=1.0000 check=ok
+RUN round=1 build=clang_growinline BOUND policy=free n=5000000 reps=7 ns_per_call=30.29 min=20.82 max=39.87 mallocs_per_call=1.0000 check=ok
+RUN round=1 build=tcc BOUND policy=free n=1000000 reps=7 ns_per_call=31.72 min=31.41 max=36.15 mallocs_per_call=1.0000 check=ok
+RUN round=1 build=clang BOUND policy=spare n=5000000 reps=7 ns_per_call=4.21 min=4.21 max=4.38 mallocs_per_call=0.0000 check=ok
+RUN round=1 build=clang_growinline BOUND policy=spare n=5000000 reps=7 ns_per_call=2.68 min=2.68 max=3.03 mallocs_per_call=0.0000 check=ok
+RUN round=1 build=tcc BOUND policy=spare n=1000000 reps=7 ns_per_call=13.79 min=13.40 max=13.88 mallocs_per_call=0.0000 check=ok
+RUN round=1 fastpath=inseg d  1 K 1 plain   2.70 ren   5.35 ren_susp   7.68 lazy   5.20 lazy_susp   7.65 reg   3.06 reg_susp   8.10 poll_susp   8.43 ns/op span 0 B ok
+RUN round=1 fastpath=free d  1 K 1 plain   2.68 ren  23.09 ren_susp  27.07 lazy   5.10 lazy_susp   7.66 reg   3.06 reg_susp   8.10 poll_susp   8.48 ns/op span 0 B ok
+RUN round=1 fastpath=spare d  1 K 1 plain   2.69 ren   6.58 ren_susp  10.43 lazy   5.13 lazy_susp   7.51 reg   3.08 reg_susp   7.87 poll_susp   8.08 ns/op span 0 B ok
+# round 2 load: 3.56 2.62 3.10
+RUN round=2 PARK policy=today N=100000 seg=64 task_alloc=112 chunk_mallocs=300000 zone_B_per_task=4208.0 malloc_size_B_per_task=4208.0 footprint_B_per_task=4230.0 resident_B_per_task=4226.9 check=ok
+RUN round=2 PARK policy=static N=100000 seg=192 task_alloc=240 chunk_mallocs=0 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=252.7 resident_B_per_task=245.1 check=ok
+RUN round=2 PARK policy=static_x N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=240.1 malloc_size_B_per_task=240.0 footprint_B_per_task=253.5 resident_B_per_task=245.8 check=ok
+RUN round=2 PARK policy=static_xk N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=4336.0 malloc_size_B_per_task=4336.0 footprint_B_per_task=4369.6 resident_B_per_task=4359.8 check=ok
+RUN round=2 build=clang BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.16 min=1.16 max=1.17 mallocs_per_call=0.0000 check=ok
+RUN round=2 build=clang_growinline BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.15 min=1.15 max=1.17 mallocs_per_call=0.0000 check=ok
+RUN round=2 build=tcc BOUND policy=inseg n=1000000 reps=7 ns_per_call=8.43 min=8.42 max=8.63 mallocs_per_call=0.0000 check=ok
+RUN round=2 build=clang BOUND policy=free n=5000000 reps=7 ns_per_call=22.18 min=21.53 max=25.51 mallocs_per_call=1.0000 check=ok
+RUN round=2 build=clang_growinline BOUND policy=free n=5000000 reps=7 ns_per_call=20.02 min=19.91 max=21.13 mallocs_per_call=1.0000 check=ok
+RUN round=2 build=tcc BOUND policy=free n=1000000 reps=7 ns_per_call=33.80 min=31.78 max=34.72 mallocs_per_call=1.0000 check=ok
+RUN round=2 build=clang BOUND policy=spare n=5000000 reps=7 ns_per_call=4.21 min=4.21 max=4.25 mallocs_per_call=0.0000 check=ok
+RUN round=2 build=clang_growinline BOUND policy=spare n=5000000 reps=7 ns_per_call=2.68 min=2.68 max=2.73 mallocs_per_call=0.0000 check=ok
+RUN round=2 build=tcc BOUND policy=spare n=1000000 reps=7 ns_per_call=13.41 min=13.26 max=13.72 mallocs_per_call=0.0000 check=ok
+RUN round=2 fastpath=inseg d  1 K 1 plain   2.69 ren   5.27 ren_susp   7.67 lazy   5.14 lazy_susp   7.67 reg   3.06 reg_susp   8.11 poll_susp   8.45 ns/op span 0 B ok
+RUN round=2 fastpath=free d  1 K 1 plain   2.68 ren  26.57 ren_susp  28.99 lazy   5.15 lazy_susp   7.67 reg   3.07 reg_susp   8.13 poll_susp   8.44 ns/op span 0 B ok
+RUN round=2 fastpath=spare d  1 K 1 plain   2.68 ren   6.95 ren_susp  10.14 lazy   5.16 lazy_susp   7.65 reg   3.07 reg_susp   8.14 poll_susp   8.06 ns/op span 0 B ok
+# round 3 load: 4.15 2.76 3.15
+RUN round=3 PARK policy=today N=100000 seg=64 task_alloc=112 chunk_mallocs=300000 zone_B_per_task=4208.0 malloc_size_B_per_task=4208.0 footprint_B_per_task=4229.7 resident_B_per_task=4226.9 check=ok
+RUN round=3 PARK policy=static N=100000 seg=192 task_alloc=240 chunk_mallocs=0 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=251.8 resident_B_per_task=244.6 check=ok
+RUN round=3 PARK policy=static_x N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=240.1 malloc_size_B_per_task=240.0 footprint_B_per_task=253.5 resident_B_per_task=245.8 check=ok
+RUN round=3 PARK policy=static_xk N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=4336.0 malloc_size_B_per_task=4336.0 footprint_B_per_task=4370.3 resident_B_per_task=4360.4 check=ok
+RUN round=3 build=clang BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.15 min=1.15 max=1.20 mallocs_per_call=0.0000 check=ok
+RUN round=3 build=clang_growinline BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.15 min=1.15 max=1.16 mallocs_per_call=0.0000 check=ok
+RUN round=3 build=tcc BOUND policy=inseg n=1000000 reps=7 ns_per_call=8.44 min=8.43 max=9.65 mallocs_per_call=0.0000 check=ok
+RUN round=3 build=clang BOUND policy=free n=5000000 reps=7 ns_per_call=22.25 min=21.84 max=25.76 mallocs_per_call=1.0000 check=ok
+RUN round=3 build=clang_growinline BOUND policy=free n=5000000 reps=7 ns_per_call=20.34 min=20.32 max=21.37 mallocs_per_call=1.0000 check=ok
+RUN round=3 build=tcc BOUND policy=free n=1000000 reps=7 ns_per_call=31.84 min=31.82 max=31.98 mallocs_per_call=1.0000 check=ok
+RUN round=3 build=clang BOUND policy=spare n=5000000 reps=7 ns_per_call=4.22 min=4.21 max=4.29 mallocs_per_call=0.0000 check=ok
+RUN round=3 build=clang_growinline BOUND policy=spare n=5000000 reps=7 ns_per_call=2.68 min=2.68 max=2.73 mallocs_per_call=0.0000 check=ok
+RUN round=3 build=tcc BOUND policy=spare n=1000000 reps=7 ns_per_call=13.80 min=13.77 max=13.96 mallocs_per_call=0.0000 check=ok
+RUN round=3 fastpath=inseg d  1 K 1 plain   2.68 ren   5.25 ren_susp   7.66 lazy   5.15 lazy_susp   7.67 reg   3.06 reg_susp   8.11 poll_susp   8.43 ns/op span 0 B ok
+RUN round=3 fastpath=free d  1 K 1 plain   2.68 ren  23.40 ren_susp  27.50 lazy   5.07 lazy_susp   7.30 reg   3.07 reg_susp   8.10 poll_susp   8.45 ns/op span 0 B ok
+RUN round=3 fastpath=spare d  1 K 1 plain   2.68 ren   6.64 ren_susp  10.36 lazy   5.11 lazy_susp   7.66 reg   3.07 reg_susp   8.12 poll_susp   9.14 ns/op span 0 B ok
+# round 4 load: 4.29 2.84 3.17
+RUN round=4 PARK policy=today N=100000 seg=64 task_alloc=112 chunk_mallocs=300000 zone_B_per_task=4208.0 malloc_size_B_per_task=4208.0 footprint_B_per_task=4230.2 resident_B_per_task=4226.9 check=ok
+RUN round=4 PARK policy=static N=100000 seg=192 task_alloc=240 chunk_mallocs=0 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=251.8 resident_B_per_task=244.6 check=ok
+RUN round=4 PARK policy=static_x N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=240.1 malloc_size_B_per_task=240.0 footprint_B_per_task=252.7 resident_B_per_task=245.4 check=ok
+RUN round=4 PARK policy=static_xk N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=4336.0 malloc_size_B_per_task=4336.0 footprint_B_per_task=4368.2 resident_B_per_task=4358.8 check=ok
+RUN round=4 build=clang BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.16 min=1.15 max=1.18 mallocs_per_call=0.0000 check=ok
+RUN round=4 build=clang_growinline BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.15 min=1.15 max=1.15 mallocs_per_call=0.0000 check=ok
+RUN round=4 build=tcc BOUND policy=inseg n=1000000 reps=7 ns_per_call=8.42 min=8.25 max=8.93 mallocs_per_call=0.0000 check=ok
+RUN round=4 build=clang BOUND policy=free n=5000000 reps=7 ns_per_call=22.74 min=21.49 max=31.31 mallocs_per_call=1.0000 check=ok
+RUN round=4 build=clang_growinline BOUND policy=free n=5000000 reps=7 ns_per_call=20.44 min=20.37 max=21.05 mallocs_per_call=1.0000 check=ok
+RUN round=4 build=tcc BOUND policy=free n=1000000 reps=7 ns_per_call=32.13 min=31.40 max=33.53 mallocs_per_call=1.0000 check=ok
+RUN round=4 build=clang BOUND policy=spare n=5000000 reps=7 ns_per_call=4.22 min=4.21 max=4.41 mallocs_per_call=0.0000 check=ok
+RUN round=4 build=clang_growinline BOUND policy=spare n=5000000 reps=7 ns_per_call=2.68 min=2.68 max=3.02 mallocs_per_call=0.0000 check=ok
+RUN round=4 build=tcc BOUND policy=spare n=1000000 reps=7 ns_per_call=13.79 min=13.41 max=14.03 mallocs_per_call=0.0000 check=ok
+RUN round=4 fastpath=inseg d  1 K 1 plain   2.30 ren   5.34 ren_susp   7.66 lazy   5.12 lazy_susp   7.68 reg   3.06 reg_susp   8.11 poll_susp  10.17 ns/op span 0 B ok
+RUN round=4 fastpath=free d  1 K 1 plain   2.82 ren  24.58 ren_susp  27.28 lazy   5.09 lazy_susp   7.67 reg   3.07 reg_susp   8.10 poll_susp   8.44 ns/op span 0 B ok
+RUN round=4 fastpath=spare d  1 K 1 plain   2.69 ren   6.56 ren_susp  10.36 lazy   5.12 lazy_susp   7.67 reg   3.07 reg_susp   8.08 poll_susp   8.44 ns/op span 0 B ok
+# round 5 load: 5.71 3.15 3.28
+RUN round=5 PARK policy=today N=100000 seg=64 task_alloc=112 chunk_mallocs=300000 zone_B_per_task=4208.0 malloc_size_B_per_task=4208.0 footprint_B_per_task=4230.2 resident_B_per_task=4226.9 check=ok
+RUN round=5 PARK policy=static N=100000 seg=192 task_alloc=240 chunk_mallocs=0 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=252.0 resident_B_per_task=244.8 check=ok
+RUN round=5 PARK policy=static_x N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=240.0 malloc_size_B_per_task=240.0 footprint_B_per_task=251.8 resident_B_per_task=244.6 check=ok
+RUN round=5 PARK policy=static_xk N=100000 seg=192 task_alloc=240 chunk_mallocs=100000 zone_B_per_task=4336.0 malloc_size_B_per_task=4336.0 footprint_B_per_task=4368.3 resident_B_per_task=4358.8 check=ok
+RUN round=5 build=clang BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.15 min=1.15 max=1.16 mallocs_per_call=0.0000 check=ok
+RUN round=5 build=clang_growinline BOUND policy=inseg n=5000000 reps=7 ns_per_call=1.15 min=1.15 max=1.16 mallocs_per_call=0.0000 check=ok
+RUN round=5 build=tcc BOUND policy=inseg n=1000000 reps=7 ns_per_call=8.43 min=8.42 max=8.74 mallocs_per_call=0.0000 check=ok
+RUN round=5 build=clang BOUND policy=free n=5000000 reps=7 ns_per_call=22.35 min=21.83 max=25.56 mallocs_per_call=1.0000 check=ok
+RUN round=5 build=clang_growinline BOUND policy=free n=5000000 reps=7 ns_per_call=20.33 min=20.09 max=27.37 mallocs_per_call=1.0000 check=ok
+RUN round=5 build=tcc BOUND policy=free n=1000000 reps=7 ns_per_call=31.88 min=31.82 max=33.50 mallocs_per_call=1.0000 check=ok
+RUN round=5 build=clang BOUND policy=spare n=5000000 reps=7 ns_per_call=4.22 min=4.21 max=4.27 mallocs_per_call=0.0000 check=ok
+RUN round=5 build=clang_growinline BOUND policy=spare n=5000000 reps=7 ns_per_call=2.68 min=2.68 max=2.89 mallocs_per_call=0.0000 check=ok
+RUN round=5 build=tcc BOUND policy=spare n=1000000 reps=7 ns_per_call=13.48 min=13.05 max=13.82 mallocs_per_call=0.0000 check=ok
+RUN round=5 fastpath=inseg d  1 K 1 plain   2.68 ren   5.25 ren_susp   7.67 lazy   5.50 lazy_susp   7.66 reg   3.07 reg_susp   8.07 poll_susp   8.45 ns/op span 0 B ok
+RUN round=5 fastpath=free d  1 K 1 plain   2.68 ren  23.63 ren_susp  28.59 lazy   5.13 lazy_susp   7.67 reg   3.07 reg_susp   8.06 poll_susp   8.51 ns/op span 0 B ok
+RUN round=5 fastpath=spare d  1 K 1 plain   2.68 ren   6.78 ren_susp  10.23 lazy   5.52 lazy_susp   7.66 reg   3.07 reg_susp   8.32 poll_susp   8.44 ns/op span 0 B ok
