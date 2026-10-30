@@ -20,6 +20,7 @@
  (applies_to build)
  (deps
   (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files *.ren)
@@ -68,6 +69,7 @@
  (applies_to tasks)
  (deps
   (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
   %{bin:ren}
   (glob_files %{project_root}/examples/crawler/*.ren)
   (glob_files %{project_root}/examples/just/*.ren)
@@ -101,6 +103,7 @@
  (applies_to bytes)
  (deps
   (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files bytes/*.ren)
@@ -115,6 +118,7 @@
  (applies_to strs)
  (deps
   (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files strs/*.ren)
@@ -126,6 +130,7 @@
   (= %{env:REN_BIG_TESTS=0} 1))
  (deps
   (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files strs/*.ren)
@@ -140,6 +145,7 @@
  (applies_to patterns)
  (deps
   (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
   %{bin:ren}
   (env_var REN_TCC)
   (glob_files patterns/*.ren)

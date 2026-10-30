@@ -59,7 +59,9 @@ Tree-sitter CLI 0.27.1 is pinned separately by the npm lockfile; generation
 explicitly targets ABI 14 for editor compatibility.
 
 `cc` is the Nix Clang wrapper, with the platform's SDK/libc and sanitizer
-libraries. `REN_TCC` points to the packaged TinyCC. TinyCC's old stable
+libraries. The shell disables Nix’s fortification flags because glibc
+requires optimization for them, while Ren deliberately uses `-O0` for
+Clang debug builds. Other default hardening remains enabled. `REN_TCC` points to the packaged TinyCC. TinyCC's old stable
 release predates arm64 macOS support, so `nix/tinycc.nix` pins the upstream
 mob commit also used by `tools/tcc.sh`. On macOS, TinyCC uses the OS's
 built-in `/usr/bin/codesign` for ad-hoc signing: the portable replacement

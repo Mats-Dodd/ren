@@ -6,6 +6,8 @@ let
 in {
   # Upstream v2.4.0's module version stamp still says 2.3.1.
   devenv.latestVersion = "2.4.0";
+  # Ren intentionally compiles debug C at -O0; glibc fortification needs -O.
+  hardeningDisable = [ "fortify" "fortify3" ];
   packages = [
     ocaml.ocaml ocaml.findlib ocaml.ppx_deriving ocaml.ppx_expect
     ocaml.ocaml-lsp pkgs.ocamlformat ocaml.dune_3
