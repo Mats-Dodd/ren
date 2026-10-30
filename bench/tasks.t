@@ -82,18 +82,20 @@ prints there.
   $ spec services/docs
   services/docs: not yet
 
-Then, once step 8 lands: the server's tests pass under a thousand seeds
-with chaos eviction, `ren test --chaos --seeds 1000`; in
+Then, once step 8 lands: the server's tests, which install its
+documents with chaos eviction, `actors(doc, chaos: true)`, pass under a
+thousand seeds, `ren test --seeds 1000`; in
 services/lost_update, a read and a write in two operations of one actor
 inside one `Docs.at` block, `ren test --sim --seeds 200` finds a seed
 that loses an edit, and `--seed` with it fails the same way again,
 while fixed.ren's one operation passes under a thousand seeds; and in
 services/memory, a document kept only in memory passes under a
-thousand seeds without chaos, and fails under some seed with it, which
-`--chaos --seed` fails again.
+thousand seeds in a family without chaos, and fails under some seed in
+one with `chaos: true`, which `--seed` fails again. There's no `ren
+test --chaos`: chaos is a parameter of `actors`.
 
   $ services_milestone() {
-  >   (cd services/docs && ren test --chaos --seeds 1000 > /dev/null 2>&1); docs=$?
+  >   (cd services/docs && ren test --seeds 1000 > /dev/null 2>&1); docs=$?
   >   (cd services/lost_update &&
   >    ren test --sim --seeds 200 --only "two sessions" > seeds.out 2>&1; found=$?
   >    seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
@@ -104,10 +106,10 @@ thousand seeds without chaos, and fails under some seed with it, which
   >      [ "$(grep -e 'left:' -e 'right:' seeds.out)" = "$(grep -e 'left:' -e 'right:' again.out)" ] &&
   >      [ "$fixed" = 0 ]; ok=$?; rm -f seeds.out again.out; exit $ok); lost=$?
   >   (cd services/memory &&
-  >    ren test --seeds 1000 > /dev/null 2>&1; calm=$?
-  >    ren test --chaos --seeds 200 > seeds.out 2>&1; found=$?
+  >    ren test --seeds 1000 --only "without chaos" > /dev/null 2>&1; calm=$?
+  >    ren test --seeds 200 --only "under chaos" > seeds.out 2>&1; found=$?
   >    seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
-  >    ren test --chaos --seed "${seed:-0}" > again.out 2>&1; again=$?
+  >    ren test --seed "${seed:-0}" --only "under chaos" > again.out 2>&1; again=$?
   >    [ "$calm" = 0 ] && [ "$found" = 1 ] && [ -n "$seed" ] && [ "$again" = 1 ]; ok=$?
   >    rm -f seeds.out again.out; exit $ok); memory=$?
   >   if [ "$docs" = 0 ] && [ "$lost" = 0 ] && [ "$memory" = 0 ]

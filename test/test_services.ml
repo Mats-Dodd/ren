@@ -16,11 +16,13 @@
          `Async.background`
      s4  `release` on one call; decision 10's deadlock rules; `sim`'s fair
          choice among an instance's waiters; `Proc.run(kill:)`; a default
-         that's a variant with no fields
+         that's a variant written bare, with no fields or defaults for all
      s5  pull arguments to `Async.each` and `Async.map`, channels as
          dependencies with `items()`, and `Async.produce` with `Send<T>`
-     s6  `striped`, which replaces `sync.keyed`
-     s7  `actors`, then `post`
+     s6  the keyed instance family, `D.Call`, and `striped` in Ren over
+         them, which replaces `sync.keyed`
+     s7  `actors` in Ren over the family, then `post`, a trailing call of
+         `D.Call`, and `chaos: true`
      s8  the milestone: the document server in miniature (the whole one
          is bench/services/docs, bench/tasks.t)
 
@@ -1986,7 +1988,7 @@ test "a caller arriving as it's released never overtakes the queue" =
     |}]
 
 let%expect_test "[s4 accept] a default that's a variant with no fields" =
-  (* What's decided 9: `kill: Kill = Tree` *)
+  (* What's decided 11: `kill: Kill = Tree` *)
   until "s4"
     ~want:{|
 Gentle
@@ -2013,11 +2015,47 @@ fn main() uses Console =
       help: give it where it's called instead
     |}]
 
-let%expect_test "[s4 reject] a default that's a variant with fields" =
+let%expect_test "[s4 accept] a default that's a variant whose fields all have defaults" =
+  (* What's decided 11: `by: By = Key` is `Key(n: 16)`; a field with a
+     default is left out, or given by name *)
+  until "s4"
+    ~want:{|
+Gentle(5)
+Gentle(9)
+Gentle(5)
+()
+|}
+    (fun () ->
+      run
+        {|
+type Mode = | Gentle(ms: Int = 5) | Hard
+
+fn stop(n: Int, how: Mode = Gentle) -> Mode = how
+
+fn main() uses Console =
+  print(stop(1))
+  print(stop(1, how: Gentle(ms: 9)))
+  print(Gentle)
+|});
+  [%expect {|
+    (until s4)
+    error: expected `,` or `)`, found `=`
+      ┌─ test.ren:1:30
+    1 │ type Mode = | Gentle(ms: Int = 5) | Hard
+      │                              ^
+
+    error: a parameter's default is a literal: a number, a `Bool` or a string
+      ┌─ test.ren:3:29
+    3 │ fn stop(n: Int, how: Mode = Gentle) -> Mode = how
+      │                             ^^^^^^
+      help: give it where it's called instead
+    |}]
+
+let%expect_test "[s4 reject] a default that's a variant written with arguments" =
   until "s4"
     ~says:
       [
-        "error: a parameter's default is a literal, or a variant with no fields";
+        "error: a parameter's default is a literal, or a variant written bare";
         "help: give it where it's called instead";
       ]
     (fun () ->
@@ -2514,7 +2552,7 @@ fn main() uses Console, Async =
       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `both`, `single`
     |}]
 
-(* ---- s6: `striped` (decision 18, language.md §11) ---- *)
+(* ---- s6: `striped`, plain Ren over the keyed instance family (decisions 18 and 20, language.md §11) ---- *)
 
 let hits =
   {|
@@ -2538,8 +2576,8 @@ let%expect_test "[s6 accept] `striped` by key: a keyless operation folded with `
       run
         (hits
        ^ {|
-fn main() uses Console =
-  with striped(counter(), n: 4, merge: Sum) in
+fn main() uses Console, Async =
+  with striped(counter(), by: Key(n: 4), merge: Sum) in
     Hits.hit("/a")
     Hits.hit("/b")
     Hits.hit("/a")
@@ -2549,7 +2587,7 @@ fn main() uses Console =
     (until s6)
     error: there's no function named `striped`
        ┌─ test.ren:11:8
-    11 │   with striped(counter(), n: 4, merge: Sum) in
+    11 │   with striped(counter(), by: Key(n: 4), merge: Sum) in
        │        ^^^^^^^
     |}]
 
@@ -2575,8 +2613,9 @@ test "every hit is counted, whichever worker it lands on" =
     |}]
 
 let%expect_test "[s6 accept] the split law: a result that depends on routing fails under some seed" =
-  (* under `sim` two virtual workers, routing from the tape: `Max` of the
-     stripes' counts erases nothing about which stripe a hit went to *)
+  (* under `sim` two virtual workers, `Async.worker()` from the tape: `Max`
+     of the stripes' counts erases nothing about which stripe a hit went
+     to *)
   until "s6"
     ~says:[ "✗ the busiest stripe saw every hit" ]
     (fun () ->
@@ -2598,6 +2637,7 @@ test "the busiest stripe saw every hit" =
     |}]
 
 let%expect_test "[s6 accept] a keyless operation that returns `()` broadcasts" =
+  (* `by:` left out is `Key`, which is `Key(n: 16)` *)
   until "s6"
     ~want:{|
 0
@@ -2617,7 +2657,7 @@ handler counter() for Hits =
   reset() => n = 0
   total() => n
 
-fn main() uses Console =
+fn main() uses Console, Async =
   with striped(counter(), merge: Sum) in
     Hits.hit("/a")
     Hits.hit("/b")
@@ -2632,7 +2672,10 @@ fn main() uses Console =
        │        ^^^^^^^
     |}]
 
-let%expect_test "[s6 accept] `merge: Concat` and `Custom(m)`, left to right in stripe order" =
+let%expect_test "[s6 accept] `merge: Concat` and `Custom(m)`, m's `call` clause folding, left to right in stripe order" =
+  (* `Custom` holds a stateless handler over `Seen` whose `call(c:
+     Seen.Call, a, b)` clause folds two stripes' results for `c`: there's
+     no `Merge<D>` *)
   until "s6"
     ~want:{|
 ["/a", "/b"]
@@ -2651,51 +2694,64 @@ handler seen() for Seen =
   see(p) => &paths.push(p)
   all() => paths
 
-handler longest() for Merge<Seen> =
-  all(a, b) => if a.len() >= b.len() then a else b
+handler longest() for Seen =
+  call(c: Seen.Call, a, b) =>
+    match c
+      All => if a.len() >= b.len() then a else b
+      See { .. } => a
 
-fn main() uses Console =
-  with striped(seen(), n: 1, merge: Concat) in
+fn main() uses Console, Async =
+  with striped(seen(), by: Key(n: 1), merge: Concat) in
     Seen.see("/a")
     Seen.see("/b")
     print(Seen.all())
-  with striped(seen(), n: 1, merge: Custom(longest())) in
+  with striped(seen(), by: Key(n: 1), merge: Custom(longest())) in
     Seen.see("/a")
     Seen.see("/b")
     print(Seen.all().len())
 |});
   [%expect {|
     (until s6)
-    error: there's no dependency named `Merge`
-       ┌─ test.ren:10:23
-    10 │ handler longest() for Merge<Seen> =
-       │                       ^^^^^
-       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Seen`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-       help: use one of those, or declare it with `dep`
+    error: `longest` doesn't implement `see` or `all`
+       ┌─ test.ren:10:9
+    10 │ handler longest() for Seen =
+       │         ^^^^^^^
+       = a handler implements every operation, unless it goes `over` another implementation, which then does the rest
+       help: write them, or declare it `over Seen` if another `Seen` should handle them
+
+    error: `Seen` has no operation named `call`
+       ┌─ test.ren:11:3
+    11 │   call(c: Seen.Call, a, b) =>
+       │   ^^^^
+       help: the operations it implements: `Seen.see`, `Seen.all`
+
+    error: `Seen` isn't a sum type, so it has no variants
+       ┌─ test.ren:11:11
+    11 │   call(c: Seen.Call, a, b) =>
+       │           ^^^^
+       help: a variant type is one of a sum's, like `Order.Placed`
 
     error: there's no function named `striped`
-       ┌─ test.ren:14:8
-    14 │   with striped(seen(), n: 1, merge: Concat) in
+       ┌─ test.ren:17:8
+    17 │   with striped(seen(), by: Key(n: 1), merge: Concat) in
        │        ^^^^^^^
 
     error: there's no function named `striped`
-       ┌─ test.ren:18:8
-    18 │   with striped(seen(), n: 1, merge: Custom(longest())) in
+       ┌─ test.ren:21:8
+    21 │   with striped(seen(), by: Key(n: 1), merge: Custom(longest())) in
        │        ^^^^^^^
     |}]
 
-let%expect_test "[s6 reject] a keyless operation that returns a value, with no `merge:`" =
+let%expect_test "[s6 reject] a keyless operation that returns a value, with no `merge:`, panics at the `with`" =
+  (* decision 20, rule 3: a check `striped` makes on its arguments, at the
+     `with` until stage 12 makes it at build time; no Infer rule *)
   until "s6"
-    ~says:
-      [
-        "error: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`";
-        "help: say how to fold them: `merge: Sum`, `Max`, `Min`, `Concat` or `Custom(m)`";
-      ]
+    ~says:[ "panic: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`" ]
     (fun () ->
-      check_error
+      run_error
         (hits
        ^ {|
-fn main() uses Console =
+fn main() uses Console, Async =
   with striped(counter()) in print(Hits.total())
 |}));
   [%expect {|
@@ -2706,64 +2762,83 @@ fn main() uses Console =
        │        ^^^^^^^
     |}]
 
-let%expect_test "[s6 reject] `by: Worker` with `n`" =
+let%expect_test "[s6 reject] `by: Worker` with a count can't be written" =
+  (* routing is an ADT: `Worker` has no fields, so this is the ADT's own
+     error, not a rule written for `striped` *)
   until "s6"
     ~says:
       [
-        "error: `by: Worker` gives each worker a stripe, so it takes no `n`";
-        "help: remove `n: 4`";
+        "error: `Worker` has 0 fields but was given 1";
+        "help: write `Worker` with no parentheses";
       ]
     (fun () ->
       check_error
         (hits
        ^ {|
-fn main() uses Console =
-  with striped(counter(), n: 4, by: Worker, merge: Sum) in print(Hits.total())
+fn main() uses Console, Async =
+  with striped(counter(), by: Worker(n: 4), merge: Sum) in print(Hits.total())
 |}));
   [%expect {|
     (until s6)
     error: there's no function named `striped`
        ┌─ test.ren:11:8
-    11 │   with striped(counter(), n: 4, by: Worker, merge: Sum) in print(Hits.total())
+    11 │   with striped(counter(), by: Worker(n: 4), merge: Sum) in print(Hits.total())
        │        ^^^^^^^
     |}]
 
 let%expect_test "[s6 reject] `Custom(m)` with a handler that has state" =
+  (* `striped` calls m as a method, `m.call(c, a, b)`: the data stage's
+     rule for a description called as a method, nothing written for
+     `striped` *)
   until "s6"
-    ~says:[ "error: `Custom` takes a stateless handler of `Merge<Hits>`" ]
+    ~says:[ "may be a description of `adding`, which keeps state, so it isn't called as a method" ]
     (fun () ->
-      check_error
+      run_error
         (hits
        ^ {|
-handler adding() for Merge<Hits> =
+handler adding() for Hits =
   var calls = 0
-  total(a, b) =>
+  call(c: Hits.Call, a, b) =>
     calls += 1
-    a + b
+    match c
+      Total => a + b
+      Hit { .. } => a
 
-fn main() uses Console =
+fn main() uses Console, Async =
   with striped(counter(), merge: Custom(adding())) in print(Hits.total())
 |}));
   [%expect {|
     (until s6)
-    error: there's no dependency named `Merge`
-       ┌─ test.ren:10:22
-    10 │ handler adding() for Merge<Hits> =
-       │                      ^^^^^
-       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Hits`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-       help: use one of those, or declare it with `dep`
+    error: `adding` doesn't implement `hit` or `total`
+       ┌─ test.ren:10:9
+    10 │ handler adding() for Hits =
+       │         ^^^^^^
+       = a handler implements every operation, unless it goes `over` another implementation, which then does the rest
+       help: write them, or declare it `over Hits` if another `Hits` should handle them
+
+    error: `Hits` has no operation named `call`
+       ┌─ test.ren:12:3
+    12 │   call(c: Hits.Call, a, b) =>
+       │   ^^^^
+       help: the operations it implements: `Hits.hit`, `Hits.total`
+
+    error: `Hits` isn't a sum type, so it has no variants
+       ┌─ test.ren:12:11
+    12 │   call(c: Hits.Call, a, b) =>
+       │           ^^^^
+       help: a variant type is one of a sum's, like `Order.Placed`
 
     error: there's no function named `striped`
-       ┌─ test.ren:17:8
-    17 │   with striped(counter(), merge: Custom(adding())) in print(Hits.total())
+       ┌─ test.ren:19:8
+    19 │   with striped(counter(), merge: Custom(adding())) in print(Hits.total())
        │        ^^^^^^^
     |}]
 
-let%expect_test "[s6 reject] `merge: Sum` of what isn't a number" =
+let%expect_test "[s6 reject] `merge: Sum` of what isn't a number panics at the `with`" =
   until "s6"
-    ~says:[ "error: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number" ]
+    ~says:[ "panic: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number" ]
     (fun () ->
-      check_error
+      run_error
         {|
 dep Seen =
   see: fn(path: Str)
@@ -2772,7 +2847,7 @@ handler seen() for Seen =
   var paths: Array<Str> = []
   see(p) => &paths.push(p)
   all() => paths
-fn main() uses Console =
+fn main() uses Console, Async =
   with striped(seen(), merge: Sum) in print(Seen.all())
 |});
   [%expect {|
@@ -2783,16 +2858,30 @@ fn main() uses Console =
       │        ^^^^^^^
     |}]
 
+let%expect_test "[s6 reject] `striped` keeps at least 1 stripe" =
+  until "s6"
+    ~says:[ "panic: `striped` keeps at least 1 stripe, not 0" ]
+    (fun () ->
+      run_error
+        (hits
+       ^ {|
+fn main() uses Console, Async =
+  with striped(counter(), by: Key(n: 0), merge: Sum) in print(Hits.total())
+|}));
+  [%expect {|
+    (until s6)
+    error: there's no function named `striped`
+       ┌─ test.ren:11:8
+    11 │   with striped(counter(), by: Key(n: 0), merge: Sum) in print(Hits.total())
+       │        ^^^^^^^
+    |}]
+
 let%expect_test "[s6 reject] `striped` of what isn't a handler's description" =
   until "s6"
-    ~says:
-      [
-        "error: `striped` takes a handler's description, and `16` is an `Int`";
-        "help: describe the handler whose instances it keeps: `striped(counter(), merge: Sum)`";
-      ]
+    ~says:[ "error: `striped` takes a handler's description, and `16` is an `Int`" ]
     (fun () ->
       check_error {|
-fn main() uses Console =
+fn main() uses Console, Async =
   with striped(16) in print(1)
 |});
   [%expect {|
@@ -2818,7 +2907,10 @@ fn main() uses Console =
     raised: Ren_tests.Helpers.No_error("expected an error, but the program checked")
     |}]
 
-(* ---- s7: `actors` (decision 18, language.md §11) ---- *)
+(* ---- s7: `actors`, plain Ren over the keyed instance family (decisions 18 and 20, language.md §11) ----
+
+   `actors` uses `Random`, for `chaos:`, so a `main` that installs it
+   names `Random` (compiler.md, "Where this stage may differ"). *)
 
 (* A document actor and its store, the smallest stand-ins: a document is
    text that grows by appending, and the store keeps the last text saved
@@ -2876,7 +2968,7 @@ fn go() ! StoreDown uses Docs, Console =
     print(Doc.text())
   print(Docs.count())
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with mem_store(), actors(doc, max: 2) as Docs in print(attempt go())
 |}));
   [%expect {|
@@ -2898,7 +2990,7 @@ Err(StoreDown)
       run
         (docs
        ^ {|
-fn main() uses Console =
+fn main() uses Console, Random =
   with mem_store(), actors(doc) as Docs in
     print(attempt Docs.at(DocId(-1)) fn() => Doc.text())
     print(Docs.count())
@@ -2937,7 +3029,7 @@ fn go() ! StoreDown uses Docs, Console =
   print(Docs.made() - Docs.count())
   print(Docs.evicted())
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with mem_store(), actors(doc, max: 2) as Docs in
     match attempt go()
       Ok(_) => ()
@@ -2971,7 +3063,7 @@ fn go() ! StoreDown uses Docs, Console =
     try Doc.edit("y")
     print(Doc.text())
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with mem_store(), actors(doc, max: 1) as Docs in
     match attempt go()
       Ok(_) => ()
@@ -3044,7 +3136,7 @@ fn go() ! StoreDown uses Docs, Console, Clock =
   Docs.evict(DocId(2))
   print(Docs.count())
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with sim.scheduler(1) in
     with sim.clock() in
       with mem_store(), actors(doc) as Docs in
@@ -3078,7 +3170,7 @@ evicted DocId(2)
       run
         (docs
        ^ {|
-fn main() uses Console =
+fn main() uses Console, Random =
   with mem_store(), actors(doc) as Docs in
     for n in [2, 1, 3]
       let _ = attempt Docs.at(DocId(n)) fn() => Doc.text()
@@ -3202,20 +3294,18 @@ test "two appends by one operation both land" =
        help: declare it under `type Docs`
     |}]
 
-let%expect_test "[s7 accept] chaos eviction finds what lives only in memory" =
-  (* `sim.scheduler(seed, evict: AnyIdle)` evicts any evictable actor at
-     any scheduling point: under some seed a document kept only in memory
-     loses its text between two `at`s *)
+let%expect_test "[s7 accept] `actors(doc, chaos: true)` finds what lives only in memory" =
+  (* chaos is a parameter of `actors`: at each call into the family it
+     evicts the evictable actors `Random` picks, from the tape under
+     `ren test`, so under some seed the document kept only in memory
+     loses its text between two `at`s. The scheduler and `ren test` know
+     nothing of it *)
   until "s7"
-    ~want:{|
-true
-()
-|}
+    ~says:[ "✗ the text kept only in memory survives" ]
     (fun () ->
-      run
-        {|
-import sim
-
+      test ~seeds:50
+        (pub_all
+         {|
 type DocId = | DocId(n: Int)
 
 dep Doc =
@@ -3229,47 +3319,41 @@ handler doc(id: DocId) for Doc =
 
 dep Docs = Actors<DocId, Doc>
 
-fn main() uses Console =
-  var lost = false
-  for seed in 1..50
-    with sim.scheduler(seed, evict: AnyIdle) in
-      with actors(doc) as Docs in
-        Docs.at(DocId(1)) fn() => Doc.append("a")
-        Async.yield()
-        Docs.at(DocId(1)) fn() =>
-          if Doc.text() != "a" then lost = true
-  print(lost)
-|});
+test "the text kept only in memory survives" =
+  with actors(doc, chaos: true) as Docs in
+    Docs.at(DocId(1)) fn() => Doc.append("a")
+    Docs.at(DocId(1)) fn() => assert Doc.text() == "a"
+|}));
   [%expect {|
     (until s7)
     error: there's no dependency named `Actors`
-       ┌─ test.ren:14:12
-    14 │ dep Docs = Actors<DocId, Doc>
-       │            ^^^^^^
+       ┌─ test.ren:12:16
+    12 │ pub dep Docs = Actors<DocId, Doc>
+       │                ^^^^^^
        = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
        help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`
-       ┌─ test.ren:20:12
-    20 │       with actors(doc) as Docs in
-       │            ^^^^^^
+       ┌─ test.ren:15:8
+    15 │   with actors(doc, chaos: true) as Docs in
+       │        ^^^^^^
 
     error: `Docs` is a type, not a dependency
-       ┌─ test.ren:20:27
-    20 │       with actors(doc) as Docs in
-       │                           ^^^^
+       ┌─ test.ren:15:36
+    15 │   with actors(doc, chaos: true) as Docs in
+       │                                    ^^^^
        help: a dependency is declared with `dep`, and lists the operations a function can call on it
 
     error: `Docs` has no member named `at`
-       ┌─ test.ren:21:14
-    21 │         Docs.at(DocId(1)) fn() => Doc.append("a")
-       │              ^^
+       ┌─ test.ren:16:10
+    16 │     Docs.at(DocId(1)) fn() => Doc.append("a")
+       │          ^^
        help: declare it under `type Docs`
 
     error: `Docs` has no member named `at`
-       ┌─ test.ren:23:14
-    23 │         Docs.at(DocId(1)) fn() =>
-       │              ^^
+       ┌─ test.ren:17:10
+    17 │     Docs.at(DocId(1)) fn() => assert Doc.text() == "a"
+       │          ^^
        help: declare it under `type Docs`
     |}]
 
@@ -3278,7 +3362,7 @@ let%expect_test "[s7 reject] `at` inside `at` of the same family" =
     ~says:
       [
         "error: `Docs.at` inside a block of `Docs.at` could wait for a slot its own block holds";
-        "help: finish with the first actor, then `at` the second; or send it a message: `Docs.post(k).op(...)`";
+        "help: finish with the first, then call the second; or post to it, which holds nothing";
       ]
     (fun () ->
       check_error
@@ -3300,8 +3384,8 @@ let%expect_test "[s7 reject] an actor `at`-ing its own family" =
   until "s7"
     ~says:
       [
-        "error: `doc` is an actor of `Docs`, so it can only `post` to it";
-        "help: send it a message instead: `Docs.post(k).edit(...)`";
+        "error: `doc` is kept by `Docs`'s family, so it can't call `Docs.at`, which pins one of its siblings";
+        "help: post to it instead, which holds nothing";
       ]
     (fun () ->
       check_error
@@ -3312,7 +3396,7 @@ dep Doc =
 dep Docs = Actors<DocId, Doc>
 handler doc(id: DocId) for Doc uses Docs =
   poke() => Docs.at(DocId(2)) fn() => Doc.poke()
-fn main() uses Console =
+fn main() uses Console, Random =
   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
 |});
   [%expect {|
@@ -3355,11 +3439,10 @@ fn main() uses Console =
     |}]
 
 let%expect_test "[s7 reject] an actor's handler takes one parameter, its key" =
+  (* `actors`' `h` is `fn(k: K) -> D ! E`: an ordinary argument's type *)
   until "s7"
     ~says:
-      [
-        "error: `actors` makes each actor from its key, so `doc` takes one parameter, a `DocId`";
-      ]
+      [ "found `fn(DocId, Int) -> Doc`" ]
     (fun () ->
       check_error
         {|
@@ -3400,12 +3483,11 @@ fn main() =
     |}]
 
 let%expect_test "[s7 reject] setup that fails with what the family doesn't declare" =
+  (* the ordinary rule for a block's errors, `h: fn(k: K) -> D ! E` with
+     the alias's `E`, which is none *)
   until "s7"
     ~says:
-      [
-        "error: making a `doc` can fail with `StoreDown`, which `Docs` doesn't declare";
-        "help: declare it on the family: `dep Docs = Actors<DocId, Doc> ! StoreDown`";
-      ]
+      [ "this function can fail with `StoreDown`" ]
     (fun () ->
       check_error
         {|
@@ -3451,8 +3533,8 @@ let%expect_test "[s7 reject] an actor's `finally` that can fail" =
   until "s7"
     ~says:
       [
-        "error: an actor's `finally` can't fail";
-        "help: save in the operations, write-through, or flush before the family ends: `Docs.each(fn() => try Doc.flush())`";
+        "error: `doc` is kept by a family, so its `finally` can't fail";
+        "help: save in its operations, write-through, or flush before the family ends";
       ]
     (fun () ->
       check_error
@@ -3500,7 +3582,7 @@ handler inner(k: Key) for Inner =
 handler outer(k: Key) for Outer =
   poke() => ()
 
-fn main() uses Console, Async =
+fn main() uses Console, Async, Random =
   with actors(outer, max: 1) as Outers, actors(inner, max: 1) as Inners in
     Async.scope fn(s) =>
       s.spawn fn() =>
@@ -3568,6 +3650,78 @@ fn main() uses Console, Async =
        help: declare it under `type Inners`
     |}]
 
+(* A third library over the family, written in a test: a family with a
+   fixed key set. It gets the family's rules, here its no-deadlock check
+   on `pin`, with no compiler support of its own. *)
+let shards =
+  {|
+type Shard = | A | B
+
+dep Count =
+  add: fn(n: Int)
+  total: fn() -> Int
+
+handler count(s: Shard) for Count =
+  var n = 0
+  add(k) => n += k
+  total() => n
+
+dep Shards =
+  at: fn(s: Shard, body: fn() uses Count)
+
+handler shards() for Shards =
+  let fam = Instances.open(count, parts: 1, cap: 2, mailbox: 16)
+  finally(_) => Instances.close(fam)
+  at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
+|}
+
+let%expect_test "[s7 accept] a third library over the family: a fixed key set" =
+  until "s7"
+    ~want:{|
+5
+2
+()
+|}
+    (fun () ->
+      run
+        (shards
+       ^ {|
+fn main() uses Console =
+  with shards() in
+    Shards.at(A) fn() => Count.add(2)
+    Shards.at(B) fn() => Count.add(3)
+    Shards.at(B) fn() => Count.add(0)
+    Shards.at(B) fn() => print(Count.total())
+    Shards.at(A) fn() => print(Count.total())
+|}));
+  [%expect {|
+    (until s7)
+    error: expected the end of the line, found `Instances`
+       ┌─ test.ren:18:26
+    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
+       │                          ^^^^^^^^^
+    |}]
+
+let%expect_test "[s7 reject] a third library's `at` inside its own `at`: the family's check on `pin`" =
+  until "s7"
+    ~says:[ "error: `Shards.at` inside a block of `Shards.at` could wait for a slot its own block holds" ]
+    (fun () ->
+      check_error
+        (shards
+       ^ {|
+fn main() =
+  with shards() in
+    Shards.at(A) fn() =>
+      Shards.at(B) fn() => Count.add(1)
+|}));
+  [%expect {|
+    (until s7)
+    error: expected the end of the line, found `Instances`
+       ┌─ test.ren:18:26
+    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
+       │                          ^^^^^^^^^
+    |}]
+
 let%expect_test "[s7 accept] a journal of a run that evicts and remakes a key names each life, and replays" =
   (* `docs[DocId(1)]#1`, then `#2` once it's made again: version 3's made
      and evicted lines; and `ren replay` of it follows it *)
@@ -3592,7 +3746,7 @@ dep Docs = Actors<DocId, Doc>
 handler doc(id: DocId) for Doc uses Console =
   poke() => print(id)
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with actors(doc, max: 1) as Docs in
     Docs.at(DocId(1)) fn() => Doc.poke()
     Docs.at(DocId(2)) fn() => Doc.poke()
@@ -3669,44 +3823,58 @@ handler log(k: Key) for Log =
   put(s) => text = text.concat(s)
   all() => text
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with actors(log) as Logs in
     var s = "a"
-    Logs.post(Key(1)).put(s)
+    Logs.post(Key(1), Log.Call.Put { s })
     s = "b"
     Logs.at(Key(1)) fn() => print(Log.all())
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:12
-    5 │ dep Logs = Actors<Key, Log>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:14:36
+    14 │     Logs.post(Key(1), Log.Call.Put { s })
+       │                                    ^
+    |}]
 
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(log) as Logs in
-       │        ^^^^^^
+let%expect_test "[s7 accept] a post's call is a value: built, kept, posted and shown" =
+  (* `post` takes a `Log.Call`, the call value the compiler writes for
+     every dependency whose operations are all data; there's no
+     `Logs.post(k).put(s)` (decided 2026-10-29) *)
+  until "s7"
+    ~want:{|
+ab
+Put { s: "b" }
+()
+|}
+    (fun () ->
+      run
+        {|
+type Key = | Key(n: Int)
+dep Log =
+  put: fn(s: Str)
+  all: fn() -> Str
+dep Logs = Actors<Key, Log>
+handler log(k: Key) for Log =
+  var text = ""
+  put(s) => text = text.concat(s)
+  all() => text
 
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:12:23
-    12 │   with actors(log) as Logs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
-       ┌─ test.ren:14:10
-    14 │     Logs.post(Key(1)).put(s)
-       │          ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:16:10
-    16 │     Logs.at(Key(1)) fn() => print(Log.all())
-       │          ^^
-       help: declare it under `type Logs`
+fn main() uses Console, Random =
+  with actors(log) as Logs in
+    Logs.post(Key(1), Log.Call.Put { s: "a" })
+    let c = Log.Call.Put { s: "b" }
+    Logs.post(Key(1), c)
+    Logs.at(Key(1)) fn() => print(Log.all())
+    print(c)
+|});
+  [%expect {|
+    (until s7)
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:13:36
+    13 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
+       │                                    ^
     |}]
 
 let%expect_test "[s7 accept] posts from one task to one actor run in order, each as one operation" =
@@ -3730,62 +3898,19 @@ test "posts arrive in the order posted" =
   with actors(log, max: 1) as Logs in
     Async.scope fn(s) =>
       s.spawn fn() =>
-        Logs.post(Key(1)).put("a")
-        Logs.post(Key(1)).put("b")
-        Logs.post(Key(1)).put("c")
+        Logs.post(Key(1), Log.Call.Put { s: "a" })
+        Logs.post(Key(1), Log.Call.Put { s: "b" })
+        Logs.post(Key(1), Log.Call.Put { s: "c" })
       s.spawn fn() => Logs.at(Key(2)) fn() => Log.put("x")
     Async.tick()
     Logs.at(Key(1)) fn() => assert Log.all() == "abc"
 |}));
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:16
-    5 │ pub dep Logs = Actors<Key, Log>
-      │                ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(log, max: 1) as Logs in
-       │        ^^^^^^
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:12:31
-    12 │   with actors(log, max: 1) as Logs in
-       │                               ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
-       ┌─ test.ren:15:14
-    15 │         Logs.post(Key(1)).put("a")
-       │              ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `post`
-       ┌─ test.ren:16:14
-    16 │         Logs.post(Key(1)).put("b")
-       │              ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `post`
-       ┌─ test.ren:17:14
-    17 │         Logs.post(Key(1)).put("c")
-       │              ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:18:28
-    18 │       s.spawn fn() => Logs.at(Key(2)) fn() => Log.put("x")
-       │                            ^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:20:10
-    20 │     Logs.at(Key(1)) fn() => assert Log.all() == "abc"
-       │          ^^
-       help: declare it under `type Logs`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:15:40
+    15 │         Logs.post(Key(1), Log.Call.Put { s: "a" })
+       │                                        ^
     |}]
 
 let%expect_test "[s7 accept] a post makes its actor, so setup's errors are the post's, and nothing is lost" =
@@ -3806,9 +3931,9 @@ handler note(id: DocId) for Note uses Store =
   let _ = try Store.load(id)
   touch() => ()
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with mem_store(), actors(note) as Notes in
-    print(attempt Notes.post(DocId(-1)).touch())
+    print(attempt Notes.post(DocId(-1), Note.Call.Touch))
     print(Notes.count())
 |}));
   [%expect {|
@@ -3843,42 +3968,17 @@ handler log(k: Key) for Log uses Console =
   finally(_) => print("done ".concat(show(k)))
   put(s) => print("got ".concat(s))
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with actors(log) as Logs in
-    Logs.post(Key(1)).put("a")
-    Logs.post(Key(1)).put("b")
+    Logs.post(Key(1), Log.Call.Put { s: "a" })
+    Logs.post(Key(1), Log.Call.Put { s: "b" })
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Logs = Actors<Key, Log>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:10:8
-    10 │   with actors(log) as Logs in
-       │        ^^^^^^
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:10:23
-    10 │   with actors(log) as Logs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
-       ┌─ test.ren:11:10
-    11 │     Logs.post(Key(1)).put("a")
-       │          ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `post`
-       ┌─ test.ren:12:10
-    12 │     Logs.post(Key(1)).put("b")
-       │          ^^^^
-       help: declare it under `type Logs`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:11:36
+    11 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
+       │                                    ^
     |}]
 
 let%expect_test "[s7 accept] an actor posts to its own family" =
@@ -3896,87 +3996,70 @@ dep Peer =
   pong: fn(from: Key)
 dep Peers = Actors<Key, Peer>
 handler peer(k: Key) for Peer uses Peers, Console =
-  ping(from) => Peers.post(from).pong(k)
+  ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
   pong(from) => print("pong from ".concat(show(from)))
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with actors(peer) as Peers in
-    Peers.post(Key(2)).ping(Key(1))
+    Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:13
-    5 │ dep Peers = Actors<Key, Peer>
-      │             ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
+    error: expected `,` or `)`, found `{`
+      ┌─ test.ren:7:49
+    7 │   ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
+      │                                                 ^
 
-    error: `Peers` is a type, not a dependency
-      ┌─ test.ren:6:36
-    6 │ handler peer(k: Key) for Peer uses Peers, Console =
-      │                                    ^^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
-      ┌─ test.ren:7:23
-    7 │   ping(from) => Peers.post(from).pong(k)
-      │                       ^^^^
-      help: declare it under `type Peers`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:11:8
-    11 │   with actors(peer) as Peers in
-       │        ^^^^^^
-
-    error: `Peers` is a type, not a dependency
-       ┌─ test.ren:11:24
-    11 │   with actors(peer) as Peers in
-       │                        ^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
-       ┌─ test.ren:12:11
-    12 │     Peers.post(Key(2)).ping(Key(1))
-       │           ^^^^
-       help: declare it under `type Peers`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:12:39
+    12 │     Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
+       │                                       ^
     |}]
 
 let%expect_test "[s7 reject] posting an operation that returns a value" =
+  (* `post`'s parameter is a `Doc.Call<()>`: an ordinary type error *)
   until "s7"
     ~says:
       [
-        "error: `text` gives a `Str`, which a post has nobody to give to";
-        "help: use it inside the actor, or call it with `at`: `Docs.at(k) fn() => Doc.text()`";
+        "error: `post` takes a call that gives `()` and can't fail, and `line` gives a `Str`";
+        "help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted";
       ]
     (fun () ->
       check_error
-        (docs
-       ^ {|
-fn main() ! StoreDown uses Store, Docs =
-  try Docs.post(DocId(1)).text()
-|}));
+        {|
+type Key = | Key(n: Int)
+dep Log =
+  put: fn(s: Str)
+  line: fn(at: Int) -> Str
+dep Logs = Actors<Key, Log>
+handler log(k: Key) for Log =
+  var lines: Array<Str> = []
+  put(s) => &lines.push(s)
+  line(at) => lines[at]
+fn main() uses Logs =
+  Logs.post(Key(1), Log.Call.Line { at: 0 })
+|});
   [%expect {|
     (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:11:35
+    11 │   Logs.post(Key(1), Log.Call.Line { at: 0 })
+       │                                   ^
     |}]
 
 let%expect_test "[s7 reject] posting an operation that can fail" =
   until "s7"
     ~says:
       [
-        "error: `edit` can fail with `StoreDown`, which a post has nobody to give to";
-        "help: handle it inside the actor, or call it with `at`: `try Docs.at(k) fn() => try Doc.edit(...)`";
+        "error: `post` takes a call that gives `()` and can't fail, and `edit` can fail with `StoreDown`";
+        "help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted";
       ]
     (fun () ->
       check_error
         (docs
        ^ {|
 fn main() ! StoreDown uses Store, Docs =
-  try Docs.post(DocId(1)).edit("a")
+  try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
 |}));
   [%expect {|
     (until s7)
@@ -3984,6 +4067,11 @@ fn main() ! StoreDown uses Store, Docs =
        ┌─ test.ren:29:31
     29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
        │                               ^
+
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:32:41
+    32 │   try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
+       │                                         ^
     |}]
 
 let%expect_test "[s7 accept] two actors posting to each other past `mailbox:` don't deadlock while an outside poster waits" =
@@ -4001,60 +4089,28 @@ dep Peers = Actors<Key, Peer>
 handler peer(k: Key) for Peer uses Peers =
   ping(left) =>
     let Key(n) = k
-    if left > 0 then Peers.post(Key(3 - n)).ping(left - 1)
+    if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
   noted() => ()
 
 test "siblings never wait; the outside does" =
   with actors(peer, mailbox: 2) as Peers in
     Async.scope fn(s) =>
-      s.spawn fn() => Peers.post(Key(1)).ping(3)
+      s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 3 })
       s.spawn fn() =>
         for i in 0..5
-          Peers.post(Key(2)).noted()
+          Peers.post(Key(2), Peer.Call.Noted)
 |}));
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:17
-    5 │ pub dep Peers = Actors<Key, Peer>
-      │                 ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
+    error: expected `,` or `)`, found `{`
+      ┌─ test.ren:9:60
+    9 │     if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
+      │                                                            ^
 
-    error: `Peers` is a type, not a dependency
-      ┌─ test.ren:6:40
-    6 │ pub handler peer(k: Key) for Peer uses Peers =
-      │                                        ^^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
-      ┌─ test.ren:9:28
-    9 │     if left > 0 then Peers.post(Key(3 - n)).ping(left - 1)
-      │                            ^^^^
-      help: declare it under `type Peers`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:13:8
-    13 │   with actors(peer, mailbox: 2) as Peers in
-       │        ^^^^^^
-
-    error: `Peers` is a type, not a dependency
-       ┌─ test.ren:13:36
-    13 │   with actors(peer, mailbox: 2) as Peers in
-       │                                    ^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
-       ┌─ test.ren:15:29
-    15 │       s.spawn fn() => Peers.post(Key(1)).ping(3)
-       │                             ^^^^
-       help: declare it under `type Peers`
-
-    error: `Peers` has no member named `post`
-       ┌─ test.ren:18:17
-    18 │           Peers.post(Key(2)).noted()
-       │                 ^^^^
-       help: declare it under `type Peers`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:15:57
+    15 │       s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 3 })
+       │                                                         ^
     |}]
 
 let%expect_test "[s7 reject] a chain reaction panics past twice `mailbox:`, with the high-water mark" =
@@ -4069,61 +4125,29 @@ let%expect_test "[s7 reject] a chain reaction panics past twice `mailbox:`, with
         {|
 type Key = | Key(n: Int)
 dep Peer =
-  double: fn()
+  double: fn(depth: Int)
 dep Peers = Actors<Key, Peer>
 handler peer(k: Key) for Peer uses Peers =
-  double() =>
+  double(depth) =>
     let Key(n) = k
-    Peers.post(Key(n + 1)).double()
-    Peers.post(Key(n + 1)).double()
+    Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
+    Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
 
-fn main() uses Console =
+fn main() uses Console, Random =
   with actors(peer, mailbox: 2) as Peers in
-    Peers.post(Key(0)).double()
+    Peers.post(Key(0), Peer.Call.Double { depth: 0 })
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:13
-    4 │ dep Peers = Actors<Key, Peer>
-      │             ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
+    error: expected `,` or `)`, found `{`
+      ┌─ test.ren:8:45
+    8 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
+      │                                             ^
 
-    error: `Peers` is a type, not a dependency
-      ┌─ test.ren:5:36
-    5 │ handler peer(k: Key) for Peer uses Peers =
-      │                                    ^^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
-      ┌─ test.ren:8:11
-    8 │     Peers.post(Key(n + 1)).double()
-      │           ^^^^
-      help: declare it under `type Peers`
-
-    error: `Peers` has no member named `post`
-      ┌─ test.ren:9:11
-    9 │     Peers.post(Key(n + 1)).double()
-      │           ^^^^
-      help: declare it under `type Peers`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(peer, mailbox: 2) as Peers in
-       │        ^^^^^^
-
-    error: `Peers` is a type, not a dependency
-       ┌─ test.ren:12:36
-    12 │   with actors(peer, mailbox: 2) as Peers in
-       │                                    ^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
-       ┌─ test.ren:13:11
-    13 │     Peers.post(Key(0)).double()
-       │           ^^^^
-       help: declare it under `type Peers`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:13:41
+    13 │     Peers.post(Key(0), Peer.Call.Double { depth: 0 })
+       │                                         ^
     |}]
 
 let%expect_test "[s7 accept] a post from inside `at` while the mailbox is full and its target isn't live completes" =
@@ -4139,56 +4163,25 @@ done
         {|
 type Key = | Key(n: Int)
 dep Doc =
-  touch: fn()
+  touch: fn(by: Int)
 dep Docs = Actors<Key, Doc>
 handler doc(k: Key) for Doc =
-  touch() => ()
+  touch(_) => ()
 
-fn main() uses Console, Async =
+fn main() uses Console, Async, Random =
   with actors(doc, max: 1, mailbox: 1) as Docs in
     Async.scope fn(s) =>
-      s.spawn fn() => Docs.post(Key(2)).touch()
+      s.spawn fn() => Docs.post(Key(2), Doc.Call.Touch { by: 1 })
       s.spawn fn() =>
-        Docs.at(Key(1)) fn() => Docs.post(Key(2)).touch()
+        Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
   print("done")
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Docs = Actors<Key, Doc>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-      ┌─ test.ren:9:8
-    9 │   with actors(doc, max: 1, mailbox: 1) as Docs in
-      │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:9:43
-    9 │   with actors(doc, max: 1, mailbox: 1) as Docs in
-      │                                           ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `post`
-       ┌─ test.ren:11:28
-    11 │       s.spawn fn() => Docs.post(Key(2)).touch()
-       │                            ^^^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:13:14
-    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2)).touch()
-       │              ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `post`
-       ┌─ test.ren:13:38
-    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2)).touch()
-       │                                      ^^^^
-       help: declare it under `type Docs`
+    error: expected `,` or `)`, found `{`
+       ┌─ test.ren:11:56
+    11 │       s.spawn fn() => Docs.post(Key(2), Doc.Call.Touch { by: 1 })
+       │                                                        ^
     |}]
 
 let%expect_test "[s7 accept] a session looping an `at` operation that posts to a sibling is held at the edge" =
@@ -4203,11 +4196,11 @@ let%expect_test "[s7 accept] a session looping an `at` operation that posts to a
 type Key = | Key(n: Int)
 dep Doc =
   edit: fn()
-  changed: fn()
+  changed: fn(from: Key)
 dep Docs = Actors<Key, Doc>
 handler doc(k: Key) for Doc uses Docs =
-  edit() => Docs.post(Key(0)).changed()
-  changed() => ()
+  edit() => Docs.post(Key(0), Doc.Call.Changed { from: k })
+  changed(_) => ()
 
 test "the session's posts stay within the bound" =
   with actors(doc, mailbox: 4) as Docs in
@@ -4218,52 +4211,17 @@ test "the session's posts stay within the bound" =
 |}));
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:16
-    5 │ pub dep Docs = Actors<Key, Doc>
-      │                ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:6:38
-    6 │ pub handler doc(k: Key) for Doc uses Docs =
-      │                                      ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `post`
-      ┌─ test.ren:7:18
-    7 │   edit() => Docs.post(Key(0)).changed()
-      │                  ^^^^
-      help: declare it under `type Docs`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:11:8
-    11 │   with actors(doc, mailbox: 4) as Docs in
-       │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-       ┌─ test.ren:11:35
-    11 │   with actors(doc, mailbox: 4) as Docs in
-       │                                   ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:12:10
-    12 │     Docs.at(Key(1)) fn() =>
-       │          ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `high_water`
-       ┌─ test.ren:15:17
-    15 │     assert Docs.high_water() <= 5
-       │                 ^^^^^^^^^^
-       help: declare it under `type Docs`
+    error: expected `,` or `)`, found `{`
+      ┌─ test.ren:7:48
+    7 │   edit() => Docs.post(Key(0), Doc.Call.Changed { from: k })
+      │                                                ^
     |}]
 
 (* ---- s8: the milestone, in miniature (bench/services/docs is the whole one) ---- *)
 
 let%expect_test "[s8 accept] the document server's actors under chaos eviction keep every edit" =
+  (* chaos is the program's: its wiring installs `actors(doc, max: 2,
+     chaos: true)`; there's no `ren test --chaos` *)
   until "s8"
     ~says:[ "✓ every edit is in the store, in one order" ]
     (fun () ->
@@ -4271,21 +4229,18 @@ let%expect_test "[s8 accept] the document server's actors under chaos eviction k
         (pub_all
          (docs
        ^ {|
-import sim
-
-wiring live provides Docs uses Console = mem_store(), actors(doc, max: 2) as Docs
+wiring live provides Docs uses Console, Random = mem_store(), actors(doc, max: 2, chaos: true) as Docs
 
 test "every edit is in the store, in one order" =
-  with sim.scheduler(3, evict: AnyIdle) in
-    with live in
-      Async.scope fn(s) =>
-        for n in 0..3
-          s.spawn fn() =>
-            let _ = attempt Docs.at(DocId(n % 2)) fn() =>
-              let _ = attempt Doc.edit("x")
-              ()
-      let t = attempt Docs.at(DocId(0)) fn() => Doc.text()
-      assert t == Ok("xx")
+  with live in
+    Async.scope fn(s) =>
+      for n in 0..3
+        s.spawn fn() =>
+          let _ = attempt Docs.at(DocId(n % 2)) fn() =>
+            let _ = attempt Doc.edit("x")
+            ()
+    let t = attempt Docs.at(DocId(0)) fn() => Doc.text()
+    assert t == Ok("xx")
 |})));
   [%expect {|
     (until s8)
@@ -4294,21 +4249,16 @@ test "every edit is in the store, in one order" =
     29 │ pub dep Docs = Actors<DocId, Doc> ! StoreDown
        │                                   ^
 
-    error: imports go at the top of the file
-       ┌─ test.ren:31:1
-    31 │ import sim
-       │ ^^^^^^^^^^
-       help: move it above the file's first function or type
-
     error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:33:5
-    33 │ pub wiring live provides Docs uses Console = mem_store(), actors(doc, max: 2) as Docs
+       ┌─ test.ren:31:5
+    31 │ pub wiring live provides Docs uses Console, Random = mem_store(), actors(doc, max: 2, chaos: true) as Docs
        │     ^^^^^^
        help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
 
     error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:41:17
-    41 │             let _ = attempt Docs.at(DocId(n % 2)) fn() =>
-       │                 ^
+       ┌─ test.ren:38:15
+    38 │           let _ = attempt Docs.at(DocId(n % 2)) fn() =>
+       │               ^
        help: add the value this block should produce as its last line
     |}]
+

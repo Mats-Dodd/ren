@@ -9,9 +9,11 @@
 // `+text`, answered with `done` once they're all applied. An `Op`
 // appends.
 //
-// THE CHECKS run its tests under a thousand seeds with chaos eviction,
-// `ren test --seeds 1000 --chaos`: nothing it needs lives only in
-// memory, since the store has every edit before the next one starts.
+// Its tests install the documents with chaos eviction, `actors(doc,
+// chaos: true)`, which evicts what `Random` picks at each call into the
+// family, and THE CHECKS run them under a thousand seeds, `ren test
+// --seeds 1000`: nothing it needs lives only in memory, since the store
+// has every edit before the next one starts.
 
 import sim.{SimNet}
 
@@ -60,8 +62,8 @@ pub handler net_conns() for Conns uses Net =
       _ => ()
 
 // the composition root: the store, the connections, and the documents,
-// at most `max` of them live at once
-pub wiring live(max: Int) provides Docs uses Net, Store = net_conns(), actors(doc, max: max) as Docs
+// at most `max` of them live at once (`actors` uses `Random`, for chaos)
+pub wiring live(max: Int) provides Docs uses Net, Store, Random = net_conns(), actors(doc, max: max) as Docs
 
 // ---- a session ----
 
@@ -100,7 +102,7 @@ pub fn serve(addr: Addr) ! NetError uses Docs, Net, Console, Async =
                 Net.close(conn)
         None => open = false
 
-pub fn main() ! NetError uses Net, Console, Async =
+pub fn main() ! NetError uses Net, Console, Async, Random =
   with mem_store(), live(50_000) in
     try serve(Addr { host: "127.0.0.1", port: 8080 })
 
@@ -146,7 +148,7 @@ test fn one_order(a: Array<Str>, b: Array<Str>) -> Bool =
   a.select(fn(x) => b.includes(x)) == b.select(fn(x) => a.includes(x))
 
 test "every subscriber sees one order of edits" =
-  with sim.net(), mem_store(), seen_conns(), actors(doc, max: 2) as Docs in
+  with sim.net(), mem_store(), seen_conns(), actors(doc, max: 2, chaos: true) as Docs in
     try Async.scope fn(s) =>
       s.spawn fn() => run_server()
       Async.each(["a\n+1\n+2", "a\n+3\n+4", "a\n+5\n+6", "b\n+7"]) fn(m) =>
@@ -159,7 +161,7 @@ test "every subscriber sees one order of edits" =
         assert one_order(Seen.lines(c), Seen.lines(d))
 
 test "the store holds the final text" =
-  with sim.net(), mem_store(), seen_conns(), actors(doc, max: 1) as Docs in
+  with sim.net(), mem_store(), seen_conns(), actors(doc, max: 1, chaos: true) as Docs in
     try Async.scope fn(s) =>
       s.spawn fn() => run_server()
       Async.each(["a\n+1\n+2", "b\n+3", "a\n+4", "c\n+5"]) fn(m) =>

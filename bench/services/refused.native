@@ -1,1 +1,1 @@
-error: `striped` keeps instances, which aren't native yet
+error: `striped` uses the keyed instance family, which isn't native yet

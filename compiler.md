@@ -9558,21 +9558,24 @@ RESULTS.md, "Bytes stage, part two, step 1").
 ## Services stage
 
 Services and concurrency (foundations.md, Staging, item 6; decisions 2,
-7, 10, 11 and 18; language.md §4, §5, §8 and §11; streams.md,
+7, 10, 11, 18 and 20; language.md §4, §5, §8 and §11; streams.md,
 "Concurrency and time"): a composition root named as a wiring,
 workflows as pipes with a `try` on each step that can fail, background
 work that can't outlive its handler, `release` on one call, pull
-arguments, channels as dependencies and `Async.produce`, and the two
-standard-library services that keep many stateful things, `striped`,
-which replaces `sync.keyed`, and `actors`, with `post`. Interpreter
-first, as tasks are: what's sequential (wirings, the pipe, `release`
-with no other task) builds natively and agrees with `ren run`; what
-starts tasks or keeps instances is refused by `ren build`, as 11a
-refuses `Async.scope` and `keyed`. Ten steps, each green on its own, as
-11a's and the data stage's were (briefs/stage-services.md):
+arguments, channels as dependencies and `Async.produce`; then the
+runtime's keyed instance family, a call as a typed value, `D.Call`, and
+the two standard-library services written in plain Ren over them that
+keep many stateful things, `striped`, which replaces `sync.keyed`, and
+`actors`, with `post`. Interpreter first, as tasks are: what's
+sequential (wirings, the pipe, `release` with no other task) builds
+natively and agrees with `ren run`; what starts tasks or keeps
+instances is refused by `ren build`, as 11a refuses `Async.scope` and
+`keyed`. Ten steps, each green on its own, as 11a's and the data
+stage's were (briefs/stage-services.md):
 
 0. **This specification,** its tests (The tests, below), and the
-   inventory of what the stage changes.
+   inventory of what the stage changes; re-specified after decision 20
+   (the progress log).
 1. **The pipe,** `x |> f(a)`, through the whole pipeline, natively too,
    with `|>` and `.` continuing a line in the lexer and tree-sitter's
    scanner; the README's and language.md's end-to-end shapes as
@@ -9588,17 +9591,24 @@ refuses `Async.scope` and `keyed`. Ten steps, each green on its own, as
    call; decision 2's handler-state row narrowed in excl.ml; `sim`
    naming the instances a parked task holds; `sim`'s fair choice among
    an instance's waiters and arrivals; `kill: Tree | Child`, and a
-   default that's a variant with no fields.
+   default that's a variant written bare, with no fields or with
+   defaults for all of them.
 5. **Pull arguments, channels and producers:** `Async.each` and
-   `Async.map` over what `for` takes, `Chan<T>`'s `items()`,
-   `Async.produce` with `Send<T>`, and `Async.map_pull`.
-6. **`striped`,** where `keyed` was, with `by:`, `merge:` and the derived
-   `Merge<D>`; `sync.keyed` removed.
-7. **`actors`,** then **`post`**, with partitions, the LRU, pins,
-   mailboxes, incarnations, `sim`'s chaos eviction and journal version 3.
+   `Async.map` over what `for` takes, `Chan<T>`'s `items()`, an
+   ordinary function in `sync`, `Async.produce` with `Send<T>`, and
+   `Async.map_pull`.
+6. **The family, `D.Call` and `striped`:** the keyed instance family in
+   lib/eval/family.ml, reached through the prelude's `Instances`, whose
+   intrinsics Core Lint checks; `D.Call` for every dependency and the
+   `call(c: D.Call)` clause; `Async.worker()`; then `striped`, plain
+   Ren over the family, with `by: Key(n: 16) | Worker` and `merge:`;
+   `sync.keyed` removed.
+7. **`actors`,** plain Ren over the family, then **`post`**, which takes
+   a `D.Call`, `Docs.post(k, Doc.Call.Edit { op })`; `chaos: true`;
+   journal version 3, a family's names by the one rule.
 8. **The milestone:** examples/docs, language.md §11's document server
    behind a wiring, its lost update found by seeds and its in-memory
-   variant found by chaos eviction.
+   variant found under `actors(doc, chaos: true)`.
 9. **A review** of the whole stage: soundness, the spec, the docs and
    tooling.
 
@@ -9626,31 +9636,34 @@ where it's built; none is argued again here.
 | What's decided 1, wirings (language.md §5) | The grammar; Wirings (step 2); Errors |
 | What's decided 2, the pipe (language.md §8), every link `[try \| attempt] term`, `\|>` ending `try`'s and `attempt`'s reach, the `\|>` and `.` continuation lines | The grammar; The pipe (step 1); Errors |
 | What's decided 3, 11a's follow-ups: decision 7's compile error and `beside`/`background`; `release` and `sim` switching at it; decision 10's deadlock rules; `Proc.run(kill:)` | Background work (step 3); `release`, deadlocks and `Proc.run(kill:)` (step 4) |
-| What's decided 4, from streams.md: pull arguments, channels as dependencies, `Async.produce` | Pull arguments, channels and producers (step 5) |
-| What's decided 5, `striped` | Stripes (step 6) |
-| What's decided 6, `actors` and `post` | Actors (step 7); Journal version 3 |
-| What's decided 7, interpreter first | Native |
-| What's decided 8, decision 2's row narrowed, built in excl.ml with `release` | `release`, deadlocks and `Proc.run(kill:)` (step 4) |
-| What's decided 9, defaults, a variant with no fields among them | The grammar; "Where this stage may differ" (lands in step 4) |
+| What's decided 4, from streams.md: pull arguments, channels as dependencies with `items()` an ordinary function of `Chan<T>` in `sync`, nothing derived; `Async.produce` | Pull arguments, channels and producers (step 5) |
+| What's decided 5, the keyed instance family, a runtime primitive: make, pin, evict, list the live keys, a queue of `D.Call`s per key; decision 18's soundness rules its own; journal names by one rule; its own module beside sched.ml; reached through a prelude dependency, `Instances`, whose intrinsics Core Lint checks | The keyed instance family (step 6); Journal version 3 (step 7) |
+| What's decided 6, `D.Call`: one case per operation, typed by its result and errors; the `call(c: D.Call)` clause; built only as far as `post`, the queue, the journal and `striped`'s merge need (formats.md, "Dependencies as data", the whole design) | `D.Call` (step 6) |
+| What's decided 7, `striped`, plain Ren over the family: `by: Key(n: 16) \| Worker`, `Async.worker()`, keyless broadcast, `merge:` with `Custom(m)` a stateless handler whose `call` clause folds, no `Merge<D>`; a missing `merge:` a panic at the `with`, no Infer rule; `sync.keyed` goes | Stripes (step 6); Errors |
+| What's decided 8, `actors`, plain Ren over the family, the user's API as language.md writes it; `post` spelled `Docs.post(k, Doc.Call.Edit { op })`, decided 2026-10-29 with no trailing-call rule; `chaos: true` evicting what `Random` picks | Actors (step 7); `D.Call` (step 6) |
+| What's decided 9, interpreter first: the family, `striped` and `actors` refused natively | Native |
+| What's decided 10, decision 2's row narrowed, built in excl.ml with `release` | `release`, deadlocks and `Proc.run(kill:)` (step 4) |
+| What's decided 11, defaults: a literal, a variant with no fields, or a variant whose fields all have defaults, written bare (`by: By = Key` is `Key(n: 16)`) | The grammar; "Where this stage may differ" (lands in step 4) |
+| 2026-10-29: decision 20 moved `actors` and `striped` to std over a runtime primitive; What's decided 5 to 8 rewritten; superseded entries give way | this section, re-specified (the progress log's second step 0 line); superseded rows struck below |
 | Sequencing: after the data stage | the data stage is merged (83924d5) before step 0 |
-| By-name arguments: defaults only; `max: Int = 10_000`, `mailbox: Int = 10_000`, `cap: Int = 16`, `n: Int = 16`; no default `merge:` | The grammar; Stripes; Actors; Pull arguments (`cap`) |
-| `striped(h, n: Int = 16, by: Key)`, one function | Stripes (step 6) |
+| By-name arguments: defaults only, a variant allowed as one; std's defaults `max:` 10_000, `mailbox:` 10_000, `cap:` 16, `Key`'s `n` 16; no default `merge:` | The grammar; Stripes; Actors; Pull arguments (`cap`) |
+| `striped(h, by: Key(n: 16) \| Worker, merge:)`, one function (~~`striped(h, n: Int = 16, by: Key)`~~, superseded) | Stripes (step 6) |
 | Stale reads after `release`: found by `sim`'s seeds, no warning | `release` (step 4), and its test "a stale read across `release` is found by a seed" |
-| `Docs.at`'s errors declared on the family; `Full` only where waiting could close a cycle | Actors (step 7), "The family's type" and "No deadlock, statically" |
-| `post` is Erlang's cast | Actors (step 7), "`post`" |
+| `Docs.at`'s errors declared on the family, `Actors<K, D> ! E`; `Full` only where waiting could close a cycle | Actors (step 7), "The family's type"; The keyed instance family, "No deadlock" |
+| `post` is Erlang's cast, as What's decided 8 says; 2026-10-29: spelled `Docs.post(k, Doc.Call.Edit { op })`, `Docs.post(k).edit(op)` not built | Actors (step 7), "`post`"; `D.Call` (step 6) |
 | `Async.produce`'s `items` a block parameter, looped with `for p in try items`; `Async.map_pull` in `produce`'s shape | Pull arguments, channels and producers (step 5) |
 | Pull arguments now: collections, temporary cursors, `&r`, a hand-written block, a channel's `items()` | Pull arguments, channels and producers (step 5) |
 | A trailing block in a pipe only in the last link | The grammar ("A step"); Errors |
-| The journal: made, evicted and posted lines, `docs[DocId(7)]#3`, version 3, recorded journals recorded again | Journal version 3 (step 7) |
+| The journal: the family adds made, evicted and posted lines, `docs[DocId(7)]#3` by the one rule for every runtime instance family; version 3; recorded journals recorded again | Journal version 3 (step 7) |
 | `sim` chooses fairly among an instance's waiters and arrivals, from the tape, in step 4 | `release`, deadlocks and `Proc.run(kill:)` (step 4), "`sim`'s fair choice" |
-| Partitions now, `parts: Int = 4` under every runtime, recorded in the journal | Actors (step 7), the family's `parts`; Journal version 3's header |
+| Partitions now, `parts: Int = 4` under every runtime, recorded in the journal | The keyed instance family (step 6); Actors (step 7); Journal version 3's header |
 | `Lfu` later | Actors (step 7): `Evict = \| Lru` |
-| Native: wirings, the pipe and `release` with no other task build; the rest refused as `keyed` is | Native |
+| Native: wirings, the pipe and `release` with no other task build; `beside`, `background`, `produce`, the family, `striped` and `actors` refused as `keyed` is | Native |
 | Decision 7's run-time half: a panic at the spawn | Background work (step 3) |
 | `Async.background`'s tasks may fail, the first failure cancelling the body | Background work (step 3) |
-| The milestone: a line protocol over `sim.net`, an `Op` that appends, `--seeds 1000` with `evict: AnyIdle` | The tests (bench/services/docs, bench/tasks.t); "Where this stage may differ" |
-| `sim` has two virtual workers for `by: Worker` | Stripes (step 6) |
-| `Merge<D>`'s `Custom(m)` takes a stateless handler of the derived `Merge<D>`; the `fn(a, b) => ...` shorthand is the inline handler | Stripes (step 6) |
+| The milestone: a line protocol over `sim.net`, an `Op` that appends, `--seeds 1000` with `actors(doc, chaos: true)` | The tests (bench/services/docs, bench/tasks.t); "Where this stage may differ" |
+| `sim` has two virtual workers for `by: Worker` | The keyed instance family, "`Async.worker()`"; Stripes (step 6) |
+| `Custom(m)`, m a stateless handler over `D` whose `call(c: D.Call)` clause folds (~~a handler of a derived `Merge<D>`~~, superseded) | Stripes (step 6), "`Custom(m)`" |
 
 ### The tests
 
@@ -9686,11 +9699,11 @@ what an importer sees, testing.md).
 | 1 | to each kind of target; a vertical chain with a `try` on each step; `try` and `attempt` on the head stopping at `\|>`; `orelse` after a chain; a `.` line continuing; a statement after a chain not swallowed; a trailing block in the last step; the end-to-end program's checkout; fourteen refusals (§8's nine, a step's missing `try` inside `attempt (...)`, the "takes second" line or not, `&` on a step, a trailing block on a step that isn't the last, a field of a value as a step) | `pipe` |
 | 2 | flattened where used; an item beside a wiring meets its `Db`; wirings combine and nest, and a test splits one; a description as a parameter; `try with` of a wiring that fails to start; teardown in reverse install order; a plain `with` still exposes everything; a private wiring's `uses` inferred, a `pub` one's written (`types`); a `pub` wiring from another module; twelve refusals (§5's seven, its cycle both through wirings and among the items one flattens, a `pub` wiring's undeclared need, no `provides`, a body that isn't items, `provides` naming what a nested wiring hides) | `wiring`, and `wiring.explain` |
 | 3 | the compile error, and the run time's panic at the spawn through a helper; `Async.beside` cancelling its task before the `finally`; a pool's order (work drains, the background stops, `finally`); a background failure cancelling the body and being its error; `Async.background`, and its first failure; a scope inside the `with`, plainly | `refused` (with step 6) |
-| 4 | `release` with no other task; letting callers in; the arm's copies written back and read again; `try release`; a stale read found by seeds, and the fix holding; two refusals (outside an operation, not a dependency's operation); a loop over a reader in the state while calling another service, accepted; state borrowed across `release`, refused; re-taking an instance, plainly; `until`'s deadlock naming what each parked task holds; the fair choice, found by seeds; a variant default, and one with fields refused; `Proc.run(kill:)` under `sim.proc()` | `release` |
+| 4 | `release` with no other task; letting callers in; the arm's copies written back and read again; `try release`; a stale read found by seeds, and the fix holding; two refusals (outside an operation, not a dependency's operation); a loop over a reader in the state while calling another service, accepted; state borrowed across `release`, refused; re-taking an instance, plainly; `until`'s deadlock naming what each parked task holds; the fair choice, found by seeds; a variant default with no fields, one whose fields all have defaults, and one written with arguments refused; `Proc.run(kill:)` under `sim.proc()` | `release` |
 | 5 | `Async.map` over a temporary cursor, in order; `Async.each` over `&r`, which goes on after; over a hand-written block; `&r` while the block touches `r`, refused; pulled only when a slot frees; `Events.items()` in a `for` and as a pull argument, and refused elsewhere; `Async.produce`; a `break` cancelling the producer; `cap` and a slow consumer under seeds; a producer's failure ending the stream; `Async.map_pull` | none |
-| 6 | `by: Key` with `merge: Sum`; `by: Worker` under seeds; the split law failing under some seed; a keyless `()` broadcast; `Concat` and `Custom(m)`; five refusals (no `merge:`, `by: Worker` with `n`, `Custom` of a handler with state, `Sum` of what isn't a number, not a description); `sync.keyed` gone | `refused` (with step 3) |
-| 7 | `at` on demand; setup's errors and the retry; LRU eviction past `max:`, the `finally` on the caller's task, the counts; an evicted actor made again from the store; a pinned actor not evicted, the maker waiting; `evict`, `evict_idle` and `each`; teardown in reverse creation order; two operations racing and one not; chaos eviction finding text kept only in memory; the journal's lives, recorded and replayed; `Full`; five refusals (`at` in `at`, an actor `at`-ing its family, a handler of more than its key, setup failing outside the family's `!`, a `finally` that can fail); `post`: arguments evaluated when posted, order under seeds, setup's errors, teardown draining, posting to its own family, two refusals (a value, an error), siblings never waiting past `mailbox:`, a chain reaction panicking past twice it, research/actors-post/'s first two counterexamples | none |
-| 8 | the document server's actors under chaos, in miniature | `docs`, `lost_update`, `memory` (bench/tasks.t) |
+| 6 | `by: Key(n: 4)` with `merge: Sum`; `by: Worker` under seeds; the split law failing under some seed; a keyless `()` broadcast; `Concat` and `Custom(m)`, m's `call` clause folding; three refusals (`by: Worker` with a count, an ADT's error; `Custom` of a handler with state, the data stage's method rule; not a description) and two panics at the `with` (no `merge:`, `Sum` of what isn't a number); `sync.keyed` gone | `refused` (with step 3) |
+| 7 | `at` on demand; setup's errors and the retry; LRU eviction past `max:`, the `finally` on the caller's task, the counts; an evicted actor made again from the store; a pinned actor not evicted, the maker waiting; `evict`, `evict_idle` and `each`; teardown in reverse creation order; two operations racing and one not; `actors(doc, chaos: true)` finding text kept only in memory; the journal's lives, recorded and replayed; `Full`; five refusals (`at` in `at`, an actor `at`-ing its family, a handler of more than its key, setup failing outside the family's `!`, a `finally` that can fail), each the family's or an ordinary type rule; `post`: arguments evaluated when posted, order under seeds, setup's errors, teardown draining, posting to its own family, two type errors on `post`'s `D.Call<()>` (a value, an error), a call value built, kept and posted, siblings never waiting past `mailbox:`, a chain reaction panicking past twice it, research/actors-post/'s first two counterexamples | none |
+| 8 | the document server's actors under `actors(doc, chaos: true)`, in miniature | `docs`, `lost_update`, `memory` (bench/tasks.t) |
 
 **bench/services/ holds the programs** with native relevance, each with
 a `.expected` as bench/data's (what `ren run` prints, `exit N`, the
@@ -9704,16 +9717,19 @@ one says `as specified` there and adds it to the `same`, `release` and
 
 **bench/services/docs, lost_update and memory are the milestone**
 (step 8), run by bench/tasks.t: `docs` is the document server, whose
-`expected` is what `ren test` prints there; its `services_milestone`
-holds once `ren test --chaos --seeds 1000` passes in docs, `ren test
---sim --seeds 200` fails lost_update's "two sessions' edits both land"
-with a seed that `--seed` fails again with the same `left:` and
-`right:`, fixed.ren's one operation passes a thousand seeds, and
-memory's text kept only in memory passes a thousand seeds without
-chaos but fails under `--chaos` by a seed that fails again. Step 8
-moves `docs` to examples/docs (`git mv`), where THE CHECKS run its
-tests, as 11a's programs moved; `lost_update` and `memory` stay, since
-their tests are meant to fail.
+`expected` is what `ren test` prints there; its tests install
+`actors(doc, ..., chaos: true)`, so chaos is in the program, not a flag
+(there's no `ren test --chaos`). Its `services_milestone` holds once
+`ren test --seeds 1000` passes in docs, `ren test --sim --seeds 200`
+fails lost_update's "two sessions' edits both land" with a seed that
+`--seed` fails again with the same `left:` and `right:`, fixed.ren's one
+operation passes a thousand seeds, and memory's text kept only in memory
+passes a thousand seeds in its calm test ("without chaos, every edit is
+still there") and fails its chaos test ("under chaos, every edit is
+still there") by a seed that `--seed` fails again. Step 8 moves `docs`
+to examples/docs (`git mv`), where THE CHECKS run its tests, as 11a's
+programs moved; `lost_update` and `memory` stay, since their tests are
+meant to fail.
 
 **Existing tests that change,** each by the step named:
 
@@ -9740,7 +9756,11 @@ their tests are meant to fail.
 - step 5: none; an `Array` is a pull argument by snapshot, as `for`
   takes it, so every `Async.map` and `Async.each` reads the same.
 - step 6: test_tasks.ml's five `keyed` tests (s8), moved to
-  test_services.ml as `striped` tests.
+  test_services.ml as `striped` tests, `keyed(4, h)` becoming
+  `striped(h, by: Key(n: 4))` and its `merge:` where a keyless operation
+  gives a value (11a's "gives what the last gave" isn't a fold the menu
+  has: those tests read each stripe's value with a keyed operation
+  instead, or `Custom` of a handler that keeps the right one).
 - step 7: examples/just/tests/build.journal, recorded again as version
   3; bench/11a/tasks/journal/v1.expected, whose help names version 3
   (a version 1 journal is still refused, as is a version 2); every
@@ -9774,7 +9794,14 @@ outside briefs/ and research/), and the compiler's own code.
 
 foundations.md and language.md name `keyed` only as what `striped`
 replaces; they're design and stay. compiler.md's 11a sections are its
-history and stay.
+history and stay. What replaces the 36 is smaller in the checker and
+larger in the runtime (decision 20): `VKeyed`'s instances move to
+lib/eval/family.ml, reached through `Instances`; `keyed_described` and
+`keyed_not_described` go with nothing in their place, since `striped`'s
+checks are ordinary type rules or its own panics at the `with`. No
+site names `Merge<D>`, `ren test --chaos` or `sim.scheduler`'s
+`evict:`, which the first draft of this section specified and decision
+20 removed: nothing to undo outside this section and its tests.
 
 **The rule 11a built for background work** (step 3): a task spawned
 into a scope that began before a `with` whose instance it can reach is
@@ -9869,7 +9896,25 @@ unary    := ... | ["try" | "attempt"] "release" postfix
                                               (`release` a word only before
                                                 a name on its line)
 param    := ... ["=" (literal | ctor_ref)]    (a default: a literal, or a
-                                                variant with no fields)
+                                                variant written bare)
+field    := IDENT ":" type ["=" literal]      (a variant's field may have a
+                                                default, as a parameter
+                                                does: `Key(n: Int = 16)`)
+dep      := ["pub"] "dep" tyname ["<" tparam, ... ">"] [errors] "=" ...
+                                              (a dependency may carry an
+                                                error row, `Actors<K, D> ! E`)
+dep_alias := ["pub"] "dep" tyname "=" dep_ref [errors]
+                                              (`dep Docs = Actors<DocId,
+                                                Doc> ! StoreDown`)
+type     := ... | tyname "." "Call" ["<" type [errors] ">"]
+                                              (`Doc.Call<()>`, `D.Call<R ! E>`:
+                                                What's decided 6; a case is
+                                                built as `Type.Case { .. }`
+                                                is, the path one part
+                                                longer: `Doc.Call.Edit
+                                                { op }`, new in step 6)
+arm      := ... | "call" "(" param {"," param} ")" "=>" body
+                                              (the `call(c: D.Call)` clause)
 ```
 
 **`|>`** is the token `PIPEGT`, lexed before `|` (lexer.ml's
@@ -9950,23 +9995,34 @@ by `(`, `:`, `=` or anything else, `release` is the name it is today: a
 call, an arm `release() =>`, an operation `release: fn()`. Its operand
 is `parse_postfix`, one call.
 
-**A default that's a variant with no fields** (What's decided 9):
+**A default that's a variant written bare** (What's decided 11): a
+variant with no fields, or one whose fields all have defaults.
 `parse_param`'s `pdefault` accepts a `ctor_ref`, `Tree` or `Kill.Tree`,
 not followed by `(` or `{`; one followed by them is "a parameter's
-default is a literal, or a variant with no fields". Ast's `pdefault`
+default is a literal, or a variant written bare". Ast's `pdefault`
 becomes `(default * Loc.t * int) option` with `default = Lit of literal
 | Ctor of 't ctor_ref`; Resolve resolves the constructor as it does in
 an expression; Iface's `defaults` keep it as the constructor's path;
-Infer checks it against the parameter's type as an argument would be
-(a constructor of that sum, with no fields); Lower fills a call's
-missing argument with the constructor, as it fills a literal. An
-operation's parameter may have a default too, written in its
-dependency's declaration (`run: fn(cmd: Str, args: Array<Str>, kill:
-Kill = Tree) -> Int ! ProcError`, `parse_fn_ty_param`), since
-`Proc.run` is an operation: a `Dep_call` fills it as a function call
-does (`Infer_env.defaults_of`, keyed by the operation's path), and an
-arm takes the parameter as any other. Step 4 builds both, as the first
-step whose surface needs them ("Where this stage may differ").
+Infer checks it against the parameter's type as an argument would be (a
+constructor of that sum, every field of which has a default); Lower
+fills a call's missing argument with the constructor applied to its
+fields' defaults, as it fills a literal. **A variant's field may have a
+default** (`parse_variant`'s fields go through the parameter's default
+rule, literals only), so `pub type By = | Key(n: Int = 16) | Worker`
+declares `Key`, and `Key` written bare, as a default or as any value,
+is `Key(n: 16)` (a constructor is called as a function is, and a field
+with a default is given by name or left out, language.md §2's one
+by-name form); `Key(n: 64)` gives it; `Worker(n: 4)` stays today's "`Worker`
+has 0 fields but was given 1", which is how `by: Worker` with a count
+can't be written. An operation's parameter may have a default too,
+written in its dependency's declaration (`run: fn(cmd: Str, args:
+Array<Str>, kill: Kill = Tree) -> Int ! ProcError`,
+`parse_fn_ty_param`), since `Proc.run` is an operation: a `Dep_call`
+fills it as a function call does (`Infer_env.defaults_of`, keyed by the
+operation's path), and an arm takes the parameter as any other. Step 4
+builds all three, as the first step whose surface needs them ("Where
+this stage may differ"); step 6's `By` is the first field default std
+declares.
 
 ### The AST
 
@@ -9987,7 +10043,13 @@ ast.ml gains, each a constructor the compiler then points at every
 - `with_item` gains `from : 't wired option`, `None` as parsed, and
   Resolve's record of the wiring an item was flattened from ("Wirings
   (step 2)", below).
-- parameters: `pdefault`'s `Ctor`, above.
+- parameters: `pdefault`'s `Ctor`, above; a variant's fields gain the
+  same `pdefault`.
+- dependencies: `Dep_alias of 't dep_ref * 't errors option`, and a
+  `dep`'s header its own `errors option` (step 7); a type `Call_ty of
+  't dep_ref * ty option * 't errors option`, `D.Call<R ! E>` (step 6);
+  a handler's arm `Call_arm of param list * expr`, the `call(c:
+  D.Call)` clause (step 6), beside `over any`'s `call =>`, which stays.
 
 The tree-sitter grammar gains `pipe_expression` (with `pipe_step`
 children, each with an optional `try`/`attempt` field), `release_
@@ -10254,7 +10316,7 @@ a task taking an instance it already holds panics rather than hangs";
 waiters and the arrivals from its tape". Decision 2's table's last row
 is narrowed to "Inside a handler arm, `Async.until`, a `release` call,
 or a block-parameter call: write of all the handler's state, that call"
-(What's decided 8).
+(What's decided 10).
 
 **`release`** is written in a handler's arm (lexically, blocks
 included, as `Async.until` is: Excl's `in_op`) and nowhere else, "`release`
@@ -10367,16 +10429,36 @@ can fail, `for p in try items`) pass out of the call as its block's do.
 
 **Channels as dependencies.** `sync.Chan<T>` stays a dependency; a
 program names one, `dep Events = Chan<Event>`, and installs it, `with
-sync.channel(16) as Events`. **`Events.items()`** is derived: Infer
-types `D.items()`, for a `D` that is `Chan<T>` or an alias of one, as
-the block `fn() -> Option<T> uses D` whose step is `D.recv()`, and Lower
-writes that block where it's called. Since a block can't be returned or
-kept (decision 1, rule D), `items()` is written only where it's pulled,
-as a `for`'s subject or a pull argument; anywhere else it's "`Events.
-items()` is pulled where it's written: in a `for`, or as a pull
-argument" with "help: loop over it: `for e in Events.items()`". Typed
-by the dependency's name, two channels of one element type don't mix
-(streams.md).
+sync.channel(16) as Events`. **`Events.items()` is an ordinary function
+of `Chan<T>` in `sync`,** as `Fs.read_str` is a function of `Fs`
+(What's decided 4: nothing is derived for it). `Chan<T>` gains, in
+std_lib.ml's source:
+
+```ren
+pub dep Chan<T> =
+  ...
+  // the items received, until the channel is closed and empty: a cursor
+  // whose `next` is `recv()`, pulled where it's written
+  pub fn items() -> Items<T> uses Chan<T> = Items {}
+
+// what `items()` gives: a cursor over the channel it's pulled from
+pub type Items<T> = {}
+  pub fn next(inout self) -> Option<T> uses Chan<T> = Chan.recv()
+```
+
+Called through an alias, `Events.items()`, a member function's `uses
+Chan<T>` is the alias it's called through, as every dependency's member
+function's is (`Fs.read_str`'s `uses Fs`), so the cursor's `next`, which
+runs where it's pulled (a `for`, or a pull argument, both on the
+caller's task and inside its `uses`), receives from `Events`, and two
+channels of one element type don't mix where each is named (streams.md).
+A temporary cursor is a pull argument as itself (above), so `Async.each(
+Events.items())` needs nothing more. What step 5 checks: that a member
+function of a generic dependency called through an alias resolves its
+`uses` to the alias, which `Fs` (not generic, never aliased) never
+tested; if it doesn't, `items()` is written `Events.items()` only where
+the alias's type names it, and the step says so ("Where this stage may
+differ").
 
 **`Async.produce`** (decided after the draft: its `items` is a block
 parameter, `fn() -> Option<T>`, looped with `for p in try items`):
@@ -10415,293 +10497,568 @@ argument, `f` concurrent, `results` the pull block of `f`'s results in
 None of it is native: to_mem refuses `produce` and `map_pull` with
 `tasks_not_native`, and `each` and `map` as today.
 
-### Stripes (step 6)
+### The keyed instance family (step 6)
 
-Decision 18 and language.md §11, "Stripes" and "Policies are data":
-`striped(h, n: Int = 16, by: Key)` keeps n instances; an operation whose
-first parameter has a key goes to one stripe (`by: Key`); `by: Worker`
-gives the caller's worker's stripe and takes no `n` (a compile error
-with `n` given); a keyless operation runs on every stripe, one that
-returns a value folded with `merge:`, left to right in stripe order,
-with no default `merge:`; not an atomic snapshot; the split law, with at
-least two virtual workers under `sim`, routing from the tape; it
-replaces `sync.keyed`.
+What's decided 5; foundations.md decision 18, "The keyed instance
+family: a runtime primitive", and decision 20's closed list, which names
+it among the runtime's privileged handlers. A program never holds an
+instance (the bet), so a library that keeps many can't keep them
+itself: the runtime keeps them for it, as it keeps tasks. The family
+does five things and owns decision 18's soundness rules; it decides
+nothing a library decides (which instance to evict, when, how many to
+keep, how to route), so `actors` and `striped` are two libraries over
+it and a third is written the same way (step 7's test, a family of a
+fixed key set).
 
-**Declared in the prelude** (language.md writes them bare,
-`striped(counter(), by: Worker, merge: Sum)`), as Ren over an intrinsic,
-as `keyed` was in `sync`:
+**Ren reaches it through `Instances`,** a runtime dependency in the
+prelude, as it reaches `Fs` (handlers.md, "How it runs"): its real
+implementation, `real_instances()`, is the only caller of the
+`family_*` intrinsics, and Core Lint checks that as it checks
+`fs_read`'s (prelude.ml gains a list beside `reaches`, `runtime_of`,
+mapping each `family_*` intrinsic to `("Instances", op)`, which Core
+Lint's "only the dependency's `real` calls it" covers; `reaches` stays
+the world's, since the journal doesn't record these as calls: it has
+its own lines for them, Journal version 3). The runtime installs
+`real_instances()` around `main` and each test, as the journal's
+handlers are, and **a `uses` never names it**: it's ambient, like the
+journal, so keeping instances adds nothing to a library's callers'
+`uses` (what a library needs besides, as `actors`' `Random`, is named as
+any need is). Only privileged code is ambient
+(decision 20's closed list); a test can't swap it, as it can't swap the
+journal.
 
 ```ren
-pub type By = | Key | Worker
-pub type Folding<D> = | Unmerged | Sum | Max | Min | Concat | Custom(m: Merge<D>)
+// the runtime's keyed instance family (foundations.md, decision 18):
+// instances of one handler, by key, made, pinned, evicted and queued for
+// by the runtime, under its rules. Which to evict, when, how many to keep
+// and how to route are the library's that opens one
+pub dep Instances =
+  // a family of `h`'s instances, one per key, in `parts` partitions of at
+  // most `cap` live instances each. Calls from outside it wait while its
+  // queued calls are over `mailbox`; a sibling's post past twice it panics
+  open: fn<K has hash, D ! E>(h: fn(k: K) -> D ! E, parts: Int, cap: Int, mailbox: Int) -> Family<K, D ! E>
+  // runs `body` with k's instance installed as `D`, pinned: made first if
+  // it isn't live (its setup's errors are `E`), after evicting the key
+  // `victim` picks from k's partition's evictable keys, least recently
+  // released first, when the partition is full; waiting while `victim`
+  // gives `None`, unless waiting could close a cycle (No deadlock, below)
+  pin: fn<K, D ! E, T>(f: Family<K, D ! E>, k: K, victim: fn(lru: Array<K>) -> Option<K>, body: fn() -> T uses D) -> T ! E
+  // puts `c` in k's queue and returns, making k's instance as `pin` does
+  // but never waiting for a slot; a delivery runs it, as one operation,
+  // on a task of the family's
+  post: fn<K, D ! E>(f: Family<K, D ! E>, k: K, c: D.Call<()>, victim: fn(lru: Array<K>) -> Option<K>) ! E
+  // runs `body` with k's instance pinned if it's live, without making it
+  // or counting as use; `false` if it isn't live
+  visit: fn<K, D ! E>(f: Family<K, D ! E>, k: K, body: fn() uses D) -> Bool
+  // evicts k's instance now, running its `finally` on this task, if it's
+  // live and evictable; whether it did
+  evict: fn<K, D ! E>(f: Family<K, D ! E>, k: K) -> Bool
+  // the live keys, in creation order
+  keys: fn<K, D ! E>(f: Family<K, D ! E>) -> Array<K>
+  // the evictable keys, least recently released first, across
+  // partitions; with `idle`, only those released at least that long
+  // ago, by the scheduler's clock (virtual under `sim`)
+  evictable: fn<K, D ! E>(f: Family<K, D ! E>, idle: Duration = Duration.zero) -> Array<K>
+  // live, made, evicted, and the most calls queued at once
+  counts: fn<K, D ! E>(f: Family<K, D ! E>) -> Counts
+  // the family's end: delivers what's queued (deliveries may post more),
+  // then runs the live instances' `finally`s, the last made's first
+  close: fn<K, D ! E>(f: Family<K, D ! E>)
 
-// `n` instances of the handler `h` describes, 1 or more ...
-pub fn striped<D>(h: D, n: Int = 16, by: By = Key, merge: Folding<D> = Unmerged) -> D =
-  stripes(h, n, by, merge)
+pub type Counts = { live: Int, made: Int, evicted: Int, high_water: Int }
+
+// a family `Instances.open` made: data, naming it, kept in the state of
+// the handler that opened it, never an instance
+pub type Family<K, D ! E> = builtin
 ```
 
-`merge:` is given by name and so has a default (decision 9's rule:
-given by name means defaulted), `Unmerged`, which is "no `merge:`":
-Infer refuses a `striped` whose `merge:` is `Unmerged`, left out or
-written, over a dependency with a keyless operation that returns a
-value: "`total` runs on every stripe and gives an `Int`, so `striped`
-needs `merge:`" with "help: say how to fold them: `merge: Sum`, `Max`,
-`Min`, `Concat` or `Custom(m)`". Infer checks `striped`'s call as it
-checked `keyed`'s (`keyed_described` becomes `striped_described`): `h`
-a description ("`striped` takes a handler's description, and `16` is
-an `Int`"); `n` given with `by: Worker`, which it sees from the
-arguments as written (a constructor written there), "`by: Worker` gives
-each worker a stripe, so it takes no `n`" with "help: remove `n: 4`";
-`merge:` given as a constructor written at the call, since what it
-folds is checked against each keyless operation's result: `Sum` on
-`Int` or `Float`, `Max` and `Min` on a type with order, `Concat` on an
-`Array`, else "`merge: Sum` adds what `all` gives, and an `Array<Str>`
-isn't a number".
+- **`Family<K, D ! E>` is a handle, not an instance:** a number naming
+  a family in the runtime, so keeping it in a handler's state keeps no
+  instance (the bet holds). A library opens one in its setup and closes
+  it in its `finally`; a call on a closed family panics, "this family
+  ended with the `with` that opened it", which is how a handle that
+  escaped (returned from an operation) is caught: sound, since nothing
+  is reached through it once the runtime has dropped the family.
+- **`h` is the family's maker,** a block that makes the instance for a
+  key (the handler's name as a function: `doc` is `fn(id: DocId) -> Doc
+  ! E`, its errors its setup's). The runtime keeps it for the family's
+  life, with the evidence captured at `open`, which is inside the `with`
+  that installs the opening handler, so the instances' needs are met by
+  that `with` set. Infer treats a parameter passed straight on to a
+  maker as a maker too (`actors`' `h`), and checks, where a handler's
+  name is given to one, three things any library over the family gets:
+  its `finally` can't fail ("`doc` is kept by a family, so its
+  `finally` can't fail"); it may name, in its `uses`, the dependency the
+  family's opener is installed as, which the `with` set's cycle rule
+  allows for exactly this need (a post holds nothing); and its arms
+  don't pin that family (below).
+- **The soundness rules are the primitive's** (decision 18, "The
+  soundness rules are the primitive's"; research/actors-post/): a post
+  makes its instance; queued calls count as waiting, so an instance with
+  mail is never evicted and a delivery never runs setup; a post's making
+  may go past `cap` when nothing is evictable, rather than wait; every
+  call from outside the family is metered at its edge, `pin` and `post`
+  waiting while the family's mail is over `mailbox`, and a sibling's
+  post (from an instance's operation, or a delivery, of the same family)
+  never waits; past twice `mailbox` a sibling's post panics, with the
+  high-water mark; teardown drains, then runs the `finally`s in reverse
+  creation order; partitions each with their own map and cap.
+- **No deadlock** (decision 18, decision 10's inner-to-outer rule):
+  checks on `pin`, as decision 7's are on `Async`'s spawn. Statically,
+  Infer marks each operation whose arm reaches `Instances.pin` (in its
+  body or through what it calls, Iface's `pins` per operation, as
+  `calls` is kept), and refuses such an operation called inside a block
+  pinned by the same family ("`Docs.at` inside a block of `Docs.at`
+  could wait for a slot its own block holds") or in an arm of a handler
+  that family's maker makes ("`doc` is kept by `Docs`'s family, so it
+  can't call `Docs.at`, which pins one of its siblings"); at run time,
+  `pin` panics with the same headline where a helper hid it (a task
+  that already pins one of the family's instances, or is one of its
+  deliveries), and a task that pins an instance of family A and would
+  wait for a slot of a family not installed outside A fails with `Full`
+  instead. `Full` is in no signature: Infer adds it to the errors of a
+  pinning operation's call only where that call is lexically inside
+  another family's pinned block, where the checker sees the cycle
+  (decided after the draft), and marks the call so; the family fails
+  such a call with `Full`, and where an unmarked call (a helper's) would
+  wait so, it panics, "a task pinning `Outers` would wait for a slot of
+  `Inners`, installed inside it": sound, since no error reaches a caller
+  that didn't declare it, and the panic is where the deadlock would be.
+- **The LRU is the family's:** an order of release it exposes, not a
+  policy. Which instance became evictable last is something only the
+  runtime sees (a delivery's operation ending, an `at` block's pin
+  released by another task), so Ren over it can't keep the order cheaply,
+  and the brief's risk allows it: `pin`'s and `post`'s `victim` block and
+  `evictable()` give it, least recently released first, and the library
+  picks (`actors`' `Lru` takes the first; `chaos` what `Random` picks;
+  `evict_idle(d)` those `evictable(idle: d)` gives).
+  Nothing in the family knows `Lru`, `max:` or chaos.
+- **`Async.worker() -> Int`** is a new scheduler operation any library
+  can call, the worker the calling task runs on: `0` under `single`;
+  under `sim`, `0` or `1`, two virtual workers, each task's drawn from
+  the tape when it's spawned (decided after the draft), so routing by
+  worker is from the tape. It's `Async`'s (the scheduler's), not the
+  family's.
 
-**`Merge<D>` is derived** (decided after the draft): for a dependency
-`D`, `Merge<D>` is a dependency with one operation per keyless
-operation of `D` that returns a value, of the same name, `fn(a: R, b:
-R) -> R`. It's built in, as `Actors` is: Resolve resolves `Merge<D>`
-to `Ty.dep_label` of a derived path (`Path.member (Path.prelude
-"Merge") D's path`), and Infer's `dep_fields` makes its operations from
-`D`'s when asked. `Custom(m)` takes a description of a handler for it,
-checked stateless as the data stage's step 6 checks a description
-called as a method (`Stateless.check`): "`Custom` takes a stateless
-handler of `Merge<Hits>`". Decision 18's `fn(a, b) => ...` shorthand is
-the inline handler a one-operation dependency already has.
-
-**The interpreter** keeps 11a's representation, renamed: `VKeyed (n,
-h)` becomes `VStriped { n; by; merge; h }`, and `VKeys` stays the
-installed form, `n` instances each with its own number and lock. A
-`Dep_call` with parameters picks a stripe by `Walk.fixed_hash` of the
-first argument's key (its type's `key` member, or the value), as
-`keyed` did, under `by: Key`; under `by: Worker` by the caller's worker:
-`single` has one worker, so one stripe (decision 18's table: "one
-stripe: the merge is the identity"), and `sim` has two virtual workers,
-each task's worker drawn from the tape when it's spawned (decided
-after the draft), so `striped(by: Worker)` keeps two stripes under
-`sim` whatever `n`. A keyless operation runs on each stripe in turn,
-in stripe order, and folds the results left to right with the merge
-(`Custom`'s by calling `m`'s operation of the same name), or gives `()`.
-Each stripe is an instance as any other, so a call holds one stripe's
-lock at a time, and the fold is not a snapshot.
-
-`striped` isn't native: to_mem refuses it, "`striped` keeps instances,
-which aren't native yet" with "help: run it with `ren run`"
-(bench/services/refused.native), as `keyed` was refused (decided after
-the draft). `sync.keyed`, `Sync_keyed`, `VKeyed` and their sites go
-(The inventory), and `sync` has no `keyed`: Resolve's "`sync` has no
-`keyed`" is the ordinary missing member's.
-
-### Actors (step 7)
-
-Decision 18 and language.md §11, "Actors are a service"; What's decided
-6, and decided after the draft: `Docs.at`'s errors declared on the
-family, `Actors<K, D> ! E`, with `Full` in `at`'s errors only where the
-checker sees waiting could close a cycle; `post` is Erlang's cast;
-partitions now, `parts: Int = 4`, the same under every runtime;
-`Lfu` later; the journal's version 3.
-
-**The family's type.** `Actors<K, D>` is a builtin dependency in the
-prelude (`pub dep Actors<K, D> = builtin`, as `Array` is a builtin
-type), and a dependency alias may carry an error row, `dep Docs =
-Actors<DocId, Doc> ! StoreDown` (the parser's `Dep_alias` takes
-`[errors]` after the `dep_ref`; ast.ml's `Dep_alias of 't dep_ref * 't
-errors option`; only an alias of `Actors` may have one, else "only a
-family of actors declares errors on its dependency"). Its members,
-typed by Infer from the alias (K, D and E):
-
-| member | type | what |
-|---|---|---|
-| `at(k: K) fn() => body` | `fn<T>(k: K, body: fn() -> T uses D) -> T ! E` | installs k's actor as `D` for the block, pinned; makes it if it isn't live; setup's errors are `E`'s; `Full` added where the checker sees waiting could close a cycle |
-| `post(k: K).op(args)` | `-> () ! E` | puts one operation of `D` in k's mailbox; makes the actor as `at` does |
-| `evict(k: K)` | `fn(k: K)` | evicts k's actor if it's live and evictable, now |
-| `evict_idle(d: Duration)` | `fn(d: Duration)` | evicts every evictable actor released longer than `d` ago |
-| `each fn() => body` | `fn(body: fn() uses D)` | each live actor, in creation order, pinned in turn; doesn't make any, doesn't count as use |
-| `count()`, `made()`, `evicted()`, `high_water()` | `fn() -> Int` | live actors; made and evicted so far; the most mail queued at once |
-
-`at` and `post` are written as calls of the dependency's members, so
-they're dependency calls for the checker's rows (`uses Docs`). `at`'s
-block is a block passed to a member, transparent as `Async.scope`'s
-is, with `D` provided (decision 5). `post(k)` is only ever followed by
-`.op(args)`: Infer types `Docs.post(k).edit(op)` as one call, the
-operation's arguments checked against `edit`'s parameters.
-
-**The handler and `actors`.** `actors(h, max: Int = 10_000, evict:
-Evict = Lru, mailbox: Int = 10_000, parts: Int = 4)` in the prelude,
-`pub type Evict = | Lru` (`Lfu` later), returns an implementation of
-`Actors<K, D>` installed `as Docs`. `h` is a handler's name, a
-function of one parameter, the key, giving an implementation of `D`:
-Infer checks it has exactly one parameter, of type `K` ("`actors` makes
-each actor from its key, so `doc` takes one parameter, a `DocId`"),
-that it implements `D`, and that its setup (its state's lines, which
-`at` runs) fails with no more than `E` ("making a `doc` can fail with
-`StoreDown`, which `Docs` doesn't declare" with "help: declare it on the
-family: `dep Docs = Actors<DocId, Doc> ! StoreDown`"), as any handler
-fits its dependency. Its other dependencies are the `actors` item's
-needs, met by the `with` set like any item's: an actor's `with` is
-deferred to `at`, so its needs are the family's. **`finally` can't
-fail:** an actor handler's `finally` with any error in its row is "an
-actor's `finally` can't fail" with "help: save in the operations,
-write-through, or flush before the family ends: `Docs.each(fn() => try
-Doc.flush())`".
-
-**No deadlock, statically.** `Docs.at` inside a block of `Docs.at`
-(lexically, blocks included, or through a function the block calls
-that `uses Docs` and calls `at`: Infer's `calls` of the block) is "`Docs.
-at` inside a block of `Docs.at` could wait for a slot its own block
-holds" with "help: finish with the first actor, then `at` the second;
-or send it a message: `Docs.post(k).op(...)`". **An actor names its own
-family in its handler's `uses` and may only `post` to it:** an `at` of
-the family in an arm of `h` is "`doc` is an actor of `Docs`, so it can
-only `post` to it" with "help: send it a message instead:
-`Docs.post(k).edit(...)`". The `with` set's cycle rule makes an
-exception for exactly this: the `actors` item may need what it
-installs, `Docs`, through `h`'s `uses`, since a post holds nothing. A
-task that pins an actor of family A (inside `A.at`) and calls `B.at`
-for B installed inside or beside A gets `Full` when B has no free slot,
-instead of waiting; Infer adds `Full` to that `at`'s errors (its
-evidence says which families are pinned around it: the `at` blocks it's
-lexically in, and, for a function, none, so a helper's `at` never adds
-`Full`, and the run time's rule covers it: a pinning task that would
-wait for a slot of a family not outside the ones it pins fails with
-`Full`).
-
-**`post`** (What's decided 6, all of it, research/actors-post/'s fixed
-rules): only an operation that returns `()` and can't fail can be
-posted, "`text` gives a `Str`, which a post has nobody to give to" and
-"`edit` can fail with `StoreDown`, which a post has nobody to give to",
-each with a help to handle it inside the actor or use `at`; the
-arguments are evaluated when posted and kept as data, a value of the
-enum of `D`'s operations the compiler writes (language.md §6, as
-`call.args` is made for `over any`), so a `var` changed after doesn't
-change the message; a post makes its actor as `at` does, so its only
-errors are setup's, `try Docs.post(k).op(args)`; a delivery never runs
-setup; queued mail counts as waiting for the actor, so an actor with
-mail is never evicted; an actor made for a post may go past `max:` when
-none is evictable, instead of waiting; posts from one task to one actor
-run in order, each as one operation, on a task the family's `with` owns
-(one delivery task per key with mail, research/actors-post/'s model);
-the mailbox belongs to the key, so order survives eviction. **The edge
-meters every call from outside:** a post, and an operation called
-through `at` before it takes the actor, wait while the family's mail is
-over `mailbox:`; a sibling's post never waits; past twice `mailbox:` a
-sibling's post panics, "`Peers` has 5 posts queued, past twice its
-`mailbox:` of 2", with the high-water mark. Teardown drains: queued
-posts are delivered (and may post more) before the `finally`s run.
-
-**The family in the scheduler: lib/eval/family.ml,** a module of its
+**The family in the interpreter: lib/eval/family.ml,** a module of its
 own beside sched.ml (the brief's risk: "a second scheduler inside the
 first"), using sched.ml's waits, scheduling points, tape and journal
 hooks and nothing else of it:
 
 ```ocaml
 type family = {
-  fname : string;               (* `docs`: the alias's name, snake_cased *)
-  max : int; mailbox : int;     (* the bounds *)
-  parts : part array;           (* [parts] partitions, a key's by
-                                   Walk.fixed_hash mod parts *)
-  make : Value.t -> Value.t;    (* runs `h(k)`'s setup: an instance *)
-  mutable order : int;          (* creation counter, for teardown and `each` *)
-  mutable mail : int;           (* posts queued, across the family *)
+  name : string;                (* `docs`: the one rule's name, below *)
+  mailbox : int;                (* the edge's bound *)
+  parts : part array;           (* a key's by Walk.fixed_hash mod parts *)
+  make : Value.t -> Value.t;    (* the maker: runs `h(k)` and its setup *)
+  mutable order : int;          (* creation counter, for teardown and `keys` *)
+  mutable mail : int;           (* calls queued, across the family *)
   mutable high : int;           (* the most at once *)
   mutable made : int; mutable evicted : int;
   incarnations : (Value.t, int) Hashtbl.t;   (* by key, the last life's
                                                 number, kept across
                                                 eviction *)
-  mailboxes : (Value.t, mail Queue.t) Hashtbl.t;  (* by key, not by actor *)
+  queues : (Value.t, Value.t Queue.t) Hashtbl.t;  (* `D.Call`s by key,
+                                                     not by instance *)
+  mutable closed : bool;
 }
 and part = {
-  live : (Value.t, actor) Hashtbl.t;  (* its own map *)
-  lru : actor Dll.t;                  (* exact LRU of its evictable actors,
-                                         least recently released first *)
-  cap : int;                          (* max / parts, at least 1 *)
+  live : (Value.t, inst) Hashtbl.t;   (* its own map *)
+  lru : inst Dll.t;                   (* its evictable instances, least
+                                         recently released first *)
+  cap : int;
 }
-and actor = {
+and inst = {
   key : Value.t; life : int; born : int;  (* `docs[DocId(7)]#3`, and its
                                              place in creation order *)
-  inst : Value.installed;           (* its instance: number, lock, finally *)
-  mutable pins : int;               (* `at` blocks and `each` holding it *)
+  installed : Value.installed;      (* its instance: number, lock, finally *)
+  mutable pins : int;               (* pinned blocks and visits holding it *)
   mutable waiters : int;            (* tasks waiting for it: setup, a slot *)
-  mutable released_at : float;      (* for `evict_idle` *)
+  mutable released_at : float;      (* for `evictable`'s times *)
   mutable state : Making of setup | Live | Evicting;
 }
 ```
 
-An actor is **evictable** when it's `Live` with no pins, no waiters, no
-operation running (its lock has no holder) and no mail queued for its
-key; the LRU holds exactly the evictable ones, an actor going to its
-back when it becomes evictable (when the last pin or operation lets go,
-"least recently released"). **Making one past its partition's `cap`**
-evicts the LRU's front, whose `finally` runs on the making task, shielded
-under the cleanup deadline as 11a's `finally`s are (a cancelled caller
-still pays the eviction it began); with none evictable, the maker
-waits (a scheduler wait on the partition, woken when one becomes
-evictable), or, for a post's making, goes past the cap. **Setup** runs
-on the first caller's task, state `Making`; others asking for the key
-wait for it and share its error; a setup that's cancelled leaves the
-key unmade and wakes its waiters, the first of whom tries again.
-**Under `sim`,** eviction happens only through `max:`, `evict_idle` and
-`evict`, unless the scheduler was installed with `evict: AnyIdle`:
-`sim.scheduler(seed: Int, evict: Chaos = AsAsked)`, `pub type Chaos =
-| AsAsked | AnyIdle` in `sim`, at which every scheduling point first
-draws from the tape whether to evict one evictable actor of any family,
-and which. `ren test --chaos` installs `sim.scheduler(seed, evict:
-AnyIdle)` for every test (decided here, for the milestone's "passes
-`ren test --seeds 1000` with `evict: AnyIdle`").
+An instance is **evictable** when it's `Live` with no pins, no waiters,
+no operation running (its lock has no holder) and nothing queued for
+its key; the LRU holds exactly the evictable ones, an instance going to
+its back when it becomes evictable. **Making one in a full partition**
+asks `victim` with the partition's LRU's keys and evicts the one it
+names, whose `finally` runs on the making task, shielded under the
+cleanup deadline as 11a's `finally`s are (a cancelled caller still pays
+the eviction it began); a `victim` that names a key not in the list
+panics ("`victim` picked a key that isn't evictable"). When it gives
+`None`, the maker waits (a scheduler wait on the partition, woken when
+one becomes evictable), or, for a post's making, goes past the cap.
+**Setup** runs on the first caller's task, state `Making`; others asking
+for the key wait for it and share its error; a setup that's cancelled
+leaves the key unmade and wakes its waiters, the first of whom tries
+again. **A delivery task per key with mail** (research/actors-post/'s
+model), spawned into a scope the family owns, which `close` waits for:
+it pins the key, calls each queued `D.Call` on it as one operation (the
+interpreter's `Dep_call` of the call's operation and arguments, what
+`D.call(c)` does, below), and ends when the queue is empty.
 
-eval.ml's `With` of a `VActors` description makes the family
-(`Family.make`), installs it as the implementation of the alias, and
-its ending is `Family.teardown`: drain the mailboxes (deliveries run
-until no mail is left), then each live actor's `finally` in reverse
-creation order. `Dep_call` on the family's members goes to `Family`'s
-functions; an operation of an actor is a `Dep_call` on `D` inside
-`at`'s block, whose evidence holds the actor's implementation, as any
-installed instance's.
+**Journal names, by one rule** (What's decided 5; decision 11, as task
+paths are named): a family is named where it's installed, by the
+dependency its opening handler is installed as, snake_cased (`with
+actors(doc) as Docs` names it `docs`; `with striped(counter())`, for
+`Hits`, names it `hits`), and a second family one handler opens is
+`docs.2`; an instance is the family's name, its key written as a value
+is, and its incarnation, which counts a key's lives from 1:
+`docs[DocId(7)]#3`. No library names anything: the runtime knows the
+`With` frame `open` ran in. A delivery task is named by its instance.
 
-**Partitions** decide which actor is evicted, so their count is fixed
-by the program, `parts:` (4 by default), never by the runtime or the
-cores: a journal from one thread replays on many (decision 18). The
-journal's header records each family's `parts`.
+**Partitions** decide which instance is evicted, so their count is
+fixed by the library, `parts`, never by the runtime or the cores: a
+journal from one thread replays on many (decision 18). The journal's
+header records each family's `parts`.
 
-None of it is native: to_mem refuses `actors`, "`actors` keeps
-instances, which aren't native yet".
+None of it is native: to_mem refuses the `family_*` intrinsics, said at
+the program's call that reached them (as a std panic is), "`striped`
+uses the keyed instance family, which isn't native yet".
+
+### `D.Call` (step 6)
+
+What's decided 6; decision 18, "A call is a typed value"; decision 7's
+`over any`; formats.md, "Dependencies as data" (signed off after the
+brief, 7830e5d), whose `D.Call` this is, the part of it this stage
+needs. **For each dependency `D` the compiler writes `D.Call`,** one
+case per operation, its parameters as fields and their defaults as
+field defaults, as it writes a description's enum (language.md §6),
+but data: `Doc.Call` for `dep Doc = edit: fn(op: Op) -> Version !
+StoreDown; join: fn(c: ConnId)` is
+
+```ren
+type Doc.Call<R ! E> =        // written by the compiler, not by a program
+  | Edit { op: Op }           // a Doc.Call<Version ! StoreDown>
+  | Join { c: ConnId }        // a Doc.Call<()>
+```
+
+- **Each case is the operation's name in upper camel case** (`edit` is
+  `Edit`, `evict_idle` `EvictIdle`), its fields named as the
+  operation's parameters, so a call is built and matched as any sum
+  with named fields is, `Doc.Call.Edit { op }` and `Edit { op } =>`.
+- **`D.Call` exists only if every operation of `D` is data** (formats.md:
+  no block, no `&` or `inout` argument, no view, a data result);
+  naming it for any other dependency is a build error naming the
+  operation, "`Doc.Call` needs every operation of `Doc` to be data, and
+  `each` takes a block". So a dependency with a block parameter can't
+  be posted to at all, the first half of decision 18's rule for `post`.
+- **Its type carries the operation's result and errors:** a variant's
+  value is a `D.Call<R ! E>` with R and E that operation's, fixed by the
+  constructor as a GADT's are, and `D.Call<()>` is a call that gives
+  `()` and can't fail. A `match` on a `D.Call<R ! E>` refines R and E in
+  each arm to that operation's (a constructor fixes them, with no
+  existential, so refinement is substitution); that's the one place the
+  checker refines, and only `D.Call`'s variants do it. Written without
+  arguments, `D.Call` in a clause's parameter is `D.Call<R ! E>` for the
+  clause's own R and E.
+- **Its arguments are values the derived walk covers** (`show`, `==`,
+  `repr`, `parse`), so the family's queue copies them and the journal
+  writes them as any value: `show(c)` is `Edit { op: Append("a") }`.
+- **Members the compiler writes,** the least `post`, the queue, the
+  journal and `striped` need (the rest of a dependency's operations as
+  data is 12c): `D.call(c)` calls the operation `c` names, with its
+  arguments, on the `D` in scope, giving R and failing with E (so
+  `try D.call(c)`); `c.first_hash() -> Option<Int>`, the first
+  argument's key's `Walk.fixed_hash` (its type's `key`, or the value,
+  as 11a's `keyed` hashed), `None` for an operation with no parameters;
+  `c.add(a, b)`, `c.max(a, b)`, `c.min(a, b)` and `c.concat(a, b)`,
+  each on two results of `c`'s operation, its result type's `add`
+  (operators.md), order, or `Array`'s `concat`, panicking for a result
+  type that has none (what `striped`'s install check rules out); and
+  `D.Call.operations`, a constant `Array<Operation>`, one per operation
+  (a small stand-in for the shapes of formats.md's design, stage 12):
+  `pub type Operation = { name: Str, params: Int, gives: Str, adds:
+  Bool, orders: Bool, concats: Bool }`, `gives` the result type as an
+  error writes it (`"Int"`, `"()"`). These are the program's
+  declarations as data, which decision 20 rule 3 gives the language.
+- **The `call(c: D.Call) => ...` clause.** A handler may write it beside
+  its operations, or instead of them: it runs for each operation it
+  doesn't write an arm for, `c` that call, its value the operation's
+  result and its errors at most the operation's. In a handler `over D`,
+  `next.call(c)` is `D.call(c)` against the next handler (formats.md).
+  `over any`'s `call =>` arm stays as built (its `call.forward()`,
+  `call.name`, `call.args`). formats.md's `D.Reply` and `D.Error`, the
+  sums of results and errors, are later (12c): here a call's result is
+  its type's `R`, so `D.call(c)` gives `R`, not a `D.Reply`.
+  A merge handler (Stripes) writes it with the two results after the
+  call, `call(c: D.Call, a, b) => ...`, a and b typed R: that form is
+  what a description's `call` clause called as a method takes,
+  `m.call(c, a, b)`.
+- **No trailing call** (decided 2026-10-29): `post` is spelled
+  `Docs.post(k, Doc.Call.Edit { op })`, the call value written out, and
+  `Docs.post(k).edit(op)` isn't built, since calls as data are designed
+  with dependencies as protocols. The arguments are evaluated where the
+  call value is built, before `post` runs, as any argument is, so a
+  `var` changed after doesn't change the message.
+- **`post`'s parameter is `c: D.Call<()>`,** so posting an operation that
+  gives a value, or can fail, is an ordinary type error on that
+  argument, with a help for a `D.Call<()>` parameter: "`post` takes a
+  call that gives `()` and can't fail, and `text` gives a `Str`" (and
+  "... and `edit` can fail with `StoreDown`"), "help: use the value, or
+  handle the error, inside the operation, or make the call directly
+  where its result is wanted". It's no rule written for `actors`: any
+  function with a `D.Call<()>` parameter says the same.
+
+### Stripes (step 6)
+
+What's decided 7; decision 18, "`striped`: map-reduce over fixed
+stripes"; language.md §11, "Stripes" and "Policies are data". **Plain
+Ren in std over the family,** in the prelude, since language.md writes
+it bare; it calls nothing a user library couldn't: `Instances`,
+`Async.worker()` and `D.Call`'s members.
+
+```ren
+// how `striped` routes an operation whose first parameter has a key
+pub type By =
+  | Key(n: Int = 16)        // to one of n stripes, by the key
+  | Worker                  // to the stripe of the caller's worker
+
+// how a keyless operation that gives a value folds its stripes'
+// results, left to right in stripe order
+pub type Fold<D> =
+  | Unmerged                // none given: refused at install where it's needed
+  | Sum | Max | Min | Concat
+  | Custom(m: D)            // a stateless handler whose `call` clause folds
+
+// the instances of `h`, kept by the runtime's family under fixed keys,
+// the stripes' numbers. Callers can't tell: code that uses `D` doesn't
+// know whether one instance serves it or sixteen
+pub handler striped<D>(h: D, by: By = Key, merge: Fold<D> = Unmerged) for D uses Async =
+  // under `Worker`, no stripe until a worker calls
+  let n = match by
+    Key(n) => n
+    Worker => 0               // made on each worker's first call
+  if by != Worker && n < 1 then lib_panic("`striped` keeps at least 1 stripe, not ".concat(show(n)))
+  if merge == Unmerged then
+    for op in D.Call.operations
+      if op.params == 0 && op.gives != "()" then
+        lib_panic("`".concat(op.name).concat("` runs on every stripe and gives an `").concat(op.gives).concat("`, so `striped` needs `merge:`"))
+  ...                       // `Sum` of what doesn't add, and the rest, the same way
+  // a stripe a key: under `Key(n)` the n made now, in order; under
+  // `Worker` each worker's on its first call, fewer than 1024 of them
+  let fam = Instances.open(fn(i: Int) => h, parts: 1, cap: if n > 0 then n else 1024, mailbox: 1)
+  for i in 0..n => try Instances.pin(fam, i, fn(_) => None, fn() => ())
+  finally(_) => Instances.close(fam)
+  call(c) =>
+    match c.first_hash()
+      Some(x) =>
+        let i = match by
+          Key(n) => x % n
+          Worker => Async.worker()
+        try release Instances.pin(fam, i, fn(_) => None, fn() => try D.call(c))
+      None =>
+        // under `Worker`, the caller's stripe at least
+        if by == Worker then try release Instances.pin(fam, Async.worker(), fn(_) => None, fn() => ())
+        // every stripe in order, each pinned on its own: not a snapshot
+        var got = None
+        for i in Instances.keys(fam)
+          let v = try release Instances.pin(fam, i, fn(_) => None, fn() => try D.call(c))
+          got = match got
+            None => Some(v)
+            Some(a) => Some(combine(merge, c, a, v))
+        got orelse lib_panic("`striped` has no stripe")
+```
+
+(The listing gives the shape; step 6 writes the whole. `combine` is a
+function: `Sum` is `c.add(a, v)`, `Max` `c.max`, `Min` `c.min`, `Concat`
+`c.concat`, `Custom(m)` `m.call(c, a, v)`; a `()` result combines to
+`()` whatever the merge, so a broadcast needs none. Every `release` is
+in the arm, on a call of `Instances`, as step 4's rule asks.)
+
+- **Routing is an ADT,** so a count with `Worker` can't be written:
+  `by: Worker(n: 4)` is today's "`Worker` has 0 fields but was given 1",
+  an ordinary error, and there's no rule for it.
+- **`Key(n)`, the default,** is the variant default with a defaulted
+  field (What's decided 11): `by: By = Key` is `Key(n: 16)`. An
+  operation whose first parameter has a key goes to stripe
+  `first_hash mod n`.
+- **`Worker`** sends a call to the caller's worker's stripe, made on that
+  worker's first call: under `single` one stripe (decision 18's table:
+  "one stripe: the merge is the identity"), under `sim` two, routing
+  from the tape (`Async.worker()`), so a program whose result depends on
+  routing beyond what the merge erases fails under some seed: the split
+  law's test.
+- **A keyless operation runs on every stripe,** in stripe order, each a
+  pin of its own, so the fold is not a snapshot; one that gives `()`
+  broadcasts, one that gives a value is folded with `merge:`.
+- **The missing `merge:` is a panic at the `with`** (What's decided 7;
+  decision 20, rule 3: a check `striped` makes on its arguments, which
+  stage 12's build-time mechanism will make at build time): `striped`'s
+  setup reads `D.Call.operations` and panics naming the operation. So
+  does a fold that doesn't fit an operation's result, "`merge: Sum` adds
+  what `all` gives, and an `Array<Str>` isn't a number". No Infer rule is
+  written for either, and `keyed_described` goes with nothing in its
+  place: `striped(16)` is the ordinary error of a dependency parameter
+  given a value that isn't a description, "`striped` takes a handler's
+  description, and `16` is an `Int`".
+- **`Custom(m)`** holds a description of a stateless handler over `D`
+  whose `call(c: D.Call, a, b)` clause folds two stripes' results for
+  `c`; `striped` calls it as a method, `m.call(c, a, b)`, so a handler
+  with state is the data stage's rule for a description called as a
+  method, "`m` may be a description of `adding`, which keeps state, so
+  it isn't called as a method": nothing written for `striped`.
+- **A stripe takes the `release`d call** (step 4's `release`): `striped`
+  is itself a handler with an instance, so its `call` arm lets go of it
+  for the pin, else every caller would queue on `striped`'s instance and
+  stripes would serialize. Sound by decision 10: the arm's only state is
+  `let`s, which `release` writes back and reads again unchanged.
+- **The journal** names a stripe by the one rule, `hits[3]#1`.
+
+`sync.keyed`, `Sync_keyed`, `VKeyed`, `VKeys` and their sites go (The
+inventory), and `sync` has no `keyed`: "`sync` has no `keyed`" is the
+ordinary missing member's.
+
+### Actors (step 7)
+
+What's decided 8; decision 18, "`actors`: one instance per key, made on
+demand"; language.md §11, "Actors are a service"; decided after the
+draft: `Docs.at`'s errors declared on the family, `Actors<K, D> ! E`,
+`Full` where the checker sees a cycle; `post` is Erlang's cast;
+partitions now; `Lfu` later; the journal's version 3. **Plain Ren in std
+over the family,** in the prelude beside `striped`; the user's API is
+language.md's, unchanged.
+
+**The family's type.** `Actors<K, D> ! E` is an ordinary generic
+dependency with an error row, declared in the prelude; a dependency
+alias may carry one too, `dep Docs = Actors<DocId, Doc> ! StoreDown`
+(the grammar's `dep_alias`), its `E` the errors of making an actor,
+which `at` and `post` fail with.
+
+```ren
+// a family of actors of `D`, one per key `K`, made on demand: `E` is what
+// making one can fail with
+pub dep Actors<K has hash, D> ! E =
+  // installs k's actor as `D` for `body`, pinned, making it if it isn't live
+  at: fn<T>(k: K, body: fn() -> T uses D) -> T ! E
+  // puts one call of `D` in k's mailbox and returns: Erlang's cast,
+  // `Docs.post(k, Doc.Call.Edit { op })`
+  post: fn(k: K, c: D.Call<()>) ! E
+  evict: fn(k: K)
+  evict_idle: fn(d: Duration)
+  // each live actor, in creation order, pinned in turn; makes none, and
+  // isn't use
+  each: fn(body: fn() uses D)
+  count: fn() -> Int
+  made: fn() -> Int
+  evicted: fn() -> Int
+  high_water: fn() -> Int
+
+pub type Evict = | Lru        // `Lfu` later
+
+// actors of `h`, a handler whose one parameter is the key: at most `max`
+// live, the least recently released evicted past it; calls from outside
+// wait while `mailbox` posts are queued. `chaos: true`, a test's, evicts
+// at each call the evictable actors `Random` picks
+pub handler actors<K has hash, D ! E>(h: fn(k: K) -> D ! E, max: Int = 10_000, mailbox: Int = 10_000, evict: Evict = Lru, chaos: Bool = false, parts: Int = 4) for Actors<K, D> ! E uses Random =
+  let fam = Instances.open(h, parts: parts, cap: max(1, max / parts), mailbox: mailbox)
+  finally(_) => Instances.close(fam)
+  at(k, body) =>
+    if chaos then shake(fam)
+    try release Instances.pin(fam, k, oldest, body)
+  post(k, c) =>
+    if chaos then shake(fam)
+    try release Instances.post(fam, k, c, oldest)
+  evict(k) => let _ = Instances.evict(fam, k)
+  evict_idle(d) => for k in Instances.evictable(fam, idle: d) => let _ = Instances.evict(fam, k)
+  each(body) => for k in Instances.keys(fam) => let _ = release Instances.visit(fam, k, body)
+  count() => Instances.counts(fam).live
+  ...
+```
+
+- **`h`** is the handler's name, `actors(doc)`: Infer checks it as any
+  argument, `fn(k: K) -> D ! E`, so a handler of more than its key is
+  "expected `fn(DocId) -> Doc`, found `fn(DocId, Int) -> Doc`", and
+  setup that fails outside the family's `E` is the ordinary "this
+  function can fail with `StoreDown`, and the type wanted here fails
+  only with ..." with the alias's `E` (both at `actors(doc)`'s argument;
+  the words that named actors go). Its other dependencies come from the
+  `with` set, the maker's evidence; the family's own (`uses Docs`, to
+  post to siblings) is the cycle rule's exception the maker has (The
+  keyed instance family).
+- **`at` and `post` take the actor through the family,** each arm
+  `release`-ing `actors`' own instance for the pin or the post (step
+  4), so `actors`' instance isn't held for a block: other callers'
+  `at`s run while one block does. Each operation inside the block takes
+  the actor for one call, as every handler's does.
+- **Eviction under `max:`,** `cap: max / parts` per partition (at least
+  1), its victim `oldest`, `fn(lru) => lru.first()`: `Lru` is std's
+  policy over the family's order of release. The victim's `finally`
+  runs on the caller's task (the family's rule).
+- **`chaos: true`** (What's decided 8): `shake(fam)`, at each call into
+  the family (`at`, `post`, `evict`, `each`), evicts each evictable
+  actor for which `Random.int(2) == 0`, in `evictable()`'s order. Under
+  `ren test` and `sim`, `Random` draws from the tape, so a seed that
+  evicts a document between two sessions replays by `--seed`. The
+  scheduler and `ren test` know nothing of it: there's no `ren test
+  --chaos` and no `evict:` on `sim.scheduler`.
+- **`actors` uses `Random`,** for `chaos:`, so an item `actors(...)`
+  needs it from its `with` set, as any item does, and a `pub` wiring or
+  a function with a written `uses` that installs one names it ("Where
+  this stage may differ"). `striped` uses `Async`, for
+  `Async.worker()`, the same way.
+- **`finally` can't fail,** the maker's rule ("`doc` is kept by a
+  family, so its `finally` can't fail").
+- **No deadlock:** `Docs.at` in `Docs.at`, an actor's `at` on its own
+  family, and `Full` are the family's checks on `pin` (The keyed
+  instance family), each saying the dependency and operation the program
+  wrote.
+- **`post`** (What's decided 8, research/actors-post/'s fixed rules):
+  `Docs.post(k, Doc.Call.Edit { op })`, whose `Doc.Call<()>` parameter
+  makes "posting an operation that gives a value, or can fail" an
+  ordinary type error, and `Doc.Call` itself a dependency whose
+  operations are all data. A post makes its actor, so its only errors
+  are setup's, `try Docs.post(k, Doc.Call.Edit { op })`; the queue,
+  the order of one task's posts, delivery as one operation each on the
+  family's tasks, the edge's meter, a sibling's post never waiting, the
+  chain reaction's panic, and teardown draining are the family's rules,
+  so `actors` writes none of them.
+
+The panic's words name the alias the family is installed as, by the
+one rule: "`Peers` has 5 posts queued, past twice its `mailbox:` of 2",
+the high-water mark on the line after.
 
 ### Journal version 3 (step 7)
 
-Decided after the draft: actors add made, evicted and posted lines, and
-an operation names `docs[DocId(7)]#3`; that's version 3, and recorded
-journals are recorded again.
+Decided after the draft: the family adds made, evicted and posted
+lines, and an operation names `docs[DocId(7)]#3` by the one rule for
+every runtime instance family (The keyed instance family, "Journal
+names"); that's version 3, and recorded journals are recorded again.
 
 ```
 # ren journal 3 · main.ren · deps: Console Net · parts: docs 4
 1 main/session:0 made docs[DocId(7)]#1
 2 main/session:0 Net.write(...)
-3 main/session:1 posted docs[DocId(7)].edit(Append("a"))
+3 main/session:1 posted docs[DocId(7)] Edit { op: Append("a") }
 4 docs[DocId(7)]#1 Store.save(...)
 5 main/session:2 evicted docs[DocId(7)]#1
 6 main/session:3 made docs[DocId(7)]#2
 ```
 
 - **`made`** and **`evicted`** lines name the task that made or evicted
-  the actor (the maker pays) and the actor, its family, key (written
-  as a value is) and incarnation, which counts the key's lives from 1.
-- **`posted`** lines are a post as data: the actor's family and key
-  (no incarnation: the mailbox is the key's) and the operation with
-  its arguments, written as a value.
-- **A delivery's task is named by its actor,** `docs[DocId(7)]#1`, so
+  the instance (the maker pays) and the instance by the one rule.
+- **`posted`** lines are a post as data: the family and key (no
+  incarnation: the queue is the key's) and the `D.Call`, written as a
+  value is.
+- **A delivery's task is named by its instance,** `docs[DocId(7)]#1`, so
   the world calls a delivered post makes are written under that name.
+- **Stripes** are instances too: `made hits[0]#1` at the `with`.
 - The header gains `parts:`, each family's name and partition count, a
   replay refusing a program whose counts differ.
 - A replay checks each `made`, `evicted` and `posted` line where it
   comes, strictly, as it checks a call, so a replay that evicts
   differently stops there and says so; as a test's schedule prefix, the
   replay follows the recorded order while it can, as version 2's does.
+  `chaos:`'s draws are `Random`'s, so a replay gives them back as it
+  gives back any `Random.int`.
 - **Version 2 is refused** as version 1 is, "`tests/build.journal` is a
   version 2 journal, which this `ren` doesn't read" with "version 3
-  names actors and their posts" and the same help, record it again
-  (journal.ml's `version_1_said` becomes `old_version_said`).
-  examples/just/tests/build.journal is recorded again.
+  names the runtime's instance families and their posts" and the same
+  help, record it again (journal.ml's `version_1_said` becomes
+  `old_version_said`). examples/just/tests/build.journal is recorded
+  again.
 
 ### Native
 
@@ -10710,11 +11067,13 @@ after the draft): the pipe (step 1, a `let` and a call), wirings (step
 2, functions that return descriptions, and a `with`), and `release`
 with no other task (step 4, a plain call: `arm_release` and
 `arm_retake` compile to nothing). `beside`, `background`, `produce`,
-`map_pull`, `striped` and `actors` are interpreter-only, refused by
-`ren build` at the first call to_mem meets, `tasks_not_native`'s
-message for the first four and "`striped` keeps instances, which aren't
-native yet" (and `actors`') for the others, each with "help: run it
-with `ren run`".
+`map_pull`, the family, and so `striped` and `actors`, are
+interpreter-only, refused by `ren build` at the first call to_mem
+meets, `tasks_not_native`'s message for the first four and, for the
+family's intrinsics, said at the program's call that reached them,
+"`striped` uses the keyed instance family, which isn't native yet" (or
+`actors`, or whatever library the program called), each with "help:
+run it with `ren run`".
 
 ### Errors
 
@@ -10826,7 +11185,7 @@ error: `r` is changed across a call that lets go of the handler       (Excl)
 panic: every task is waiting, and nothing can wake one               (the interpreter, today's, with what each holds)
   = main/main:0 waits in `Async.until` at test.ren:11:13, holding `A` (a.go)
 
-error: a parameter's default is a literal, or a variant with no fields   (parser, today's widened)
+error: a parameter's default is a literal, or a variant written bare   (parser, today's widened)
   help: give it where it's called instead
 ```
 
@@ -10839,61 +11198,64 @@ error: `Events.items()` is pulled where it's written: in a `for`, or as a pull a
   help: loop over it: `for e in Events.items()`
 ```
 
-Stripes (step 6):
+Stripes (step 6), none of them a rule written for `striped`:
 
 ```
-error: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`   (Infer)
-  help: say how to fold them: `merge: Sum`, `Max`, `Min`, `Concat` or `Custom(m)`
+panic: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`   (striped's setup, at the `with`)
 
-error: `by: Worker` gives each worker a stripe, so it takes no `n`    (Infer)
-  help: remove `n: 4`
+panic: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number   (striped's setup, at the `with`)
 
-error: `Custom` takes a stateless handler of `Merge<Hits>`           (Infer, Stateless)
+panic: `striped` keeps at least 1 stripe, not 0                      (striped's setup)
 
-error: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number   (Infer)
+error: `Worker` has 0 fields but was given 1                         (Infer, today's)
+  help: write `Worker` with no parentheses
 
-error: `striped` takes a handler's description, and `16` is an `Int` (Infer)
-  help: describe the handler whose instances it keeps: `striped(counter(), merge: Sum)`
+error: `m` may be a description of `adding`, which keeps state, so it isn't called as a method   (the data stage's rule)
 
-error: `striped` keeps instances, which aren't native yet            (to_mem)
+error: `striped` takes a handler's description, and `16` is an `Int` (Infer: a dependency parameter given a value)
+
+error: `striped` uses the keyed instance family, which isn't native yet   (to_mem)
   help: run it with `ren run`
 ```
 
-Actors and `post` (step 7):
+The family and `D.Call` (steps 6 and 7), each the family's or an
+ordinary type rule, saying the dependency and operation the program
+wrote:
 
 ```
-error: `Docs.at` inside a block of `Docs.at` could wait for a slot its own block holds   (Infer)
-  help: finish with the first actor, then `at` the second; or send it a message: `Docs.post(k).op(...)`
+error: `Docs.at` inside a block of `Docs.at` could wait for a slot its own block holds   (Infer, a check on `Instances.pin`)
+  help: finish with the first, then call the second; or post to it, which holds nothing
 
-error: `doc` is an actor of `Docs`, so it can only `post` to it       (Infer)
-  help: send it a message instead: `Docs.post(k).edit(...)`
+error: `doc` is kept by `Docs`'s family, so it can't call `Docs.at`, which pins one of its siblings   (Infer, a check on `Instances.pin`)
+  help: post to it instead, which holds nothing
 
-error: `actors` makes each actor from its key, so `doc` takes one parameter, a `DocId`   (Infer)
+error: `doc` is kept by a family, so its `finally` can't fail        (Infer, the maker's rule)
+  help: save in its operations, write-through, or flush before the family ends
 
-error: making a `doc` can fail with `StoreDown`, which `Docs` doesn't declare   (Infer)
-  help: declare it on the family: `dep Docs = Actors<DocId, Doc> ! StoreDown`
+error: expected `fn(DocId) -> Doc`, found `fn(DocId, Int) -> Doc`    (Infer, today's)
 
-error: an actor's `finally` can't fail                               (Infer)
-  help: save in the operations, write-through, or flush before the family ends: `Docs.each(fn() => try Doc.flush())`
+error: expected `fn(DocId) -> Doc`, found `fn(DocId) -> Doc ! StoreDown`   (Infer, today's)
+  = this function can fail with `StoreDown`, and the type wanted here fails only with ...
 
-error: `text` gives a `Str`, which a post has nobody to give to      (Infer)
-  help: use it inside the actor, or call it with `at`: `Docs.at(k) fn() => Doc.text()`
+error: `post` takes a call that gives `()` and can't fail, and `text` gives a `Str`   (Infer, a `D.Call<()>` parameter)
+  help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
 
-error: `edit` can fail with `StoreDown`, which a post has nobody to give to   (Infer)
-  help: handle it inside the actor, or call it with `at`: `try Docs.at(k) fn() => try Doc.edit(...)`
+error: `post` takes a call that gives `()` and can't fail, and `edit` can fail with `StoreDown`   (Infer, the same)
+  help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
 
-error: only a family of actors declares errors on its dependency     (Resolve)
+error: `Doc.Call` needs every operation of `Doc` to be data, and `each` takes a block   (Infer, formats.md's)
 
-panic: `Peers` has 5 posts queued, past twice its `mailbox:` of 2    (the interpreter)
+panic: `Peers` has 5 posts queued, past twice its `mailbox:` of 2    (the family)
   = the high-water mark: 5
-  = an actor that posts twice around a cycle grows its family's mail without end
+  = an instance that posts twice around a cycle grows its family's mail without end
+
+panic: this family ended with the `with` that opened it              (the family)
+
+panic: a task pinning `Outers` would wait for a slot of `Inners`, installed inside it   (the family, a helper's `at`)
 
 error: `tests/build.journal` is a version 2 journal, which this `ren` doesn't read   (`ren replay`)
-  = version 3 names actors and their posts
+  = version 3 names the runtime's instance families and their posts
   help: record it again: `ren run --record tests/build.journal main.ren`
-
-error: `actors` keeps instances, which aren't native yet             (to_mem)
-  help: run it with `ren run`
 ```
 
 ### What each step changes
@@ -10921,8 +11283,8 @@ error: `actors` keeps instances, which aren't native yet             (to_mem)
   `task_background`; `beside`, `frame.bg`, `context` and `leave_with`'s
   cancelling removed; the spawn's check), eval.ml (`endings`), excl.ml
   (the compile error), to_mem.ml (refused); examples/refresh, async.md.
-- **Step 4:** lexer.ml/parser.ml (`release`; a constructor default; an
-  operation's parameter's default), ast.ml (`Release`, `pdefault`),
+- **Step 4:** lexer.ml/parser.ml (`release`; a constructor default; a
+  variant's field defaults; an operation's parameter's default), ast.ml (`Release`, `pdefault`),
   resolve.ml, iface.ml (defaults), infer_expr.ml, infer_top.ml
   (`defaults_of` for operations), lower.ml (`release`'s write-back and
   read-again, as `until_released`), intrinsic.ml (`Arm_release`,
@@ -10940,22 +11302,28 @@ error: `actors` keeps instances, which aren't native yet             (to_mem)
   `task_map_pull`, `task_map` and `task_each` pulling), to_mem.ml
   (refused); async.md's "Later" line, stdlib.md, the crawler if it
   reads better.
-- **Step 6:** prelude.ml (`By`, `Folding`, `striped`), resolve.ml and
-  infer_lookup.ml (`Merge<D>` derived), infer_expr.ml
-  (`striped_described`), infer_msg.ml, stateless.ml (`Custom`'s
-  description), value.ml, eval.ml and builtins.ml (`VStriped`, `by:`,
-  the fold), sched.ml (`sim`'s two workers, drawn at spawn),
-  to_mem.ml; `keyed` removed everywhere (The inventory); test_tasks.ml's
-  `keyed` tests moved.
-- **Step 7:** parser.ml and ast.ml (`Dep_alias`'s errors), prelude.ml
-  (`Actors`, `actors`, `Evict`), std_lib.ml (`sim.scheduler`'s `evict:`,
-  `Chaos`), resolve.ml, infer_expr.ml and infer_handlers.ml (the
-  family's members, `at` and `post`, the handler's checks, `at` in `at`,
-  `Full`), infer_msg.ml, lib/eval/family.ml (new), eval.ml (`With` of a
-  family, its members, deliveries), sched.ml (hooks: a scheduling
-  point's chaos, waits on a partition), journal.ml (version 3),
-  driver.ml and the test runner (`--chaos`), to_mem.ml; examples/just's
-  journal recorded again.
+- **Step 6:** lib/eval/family.ml (new: the family, its partitions,
+  LRU, queues, deliveries, names), intrinsic.ml, builtins.ml and
+  prelude.ml (`Instances`, `real_instances`, `Family`, `Counts`, the
+  `family_*` intrinsics and `runtime_of`, Core Lint's check of them),
+  eval.ml (`With` of the opener's frame, the family's name;
+  `D.call`), sched.ml (`Async.worker()`, `sim`'s two workers drawn at
+  spawn; the family's hooks: waits on a partition, the delivery scope);
+  parser.ml (the path `D.Call.Case` where `Type.Case` is taken, today
+  "expected `,` or `)`, found `{`"), ast.ml, resolve.ml and infer
+  (`D.Call<R ! E>`, its cases, members and the all-data rule, refinement in a `match` on one, the `call(c:
+  D.Call)` clause and a description's `call` called as a method, the
+  maker parameter and its three checks, `pins` per operation and the
+  two no-deadlock errors, a dependency parameter `D`); prelude.ml's
+  `striped`, `By`, `Fold` in Ren; to_mem.ml (the family refused);
+  `keyed` removed everywhere (The inventory); test_tasks.ml's `keyed`
+  tests moved.
+- **Step 7:** parser.ml and ast.ml (a `dep`'s and an alias's error
+  row), Infer (an error row as a dependency's parameter, `fn<T>` in an
+  operation), prelude.ml's `Actors`, `Evict` and
+  `actors` in Ren; journal.ml (version 3, the family's lines, the
+  header's `parts:`), driver.ml (`ren replay`'s version message);
+  examples/just's journal recorded again.
 - **Step 8:** bench/services/docs moved to examples/docs; bench/tasks.t's
   milestone; THE CHECKS' examples list gains docs.
 
@@ -10986,11 +11354,12 @@ fit the code, each to revisit if a step finds it wrong:
 - **`try`'s and `attempt`'s stop at `|>` is a parser flag** reset in
   every bracket and body, so `try f(a |> g)` keeps `try` covering the
   whole call.
-- **The variant default and an operation's parameter's default land in
-  step 4,** not step 0 (What's decided 9 says step 0): step 0 builds no
-  language, and step 4's `Proc.run(kill:)` is the first surface that
-  needs them. An operation may have a default because `Proc.run` is
-  one.
+- **The variant default, a variant's field defaults and an operation's
+  parameter's default land in step 4,** not step 0 (What's decided 11
+  says step 0): step 0 builds no language, and step 4's
+  `Proc.run(kill:)` is the first surface that needs them. An operation
+  may have a default because `Proc.run` is one. A field's default is a
+  literal only, as a parameter's literal default is.
 - **A cancelled `Tree` run is killed by a C stub** that forks, calls
   `setpgid` and `execvp`s, OCaml's `Unix` having no process groups.
 - **`SimProc` keeps `killed()` and adds `kills()`,** rather than
@@ -11003,27 +11372,66 @@ fit the code, each to revisit if a step finds it wrong:
 - **A pull parameter is a mode, `xs: pull T`,** checked as a `for`'s
   subject; Lower makes every pull argument a step block, so the
   interpreter's `task_map` and `task_each` take one kind of source.
-- **`Events.items()` is a block Lower writes where it's called,** and is
-  refused anywhere it isn't pulled, since a block can't be returned.
+- **`Events.items()` gives a cursor type, `sync.Items<T>`,** whose
+  `next` is `Chan.recv()`, reading the alias it was called through;
+  step 5 checks that a generic dependency's member function called
+  through an alias resolves its `uses` to that alias.
 - **`Async.produce`'s producer is `concurrent`,** and its failure reaches
   the body through `items`, after what it sent before failing.
 - **`Async.background`'s scope is a `Background`,** a `Scope` whose
   blocks may fail, since a `Scope`'s spawned blocks can't.
-- **`striped`, `actors`, `Actors`, `Merge`, `By`, `Folding` and `Evict`
-  are in the prelude,** since language.md writes them bare; `sync` keeps
+- **`Instances`, the family's dependency, is ambient:** the runtime
+  installs it around `main` and each test, as the journal's handlers,
+  and no `uses` names it, so a library over it adds nothing to its
+  callers' signatures. Only privileged code (decision 20's closed list)
+  may be ambient.
+- **The LRU lives in the family,** as the order of release it exposes
+  (`victim`'s list, `evictable()`), since only the runtime sees when an
+  instance becomes evictable; the policy that reads it (`Lru`, chaos,
+  `evict_idle`) is the library's. `evictable(idle: d)` gives the time
+  half, so `actors` needs no `Clock`.
+- **A family is a `Family<K, D ! E>` handle kept in its opener's state,**
+  a number, not an instance; a call after `close` panics.
+- **The family's maker parameter carries three checks** any library
+  over it gets (a `finally` that can't fail, the cycle rule's exception
+  for posting to siblings, no pinning its own family): the family's
+  rules, stated once on `Instances.open`'s `h`.
+- **`D.Call`'s variants are its operations' names in upper camel case,**
+  and a `match` on one refines its result and error types (a
+  constructor fixes them); nothing else in Ren refines.
+- **A merge's clause takes the two results after the call,** `call(c:
+  D.Call, a, b) => ...`, called by `striped` as a method,
+  `m.call(c, a, b)`: the design says the clause folds two results for
+  `c` and is silent on how it gets them.
+- **The built-in folds are `D.Call` members,** `c.add`, `c.max`, `c.min`
+  and `c.concat`, and the install check reads `D.Call.operations`,
+  since `striped`'s clause can't name a call's result type: the
+  declarations as data, decision 20 rule 3.
+- **`merge:`'s default is `Unmerged`,** since a parameter given by name
+  has a default (§2) and decision 18 gives no default fold; `striped`'s
+  setup refuses it, at the `with`, where a keyless operation gives a
+  value. It's a value of std's `Fold`, not a rule in the checker.
+- **`striped` and `actors` `release` their own instance** in each arm
+  that pins or posts, else every caller would queue on the library's
+  one instance; `release` (step 4) is what any library over the family
+  writes.
+- **`actors` uses `Random` and `striped` uses `Async`,** so a `pub`
+  wiring or a function with a written `uses` that installs one names it:
+  language.md §11's `live ... uses Net` is `uses Net, Random` as built.
+  The alternative, the family drawing chaos's randomness itself, would
+  put chaos in the runtime, which What's decided 8 rules out.
+- **`post`'s type errors say `post`, not "a post",** and their help is
+  general (handle it inside the operation, or call it directly), since
+  they're the ordinary rule for any `D.Call<()>` parameter; decision 18's
+  "use `at`" is the docs'.
+- **`striped`, `actors`, `Actors`, `By`, `Fold` and `Evict` are in the
+  prelude,** plain Ren, since language.md writes them bare; `sync` keeps
   its channel, semaphore, `limit` and batcher.
-- **`merge:` has a default, `Unmerged`,** which is "no `merge:`", since a
-  parameter given by name has a default (decision 9's rule), and decision
-  18 says there's no default fold; `merge:` is given as a constructor
-  written at the call, since what it folds is checked there.
-- **`striped(by: Worker)` under `sim` keeps two stripes whatever `n`,**
-  each task's worker drawn from the tape when it's spawned; under
-  `single`, one.
-- **A family's name in the journal is its alias's, snake_cased** (`Docs`
-  is `docs`); the incarnation counts a key's lives from 1.
-- **`ren test --chaos`** is how a test run opts into `evict: AnyIdle`,
-  and `sim.scheduler(seed, evict: AnyIdle)` how a program does; `Chaos =
-  AsAsked | AnyIdle` is `sim`'s type for it.
+- **`striped(by: Worker)` makes a stripe per worker on its first call,**
+  two under `sim`, one under `single`.
+- **A family's name in the journal is the dependency its opener is
+  installed as, snake_cased** (`Docs` is `docs`, `docs.2` for a second
+  family of one opener); the incarnation counts a key's lives from 1.
 - **`Docs.each`'s block takes no parameters** (decision 18's `Docs.each(fn()
   => try Doc.flush())`), and the family exposes `count`, `made`,
   `evicted` and `high_water`.
@@ -11088,7 +11496,8 @@ Chosen in step 1, as built:
 | step | commit | done | left |
 |---|---|---|---|
 | 0 | 7a624b2 | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
-| 1 | this commit | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
+| 1 | 5f9409d | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
+| 0 (decision 20) | this commit | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
 
 ## The runtime model
 

@@ -1,6 +1,7 @@
 // The services stage (compiler.md, "Services stage", "Native"): what
-// starts tasks, or keeps instances, is the interpreter's. `ren build`
-// refuses this program at `Async.beside`, as 11a's refuses
+// starts tasks, or keeps instances in the runtime's keyed instance
+// family, is the interpreter's. `ren build` refuses this program at
+// `striped`, the first call that reaches the family, as 11a's refuses
 // `Async.scope`; `ren run` runs it.
 
 dep Hits =
@@ -13,7 +14,7 @@ handler counter() for Hits =
   total() => n
 
 fn main() uses Console, Async =
-  with striped(counter(), n: 2, merge: Sum) in
+  with striped(counter(), by: Key(n: 2), merge: Sum) in
     Async.beside(fn() => Hits.hit("/a")) fn() =>
       Async.yield()
       Hits.hit("/b")
