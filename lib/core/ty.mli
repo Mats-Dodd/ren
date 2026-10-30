@@ -189,8 +189,12 @@ val own_args : ty -> args
 
 (* [s], a scheme's type, with the type arguments [a] put in: the n-th
    of [a.tys] for [Var n], and for a row ending in row variable [n], the
-   n-th of [a.rows]'s labels added to the row's, ending in its tail. *)
-val apply : args -> ty -> ty
+   n-th of [a.rows]'s labels added to the row's, ending in its tail.
+   Without [calls], generic code's `Call<D, R, ! E>` stays itself where
+   [D] is known, rather than its `D.Call` ([known]): the checker reads
+   which calls it takes from it (compiler.md, "Services stage",
+   "`D.Call`"). *)
+val apply : ?calls:bool -> args -> ty -> ty
 
 (* [t], made from another by putting types in for its variables, with
    what's known once a dependency is: generic code's `Call<D, R, ! E>` of

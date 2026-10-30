@@ -223,6 +223,50 @@ let dep ?(args = []) name =
 (* The label of the dependency [d]. *)
 let dep_of d = dep ~args:d.dargs (Ty.dep_label d.dpath)
 
+(* ---- `D.Call<R ! E>`: which calls a value can be ----
+
+   A dependency's `D.Call` is a sum of its calls, one case per operation
+   (compiler.md, "Services stage", "`D.Call`"), and a call's type carries
+   the result and errors of its operation, so `post`'s parameter, a
+   `D.Call<()>`, takes only calls that give `()` and can't fail: an
+   ordinary type rule. The checker carries that as which cases a value
+   can be, a row of the cases' names after the dependency's own type
+   arguments, `Doc.Call<! Edit | ..ρ>`, as OCaml carries a polymorphic
+   variant's: a case built is its own name and possibly more, open; a
+   `Doc.Call` written is every case, closed; and `Doc.Call<R ! E>`, the
+   prelude's `Call<D, R, ! E>` once [D] is `Doc`, is the cases whose
+   operations give R and fail with at most E, closed. So a value of two
+   cases, `if b then Edit {..} else Join {..}`, is a call that may be
+   either, which `post` takes only if it takes both, and nothing is a
+   `D.Call<()>` that could be a call of another operation. The row is the
+   checker's: what it hands on ([canon_ty]) is `Doc.Call` as declared,
+   whatever case it is, which is all lowering and the interpreter need.
+
+   The cases of each `D.Call` the module can meet, by its path: each
+   case's name, its operation's, and that one's result and errors, at the
+   dependency's type parameters ([Ty.Var i]), filled in as a module's
+   checking begins (Infer_top.new_env). It's kept here, not in [state],
+   since a type read from an interface ([of_ty]) is made without one; a
+   path names one dependency's calls in one program, and each
+   compilation fills in every path it can meet before it meets one. *)
+type call_case = { case : string; op : string; gives : Ty.ty; fails : Ty.row }
+
+let calls : (Path.t, call_case list) Hashtbl.t = Hashtbl.create 8
+
+(* A case's label in a call's row. *)
+let call_label case = { name = case; payload = []; dep = false; written = unmarked () }
+
+(* The row of every case of the calls at [p]: a `D.Call` written, or
+   read from an interface, which may be any of them. *)
+let every_call p =
+  List.fold_right
+    (fun c r -> RExtend (call_label c.case, r))
+    (Option.value (Hashtbl.find_opt calls p) ~default:[])
+    REmpty
+
+(* Whether [p] is a `D.Call`'s path, whose types carry a row of cases. *)
+let is_calls p = Ty.call_dep p <> None
+
 (* The type parameters refined where they're checked: in an arm of a
    `match` on a `call` clause's call, the result of the call is known to
    be the result of the arm's case's operation (compiler.md, "Services
@@ -854,6 +898,15 @@ let rec canon_ty c ~all t : Ty.ty =
       | Some v -> canon_ty c ~all v
       | None -> Error)
   | TVar _ | TError -> Error
+  | TCon (p, args) when is_calls p -> (
+      (* a call's row of cases is the checker's (see [calls]) *)
+      match List.rev args with
+      | TErrors _ :: dargs -> Con (p, List.map (canon_ty c ~all) (List.rev dargs))
+      | _ -> Con (p, List.map (canon_ty c ~all) args))
+  | TCon (p, args) when p = Ty.generic_call ->
+      (* as [Ty.apply] makes it: `Call<D, R, ! E>` with [D] known is
+         [D]'s `D.Call` *)
+      Ty.known (Con (p, List.map (canon_ty c ~all) args))
   | TCon (p, args) -> Con (p, List.map (canon_ty c ~all) args)
   | TVariant (p, k, args) -> Variant (p, k, List.map (canon_ty c ~all) args)
   | TErrors e -> Errors (canon_row c ~all e)
@@ -942,9 +995,32 @@ let to_scheme st t : Ty.scheme =
 
 (* A canonical type from an interface, with [vars] standing for its
    variables and [tails] for its row variables. *)
+(* Whether [t] holds nothing inference hasn't solved yet. *)
+let rec solved t =
+  match repr t with
+  | TVar { contents = Unbound _ } -> false
+  | TCon (_, args) | TVariant (_, _, args) -> List.for_all solved args
+  | TErrors r -> solved_row r
+  | TImpl i -> List.for_all (fun d -> List.for_all solved d.dargs) i.deps
+  | TFun (ps, r, e, _) ->
+      List.for_all (fun (p : param) -> solved p.ty) ps && solved r && solved_row e
+  | TVar { contents = Link _ } | TSkol _ | TError -> true
+
+and solved_row r =
+  match repr_row r with
+  | RVar { contents = RUnbound _ } -> false
+  | RExtend (l, rest) -> List.for_all solved l.payload && solved_row rest
+  | _ -> true
+
+(* The closed row of the cases [cases]. *)
+let just_calls cases = List.fold_right (fun c r -> RExtend (call_label c, r)) cases REmpty
+
 let rec of_ty ~vars ~tails (t : Ty.ty) =
   let go = of_ty ~vars ~tails in
   match t with
+  | Con (p, args) when is_calls p ->
+      (* a call read from an interface may be any of its cases *)
+      TCon (p, List.map go args @ [ TErrors (every_call p) ])
   | Con (p, args) -> TCon (p, List.map go args)
   | Variant (p, c, args) -> TVariant (p, c, List.map go args)
   | Errors e -> TErrors (of_row ~vars ~tails ~dep:false e)
@@ -980,6 +1056,27 @@ and of_row ~vars ~tails ~dep (r : Ty.row) =
          })
        r.labels)
     tail
+
+(* The cases of the calls at [p], at the dependency's type arguments
+   [dargs], whose operations give [r] and fail with at most [e]: what a
+   `D.Call<R ! E>` may be (see [calls]). [None] while [r] or [e] isn't
+   known, when which they are can't be said yet. *)
+and calls_giving p dargs r e =
+  if not (solved r && solved_row e) then None
+  else
+    let can = List.map (fun l -> l.name) (fst (row_parts e)) in
+    Some
+      (List.filter_map
+         (fun (c : call_case) ->
+           let gives =
+             of_ty
+               ~vars:(fun i -> Option.value (List.nth_opt dargs i) ~default:TError)
+               ~tails:(fun _ -> REmpty) c.gives
+           in
+           if same_ty gives r && List.for_all (fun (l : Ty.label) -> List.mem l.name can) c.fails.labels
+           then Some c.case
+           else None)
+         (Option.value (Hashtbl.find_opt calls p) ~default:[]))
 
 (* [t], or if it's one of the module's own opaque types, what that's
    represented as, and so on until it's some other type (resolve.ml makes

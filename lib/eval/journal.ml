@@ -544,14 +544,44 @@ let first_word text =
   | Some i -> (String.sub text 0 i, String.sub text (i + 1) (String.length text - i - 1))
   | None -> (text, "")
 
-(* Whether [w] can be a task's path, `main/accept:7/handle.op:0`. *)
+(* The first word of [text] that's a task's path, and the rest after the
+   space that ends it: a keyed instance family's delivery is named by
+   its instance, `docs[DocId(7)]#1`, whose key, written as a value is,
+   may hold a space inside its brackets, in a string. *)
+let task_word text =
+  let n = String.length text in
+  let rec go i depth quoted =
+    if i >= n then (text, "")
+    else
+      match text.[i] with
+      | '\\' when quoted -> go (i + 2) depth quoted
+      | '"' when depth > 0 -> go (i + 1) depth (not quoted)
+      | _ when quoted -> go (i + 1) depth quoted
+      | '[' -> go (i + 1) (depth + 1) quoted
+      | ']' -> go (i + 1) (depth - 1) quoted
+      | ' ' when depth = 0 -> (String.sub text 0 i, String.sub text (i + 1) (n - i - 1))
+      | _ -> go (i + 1) depth quoted
+  in
+  go 0 0 false
+
+(* Whether [w] can be a task's path, `main/accept:7/handle.op:0`, or a
+   family's delivery's, `docs[DocId(7)]#1`. *)
 let is_path w =
-  w <> ""
-  && String.for_all
-       (function
-         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '/' | ':' | '.' -> true
-         | _ -> false)
-       w
+  let plain w =
+    w <> ""
+    && String.for_all
+         (function
+           | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '/' | ':' | '.' -> true
+           | _ -> false)
+         w
+  in
+  match (String.index_opt w '[', String.rindex_opt w '#') with
+  | Some b, Some h when b < h && h > 0 && w.[h - 1] = ']' ->
+      plain (String.sub w 0 b)
+      && h + 1 < String.length w
+      && String.for_all (function '0' .. '9' -> true | _ -> false)
+           (String.sub w (h + 1) (String.length w - h - 1))
+  | _ -> plain w
 
 (* The mark a call's first line ends with when the call waits: what it
    gave is on a line of its own, later. *)
@@ -570,16 +600,17 @@ let parse_entry ~file line text =
             panic`, where, and what it said in quotes"
          ())
   in
-  let word, rest = first_word text in
+  let word, rest = task_word text in
   match word with
   | "poll" when rest <> "" ->
-      Poll (List.filter (( <> ) "") (String.split_on_char ' ' rest), line)
+      let rec paths r = match task_word r with "", "" -> [] | p, rest -> p :: paths rest in
+      Poll (List.filter (( <> ) "") (paths rest), line)
   | task when not (is_path task) -> bad ()
   | task -> (
       let word, after = first_word rest in
       match word with
       | "cancelled" when after = "" -> Cancel (task, line)
-      | ("opened" | "made" | "evicted") when after <> "" -> Family (task, rest, line)
+      | ("opened" | "made" | "evicted" | "posted") when after <> "" -> Family (task, rest, line)
       | "→" -> Gave (task, (if after = "" then None else Some after), line)
       | "exit" when after = "0" -> End (Exited, line)
       | "exit" when (match int_of_string_opt after with Some n -> n > 128 && n < 256 | None -> false) ->

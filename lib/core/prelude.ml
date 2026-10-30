@@ -1065,6 +1065,16 @@ pub dep Instances =
   // operation pins with it, since its type can't name that error
   pub fn enter<K, D>(f: Family<K, D>, k: K, victim: fn(lru: Array<K>) -> Option<K>, body: fn() uses D) -> Pinned<D> =
     try family_enter(f, k, victim, body)
+  // puts `c` in `k`'s queue and returns: a task of the family's runs
+  // it, as one operation of `k`'s instance, after those queued before
+  // it. The instance is made first if it isn't live, as `enter` makes
+  // it, what making it failed with kept in what it gives, for `made`,
+  // but never waits for room: past `cap` if none is evictable. A call
+  // from outside the family waits while its mailbox is full; one of an
+  // instance's own, to a sibling, never waits, and panics past twice
+  // `mailbox`
+  pub fn post<K, D>(f: Family<K, D>, k: K, c: Call<D, Unit, !>, victim: fn(lru: Array<K>) -> Option<K>) -> Pinned<D> =
+    try family_post(f, k, c, victim)
   // fails as making the instance `enter` pinned did, if it failed
   pub fn made<D>(p: Pinned<(D ! ..e)>) ! ..e = try family_made(p)
   // the family's end: the live instances' `finally`s, the last made's
@@ -1239,6 +1249,9 @@ pub dep Actors<K, D> =
   evicted: fn() -> Int
   // the most posts queued at once
   high_water: fn() -> Int
+  // puts the call `c` in `k`'s mailbox, making its actor first if it
+  // isn't live: what making it failed with, if it did. `post`'s step
+  send: fn(k: K, c: Call<D, Unit, !>) -> Pinned<D>
 
   // installs `k`'s actor as `D` for `body`, making it if it isn't live:
   // what making it fails with is `at`'s. Each operation in `body` takes
@@ -1250,6 +1263,15 @@ pub dep Actors<K, D> =
     match got
       Some(r) => try r
       None => lib_panic("`at`'s block didn't run")
+  // puts one call of `D` in `k`'s mailbox and returns, Erlang's cast:
+  // `Docs.post(k, Doc.Call.Edit { op })`. Its arguments are evaluated
+  // now; the call is one that gives `()` and can't fail, run later as
+  // one operation of `k`'s actor, after the posts this task made to it
+  // before. It makes the actor if it isn't live, so what making it fails
+  // with is `post`'s, and it's all a post can fail with
+  pub fn post(k: K, c: Call<(D ! ..e), Unit, !>) ! ..e uses Actors<K, (D ! ..e)> =
+    let p: Pinned<(D ! ..e)> = Actors.send(k, c)
+    try Instances.made(p)
   // `body` with each live actor installed in turn, in the order they were
   // made, pinned while it runs: it makes none, and isn't use
   pub fn each(body: fn() uses D) ! ..e uses Actors<K, D> =
@@ -1299,6 +1321,9 @@ pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: In
   made() => Instances.counts(fam).made
   evicted() => Instances.counts(fam).evicted
   high_water() => Instances.counts(fam).high_water
+  send(k, c) =>
+    shake(fam, chaos)
+    Instances.post(fam, k, c, fn(lru: Array<K>) => victim(evict, lru))
 
 // how many partitions `actors` keeps of `max` actors, asked for `parts`:
 // as many as keep 64 each, up to `parts`, and at least 1
@@ -2104,6 +2129,23 @@ let scheme (x : Intrinsic.t) =
              Con (Path.prelude "Pinned", [ Var 1 ]),
              open_row 0,
              open_row 1 ))
+  (* fn<K, D>(f: Family<K, D>, k: K, c: Call<D, (), !>, victim: fn(lru:
+     Array<K>) -> Option<K>) -> Pinned<D>: [c] put in [k]'s queue, its
+     instance made first as [Family_enter]'s is, but never waiting for
+     room, what making it failed with kept in what it gives (compiler.md,
+     "Services stage", "Actors (step 7)") *)
+  | Family_post ->
+      scheme_of
+        (Fun
+           ( [
+               read (family (Var 0) (Var 1));
+               read (Var 0);
+               read (Con (Ty.generic_call, [ Var 1; unit; Errors Ty.closed ]));
+               read (Fun ([ read (array (Var 0)) ], option (Var 0), open_row 0, Ty.closed));
+             ],
+             Con (Path.prelude "Pinned", [ Var 1 ]),
+             open_row 0,
+             Ty.closed ))
   (* fn<D>(p: Pinned<(D ! E)>) ! E: what making the instance failed with,
      if it did *)
   (* fn<T>(body: fn() -> T ! E uses U) -> Result<T, ! E> uses U: what
@@ -2187,7 +2229,7 @@ let reaches (x : Intrinsic.t) =
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Task_random
   | Async_worker | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
   | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_full
-  | Family_enter | Family_made | Family_kept
+  | Family_enter | Family_post | Family_made | Family_kept
   | Call_first_hash | Call_add | Call_max | Call_min
   | Call_concat | Call_fold | Call_operations
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
@@ -2235,7 +2277,7 @@ let caller (x : Intrinsic.t) =
       | Sim_advance | Sim_alarm | Task_drain | Hash | Async_worker
       | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
       | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_full
-      | Family_enter | Family_made | Family_kept
+      | Family_enter | Family_post | Family_made | Family_kept
       | Call_first_hash | Call_add | Call_max
       | Call_min | Call_concat | Call_fold | Call_operations ) ) ->
       Internal
@@ -2261,6 +2303,7 @@ let runtime_of (x : Intrinsic.t) =
   | Family_visit -> Some ("Instances", "visit")
   | Family_idle -> Some ("Instances", "idle")
   | Family_enter -> Some ("Instances", "enter")
+  | Family_post -> Some ("Instances", "post")
   | Family_made -> Some ("Instances", "made")
   | _ -> None
 
@@ -2345,6 +2388,7 @@ let fns : Intrinsic.t list =
     Family_idle;
     Family_full;
     Family_enter;
+    Family_post;
     Family_made;
     Family_kept;
     Call_first_hash;

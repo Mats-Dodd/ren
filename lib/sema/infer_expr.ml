@@ -2846,7 +2846,7 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
                   | _ -> ())
                 ps args);
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
-        given_for env cx ~fnode:f.node ~at:e.loc ~ename ps args (made env ret))
+        given_for env cx ~node:(e.node, e.loc, cx.self) ~fnode:f.node ~at:e.loc ~ename ps args (made env ret))
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          block, whose errors are the call's. Its type isn't written, so it
@@ -2992,7 +2992,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
                        (tags_cant_fail loc ~fn ~param ~tag:t ~what ~can))
                  names)))
       (List.rev !given_tags);
-    kept_needs env ps (made env ret)
+    kept_needs env ~node:(e.node, e.loc, cx.self) ps (made env ret)
 
 (* [t], what a call gives, once its arguments [args] are checked, for
    the parameters [ps]: if it's a handler `for D`'s (Ty.param_path;
@@ -3004,7 +3004,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
    is given (Lower). A [D] that isn't a handler's description of one
    dependency whose operations are data is said, and the call is then of
    no type, so its `with` says nothing more. *)
-and given_for env cx ~fnode ~at ~ename ps args t =
+and given_for env cx ?node ~fnode ~at ~ename ps args t =
   match repr t with
   | TImpl ({ deps = [ { dpath; dargs = [ d ] } ]; _ } as i)
     when dpath = Ty.param_path -> (
@@ -3059,7 +3059,7 @@ and given_for env cx ~fnode ~at ~ename ps args t =
                  | None -> "this")
                (show (printer env) dt));
           TError)
-  | _ -> kept_needs env ps t
+  | _ -> kept_needs env ?node ps t
 
 (* [t], what a call of a handler gives, given [ps], its parameters: one
    given a maker, a parameter that's a function giving a description,
@@ -3067,7 +3067,7 @@ and given_for env cx ~fnode ~at ~ename ps args t =
    what it describes where it's installed (the runtime's family does,
    with the evidence there), so it needs what those need too
    (compiler.md, "Services stage", "Actors (step 7)"). *)
-and kept_needs env ps t =
+and kept_needs env ?node ps t =
   match repr t with
   | TImpl i ->
       let kept =
@@ -3084,7 +3084,13 @@ and kept_needs env ps t =
       if kept = [] then t
       else
         let ls = fst (row_parts i.needs) in
-        TImpl { i with needs = extend (ls @ without_labels ls kept) (row_end i.needs) }
+        let only = without_labels ls kept in
+        Option.iter
+          (fun (n, l, self) ->
+            Hashtbl.replace env.kept_own (n, l) only;
+            Hashtbl.replace env.kept_in self only)
+          node;
+        TImpl { i with needs = extend (ls @ only) (row_end i.needs) }
   | _ -> t
 
 (* [check ()], checking the arguments of the call [e] of [f], whose
@@ -3160,6 +3166,71 @@ and made env t =
    type, of [ps]; [name] is the callee, for messages, and [callee] the
    top-level function it is, if it's one. [written] says which of [ps]
    have a type written, where an argument is narrowed to it ([narrow]). *)
+(* [expected], if it's generic code's `D.Call<R ! E>` made for a known
+   dependency, a parameter's `Call<D, R, ! E>` once [D] is: that
+   dependency, at its type arguments, R and E (Types.calls). *)
+and known_calls expected =
+  let rec described d =
+    match repr d with
+    | TImpl { deps = [ { dpath; dargs = [ x ] } ]; _ } when dpath = Ty.param_path -> described x
+    | d -> d
+  in
+  match repr expected with
+  | TCon (g, [ d; r; TErrors e ]) when g = Ty.generic_call -> (
+      match described d with
+      | TImpl { deps = [ x ]; _ } when Hashtbl.mem Types.calls (Ty.call_path x.dpath) ->
+          Some (x, r, e)
+      | _ -> None)
+  | _ -> None
+
+(* [a], given to [name]'s parameter of `D.Call<R ! E>`, [expected]: a
+   call that may be one of an operation that gives something else, or
+   can fail with what E doesn't list, is refused naming that operation,
+   with the help decision 18 gives; anything else is an ordinary
+   mismatch. It's no rule written for `post`: any function's parameter of
+   such a type says the same (compiler.md, "Services stage", "`D.Call`"). *)
+and call_arg env cx ~name (a : expr) expected =
+  let t = infer env cx a in
+  (* the first case [t] may be that [expected], a `D.Call<R ! E>`, doesn't
+     take: one whose operation gives something else than R, or can fail
+     with what E doesn't list *)
+  let refused =
+    match (known_calls expected, repr t) with
+    | Some (x, r, e), TCon (p, args) when p = Ty.call_path x.dpath -> (
+        match (List.rev args, calls_giving p x.dargs r e) with
+        | TErrors row :: _, Some allowed ->
+            List.find_map
+              (fun (c : Types.call_case) ->
+                if List.mem c.case (row_names row) && not (List.mem c.case allowed) then
+                  Some (c, x.dargs, r, e)
+                else None)
+              (Option.value (Hashtbl.find_opt Types.calls p) ~default:[])
+        | _ -> None)
+    | _ -> None
+  in
+  match refused with
+  | Some (c, dargs, r, e) ->
+      let pr = printer env in
+      let shown t = if same_ty t unit then "()" else show pr t in
+      let gives =
+        of_ty ~vars:(fun i -> Option.value (List.nth_opt dargs i) ~default:TError)
+          ~tails:(fun _ -> REmpty) c.gives
+      in
+      (* the function as it's called, `post` of `Docs.post` *)
+      let fn =
+        match name with
+        | Some n -> (
+            match String.rindex_opt n '.' with
+            | Some i -> String.sub n (i + 1) (String.length n - i - 1)
+            | None -> n)
+        | None -> "this"
+      in
+      report env
+        (call_not_taken (result_loc a) ~fn ~gives:(shown r) ~fails:(row_names e) ~op:c.op
+           ~op_gives:(if same_ty gives r then None else Some (shown gives))
+           ~op_fails:(List.map (fun (l : Ty.label) -> l.name) c.fails.labels))
+  | None -> ignore (unifies env plain (result_loc a) ~found:t ~expected)
+
 and check_args env cx ~name ?callee ~written ps args =
   List.iter2
     (fun ((p : Types.param), written) (a : expr) ->
@@ -3202,6 +3273,7 @@ and check_args env cx ~name ?callee ~written ps args =
       | Read, Ref place when passed ->
           ignore (infer env cx place);
           report env (arg_not_changed a.loc name)
+      | Read, _ when known_calls p.ty <> None -> call_arg env cx ~name a p.ty
       | Read, _ -> (
           let why =
             match (cant_fail_why env callee a p.ty, callee) with
@@ -3396,6 +3468,7 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
   | Some (td, ctor) ->
       Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
       let t, tvars = instance env td in
+      call_case env t ctor.cname;
       let written = written_args td written in
       let shown = ctor_written env cref in
       let source (a : expr) = Option.value (env.source a) ~default:"..." in
@@ -3460,6 +3533,7 @@ and infer_con_named env cx (e : expr) (cref : ctor_ref) fields ~written
   | Some (td, ctor) ->
       Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
       let t, tvars = instance env td in
+      call_case env t ctor.cname;
       let written = written_args td written in
       let shown = ctor_written env cref in
       (if not ctor.cnamed then (
@@ -3750,6 +3824,7 @@ and infer_update env cx (e : expr) target base fields ~expected =
         match tgt with Some t -> t | None -> (btd, bfs, None)
       in
       let t, tvars = instance env td in
+      Option.iter (call_case env t) ctor;
       (* with no target, an update of a variant type is that variant
          type: `{ ..p, total: x }` is an `Order.Placed` *)
       let t, target_name =

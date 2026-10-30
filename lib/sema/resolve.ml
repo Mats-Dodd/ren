@@ -627,10 +627,25 @@ let calls_type env ~params (t : tyname) (c : ident) args : Resolved.ty option =
   let unit () = TyName ({ tref = Named (Path.prelude "Unit"); tloc = loc }, []) in
   match (t.tmod, index_of t.tid.name 0 params) with
   | None, Some i ->
+      (* `D.Call`, a call of any of [D]'s operations, whatever it gives;
+         `D.Call<R>` and `D.Call<R, ! E>`, one that gives R and fails with
+         at most E, none if they aren't written *)
+      let tloc = Loc.span loc c.loc in
+      let rest =
+        match args with
+        | [] -> []
+        | [ r ] -> [ r; TyErrors { errs = []; etail = None; eloc = tloc } ]
+        | [ r; e ] -> [ r; e ]
+        | _ ->
+            report env loc
+              (sprintf "`%s.Call` takes at most 2 type arguments but was given %d"
+                 (show_tyname t) (List.length args));
+            []
+      in
       Some
         (TyName
-           ( { tref = Named Ty.generic_call; tloc = Loc.span loc c.loc },
-             [ TyName ({ tref = Param i; tloc = loc }, []) ] ))
+           ( { tref = Named Ty.generic_call; tloc },
+             TyName ({ tref = Param i; tloc = loc }, []) :: rest ))
   | _ -> (
       match find_named env ~params t with
       | Some (Named p, n) when dep_ops env p <> None -> (
@@ -647,11 +662,30 @@ let calls_type env ~params (t : tyname) (c : ident) args : Resolved.ty option =
           in
           if found then (
             let given = List.length args in
-            if n <> given then
+            if given > n && given <= n + 2 then
+              (* what a call gives and fails with is in a concrete call's
+                 type, and checked where generic code's `D.Call<R ! E>`
+                 meets it, `post`'s `D.Call<()>` (Types.calls); it isn't
+                 written of a dependency's own calls, since the
+                 interface a function is seen through by other modules
+                 keeps only `Doc.Call` *)
+              report env loc
+                ~help:
+                  "build the call where it's posted, and take what it's built \
+                   from instead"
+                (sprintf
+                   "what a call of `%s` gives and fails with isn't written: \
+                    `%s.Call` is a call of any of its operations, and \
+                    `D.Call<R ! E>` is generic code's"
+                   (show_tyname t) (show_tyname t))
+            else if n <> given then
               report env loc
                 (sprintf "`%s.Call` takes %d type argument%s but was given %d"
                    (show_tyname t) n (plural n) given);
-            Some (TyName ({ tref = Named cp; tloc = Loc.span loc c.loc }, args)))
+            Some
+              (TyName
+                 ( { tref = Named cp; tloc = Loc.span loc c.loc },
+                   List.filteri (fun i _ -> i < n) args )))
           else
             (* which operation isn't data, and why *)
             let reason =

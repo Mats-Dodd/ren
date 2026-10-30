@@ -684,6 +684,30 @@ let new_env sink ~reachable (r : Resolve.t) =
       | Dep_alias t -> Hashtbl.replace st.aliases p t
       | _ -> ())
     types;
+  (* each `D.Call`'s cases, with what their operations give and fail
+     with, which a call's type carries (Types.calls) *)
+  Hashtbl.iter
+    (fun p _ ->
+      match Ty.call_dep p with
+      | Some d -> (
+          let dargs =
+            match Hashtbl.find_opt types d with
+            | Some dd -> List.mapi (fun i _ -> Ty.Var i) dd.params
+            | None -> []
+          in
+          match Iface.dep_fields (Hashtbl.find_opt types) { dpath = d; dargs } with
+          | Some ops ->
+              Hashtbl.replace Types.calls p
+                (List.filter_map
+                   (fun (o : Iface.field) ->
+                     match o.fty with
+                     | Fun (_, gives, fails, _) ->
+                         Some { Types.case = Ty.call_case o.fname; op = o.fname; gives; fails }
+                     | _ -> None)
+                   ops)
+          | None -> ())
+      | None -> ())
+    types;
   (* the types step 2 of a lookup through a type looks in: those the
      module can name bare. [r.scope] is sorted by name, and two of its
      types never share one. *)
@@ -767,6 +791,8 @@ let new_env sink ~reachable (r : Resolve.t) =
     pinned_by = [];
     pin_ops = Hashtbl.create 4;
     kept_pins = Hashtbl.create 4;
+    kept_own = Hashtbl.create 4;
+    kept_in = Hashtbl.create 4;
   }
 
 (* A function's parameters with defaults, by their places among the

@@ -93,6 +93,7 @@ type t =
   | Family_idle
   | Family_full
   | Family_enter
+  | Family_post
   | Family_made
   | Family_kept
   | Call_first_hash

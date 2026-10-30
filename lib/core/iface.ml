@@ -243,16 +243,16 @@ let members_of path ops =
    one it names (compiler.md, "Generic dependencies"). [find] finds a
    type's declaration. [None] if [d] isn't a dependency, or is given the
    wrong number of type arguments. *)
-let rec dep_fields find (d : Ty.dep) =
+let rec dep_fields ?calls find (d : Ty.dep) =
   match find d.dpath with
   | Some { body = Dep fs; params; _ }
     when List.length params = List.length d.dargs ->
       Some
         (List.map
            (fun f ->
-             { f with fty = Ty.apply { tys = d.dargs; rows = [] } f.fty })
+             { f with fty = Ty.apply ?calls { tys = d.dargs; rows = [] } f.fty })
            fs)
-  | Some { body = Dep_alias t; _ } when d.dargs = [] -> dep_fields find t
+  | Some { body = Dep_alias t; _ } when d.dargs = [] -> dep_fields ?calls find t
   | _ -> None
 
 (* What the alias at [p] names, if it's one. *)

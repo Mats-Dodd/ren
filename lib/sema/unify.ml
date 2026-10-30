@@ -81,6 +81,16 @@ let rec unify st a b =
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
     ->
       List.iter2 (unify st) a1 a2
+  (* generic code's `D.Call<R ! E>`, the prelude's `Call<D, R, ! E>`,
+     with [D] a description of a dependency, is that one's `D.Call` of
+     the cases whose operations give R and fail with at most E, once
+     they're known: `post`'s `Doc.Call<()>` (Types.calls) *)
+  | TCon (g, [ d; r; TErrors e ]), TCon (p, args)
+    when g = Ty.generic_call && is_calls p ->
+      known_call st d r e p args
+  | TCon (p, args), TCon (g, [ d; r; TErrors e ])
+    when g = Ty.generic_call && is_calls p ->
+      known_call st d r e p args
   (* a variant type is only itself: never its sum, with no subtyping and
      no conversion (compiler.md, "Data stage", "Variant types") *)
   | TVariant (n1, c1, a1), TVariant (n2, c2, a2)
@@ -142,6 +152,26 @@ let rec unify st a b =
          && x.dpath <> Ty.any_path ->
       unify st (TImpl i) (TImpl j)
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
+  | _ -> raise Mismatch
+
+(* `Call<D, R, ! E>`, [d] [r] and [e], unified with a call of the
+   dependency at [p], `Doc.Call<..., ! cases>`, [args]: [D] is that
+   dependency's description, and the call one of the cases whose
+   operations give R and fail with at most E. *)
+and known_call st d r e p args =
+  (* `(D ! ..e)`, [D] a description, is [D]'s *)
+  let rec described d =
+    match repr d with
+    | TImpl { deps = [ { dpath; dargs = [ x ] } ]; _ } when dpath = Ty.param_path -> described x
+    | d -> d
+  in
+  match (described d, List.rev args) with
+  | TImpl { deps = [ x ]; _ }, TErrors row :: rdargs
+    when Ty.call_path x.dpath = p && List.length x.dargs = List.length rdargs -> (
+      List.iter2 (unify st) x.dargs (List.rev rdargs);
+      match calls_giving p x.dargs r e with
+      | Some cases -> unify_row st row (just_calls cases)
+      | None -> raise Mismatch)
   | _ -> raise Mismatch
 
 (* Rows are equal when they have the same labels, in any order. To unify

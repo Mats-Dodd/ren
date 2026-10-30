@@ -30,9 +30,21 @@
    key's lives from 1: `docs[DocId(7)]#3` ([name_of]). The deadlock panic
    names an instance a parked task holds so.
 
-   Not built yet, step 7b's (compiler.md, "Services stage", progress
-   log): `post` and the queue of calls per key with its delivery tasks,
-   the meter at the family's edge, and teardown draining the queues. *)
+   **Posts** (decision 18's `post`; research/actors-post/'s fixed rules):
+   a call put in a key's queue, which belongs to the key, not to its
+   instance, so the order of one task's posts survives eviction; a task
+   of the family's, one per key with mail, delivers each as one operation
+   of the key's instance, in order ([deliver]). A post makes its
+   instance, as a pin does, so what a delivery runs on is always live
+   (queued mail keeps an instance from eviction, [evictable]) and a
+   delivery never runs setup; but a post never waits for room: it goes
+   past the cap when none is evictable, so draining the mail never needs
+   a slot. Every call from outside the family, a post or an operation of
+   one of its instances, waits at its edge while the mailbox is full
+   ([edge]); a sibling's, from one of its instances' operations or a
+   delivery, never waits, and panics past twice the mailbox ([post]).
+   The family's end delivers what's queued, which may post more, then
+   runs its instances' `finally`s ([close]). *)
 
 (* Where an instance is in its life. *)
 type state = Making | Live | Evicting
@@ -68,12 +80,29 @@ type part = {
 }
 
 (* What eval.ml does for a family: make an instance for a key, its
-   implementation and its `finally`; run a `finally`; and show a key, as
-   a value of the keys' type is shown. *)
+   implementation and its `finally`; run a `finally`; run a posted call,
+   a value of the dependency's `D.Call`, as one operation of an
+   instance's; show a key, as a value of the keys' type is shown, and a
+   call; and let the instances name the opener's own install ([sibling]). *)
 type runner = {
   make : Value.t -> Value.installed * Value.t option;
   finish : Value.t -> unit;
+  deliver : string -> Value.installed -> Value.t -> unit;
   show : Value.t -> string;
+  show_call : Value.t -> string;
+  sibling : Value.installed -> unit;
+}
+
+(* A key's queue of posted calls, the first posted first, each with the
+   task that posted it; whether a task of the family's is delivering
+   them, and whose call it's delivering now; and the tasks waiting for
+   their own posts to be delivered before they call the instance
+   ([ordered]). *)
+type box = {
+  calls : (Sched.task option * Value.t) Queue.t;
+  mutable delivering : bool;
+  mutable current : Sched.task option;
+  mutable after : (unit -> bool) list;
 }
 
 type family = {
@@ -83,7 +112,7 @@ type family = {
       (** its place among the families opened, which a family opened
           inside another's `with` comes after: what "installed outside"
           means to the no-deadlock rule ([pin]) *)
-  mailbox : int;  (** the edge's bound, which step 7's meter reads *)
+  mailbox : int;  (** the edge's bound ([edge]) *)
   hash : Value.t -> int64;  (** a key's, the same in every run *)
   equal : Value.t -> Value.t -> bool;
   parts : part array;
@@ -95,6 +124,16 @@ type family = {
   mutable lives : (Value.t * int) list;
       (** each key made, with its last life's number, kept across eviction *)
   mutable closed : bool;
+  mutable mail : int;  (** the calls queued, across its keys *)
+  mutable boxes : (Value.t * box) list;
+      (** each key with calls queued or being delivered, and its queue: the
+          key's, not its instance's *)
+  tasks : Sched.scope;  (** where its deliveries run, which [close] waits for *)
+  context : Sched.frame list;
+      (** the `with`s the opener was in, which its deliveries are in too *)
+  mutable deliveries : Sched.task list;  (** those running now *)
+  mutable edge : (unit -> bool) list;
+      (** the calls from outside waiting for room in the mailbox *)
 }
 
 (* A family as a program holds it, `Family<K, D>`: a handle, not an
@@ -113,11 +152,20 @@ let panic msg = raise (Builtins.Panic msg)
 exception Full
 
 (* What's journaled of a family (journal.ml, version 3), on the task
-   that did it: a family opened, with its partitions, and an instance
-   made and one evicted, each named by the one rule. *)
+   that did it: a family opened, with its partitions, an instance made
+   and one evicted, each named by the one rule, and a call posted, to a
+   key, not an instance, since the queue is the key's: `posted
+   docs[DocId(7)] Edit { op: "a" }`. *)
 let on_made name = Sched.family_event ("made " ^ name)
 let on_evicted name = Sched.family_event ("evicted " ^ name)
 let on_opened name parts = Sched.family_event (Printf.sprintf "opened %s parts %d" name parts)
+let on_posted to_ call = Sched.family_event (Printf.sprintf "posted %s %s" to_ call)
+
+(* The family each live instance is of, and the instance, by its number
+   (Value.installed's [inst]): what the edge's meter finds an operation's
+   family by ([metered]), and a sibling by ([sibling]). Numbers are never
+   reused, so an entry a run that panicked left is never found. *)
+let owners : (int, family * inst) Hashtbl.t = Hashtbl.create 16
 
 (* The families whose instances each task pins for a block, the last
    pinned first, by the task: what the no-deadlock rules read ([pin]).
@@ -188,15 +236,25 @@ let snake name =
   Buffer.contents b
 
 (* The families each `with` has opened while its handler was made, by
-   the dependency it installs, which names the next one ([opened]). *)
-let opening : (string * int ref) list ref = ref []
+   the dependency it installs, which names the next one ([opened]), and
+   those it has opened so far. *)
+let opening : (string * int ref * family list ref) list ref = ref []
 
 (* [f ()], making the instance a `with` installs as [dep]: a family its
-   handler opens meanwhile is named by it. *)
+   handler opens meanwhile is named by it. With the families it opened,
+   for [installed_as]. *)
 let installing dep f =
   let around = !opening in
-  opening := (dep, ref 0) :: around;
-  Fun.protect ~finally:(fun () -> opening := around) f
+  let opened = ref [] in
+  opening := (dep, ref 0, opened) :: around;
+  let r = Fun.protect ~finally:(fun () -> opening := around) f in
+  (r, !opened)
+
+(* The instance a `with` installs, [top], whose handler opened [fams]
+   while it was made: their instances may name it, to post to their
+   siblings (decision 18, "Siblings"), so it's added to the evidence
+   their maker was given at `open`, which came before it existed. *)
+let installed_as fams top = List.iter (fun f -> f.runner.sibling top) fams
 
 (* A family opened now, by the handler being made for the innermost
    `with` that's installing one, in [parts] partitions of [cap] instances
@@ -206,31 +264,42 @@ let opened_count = ref 0
 let opened ~parts ~cap ~mailbox ~hash ~equal runner =
   if parts < 1 then panic (Printf.sprintf "a family has at least 1 partition, not %d" parts);
   if cap < 1 then panic (Printf.sprintf "a family's partition keeps at least 1 instance, not %d" cap);
-  let dep, name =
+  if mailbox < 1 then panic (Printf.sprintf "a family's mailbox holds at least 1 call, not %d" mailbox);
+  let dep, name, fams =
     match !opening with
-    | (dep, n) :: _ ->
+    | (dep, n, fams) :: _ ->
         incr n;
-        (dep, if !n = 1 then snake dep else Printf.sprintf "%s.%d" (snake dep) !n)
-    | [] -> ("Instances", "family")
+        (dep, (if !n = 1 then snake dep else Printf.sprintf "%s.%d" (snake dep) !n), Some fams)
+    | [] -> ("Instances", "family", None)
   in
   incr opened_count;
   on_opened name parts;
-  {
-    name;
-    dep;
-    num = !opened_count;
-    mailbox;
-    hash;
-    equal;
-    parts = Array.init parts (fun _ -> { insts = []; lru = []; cap; room = [] });
-    runner;
-    order = 0;
-    made = 0;
-    evicted = 0;
-    high = 0;
-    lives = [];
-    closed = false;
-  }
+  let f =
+    {
+      name;
+      dep;
+      num = !opened_count;
+      mailbox;
+      hash;
+      equal;
+      parts = Array.init parts (fun _ -> { insts = []; lru = []; cap; room = [] });
+      runner;
+      order = 0;
+      made = 0;
+      evicted = 0;
+      high = 0;
+      lives = [];
+      closed = false;
+      mail = 0;
+      boxes = [];
+      tasks = Sched.owned ();
+      context = Sched.context ();
+      deliveries = [];
+      edge = [];
+    }
+  in
+  Option.iter (fun fams -> fams := f :: !fams) fams;
+  f
 
 (* An instance's name by the one rule: `docs[DocId(7)]#3`. *)
 let name_of f (i : inst) =
@@ -250,8 +319,18 @@ let find f k =
     (fun i -> i.state <> Evicting && f.equal i.key k)
     (part_of f k).insts
 
-(* Whether [i] can be evicted: it's live, and no operation of it runs. *)
-let evictable i = i.state = Live && i.pins = 0
+(* [k]'s queue of posted calls, if it has calls queued or being
+   delivered. *)
+let box_of f k = List.find_map (fun (k', b) -> if f.equal k' k then Some b else None) f.boxes
+
+(* Whether calls are queued for [k]: they count as waiting for its
+   instance (decision 18). *)
+let has_mail f k =
+  match box_of f k with Some b -> not (Queue.is_empty b.calls) | None -> false
+
+(* Whether [i] can be evicted: it's live, no operation of it runs, and no
+   call is queued for it, so a delivery never makes one. *)
+let evictable f i = i.state = Live && i.pins = 0 && not (has_mail f i.key)
 
 (* The order of release: [i], once nothing pins it, goes where the time
    it was last released puts it, the least recently released first, and
@@ -293,6 +372,7 @@ let evict_now f i =
   Fun.protect
     ~finally:(fun () ->
       p.insts <- List.filter (fun j -> j != i) p.insts;
+      Option.iter (fun (ins : Value.installed) -> Hashtbl.remove owners ins.inst) i.installed;
       f.evicted <- f.evicted + 1;
       p.room <- Sched.wake_first p.room)
     (fun () -> Option.iter (fun fin -> Sched.shielded (fun () -> f.runner.finish fin)) i.finally)
@@ -319,9 +399,12 @@ let inside f = List.find_opt (fun g -> f.num >= g.num) (pinned ())
    that can ([take_mark]), and panics where it wasn't, since that error
    is in no signature there. [block] says it's pinned for a block, not
    for one operation, which a task already pinning one of [f]'s for a
-   block can't do (a helper hid what Infer refuses). Each [pin] is
-   matched by an [unpin]. *)
-let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
+   block can't do (a helper hid what Infer refuses). With [over], a
+   post's, it never waits for room: past the cap, when [victim] gives
+   none or none is evictable, so delivering what's posted never needs a
+   slot (research/actors-post/, recommendation 1). Each [pin] is matched
+   by an [unpin]. *)
+let pin ?at ?(victim = fun _ -> None) ?(block = false) ?(over = false) f k =
   ended f;
   let full_ok = take_mark () in
   if block && List.memq f (pinned ()) then
@@ -345,77 +428,81 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
     | Some { state = Evicting; _ } -> go ()
     | None ->
         let p = part_of f k in
-        if List.length p.insts >= p.cap then (
-          let lru = List.filter evictable p.lru in
-          let wait () =
-            match inside f with
-            | Some g ->
-                if full_ok then raise Full
-                else
-                  panic
-                    (Printf.sprintf
-                       "a task pinning `%s` would wait for a slot of `%s`, \
-                        installed inside it"
-                       g.dep f.dep)
-            | None ->
+        (* a wait for room in a full partition, unless the task pins an
+           instance of a family installed inside [f] *)
+        let wait () =
+          match inside f with
+          | Some g ->
+              if full_ok then raise Full
+              else
+                panic
+                  (Printf.sprintf
+                     "a task pinning `%s` would wait for a slot of `%s`, \
+                      installed inside it"
+                     g.dep f.dep)
+          | None ->
               Sched.wait ?at
                 (Printf.sprintf "waits for room in `%s`" f.name)
                 (fun wake -> p.room <- p.room @ [ wake ])
-          in
-          (match lru with
-          | [] -> wait ()
-          | _ -> (
-              let keys = List.map (fun i -> i.key) lru in
-              match victim keys with
-              | None -> wait ()
-              | Some v -> (
-                  if not (List.exists (fun k' -> f.equal k' v) keys) then
-                    panic "`victim` picked a key that isn't evictable";
-                  (* the victim was asked by a block, which may have let
-                     another task run: it's evicted only if it still can be *)
-                  match find f v with
-                  | Some j when evictable j -> evict_now f j
-                  | _ -> ())));
-          go ())
+        in
+        if List.length p.insts < p.cap then fresh p
         else
-          let i =
-            {
-              key = k;
-              life = next_life f k;
-              born = f.order;
-              installed = None;
-              finally = None;
-              pins = 1;
-              released_at = 0.;
-              state = Making;
-              waiting = [];
-              failed = None;
-            }
-          in
-          f.order <- f.order + 1;
-          p.insts <- p.insts @ [ i ];
-          let wake_all () =
-            List.iter (fun w -> ignore (w ())) i.waiting;
-            i.waiting <- []
-          in
-          (match f.runner.make k with
-          | installed, finally ->
-              i.installed <- Some installed;
-              i.finally <- finally;
-              i.state <- Live;
-              f.made <- f.made + 1;
-              on_made (name_of f i);
-              wake_all ()
-          | exception e ->
-              (* its setup failed, or was cancelled: the key is left
-                 unmade; those waiting fail with the same error, or, if
-                 it was cancelled, the first of them tries again *)
-              p.insts <- List.filter (fun j -> j != i) p.insts;
-              (match e with Sched.Cancelled -> () | e -> i.failed <- Some e);
-              wake_all ();
-              p.room <- Sched.wake_first p.room;
-              raise e);
-          i
+          let lru = List.filter (evictable f) p.lru in
+          match if lru = [] then None else victim (List.map (fun i -> i.key) lru) with
+          | None when over -> fresh p
+          | None ->
+              wait ();
+              go ()
+          | Some v ->
+              if not (List.exists (fun i -> f.equal i.key v) lru) then
+                panic "`victim` picked a key that isn't evictable";
+              (* the victim was asked by a block, which may have let
+                 another task run: it's evicted only if it still can be *)
+              (match find f v with
+              | Some j when evictable f j -> evict_now f j
+              | _ -> ());
+              go ()
+  (* [k]'s instance made now, in [p], on this task, pinned *)
+  and fresh p =
+    let i =
+      {
+        key = k;
+        life = next_life f k;
+        born = f.order;
+        installed = None;
+        finally = None;
+        pins = 1;
+        released_at = 0.;
+        state = Making;
+        waiting = [];
+        failed = None;
+      }
+    in
+    f.order <- f.order + 1;
+    p.insts <- p.insts @ [ i ];
+    let wake_all () =
+      List.iter (fun w -> ignore (w ())) i.waiting;
+      i.waiting <- []
+    in
+    (match f.runner.make k with
+    | installed, finally ->
+        i.installed <- Some installed;
+        i.finally <- finally;
+        i.state <- Live;
+        Hashtbl.replace owners installed.inst (f, i);
+        f.made <- f.made + 1;
+        on_made (name_of f i);
+        wake_all ()
+    | exception e ->
+        (* its setup failed, or was cancelled: the key is left
+           unmade; those waiting fail with the same error, or, if
+           it was cancelled, the first of them tries again *)
+        p.insts <- List.filter (fun j -> j != i) p.insts;
+        (match e with Sched.Cancelled -> () | e -> i.failed <- Some e);
+        wake_all ();
+        p.room <- Sched.wake_first p.room;
+        raise e);
+    i
   in
   let i = go () in
   if block then add_pin f;
@@ -453,10 +540,193 @@ let visit f k =
 let evict f k =
   ended f;
   match find f k with
-  | Some i when evictable i ->
+  | Some i when evictable f i ->
       evict_now f i;
       true
   | _ -> false
+
+(* ---- posts (decision 18's `post`; research/actors-post/) ---- *)
+
+(* A sibling's post past twice the mailbox: a chain reaction, which ends
+   as a stack overflow does, with its headline and notes, which eval.ml
+   says at the program's call that posted. *)
+exception Overflow of string * string list
+
+(* Whether the task running is inside [f]: one of its deliveries, or in
+   an operation of one of its instances, which it hasn't let go of. A
+   call from there is a sibling's, which never waits at the edge. *)
+let sibling f =
+  match me () with
+  | None -> false
+  | Some t ->
+      List.memq t f.deliveries
+      || List.exists
+           (fun (h : Sched.held) ->
+             (not (List.mem h.inst t.let_go))
+             && match Hashtbl.find_opt owners h.inst with Some (g, _) -> g == f | None -> false)
+           t.holding
+
+(* The edge's meter (decision 18, "Back-pressure at the family's edge"):
+   a call from outside [f] waits while its mailbox is full, so what work
+   from outside causes is at most the mailbox, plus one operation's posts
+   per live instance. It waits holding no slot it needs: a delivery
+   makes room by delivering, and a post's making never waits for room
+   ([pin]'s [over]). *)
+let edge ?at f =
+  while f.mail >= f.mailbox && not f.closed do
+    Sched.wait ?at
+      (Printf.sprintf "waits for room in `%s`'s mailbox" f.dep)
+      (fun wake -> f.edge <- f.edge @ [ wake ])
+  done
+
+(* Whether [t] posted a call in [b] that hasn't been delivered yet. *)
+let posted_by t (b : box) =
+  let is = function Some u -> u == t | None -> false in
+  is b.current || Queue.fold (fun seen (p, _) -> seen || is p) false b.calls
+
+(* A task calling an operation of [i] waits first until what it posted to
+   [i]'s key has been delivered: a task's posts and its calls of one
+   actor come in the order it made them, as a cast and a call of one
+   Erlang process do, through its one mailbox. *)
+let ordered ?at f i =
+  match me () with
+  | None -> ()
+  | Some t ->
+      let rec go () =
+        match box_of f i.key with
+        | Some b when posted_by t b ->
+            Sched.wait ?at
+              (Printf.sprintf "waits for its posts to `%s` to be delivered" (name_of f i))
+              (fun wake -> b.after <- b.after @ [ wake ]);
+            go ()
+        | _ -> ()
+      in
+      go ()
+
+(* An operation of the instance numbered [inst] is about to take it: if
+   it's an instance of a family's and the call comes from outside the
+   family, an operation called through a pinned block, it's metered at
+   the edge first, as a post is (research/actors-post/, recommendation
+   2), and waits for what its task posted to the instance ([ordered]). A
+   delivery's own, and a sibling's, don't wait. *)
+let metered ?at inst =
+  match Hashtbl.find_opt owners inst with
+  | Some (f, i) when not (sibling f) ->
+      edge ?at f;
+      ordered ?at f i
+  | _ -> ()
+
+(* [k]'s instance, which a call is queued for and so is live, pinned for
+   one delivery. *)
+let delivered_to f k =
+  match find f k with
+  | Some ({ state = Live; _ } as i) ->
+      i.pins <- i.pins + 1;
+      let p = part_of f k in
+      p.lru <- List.filter (fun j -> j != i) p.lru;
+      i
+  | _ -> failwith "bug: the family: a delivery to an instance that isn't live"
+
+(* What's queued for [k], delivered on a task of the family's, each as one
+   operation of its instance, the first posted first, until none is
+   left. Each is taken off the queue as it starts, and the edge's first
+   waiter woken; the instance is pinned while it runs, and once its queue
+   is empty and nothing pins it, it's evictable again. *)
+let deliver f k (b : box) () =
+  let rec next () =
+    if not (Queue.is_empty b.calls) then (
+      let i = delivered_to f k in
+      let poster, c = Queue.pop b.calls in
+      b.current <- poster;
+      f.mail <- f.mail - 1;
+      f.edge <- Sched.wake_first f.edge;
+      Fun.protect
+        ~finally:(fun () ->
+          b.current <- None;
+          unpin f i;
+          List.iter (fun w -> ignore (w ())) b.after;
+          b.after <- [])
+        (fun () ->
+          match i.installed with
+          | Some ins -> f.runner.deliver (name_of f i) ins c
+          | None -> failwith "bug: the family: a delivery to an instance that isn't made");
+      next ())
+  in
+  let t = me () in
+  Fun.protect
+    ~finally:(fun () ->
+      b.delivering <- false;
+      f.boxes <- List.filter (fun (_, b') -> b' != b) f.boxes;
+      match t with
+      | Some t -> f.deliveries <- List.filter (fun u -> u != t) f.deliveries
+      | None -> ())
+    next
+
+(* The most calls each family that was posted to has queued at once, by
+   the dependency it's installed as, across the runs since [reset_highs]:
+   what `ren test` reports of a test, under `sim`, its high-water mark
+   (decision 18, "A chain reaction panics": it's how one is found before
+   it panics). *)
+let highs : (string * int) list ref = ref []
+
+let reset_highs () = highs := []
+
+let note_high f =
+  match List.assoc_opt f.dep !highs with
+  | Some h when h >= f.high -> ()
+  | Some _ -> highs := List.map (fun (d, h) -> if d = f.dep then (d, f.high) else (d, h)) !highs
+  | None -> highs := !highs @ [ (f.dep, f.high) ]
+
+(* Put [c] in [k]'s queue, which a task of the family's delivers, started
+   now if none is: named by the instance it delivers to, by the one rule. *)
+let enqueue f k (i : inst) c =
+  let b =
+    match box_of f k with
+    | Some b -> b
+    | None ->
+        let b = { calls = Queue.create (); delivering = false; current = None; after = [] } in
+        f.boxes <- f.boxes @ [ (k, b) ];
+        b
+  in
+  Queue.push (me (), c) b.calls;
+  f.mail <- f.mail + 1;
+  if f.mail > f.high then (
+    f.high <- f.mail;
+    note_high f);
+  if not b.delivering then (
+    b.delivering <- true;
+    let t = Sched.start_owned f.tasks ~path:(name_of f i) ~context:f.context (fun () ->
+        deliver f k b ();
+        Value.VUnit)
+    in
+    f.deliveries <- t :: f.deliveries)
+
+(* `post`: [c] put in [k]'s queue, a call of [k]'s instance that gives
+   `()` and can't fail, to be run later, after those this task posted to
+   [k] before it. A call from outside waits at the edge first ([edge]).
+   The instance is made now if it isn't live, so what making it fails
+   with is the post's, and nothing is queued then; its making never waits
+   for room ([pin]'s [over]). A sibling's post past twice the mailbox is
+   a chain reaction, which panics ([Overflow]). *)
+let post ?at ?victim f k c =
+  ended f;
+  let inside = sibling f in
+  if not inside then edge ?at f;
+  let i = pin ?at ?victim ~over:true f k in
+  Fun.protect
+    ~finally:(fun () -> unpin f i)
+    (fun () ->
+      on_posted (Printf.sprintf "%s[%s]" f.name (f.runner.show k)) (f.runner.show_call c);
+      enqueue f k i c);
+  if inside && f.mail > 2 * f.mailbox then
+    raise
+      (Overflow
+         ( Printf.sprintf "`%s` has %d posts queued, past twice its `mailbox:` of %d" f.dep
+             f.mail f.mailbox,
+           [
+             Printf.sprintf "the high-water mark: %d" f.high;
+             "an instance that posts twice around a cycle grows its family's mail without end";
+           ] ))
 
 (* Every instance, in the order they were made. *)
 let all f =
@@ -476,7 +746,7 @@ let evictable_keys ?(idle = 0.) f =
   ended f;
   let now = Sched.now () in
   Array.to_list f.parts
-  |> List.concat_map (fun p -> List.filter evictable p.lru)
+  |> List.concat_map (fun p -> List.filter (evictable f) p.lru)
   |> List.filter (fun i -> now -. i.released_at >= idle)
   |> List.stable_sort (fun a b -> compare a.released_at b.released_at)
   |> List.map (fun i -> i.key)
@@ -486,11 +756,19 @@ let counts f =
   ended f;
   (List.length (keys f), f.made, f.evicted, f.high)
 
-(* The family's end: its instances' `finally`s, the last made's first.
-   An operation of one still running would be a task that outlived the
-   `with` that installed the family, which decision 7 rules out. *)
+(* The family's end: what's queued is delivered first, by its tasks,
+   which may post more (decision 18, "Teardown drains"; decision 7: a
+   scope waits for its tasks), then its instances' `finally`s run, the
+   last made's first. An operation of one still running would be a task
+   that outlived the `with` that installed the family, which decision 7
+   rules out. Two instances that post to each other for ever keep it
+   from ending, as a loop would. *)
 let close f =
   ended f;
+  while f.tasks.running <> [] do
+    Sched.wait_empty ~cancellable:false ~what:(Printf.sprintf "waits for `%s`'s mail to be delivered" f.dep) f.tasks
+  done;
+  Sched.closed f.tasks;
   let insts = List.rev (all f) in
   f.closed <- true;
   List.iter
@@ -501,5 +779,6 @@ let close f =
              (name_of f i));
       if i.state = Live then (
         i.state <- Evicting;
+        Option.iter (fun (ins : Value.installed) -> Hashtbl.remove owners ins.inst) i.installed;
         Option.iter (fun fin -> Sched.shielded (fun () -> f.runner.finish fin)) i.finally))
     insts

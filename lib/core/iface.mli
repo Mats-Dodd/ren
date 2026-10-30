@@ -202,8 +202,10 @@ val tags : sets:sets -> error list -> (Ty.label * Path.t option) list
 (* The operations of a dependency at its type arguments: a generic one's,
    its [Var]s replaced by them, and an alias's, those of the one it names.
    The function finds a type's declaration. [None] if it isn't a
-   dependency, or is given the wrong number of type arguments. *)
-val dep_fields : (Path.t -> type_decl option) -> Ty.dep -> field list option
+   dependency, or is given the wrong number of type arguments. [calls]
+   is [Ty.apply]'s. *)
+val dep_fields :
+  ?calls:bool -> (Path.t -> type_decl option) -> Ty.dep -> field list option
 
 (* What the alias at a path names, if it's one. *)
 val alias_of : (Path.t -> type_decl option) -> Path.t -> Ty.dep option

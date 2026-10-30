@@ -291,7 +291,7 @@ and call_clause core env cx hcx ~node ~needs ~own (impl : expr) params body =
         in
         match (Hashtbl.find_opt env.types cp, ops) with
         | Some _, Some ops ->
-            ( TCon (cp, d.dargs),
+            ( TCon (cp, d.dargs @ [ TErrors (every_call cp) ]),
               List.filter_map
                 (fun (o : Iface.field) ->
                   match field_type ~tvars:d.dargs o with
@@ -1504,10 +1504,40 @@ and install env cx (lk : with_link) (i : impl) ~keys inner =
         Some p
     | _ -> None
   in
+  (* what it needs only for the instances of a family it keeps, which
+     post to their siblings through what it's installed as, `doc` that
+     uses `Docs` in `actors(doc) as Docs`, it meets itself: the family
+     adds its own install to their evidence (decision 18, "Siblings";
+     Infer_expr.kept_needs) *)
+  let needs =
+    let kept =
+      match (Hashtbl.find_opt env.kept_own (lk.link.node, lk.link.loc), lk.link.kind) with
+      | Some only, _ -> Some only
+      | None, Call ({ kind = Var (Global p); _ }, _) when Hashtbl.mem env.wired_from p ->
+          (* a wiring's link, made into a function whose body is its item *)
+          Hashtbl.find_opt env.kept_in p
+      | None, _ -> None
+    in
+    match kept with
+    | Some only ->
+        let own = List.filter (fun l -> List.exists (fun (k, _) -> same_label l k) keys) only in
+        if own = [] then i.needs
+        else (
+          let needs = extend (without_labels own (fst (row_parts i.needs))) (row_end i.needs) in
+          (* and so lowering passes it nothing for them *)
+          (match Hashtbl.find_opt cx.nodes lk.link.node with
+          | Some t -> (
+              match repr t with
+              | TImpl ti -> Hashtbl.replace cx.nodes lk.link.node (TImpl { ti with needs })
+              | _ -> ())
+          | None -> ());
+          needs)
+    | None -> i.needs
+  in
   use_row env cx ~loc ~needs:true ?callee
-    (copy_needs env ~loc ~what:Installing i.needs);
+    (copy_needs env ~loc ~what:Installing needs);
   (* its kind is recorded at a node of its own, which needs a type *)
-  Hashtbl.replace cx.nodes lk.knode (TImpl i);
+  Hashtbl.replace cx.nodes lk.knode (TImpl { i with needs });
   (* a link above the bottom of a chain is installed as what it goes
      over, the bottom's keys, which an alias names only at the bottom *)
   let keys =

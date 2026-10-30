@@ -3113,14 +3113,6 @@ fn main() uses Console, Random =
       │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       = an actor's siblings are the other instances of `Docs`
       help: post to it instead, which holds nothing
-
-    error: nothing installs `Docs` before `main`
-      ┌─ test.ren:7:4
-    7 │ fn main() uses Console, Random =
-      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
-    8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │        ----------- installing this needs `Docs`
-      help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Docs`
     |}]
 
 let%expect_test "[s7 reject] an actor's handler takes one parameter, its key" =
@@ -3372,14 +3364,8 @@ fn main() uses Console, Random =
 (* ---- s7: `post`, Erlang's cast ---- *)
 
 let%expect_test "[s7 accept] a post's arguments are evaluated when it's posted" =
-  until "s7"
-    ~want:{|
-a
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Key = | Key(n: Int)
 dep Log =
   put: fn(s: Str)
@@ -3396,29 +3382,18 @@ fn main() uses Console, Random =
     Logs.post(Key(1), Log.Call.Put { s })
     s = "b"
     Logs.at(Key(1)) fn() => print(Log.all())
-|});
+|};
   [%expect {|
-    (until s7)
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:14:10
-    14 │     Logs.post(Key(1), Log.Call.Put { s })
-       │          ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    a
+    ()
     |}]
 
 let%expect_test "[s7 accept] a post's call is a value: built, kept, posted and shown" =
   (* `post` takes a `Log.Call`, the call value the compiler writes for
      every dependency whose operations are all data; there's no
      `Logs.post(k).put(s)` (decided 2026-10-29) *)
-  until "s7"
-    ~want:{|
-ab
-Put { s: "b" }
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Key = | Key(n: Int)
 dep Log =
   put: fn(s: Str)
@@ -3436,41 +3411,45 @@ fn main() uses Console, Random =
     Logs.post(Key(1), c)
     Logs.at(Key(1)) fn() => print(Log.all())
     print(c)
-|});
+|};
   [%expect {|
-    (until s7)
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:13:10
-    13 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
-       │          ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:15:10
-    15 │     Logs.post(Key(1), c)
-       │          ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    ab
+    Put { s: "b" }
+    ()
     |}]
 
 let%expect_test "[s7 accept] posts from one task to one actor run in order, each as one operation" =
-  until "s7"
-    ~says:[ "✓ posts arrive in the order posted" ]
-    (fun () ->
-      test ~seeds:200
-        (pub_all
-         {|
+  (* `max: 1` evicts key 1's actor once its mail is delivered, when the
+     second task's `at` needs the slot, so each actor writes through to
+     `Kept`, which outlives it: what's in memory is lost on eviction, as
+     it should be *)
+  test ~seeds:1000
+    (pub_all
+     {|
 type Key = | Key(n: Int)
 dep Log =
   put: fn(s: Str)
   all: fn() -> Str
 dep Logs = Actors<Key, Log>
-handler log(k: Key) for Log =
-  var text = ""
-  put(s) => text = text + s
-  all() => text
+dep Kept =
+  add: fn(n: Int, s: Str)
+  all: fn(n: Int) -> Str
+handler kept() for Kept =
+  var texts: Map<Int, Str> = Map.empty
+  add(n, s) =>
+    let t = (texts.get(n) orelse "") + s
+    &texts.set(n, t)
+  all(n) => texts.get(n) orelse ""
+handler log(k: Key) for Log uses Kept =
+  put(s) =>
+    let Key(n) = k
+    Kept.add(n, s)
+  all() =>
+    let Key(n) = k
+    Kept.all(n)
 
 test "posts arrive in the order posted" =
-  with actors(log, max: 1) as Logs in
+  with kept(), actors(log, max: 1) as Logs in
     Async.scope fn(s) =>
       s.spawn fn() =>
         Logs.post(Key(1), Log.Call.Put { s: "a" })
@@ -3479,39 +3458,20 @@ test "posts arrive in the order posted" =
       s.spawn fn() => Logs.at(Key(2)) fn() => Log.put("x")
     Async.tick()
     Logs.at(Key(1)) fn() => assert Log.all() == "abc"
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:15:14
-    15 │         Logs.post(Key(1), Log.Call.Put { s: "a" })
-       │              ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    test.ren
+      ✓ posts arrive in the order posted
+          `Logs`'s high-water mark: 3 posts queued at once
 
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:16:14
-    16 │         Logs.post(Key(1), Log.Call.Put { s: "b" })
-       │              ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:17:14
-    17 │         Logs.post(Key(1), Log.Call.Put { s: "c" })
-       │              ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    1 passed, each under 1000 seeds
+    [exit 0]
     |}]
 
 let%expect_test "[s7 accept] a post makes its actor, so setup's errors are the post's, and nothing is lost" =
-  until "s7"
-    ~want:{|
-Err(StoreDown)
-0
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
+  run
+    (docs
+   ^ {|
 dep Notes = Actors<DocId, Note> ! StoreDown
 dep Note =
   touch: fn()
@@ -3523,64 +3483,41 @@ fn main() uses Console, Random =
   with mem_store(), actors(note) as Notes in
     print(attempt Notes.post(DocId(-1), Note.Call.Touch))
     print(Notes.count())
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: `Notes` has no operation or member named `post`
-       ┌─ test.ren:42:25
-    42 │     print(attempt Notes.post(DocId(-1), Note.Call.Touch))
-       │                         ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    Err(StoreDown)
+    0
+    ()
     |}]
 
 let%expect_test "[s7 accept] teardown delivers queued posts before the `finally`s" =
-  until "s7"
-    ~want:{|
-got a
-got b
-done Key(1)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Key = | Key(n: Int)
 dep Log =
   put: fn(s: Str)
 dep Logs = Actors<Key, Log>
 handler log(k: Key) for Log uses Console =
-  finally(_) => print("done " + show(k))
+  finally(r) =>
+    print("done " + show(k))
+    try r
   put(s) => print("got " + s)
 
 fn main() uses Console, Random =
   with actors(log) as Logs in
     Logs.post(Key(1), Log.Call.Put { s: "a" })
     Logs.post(Key(1), Log.Call.Put { s: "b" })
-|});
+|};
   [%expect {|
-    (until s7)
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:11:10
-    11 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
-       │          ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:12:10
-    12 │     Logs.post(Key(1), Log.Call.Put { s: "b" })
-       │          ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    got a
+    got b
+    done Key(1)
+    ()
     |}]
 
 let%expect_test "[s7 accept] an actor posts to its own family" =
-  until "s7"
-    ~want:{|
-pong from Key(2)
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Key = | Key(n: Int)
 dep Peer =
   ping: fn(from: Key)
@@ -3593,33 +3530,16 @@ handler peer(k: Key) for Peer uses Peers, Console =
 fn main() uses Console, Random =
   with actors(peer) as Peers in
     Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
-|});
+|};
   [%expect {|
-    (until s7)
-    error: `Peers` has no operation or member named `post`
-      ┌─ test.ren:7:23
-    7 │   ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
-      │                       ^^^^
-      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Peers` has no operation or member named `post`
-       ┌─ test.ren:12:11
-    12 │     Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
-       │           ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    pong from Key(2)
+    ()
     |}]
 
 let%expect_test "[s7 reject] posting an operation that returns a value" =
   (* `post`'s parameter is a `Doc.Call<()>`: an ordinary type error *)
-  until "s7"
-    ~says:
-      [
-        "error: `post` takes a call that gives `()` and can't fail, and `line` gives a `Str`";
-        "help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type Key = | Key(n: Int)
 dep Log =
   put: fn(s: Str)
@@ -3629,48 +3549,38 @@ handler log(k: Key) for Log =
   var lines: Array<Str> = []
   put(s) => &lines.push(s)
   line(at) => lines[at]
-fn main() uses Logs =
+fn go() uses Logs =
   Logs.post(Key(1), Log.Call.Line { at: 0 })
-|});
+fn main() = ()
+|};
   [%expect {|
-    (until s7)
-    error: `Logs` has no operation or member named `post`
-       ┌─ test.ren:11:8
+    error: `post` takes a call that gives `()` and can't fail, and `line` gives a `Str`
+       ┌─ test.ren:11:21
     11 │   Logs.post(Key(1), Log.Call.Line { at: 0 })
-       │        ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+       │                     ^^^^^^^^^^^^^^^^^^^^^^^
+       help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
     |}]
 
 let%expect_test "[s7 reject] posting an operation that can fail" =
-  until "s7"
-    ~says:
-      [
-        "error: `post` takes a call that gives `()` and can't fail, and `edit` can fail with `StoreDown`";
-        "help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted";
-      ]
-    (fun () ->
-      check_error
-        (docs
-       ^ {|
-fn main() ! StoreDown uses Store, Docs =
+  check_error
+    (docs
+   ^ {|
+fn go() ! StoreDown uses Docs =
   try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
-|}));
+fn main() = ()
+|});
   [%expect {|
-    (until s7)
-    error: `Docs` has no operation or member named `post`
-       ┌─ test.ren:34:12
+    error: `post` takes a call that gives `()` and can't fail, and `edit` can fail with `StoreDown`
+       ┌─ test.ren:34:27
     34 │   try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
-       │            ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+       │                           ^^^^^^^^^^^^^^^^^^^^^^^^
+       help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
     |}]
 
 let%expect_test "[s7 accept] two actors posting to each other past `mailbox:` don't deadlock while an outside poster waits" =
-  until "s7"
-    ~says:[ "✓ siblings never wait; the outside does" ]
-    (fun () ->
-      test ~seeds:200
-        (pub_all
-         {|
+  test ~seeds:200
+    (pub_all
+     {|
 type Key = | Key(n: Int)
 dep Peer =
   ping: fn(left: Int)
@@ -3689,38 +3599,19 @@ test "siblings never wait; the outside does" =
       s.spawn fn() =>
         for i in 0..5
           Peers.post(Key(2), Peer.Call.Noted)
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: `Peers` has no operation or member named `post`
-      ┌─ test.ren:9:28
-    9 │     if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
-      │                            ^^^^
-      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    test.ren
+      ✓ siblings never wait; the outside does
+          `Peers`'s high-water mark: 2 posts queued at once
 
-    error: `Peers` has no operation or member named `post`
-       ┌─ test.ren:15:29
-    15 │       s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 3 })
-       │                             ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Peers` has no operation or member named `post`
-       ┌─ test.ren:18:17
-    18 │           Peers.post(Key(2), Peer.Call.Noted)
-       │                 ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    1 passed, each under 200 seeds
+    [exit 0]
     |}]
 
 let%expect_test "[s7 reject] a chain reaction panics past twice `mailbox:`, with the high-water mark" =
-  until "s7"
-    ~says:
-      [
-        "panic: `Peers` has 5 posts queued, past twice its `mailbox:` of 2";
-        "high-water mark";
-      ]
-    (fun () ->
-      run_error
-        {|
+  run_error
+    {|
 type Key = | Key(n: Int)
 dep Peer =
   double: fn(depth: Int)
@@ -3734,39 +3625,22 @@ handler peer(k: Key) for Peer uses Peers =
 fn main() uses Console, Random =
   with actors(peer, mailbox: 2) as Peers in
     Peers.post(Key(0), Peer.Call.Double { depth: 0 })
-|});
+|};
   [%expect {|
-    (until s7)
-    error: `Peers` has no operation or member named `post`
-      ┌─ test.ren:8:11
-    8 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
-      │           ^^^^
-      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Peers` has no operation or member named `post`
-      ┌─ test.ren:9:11
+    error: panic: `Peers` has 5 posts queued, past twice its `mailbox:` of 2
+      ┌─ test.ren:9:5
     9 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
-      │           ^^^^
-      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Peers` has no operation or member named `post`
-       ┌─ test.ren:13:11
-    13 │     Peers.post(Key(0), Peer.Call.Double { depth: 0 })
-       │           ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+      │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = in the task peers[Key(2)]#1
+      = the high-water mark: 5
+      = an instance that posts twice around a cycle grows its family's mail without end
     |}]
 
 let%expect_test "[s7 accept] a post from inside `at` while the mailbox is full and its target isn't live completes" =
   (* research/actors-post/'s first counterexample, which the fixed rules
      make complete: the post from inside `at` makes room by delivering *)
-  until "s7"
-    ~want:{|
-done
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 type Key = | Key(n: Int)
 dep Doc =
   touch: fn(by: Int)
@@ -3781,31 +3655,18 @@ fn main() uses Console, Async, Random =
       s.spawn fn() =>
         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
   print("done")
-|});
+|};
   [%expect {|
-    (until s7)
-    error: `Docs` has no operation or member named `post`
-       ┌─ test.ren:11:28
-    11 │       s.spawn fn() => Docs.post(Key(2), Doc.Call.Touch { by: 1 })
-       │                            ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
-
-    error: `Docs` has no operation or member named `post`
-       ┌─ test.ren:13:38
-    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
-       │                                      ^^^^
-       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    done
+    ()
     |}]
 
 let%expect_test "[s7 accept] a session looping an `at` operation that posts to a sibling is held at the edge" =
   (* the second counterexample: every call from outside is metered, so
      the index's mail never passes `mailbox:` plus one operation's posts *)
-  until "s7"
-    ~says:[ "✓ the session's posts stay within the bound" ]
-    (fun () ->
-      test ~seeds:100
-        (pub_all
-         {|
+  test ~seeds:100
+    (pub_all
+     {|
 type Key = | Key(n: Int)
 dep Doc =
   edit: fn()
@@ -3821,14 +3682,202 @@ test "the session's posts stay within the bound" =
       for i in 0..50
         Doc.edit()
     assert Docs.high_water() <= 5
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: `Docs` has no operation or member named `post`
-      ┌─ test.ren:7:18
-    7 │   edit() => Docs.post(Key(0), Doc.Call.Changed { from: k })
-      │                  ^^^^
-      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
+    test.ren
+      ✓ the session's posts stay within the bound
+          `Docs`'s high-water mark: 4 posts queued at once
+
+    1 passed, each under 100 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s7 accept] each family's high-water mark is reported" =
+  (* the most posts a family has queued at once (decision 18, "A chain
+     reaction panics": debug builds and `sim` report it, which is how one
+     is found before it panics): `ren test` says it under each test, the
+     most under any seed, and `high_water()` gives it to the program *)
+  test ~seeds:50
+    (pub_all
+     {|
+type Key = | Key(n: Int)
+dep Tally =
+  add: fn(n: Int)
+dep Tallies = Actors<Key, Tally>
+handler tally(k: Key) for Tally =
+  var total = 0
+  add(n) => total += n
+
+test "three posts queued before any is delivered" =
+  with actors(tally) as Tallies in
+    Tallies.post(Key(1), Tally.Call.Add { n: 1 })
+    Tallies.post(Key(1), Tally.Call.Add { n: 2 })
+    Tallies.post(Key(2), Tally.Call.Add { n: 3 })
+    assert Tallies.high_water() == 3
+|});
+  [%expect {|
+    test.ren
+      ✓ three posts queued before any is delivered
+          `Tallies`'s high-water mark: 3 posts queued at once
+
+    1 passed, each under 50 seeds
+    [exit 0]
+    |}]
+
+let%expect_test "[s7 accept] a run with posts replays from its journal" =
+  (* a post is journaled as data, on the task that posted it, and what a
+     delivery does under its instance's name: `ren replay` runs it again,
+     and recording it again writes the same journal, byte for byte *)
+  in_folder
+    [
+      ( "main.ren",
+        {|
+type Key = | Key(n: Int)
+dep Peer =
+  ping: fn(left: Int)
+  say: fn(s: Str)
+dep Peers = Actors<Key, Peer>
+handler peer(k: Key) for Peer uses Peers, Console =
+  ping(left) =>
+    let Key(n) = k
+    print(show(k) + " " + show(left))
+    if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
+  say(s) => print(s + " to " + show(k))
+
+fn main() uses Console, Random =
+  with actors(peer, max: 1) as Peers in
+    Peers.post(Key(1), Peer.Call.Ping { left: 3 })
+    Peers.post(Key(2), Peer.Call.Say { s: "hi there" })
+    Peers.at(Key(2)) fn() => Peer.say("hello")
+|}
+      );
+    ]
+    (fun () ->
+      record ();
+      let first = read "run.journal" in
+      replay "run.journal";
+      record ();
+      print_endline
+        (if read "run.journal" = first then "recorded again: the same bytes"
+         else "recorded again: different"));
+  [%expect {|
+    Key(1) 3
+    hi there to Key(2)
+    Key(2) 2
+    hello to Key(2)
+    Key(1) 1
+    Key(2) 0
+    # ren journal 3 · main.ren · deps: Console Random
+    1 main opened peers parts 1
+    2 main made peers[Key(1)]#1
+    3 main posted peers[Key(1)] Ping { left: 3 }
+    4 main made peers[Key(2)]#1
+    5 main posted peers[Key(2)] Say { s: "hi there" }
+    6 peers[Key(1)]#1 Console.write("Key(1) 3")
+    7 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 2 }
+    8 peers[Key(2)]#1 Console.write("hi there to Key(2)")
+    9 peers[Key(2)]#1 Console.write("Key(2) 2")
+    10 peers[Key(2)]#1 posted peers[Key(1)] Ping { left: 1 }
+    11 main Console.write("hello to Key(2)")
+    12 peers[Key(1)]#1 Console.write("Key(1) 1")
+    13 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 0 }
+    14 peers[Key(2)]#1 Console.write("Key(2) 0")
+    15 main exit 0
+    Key(1) 3
+    hi there to Key(2)
+    Key(2) 2
+    hello to Key(2)
+    Key(1) 1
+    Key(2) 0
+    replayed 6 calls
+    Key(1) 3
+    hi there to Key(2)
+    Key(2) 2
+    hello to Key(2)
+    Key(1) 1
+    Key(2) 0
+    # ren journal 3 · main.ren · deps: Console Random
+    1 main opened peers parts 1
+    2 main made peers[Key(1)]#1
+    3 main posted peers[Key(1)] Ping { left: 3 }
+    4 main made peers[Key(2)]#1
+    5 main posted peers[Key(2)] Say { s: "hi there" }
+    6 peers[Key(1)]#1 Console.write("Key(1) 3")
+    7 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 2 }
+    8 peers[Key(2)]#1 Console.write("hi there to Key(2)")
+    9 peers[Key(2)]#1 Console.write("Key(2) 2")
+    10 peers[Key(2)]#1 posted peers[Key(1)] Ping { left: 1 }
+    11 main Console.write("hello to Key(2)")
+    12 peers[Key(1)]#1 Console.write("Key(1) 1")
+    13 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 0 }
+    14 peers[Key(2)]#1 Console.write("Key(2) 0")
+    15 main exit 0
+    recorded again: the same bytes
+    |}]
+
+let senders =
+  {|
+type Shard = | A | B
+
+dep Count =
+  add: fn(n: Int)
+  total: fn() -> Int
+
+handler count(s: Shard) for Count uses Console =
+  var n = 0
+  finally(r) =>
+    print(show(s) + " " + show(n))
+    try r
+  add(k) => n += k
+  total() => n
+
+dep Shards<D> =
+  send: fn(s: Shard, c: Call<D, Unit, !>)
+dep Counts = Shards<Count>
+
+handler shards<D>(h: spawned fn(s: Shard) -> D) for Shards<D> =
+  let fam = Instances.open(fn(s: Shard) => h(s), 1, 2, 16)
+  finally(r) =>
+    Instances.close(fam)
+    try r
+  send(s, c) =>
+    let _ = Instances.post(fam, s, c, fn(_) => None)
+    ()
+|}
+
+let%expect_test "[s7 accept] a third library over the family posts, with no support of its own" =
+  (* `Instances.post` and the prelude's `Call<D, (), !>` are all it needs:
+     the queue, the delivery and the type rule are the family's and the
+     compiler's for any library *)
+  run
+    (senders
+   ^ {|
+fn main() uses Console =
+  with shards(count) as Counts in
+    Counts.send(A, Count.Call.Add { n: 2 })
+    Counts.send(B, Count.Call.Add { n: 3 })
+    Counts.send(A, Count.Call.Add { n: 4 })
+|});
+  [%expect {|
+    B 3
+    A 6
+    ()
+    |}]
+
+let%expect_test "[s7 reject] a third library's post of an operation that gives a value" =
+  check_error
+    (senders
+   ^ {|
+fn main() uses Console =
+  with shards(count) as Counts in
+    Counts.send(A, Count.Call.Total)
+|});
+  [%expect {|
+    error: `send` takes a call that gives `()` and can't fail, and `total` gives an `Int`
+       ┌─ test.ren:30:20
+    30 │     Counts.send(A, Count.Call.Total)
+       │                    ^^^^^^^^^^^^^^^^
+       help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
     |}]
 
 (* ---- s8: the milestone, in miniature (bench/services/docs is the whole one) ---- *)

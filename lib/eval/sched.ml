@@ -1164,6 +1164,22 @@ let scope ~max =
   t.scopes <- sc :: t.scopes;
   sc
 
+(* A scope of the task running that its code doesn't run a body of: the
+   keyed instance family's, whose tasks deliver what's posted (family.ml),
+   which the family's end waits for. *)
+let owned () =
+  {
+    max = max_int;
+    owner = (sched ()).current;
+    began = begun ();
+    running = [];
+    room = [];
+    empty = [];
+    keyed = [];
+    drain = None;
+    ended = false;
+  }
+
 (* The body of [sc] has ended, and so have its tasks. *)
 let closed sc =
   sc.ended <- true;
@@ -1268,6 +1284,26 @@ and started ?key sc ~parent ~label thunk =
   t.drained <- sc.drain;
   Queue.push (t, Start thunk) s.queue;
   t
+
+(* [thunk] started now as a task of [sc], an [owned] scope, with the
+   path [path] rather than one under the task running, and [context], the
+   `with`s whose bodies the code that made [sc] was in ([inner]): the
+   keyed instance family's delivery of what's posted to one of its
+   instances, named by the instance, `docs[DocId(7)]#1`. *)
+let start_owned sc ~path ~context thunk =
+  let s = sched () in
+  let t = task ~context ~path ~root:false (Some sc) in
+  sc.running <- sc.running @ [ t ];
+  s.alive <- t :: s.alive;
+  t.drained <- sc.drain;
+  Queue.push (t, Start thunk) s.queue;
+  t
+
+(* The `with`s whose bodies the task running is in, the innermost first,
+   with those of the code that spawned it: what a task it starts can't
+   outlive ([inner]). *)
+let context () =
+  match current () with Some t -> t.frames @ t.context | None -> []
 
 (* ---- `with`s ---- *)
 

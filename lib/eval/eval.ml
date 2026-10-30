@@ -720,20 +720,24 @@ let rec eval cx env (e : expr) =
       let made h =
         (* a family its setup opens is named by what it's installed as
            (family.ml, [installing]) *)
-        let impls, finally, excl =
-          installing e.loc (fun () ->
-              Family.installing dep.name (fun () -> instance cx h outer what))
+        let (impls, finally, excl), fams =
+          Family.installing dep.name (fun () ->
+              installing e.loc (fun () -> instance cx h outer what))
         in
         match (List.assoc_opt from impls, impls) with
-        | Some impl, _ | None, [ (_, impl) ] -> (impl, finally, excl)
+        | Some impl, _ | None, [ (_, impl) ] -> (impl, finally, excl, fams)
         | None, _ -> bug (what ^ " from a handler that doesn't implement it")
       in
       let args = List.map (type_of env) dargs in
       let top, finallys =
         match impl with
         | VHandler h ->
-            let impl, finally, excl = made h in
-            ({ dep; args; impl; outer; inst = Value.instance (); excl }, [ finally ])
+            let impl, finally, excl, fams = made h in
+            let top = { dep; args; impl; outer; inst = Value.instance (); excl } in
+            (* the families it opened keep instances that may post to
+               their siblings through it (decision 18, "Siblings") *)
+            Family.installed_as fams top;
+            (top, [ finally ])
         | _ -> bug (what ^ " with something that isn't a handler")
       in
       let installed = VEvidence (top :: outer) in
@@ -766,9 +770,9 @@ let rec eval cx env (e : expr) =
         let named =
           match deps with ((k : dkey), _) :: _ -> k.kpath.name | [] -> "Instances"
         in
-        let impls, finally, excl =
-          installing e.loc (fun () ->
-              Family.installing named (fun () -> instance cx h outer what))
+        let (impls, finally, excl), _ =
+          Family.installing named (fun () ->
+              installing e.loc (fun () -> instance cx h outer what))
         in
         if not (List.for_all (fun (_, p) -> List.mem_assoc p impls) deps) then
           bug (what ^ " whose instance doesn't implement its dependencies");
@@ -1233,6 +1237,10 @@ and dep_op cx ~loc ~(dep : Path.t) ~op ~fty ~next ~what ?(held = dep.name) args 
         if loc.file = Prelude.file then at_call cx else Some (where loc)
       in
       let call () =
+        (* an operation of a keyed instance family's instance, called
+           from outside it, through a block that pins it, waits at the
+           family's edge while its mailbox is full (Family.metered) *)
+        Family.metered ?at inst;
         (* under `sim`, where two tasks' calls of a shared,
            exclusive instance can be seen in either order, a
            scheduling point *)
@@ -1430,7 +1438,8 @@ and builtin ?loc ?ev cx f args =
   | VBuiltin
       ( (( Family_open | Family_call | Family_make | Family_keys | Family_evict
          | Family_evictable | Family_counts | Family_close | Family_pin | Family_visit
-         | Family_idle | Family_full | Family_enter | Family_made | Family_kept | Call_first_hash
+         | Family_idle | Family_full | Family_enter | Family_post | Family_made | Family_kept
+         | Call_first_hash
          | Call_add | Call_max | Call_min | Call_concat | Call_fold
          | Call_operations ) as x),
         tys,
@@ -1566,12 +1575,13 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
          handler's name passed on, `actors`' `h`, captured none: it's the
          evidence here, where the opening handler's setup runs *)
       let outer =
-        match make with
-        | VClosure { outer; env; _ } -> (
-            match Option.map ( ! ) (Env.find_opt outer env) with
-            | Some (VEvidence is) -> is
-            | _ -> [])
-        | _ -> ( match ev with VEvidence is -> is | _ -> [])
+        ref
+          (match make with
+          | VClosure { outer; env; _ } -> (
+              match Option.map ( ! ) (Env.find_opt outer env) with
+              | Some (VEvidence is) -> is
+              | _ -> [])
+          | _ -> ( match ev with VEvidence is -> is | _ -> []))
       in
       let what = Printf.sprintf "making an instance of `%s`" dep.name in
       let runner : Family.runner =
@@ -1580,7 +1590,7 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
             (fun k ->
               match fst (call_at cx loc make [ k ] (VEvidence [])) with
               | Ok (VHandler h) -> (
-                  match installing loc (fun () -> instance cx h outer what) with
+                  match installing loc (fun () -> instance cx h !outer what) with
                   | impls, finally, excl -> (
                       match List.assoc_opt dep impls with
                       | Some impl ->
@@ -1589,7 +1599,7 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
                              it, so an exclusive one's operations don't
                              interleave from the start *)
                           Sched.share inst ~excl;
-                          ({ Value.dep; args = dargs; impl; outer; inst; excl }, finally)
+                          ({ Value.dep; args = dargs; impl; outer = !outer; inst; excl }, finally)
                       | None -> bug (what ^ " that doesn't implement it"))
                   | exception Failed err when not (is_cancelled_tag err) ->
                       (* setup's errors are the family's, `Actors<K, D>
@@ -1601,7 +1611,7 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
           finish =
             (fun fin ->
               let unit = VCon { ty = Path.prelude "Result"; name = "Ok"; args = [ VUnit ] } in
-              match fst (call_at cx loc fin [ VType Ty.unit; unit ] (VEvidence outer)) with
+              match fst (call_at cx loc fin [ VType Ty.unit; unit ] (VEvidence !outer)) with
               | Ok _ -> ()
               | Error err when is_cancelled_tag err -> raise Sched.Cancelled
               | Error err ->
@@ -1614,7 +1624,31 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
                        (Printf.sprintf
                           "an instance of `%s` failed in its `finally`, with `%s`, which a family can't give anyone"
                           dep.name (Value.show err))));
-          show = (fun k -> Shown.shown ~own:(own_show cx) cx.types kty k);
+          (* a posted call, as one operation of the instance [ins],
+             named [held] by the one rule: it gives `()` and can't fail
+             (`post`'s `Call<D, (), !>`) *)
+          deliver =
+            (fun held ins c ->
+              match (ins.impl, c) with
+              | VRecord ops, VCon { name = case; args = cargs; _ } -> (
+                  let op, fty = op_of ins.dep ins.args case in
+                  let what = Printf.sprintf "a posted call of `%s.%s`" ins.dep.name op in
+                  match
+                    dep_op cx ~loc ~dep:ins.dep ~op ~fty ~next:false ~what ~held cargs ops
+                      ins.outer ins.inst
+                  with
+                  | _ -> ()
+                  | exception Failed err when is_cancelled_tag err -> raise Sched.Cancelled
+                  | exception Failed _ -> bug "a posted call that failed, which it can't")
+              | _ -> bug "a posted call that isn't one");
+          (* a key and a call written as the journal writes a value, so
+             a key that's a string is quoted, and the name `logs["a
+             b"]#1` reads back *)
+          show = (fun k -> Journal.write cx.types kty k);
+          show_call = (fun c -> Journal.write cx.types (Con (Ty.call_path dep, dargs)) c);
+          (* the opener's own install, which its instances name to post
+             to their siblings, comes after `open` (Family.installed_as) *)
+          sibling = (fun top -> outer := top :: !outer);
         }
       in
       Ok
@@ -1686,6 +1720,20 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
           | exception e ->
               Family.unpin ~block:true f i;
               raise e))
+  | Family_post, [ f; k; c; victim ] -> (
+      let f = fam f in
+      let victim keys =
+        match fst (call_at cx loc victim [ Value.array_of_list keys ] ev) with
+        | Ok (VCon { name = "Some"; args = [ v ]; _ }) -> Some v
+        | Ok _ -> None
+        | Error err -> raise (Failed err)
+      in
+      (* what making the instance failed with, kept, as `enter`'s is *)
+      let pinned = Path.prelude "Pinned" in
+      match Family.post ?at ~victim f k c with
+      | () -> Ok (VCon { ty = pinned; name = "Pinned"; args = [] })
+      | exception Failed err -> Ok (VCon { ty = pinned; name = "Unmade"; args = [ err ] })
+      | exception Family.Overflow (msg, notes) -> raise (panic_at loc ~notes msg))
   | Family_kept, [ body ] -> (
       let result = Path.prelude "Result" in
       match fst (call_at cx loc body [] ev) with

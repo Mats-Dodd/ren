@@ -46,6 +46,9 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   let go = convert env ~tvars ~named ~row in
   match t with
   | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
+  | TyName ({ tref = Named p; _ }, args) when is_calls p ->
+      (* `Doc.Call` written, which may be any of its calls (Types.calls) *)
+      TCon (p, List.map go args @ [ TErrors (every_call p) ])
   | TyName ({ tref = Named p; _ }, args) -> TCon (p, List.map go args)
   | TyVariant ({ tref = Named p; _ }, c, args) ->
       (* Resolve checked it's a sum's constructor with named fields *)
@@ -253,8 +256,24 @@ let instance env (td : Iface.type_decl) =
       (* an implementation, which needs whatever its operations use *)
       ( impl_type [ { dpath = td.path; dargs = tvars } ] (fresh_row env.st),
         tvars )
+  | Sum _ when is_calls td.path ->
+      (* a call, of some of the cases, which building one says
+         ([call_case]) and matching one doesn't (Types.calls) *)
+      (TCon (td.path, tvars @ [ TErrors (fresh_row env.st) ]), tvars)
   | Record _ | Sum _ | Builtin | Opaque _ | Errors _ ->
       (TCon (td.path, tvars), tvars)
+
+(* [t], a call just built as its case [case], is that case and possibly
+   others (Types.calls). Anything else is left as it is. *)
+let call_case env t case =
+  match repr t with
+  | TCon (p, args) when is_calls p -> (
+      match List.rev args with
+      | TErrors row :: _ -> (
+          try Unify.unify_row env.st row (RExtend (call_label case, fresh_row env.st))
+          with Unify.Mismatch | Unify.Infinite | Unify.Two_shapes _ -> ())
+      | _ -> ())
+  | _ -> ()
 
 (* Whether [t], the type of a parameter or a field as it was made from a
    declaration or a scheme, is written there: not a variable, which stands

@@ -334,6 +334,17 @@ type env = {
       (** each handler whose arms pin, by its function, with each family
           they pin, the call as written and where: one a family keeps can't
           pin its own *)
+  kept_own : (int * Loc.t, label list) Hashtbl.t;
+      (** by a call's node and place (a node is numbered within its
+          function), the needs a handler's call has only because of
+          the makers it's given, the handlers whose descriptions it keeps
+          ([Infer_expr.kept_needs]): where it's installed as one of those,
+          `actors(doc) as Docs` for a `doc` that uses `Docs`, that one is
+          its instances' siblings', which the family meets itself *)
+  kept_in : (Path.t, label list) Hashtbl.t;
+      (** the same, by the function the call is in: a wiring's link is
+          a function whose body is its item, which a `with` that lists
+          the wiring calls *)
 }
 
 (* A function of the group being checked, as the group's functions see

@@ -1216,6 +1216,31 @@ let kept_finally_fails loc ~handler =
 
 (* The handler [handler], kept by the family installed as [family], whose
    arm calls [call], which pins one of that family's instances. *)
+(* A call given to [fn]'s parameter of `D.Call<R ! E>`, [gives] and
+   [fails] as written, `()` and none, that may be a call of [op], which
+   gives [op_gives] or can fail with [op_fails] (compiler.md, "Services
+   stage", "`D.Call`"): an ordinary type rule, whatever [fn] is. *)
+let call_not_taken loc ~fn ~gives ~fails ~op ~op_gives ~op_fails =
+  let wanted =
+    match fails with
+    | [] -> sprintf "gives `%s` and can't fail" gives
+    | es ->
+        sprintf "gives `%s` and can fail only with %s" gives
+          (String.concat " or " (List.map (sprintf "`%s`") es))
+  in
+  let found =
+    match op_gives with
+    | Some g -> sprintf "`%s` gives %s" op (article g)
+    | None ->
+        sprintf "`%s` can fail with %s" op
+          (String.concat " or " (List.map (sprintf "`%s`") op_fails))
+  in
+  Diag.make loc
+    ~help:
+      "use the value, or handle the error, inside the operation, or make the \
+       call directly where its result is wanted"
+    (sprintf "`%s` takes a call that %s, and %s" fn wanted found)
+
 let kept_pins_own loc ~handler ~family ~call =
   Diag.make loc
     ~notes:[ sprintf "an actor's siblings are the other instances of `%s`" family ]

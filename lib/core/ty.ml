@@ -412,10 +412,12 @@ let rec known_label (l : label) =
       known_label { l with payload = [ d ] }
   | _ -> l
 
-let rec apply (a : args) (s : ty) : ty =
+let rec apply ?(calls = true) (a : args) (s : ty) : ty =
+  let apply = apply ~calls and apply_row = apply_row ~calls in
   match s with
   | Var n -> List.nth a.tys n
   | Error -> Error
+  | Con (p, args) when not calls -> Con (p, List.map (apply a) args)
   | Con (p, args) -> known (Con (p, List.map (apply a) args))
   | Variant (p, c, args) -> Variant (p, c, List.map (apply a) args)
   | Errors e -> Errors (apply_row a e)
@@ -433,10 +435,10 @@ let rec apply (a : args) (s : ty) : ty =
           apply_row a e,
           apply_row a u )
 
-and apply_row a (r : row) : row =
+and apply_row ?(calls = true) a (r : row) : row =
   let labels =
     List.map
-      (fun (l : label) -> known_label { l with payload = List.map (apply a) l.payload })
+      (fun (l : label) -> known_label { l with payload = List.map (apply ~calls a) l.payload })
       r.labels
   in
   match r.tail with

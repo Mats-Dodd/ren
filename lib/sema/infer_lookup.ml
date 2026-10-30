@@ -167,7 +167,9 @@ let record_fields (td : Iface.type_decl) =
    are those of the one it names, at its types. *)
 let dep_op_in env name (td : Iface.type_decl) =
   match
-    Iface.dep_fields
+    (* a `D.Call<R ! E>` among its parameters is kept as it's written,
+       which says which calls it takes (Types.calls) *)
+    Iface.dep_fields ~calls:false
       (Hashtbl.find_opt env.types)
       { Ty.dpath = td.path; dargs = List.mapi (fun i _ -> Ty.Var i) td.params }
   with
