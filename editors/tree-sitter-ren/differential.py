@@ -17,7 +17,7 @@ by tree-sitter.
                                             import or a misaligned line;
                                             counted, and listed with -v
 
-Run from anywhere, after `dune build` and `npm install`:
+Run from anywhere, after `dune build` and `npm ci`:
 
   python3 editors/tree-sitter-ren/differential.py [-v]
 """
@@ -81,7 +81,7 @@ def main():
     verbose = "-v" in sys.argv
     for tool in (REN, TREE_SITTER):
         if not tool.exists():
-            sys.exit(f"missing {tool}: run `dune build` and `npm install` first")
+            sys.exit(f"missing {tool}: run `dune build` and `npm ci` first")
 
     with tempfile.TemporaryDirectory() as tmp:
         files = []

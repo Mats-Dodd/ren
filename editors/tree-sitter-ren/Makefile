@@ -7,12 +7,12 @@ TS := node_modules/.bin/tree-sitter
 
 check: generate test differential
 
-node_modules: package.json
-	npm install --silent
-	touch node_modules
+node_modules/.ren-install: package.json package-lock.json
+	npm ci --no-audit --no-fund
+	touch $@
 
-generate: node_modules
-	$(TS) generate
+generate: node_modules/.ren-install
+	$(TS) generate --abi 14
 
 # the corpus (test/corpus) and the highlight assertions (test/highlight)
 test: generate
