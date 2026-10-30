@@ -756,7 +756,7 @@ in a hoisted loop panics as it would anywhere:
   3 │     a[i] = i
     │     ^^^^
   $ ren build --release --emit-c hoist.ren | grep '^static inline.*_loop_'
-  static inline __attribute__((always_inline)) void ren_hoist_shout_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v27_len, ren_val* restrict v30_buf) {
+  static inline __attribute__((always_inline)) void ren_hoist_shout_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v28_len, ren_val* restrict v31_buf) {
   static inline __attribute__((always_inline)) void ren_hoist_nudge_1_loop_1(int64_t* v3_i, int64_t v6_stop, int64_t v32_len, ren_val* restrict v35_buf) {
   static inline __attribute__((always_inline)) void ren_hoist_mix_1_loop_1(int64_t* v5_i, int64_t v8_stop, int64_t v116_len, ren_val* restrict v119_buf, int64_t v121_len, ren_val* restrict v124_buf, int64_t v126_len, ren_val* restrict v128_buf) {
   static inline __attribute__((always_inline)) void ren_hoist_mix_1_loop_2(int64_t* v5_i, int64_t v8_stop, int64_t v102_len, ren_val* restrict v105_buf, int64_t v107_len, ren_val* restrict v110_buf, int64_t v112_len, ren_val* restrict v114_buf) {

@@ -9674,6 +9674,19 @@ Choices where strings.md, decision 17 and the brief are silent:
 - Step 3: `show` of an `Int`, natively (`ren_show_int`), writes its digits itself, not with
   `snprintf`, which took a fifth of json's time once appending was in
   place.
+- Step 4: a tuple's part and an error's payload hold a `Str`'s box,
+  not its two words: a tuple's parts' types are its arguments, as a type
+  variable's are, and an error's walk finds its payload by its count of
+  words. A block's arguments and value, a handler's arms' arguments and
+  value, what a handler captures and a `with`'s value hold the box too,
+  where the spec gave two words: they're words throughout the runtime's
+  blocks and descriptions, and a box costs only where a slice crosses one.
+- Step 4: a walk that only reads a `Str` is given its two words as an A
+  slice made on the stack for the call (count 0), not "by the address of
+  its words": the walks are A's, unchanged, and see a box or a view
+  where they meet a string, and two words where an array or a field
+  holds them. A map's key is boxed only if the map keeps it.
+- Step 4: a value past 4 GiB panics where it's made, until the escape.
 
 ### Step 1, as built
 
@@ -9881,6 +9894,180 @@ makes the slices values; `show` into a buffer isn't in this stage. `ren_show_int
 wrote its digits with `snprintf` before this step, a fifth of json's
 instructions; it writes them itself now (json was 1.85×, logfmt 1.23×).
 
+### Step 4 (part 1), as built: representation B
+
+The first part of step 4 is B's layout itself in release builds; the
+uncounted view, the 4 GiB escape and unboxed map entries are later
+parts', which this one leaves room for (below, "For the next part").
+Debug builds keep A throughout, so nothing here changes them.
+
+**The layout.** to_mem.ml's `layout` gives `Str` and `Bytes`, in a
+release build, one struct, `Struct (n, true)` with `sfields = [Boxed;
+Int]` and `skind = Product` (`sv_strukt`), registered under `Str`, so a
+`Str`'s bytes are `Bytes` with no conversion and `Str.from_utf8` gives
+its argument back. The program says which struct it is (Mem's `sv`),
+emit_c.ml writes it as `typedef ren_sv ren_struct_n`, and fold.ml never
+merges another struct of the same slots into it, nor it into another,
+since its C type is the runtime's. Everything the data stage built for a
+small record holds: a `Tok { kind: Int, text: Str }` is three slots,
+flattened; an `Array<Str>` is two words an element, mask `0b01`; an
+`Option<Str>` is two slots, its niche in the root's; Perceus dups and
+drops slot 0 and Mem Lint checks it as any counted struct. A literal is
+`Make_struct [Lit n; Int (len << 32)]`, which rc.ml and Mem Lint take
+for a constant (`Static`): no count, no drop, as `Lit` itself.
+
+**An object's field** (`field_slot`) takes the two words, its place
+`Flat [k; k + 1]`, when its *declared* type is `Str` or `Bytes` (no type
+variable in it), so a generic type's layout doesn't change with its
+arguments; one declared a type variable's, and a tuple's part and an
+error's payload (whose types are their arguments, or are walked through
+descriptors kept after them), hold the box. `shape` and `pack` give the
+places; reads, updates, patterns and building go through the data
+stage's `Flat` code, which needed only the object's word count passed to
+`flat_var`. The walks find a field by its constructor's `at` table,
+which now says 128 bits for a two-word field (`ren_ctor_field`).
+logs' `Rec`, six strings and two `Int`s, is one 14-word object, where it
+was an object and six slice objects.
+
+**Where it's boxed,** by runtime calls, never by `To_word` and
+`Of_word`, which Perceus takes for the same reference: `Str_box`
+(`ren_sv_box`: the root itself, counted again, if the value is all of
+it, else a new 32-byte A slice) and `Str_unbox` (`ren_sv_unbox`), each
+borrowing and counting again, the original dropped after
+(`box_taken`, `unboxed`). They're at: a value given or returned as a
+word (`convert`, `take_word`, `from_word`), a block's arguments, its
+value and its parameters (`call_block`, `lambda`), a handler's arms'
+parameters and values, what a handler captures (`captured`), a `with`'s
+value, a field declared a type variable's or a tuple's part or an
+error's payload (`packed_words` boxes, `Field`, patterns' `boxes`
+unbox), a map's value (`kept_word`), and the C of a type's own `key`
+(`key_wrapper`). A walk that only reads (`show`, `==`, ordering, `x.hash()`,
+a map's `get`, `remove`'s key, the NaN walk) is given the two words, as
+an A slice made on the stack for the call (`REN_SV_VIEW`, count 0, so
+counting it does nothing), and a map's key is boxed only if the map
+keeps it (`ren_map_set_sv`); Mem Lint allows two words there and
+nowhere else that takes a word (mem_lint.ml, `views`).
+
+**The runtime** (ren_rt.h, "representation B"). Its strings' functions
+take two words (`ren_sv`) where they're hot: length, data (the root's
+address plus 32 plus the offset, no load), `==`, a slice (inline, its
+checks then arithmetic and one count), `split_at`'s halves and their
+join, `+` and `+=` (`ren_sv_concat_taking`, in place when the root's
+count is 1, after setting the root's `len` to the range's end, as
+"Uniqueness under B" says; growing realloc's an owner the value starts,
+and copies only the range of one it doesn't), `copy()`, `split`,
+`trim`, `join`, `b.at(i)`, layer 3's reads and writes (in place through
+a slice of a unique root) and `show` of a scalar. The rest (`lower`,
+`code`, `char_floor`, `from_utf8`'s test, lossy, `Bytes.of`, a splice,
+the console) is today's A functions given a view and, for a string
+back, `ren_sv_take`. `ren_desc_sv` says a descriptor is a string's,
+under `REN_SV`, which a release build defines: an array made from one
+(`ren_alloc_array_d`, `Map.keys`, `sort`) is two words an element, and
+the `_w` functions generic code calls box and unbox an element. The
+walks read a two-word element or field as a view (`ren_array_peek`,
+`ren_ctor_field`); `ren_array_sort` sorts two-word strings by their
+bytes directly, with no walk, unless the type has its own `key`. A
+value past 4 GiB panics where it's made (`ren_sv_too_big`), where the
+escape will go.
+
+**hoist.ml** reads a string's length and data before a loop for two
+words as for an object; they're the range and the root, which nothing
+changes while the value is held. **rc.ml** gains `lend_parts`, after
+Perceus: a struct made of a field's part, only read, then dropped,
+`Dup p; let k = Make_struct [p; range]; reads; Drop k` with nothing in
+between that drops, frees, calls, branches or gives `k` away, loses the
+count and the drop, which are a pair that does nothing, since what `p`
+is a part of holds it throughout (rule B); `k` is then a part of the
+same object, which Mem Lint checks as one (a struct whose one counted
+slot is a part with no count). It's lent only if `p` is a field read
+that one `Dup` counts and nothing keeps, so Lint sees it with a count of
+0, and so can tell. A release build's `r.key.at(1)` no longer counts
+the input's root twice.
+
+**The tests.** strs.t's `objects` of slices_count.ren is fewer than 200
+in a release build now (10,000 slices kept in an array of small
+records, which a debug build keeps as objects), as step 0 marked for
+step 4; every strs.t, bytes.t and build.t program is the same in every
+build under the sanitizers with no object alive at the end, and
+slices_kept.ren keeps its slices in each place B lays out, its root
+dropped first. Changed only where B's layout shows: test_native.ml's
+printed Mem of release builds, bytes.t's count of what a release
+build's panic leaves alive (2 to 1), and build.t's C variable numbers.
+
+**Measured** (x86_64 cloud container, 4 cores, shared, GCC 13.3 -O2,
+wall time, ms a round, 7 runs interleaved; before is bb005eb, step 3's
+code; bench/native/RESULTS.md, "Bytes stage, part two, step 4, part 1",
+has the spreads, the twins and the commands). Fix by fix: (1) B itself,
+the layout and the runtime's two-word functions: tok 0.69 of before,
+sort 0.38, map 0.92, group 1.06, logs 0.69, slices json 0.76 (3 runs);
+(2) literals uncounted and a map's key boxed only when kept: slices
+json 0.87 of (1), group back to 1.01 of before; (3) `lend_parts`:
+slices pages 0.71 of (2), json 0.91, the rest unchanged. All three
+against before:
+
+| kernel | before | after | after / before | after / Rust |
+|---|---|---|---|---|
+| tok | 57.4 | 37.5 | 0.65 | 1.51 |
+| sort | 1427.7 | 503.1 | 0.35 | 2.17 |
+| map | 2454.8 | 2081.0 | 0.85 | 1.88 (std's: 1.37) |
+| group | 533.4 | 535.4 | 1.00 (11 runs: 0.85) | 1.06 (std's: 0.95) |
+| logs | 423.8 | 263.2 | 0.62 | 1.19 |
+| out json `+=`, 1M | 334.9 | 271.4 | 0.81 | 1.22 |
+| slices logs / `_r` | 30.5 / 19.9 | 19.3 / 20.5 | 0.63 / 1.03 | 1.48 / 0.93 |
+| slices json / `_r` | 153.4 / 82.4 | 105.1 / 85.7 | 0.69 / 1.04 | 1.46 / 1.96 |
+| slices pages / `_r` | 15.5 / 5.2 | 6.5 / 5.5 | 0.42 / 1.04 | 2.82 / 1.78 |
+
+"after / Rust" is measure.py's run of the after build beside the twins.
+The rest of bench/native is within noise of before, but interp, 1.35
+over 11 runs, whose `eval` is the same machine code at another address
+(878.8M instructions in callgrind either way): a placement effect.
+`-DREN_RC_SHARED` costs json 1.14×, which counts its root most, and
+nothing measurable elsewhere.
+
+The clang fault (VERIFY.md, problem 1): clang 18 -O2 keeps 11 to 14
+induction variables in logs' `field_end` scan inlined into `records`,
+with spills, before B and after, so it isn't B's: hoist.ml already
+reads the range unpacked into two locals before the loop. Built with
+clang, logs is 0.73 of before (298.4 against 408.4); an empty `asm` on
+the index in `ren_buf_byte` gave 1.00 of that (289.2 against 288.7), so
+there's no barrier.
+
+**Against the step's targets** (the whole of step 4's; later parts add
+to these): tok 0.65 and sort 0.35 (0.80 or less), map 0.85 (0.95 or
+less), group 1.00 (no slower) and logs 0.62 (0.90 or less) hold. The
+slices kernels against their `_r` forms: logs 0.94 holds (1.1); json
+1.23 and pages 1.18 in this run (1.21 and 1.63 in measure.py's) miss
+1.2, by what's left of counting the input's root: each token or record
+pushed counts it, each element read counts it again and drops it (the
+data stage's choice for an array of counted structs, which a read
+borrowed while the array is held would remove), and freeing the array
+drops it once an element, a chain of increments and decrements of one
+word that offsets don't have. Every slices and `_r` kernel is within 2×
+of Rust but pages, 2.82×, for the same reason. The uncounted view
+doesn't touch these (each slice is stored); borrowed element reads
+would. The escape's cost is the later part's to measure.
+
+**For the next part.** Boxing is `box_taken`, `unboxed`, `kept_word`,
+`captured` and `ren_map_set_sv` in to_mem.ml and the runtime; a map's
+entries are still words, a string's box, so unboxed entries replace
+`kept_word` and `ren_map_set_sv` and teach `REN_MAP_EACH`'s readers
+two words. The runtime's functions take `ren_sv` by value, or an A view
+(`REN_SV_VIEW`), and give `ren_sv`; `ren_sv_make` is where the escape
+goes, and `ren_sv_len`, `ren_sv_data` and `ren_sv_view` are the three
+reads that test it. The uncounted view is a slice whose root isn't
+counted: `ren_sv_slice` dups the root, which a part wouldn't. Traps
+found: Perceus takes `To_word` and `Of_word` for the same reference, so
+a box made there would be counted wrong (hence runtime calls); a
+struct aliased to its one counted slot confuses a struct's slot `k`
+with its root object's field `k`, which freed a string as an object
+(tried and dropped); fold.ml merged structs by their slots alone, which
+would have made a user's `{ Boxed, Int }` record the runtime's `ren_sv`;
+GCC warns of the in-place append's `memcpy` where it's inlined on a
+literal's root, which the count test never lets run (silenced in
+ren_rt.h); and a release build's `--rc naive` is quadratic on
+bench/data/rows.ren before and after (25 s against 33 s here), which
+nothing tests.
+
 ### Progress log
 
 | step | commit | what's done | what's left |
@@ -9888,6 +10075,7 @@ instructions; it writes them itself now (json was 1.85×, logfmt 1.23×).
 | 1 | "Bytes stage, part two, step 1: the boundary" | the NEON block validator and its scalar path, the rescan; `InvalidUtf8(at, incomplete)` in every use; `from_utf8_lossy`; test/utf8/'s differential test, natively and under qemu-aarch64, 0 disagreements; invalid_utf8 and s1 on; scalar path 21×, 1.23× and 2.3× the old loop on ASCII, CJK and mixed (x86_64) | the NEON GB/s targets, the owner's to time on the M4 Max |
 | 2 | "Bytes stage, part two, step 2: the API" | `'a'`, interpolation with `\{x=}`, `ascii_lower`, `byte_len`, `is_empty`, the `len`/`s[i]`/`lower`/`concat` errors, `+` and `+=` (copying), `char_floor`/`char_ceil` and the cut panic's help natively, `chars`, `code`, `of_code`, `join`, `cursor(from:)`; tree-sitter and Zed; every program moved; s2 on | in-place `+=` (step 3); excl.ml got one constructor in its list of nodes to walk, the only touch of the services stage's files beyond the shared ones |
 | 3 | "Bytes stage, part two, step 3: appending in place" | the owner's `cap` and `REN_STR_SLICE`; `ren_str_concat_taking` (in place, doubling, copying with room) where the left side dies, `Bytes` too; the debug report with `REN_NOTES`; append_count and the report's block on; `+=` 1.06× Rust on logfmt, linear on both | json's `+=` at 1.41× of Rust, not 1.1×: A's slice objects and `show`'s strings, not the appending (step 4 makes the slices values) |
+| 4, part 1 | "Bytes stage, part two, step 4 (part 1): representation B" | `Str` and `Bytes` two words in release builds (`ren_sv`), inline in locals, small records, arrays and declared fields; boxed (A) at words, blocks, handlers, tuples' and errors' fields and map values; walks given a stack view; `ren_map_set_sv`; literals uncounted; `lend_parts`; tok 0.65, sort 0.35, map 0.85, group 1.00, logs 0.62 of step 3; slices_count's objects on | the uncounted view, the 4 GiB escape (a value past it panics), unboxed map entries, the 16-byte owner experiment; slices json and pages at 1.2× and 1.2 to 1.6× of `_r` and pages 2.8× of Rust, from counting the root on each element read and free |
 
 ## Services stage
 

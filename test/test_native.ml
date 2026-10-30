@@ -459,7 +459,7 @@ fn main() -> Int =
                       (let i/22:Int i/18)
                       (let $elem/23:Int (buf-get:Int $buf/38 $len/36 i/22))
                       (drop self/2)
-                      (let $result/24:Boxed
+                      (let $result/24:Struct0c
                         (call ren_test_main_1_2 ev/1 $elem/23))
                       (drop $result/24)
                       (panic "an element cast to a type it isn't kept as")))
@@ -634,22 +634,29 @@ fn main() -> Int =
     None => 0
 |};
   [%expect {|
-    (fn ren_test_first_1 (ev/1:Ev ^xs/2:Boxed) -> Struct1c
+    (fn ren_test_first_1 (ev/1:Ev ^xs/2:Boxed) -> Struct2c
       (do (let xs/3:Boxed xs/2) (let $len/4:Int (array-len xs/3))
         (let $eq/5:Bool (== $len/4 0))
-        (decl $if/6:Struct1c)
+        (decl $if/6:Struct2c)
         (if $eq/5
-          (do (let $struct/7:Struct1c (struct #niche1*)) (set $if/6 $struct/7))
-          (do (let xs/8:Boxed xs/2) (let $elem/9:Boxed (array-get:Boxed xs/8 0))
-            (let $struct/10:Struct1c (struct $elem/9))
-            (set $if/6 $struct/10)))
+          (do (let $struct/7:Struct2c (struct #niche1* 0)) (set $if/6 $struct/7))
+          (do (let xs/8:Boxed xs/2)
+            (let $elem/9:Struct0c (array-get:Struct0c xs/8 0))
+            (let $slot/10:Boxed (. $elem/9 0))
+            (let $slot/11:Int (. $elem/9 1))
+            (free $elem/9 0=$slot/10)
+            (let $struct/12:Struct2c (struct $slot/10 $slot/11))
+            (set $if/6 $struct/12)))
         (return $if/6)))
-    (fn ren_test_pick_1 (ev/1:Ev ^xs/2:Boxed i/3:Int) -> Struct0c
+    (fn ren_test_pick_1 (ev/1:Ev ^xs/2:Boxed i/3:Int) -> Struct1c
       (do (let xs/4:Boxed xs/2) (let i/5:Int i/3)
-        (let $elem/6:Boxed (array-get:Boxed xs/4 i/5))
+        (let $elem/6:Struct0c (array-get:Struct0c xs/4 i/5))
         (let i/7:Int i/3)
-        (let $struct/8:Struct0c (struct $elem/6 i/7))
-        (return $struct/8)))
+        (let $slot/8:Boxed (. $elem/6 0))
+        (let $slot/9:Int (. $elem/6 1))
+        (free $elem/6 0=$slot/8)
+        (let $struct/10:Struct1c (struct $slot/8 $slot/9 i/7))
+        (return $struct/10)))
     Mem Lint: ok
     |}]
 
@@ -674,6 +681,7 @@ let lint ?(structs = []) fns =
       dep_infos = [];
       dsites = [];
       clones = [];
+      sv = None;
       overflow =
         { sid = 0; loc = Loc.point ~file:"x" 1 1; wrap = None; kind = Panics; made = None; notes = []; help = None; recv = None };
     }

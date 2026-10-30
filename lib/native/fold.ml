@@ -82,7 +82,8 @@ let rt h (r : rt) : rt =
     | Map_len | Map_find | Map_value | Map_set | Map_set_taking | Set_add
     | Set_add_taking | Map_remove | Map_remove_taking | Map_of _ | Set_of
     | Map_entries _ | Map_keys | Map_values | Hash_fixed | Array_sort _
-    | Str_lower | Char_bound _ | Str_code | Str_of_code | Str_join | Panic_str ) as r ->
+    | Str_lower | Char_bound _ | Str_code | Str_of_code | Str_join | Panic_str
+    | Str_box | Str_unbox ) as r ->
       r
 
 let kept h = List.map (fun (i, a) -> (i, atom h a))
@@ -249,9 +250,12 @@ let program (p : program) : program =
   let first = Hashtbl.create 16 in
   Array.iteri
     (fun n fields ->
-      if not (Hashtbl.mem first fields) then Hashtbl.replace first fields n)
+      if (not (Hashtbl.mem first fields)) && p.sv <> Some n then
+        Hashtbl.replace first fields n)
     structs;
-  let st n = Hashtbl.find first structs.(n) in
+  (* a release build's `Str` (representation B) is a struct of its own,
+     the runtime's [ren_sv], whose C type no other struct's is *)
+  let st n = if p.sv = Some n then n else Hashtbl.find first structs.(n) in
   (* each function's name: the function it's folded into, if it is *)
   let into = Hashtbl.create 64 in
   let rec name g =

@@ -203,7 +203,7 @@ object (representation A).
   $ objects --release --stats append_count.ren
   fewer than 200 objects
   $ objects --release --stats slices_count.ren
-  200 objects or more
+  fewer than 200 objects
   $ objects --debug --stats slices_count.ren
   200 objects or more
 

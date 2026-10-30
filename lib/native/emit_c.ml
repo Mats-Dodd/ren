@@ -190,10 +190,22 @@ let lowering (m : meth) =
   | Some t -> Some (t, fst (Dispatch.lowering t !dsites.(m.msite) m))
   | None -> None
 
-(* [c], a C expression of a value of [l], as a [ren_val], a word. *)
+(* The [Struct] a release build keeps a `Str` and `Bytes` as, the
+   runtime's [ren_sv] (representation B), if it has one: set by [parts]. *)
+let sv : int option ref = ref None
+
+let is_sv (l : layout) =
+  match (l, !sv) with Struct (n, _), Some m -> n = m | _ -> false
+
+(* [c], a C expression of a value of [l], as a [ren_val], a word. A
+   release build's `Str` is given to what only reads it, a walk, as an A
+   slice made on the stack for the call ([REN_SV_VIEW], ren_rt.h), which
+   lives as long as the statement: Mem Lint lets nothing else be given
+   one (mem_lint.ml, [views]). *)
 let word_of (l : layout) c =
   match l with
   | Word _ -> c
+  | l when is_sv l -> sprintf "(ren_val){.o = REN_SV_VIEW(%s)}" c
   | Float -> sprintf "(ren_val){.f = %s}" c
   | Boxed | Desc -> sprintf "(ren_val){.o = %s}" c
   | Ptr | Ev | Cell _ -> sprintf "(ren_val){.p = (void*)%s}" c
@@ -321,7 +333,7 @@ let buf_suffix (l : layout) =
   | Boxed | Desc -> "_o"
   | _ -> bug "a buffer of words"
 
-let runtime rt args site_arg =
+let rec runtime ?result rt args site_arg =
   let a i = atom (List.nth args i) in
   let site () =
     match site_arg with
@@ -331,6 +343,99 @@ let runtime rt args site_arg =
   (* an index's: none for one bounds.ml proved in bounds, which the
      runtime then doesn't check ([ren_array_check]) *)
   let isite () = if site_arg = None then "REN_IN_BOUNDS" else site () in
+  let svx i = is_sv (atom_layout (List.nth args i)) in
+  let str s = match (s : sliced) with Of_str -> "true" | _ -> "false" in
+  (* a release build's `Str` and `Bytes`: the runtime's functions of two
+     words (ren_rt.h, "representation B") *)
+  let b =
+    if !sv = None then None
+    else
+      match rt with
+      | Str_len when svx 0 -> Some (sprintf "ren_sv_len(%s)" (a 0))
+      | Str_data when svx 0 -> Some (sprintf "((void*)ren_sv_data(%s))" (a 0))
+      | Str_eq when svx 0 -> Some (sprintf "ren_sv_eq(%s, %s)" (a 0) (a 1))
+      | Str_concat when svx 0 ->
+          Some (sprintf "ren_sv_concat(%s, %s)" (a 0) (a 1))
+      | Str_concat_taking when svx 0 ->
+          Some (sprintf "ren_sv_concat_taking(%s, %s, NULL)" (a 0) (a 1))
+      | Str_box -> Some (sprintf "ren_sv_box(%s)" (a 0))
+      | Str_unbox -> Some (sprintf "ren_sv_unbox(%s)" (a 0))
+      | Slice (s, Range) when svx 0 ->
+          Some
+            (sprintf "ren_sv_slice(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2) (str s)
+               (site ()))
+      | Slice (s, Before) when svx 0 ->
+          Some (sprintf "ren_sv_before(%s, %s, %s, %s)" (a 0) (a 1) (str s) (site ()))
+      | Slice (_, After) when svx 0 -> Some (sprintf "ren_sv_after(%s, %s)" (a 0) (a 1))
+      | Join _ when svx 0 -> Some (sprintf "ren_sv_join(%s, %s)" (a 0) (a 1))
+      | Copied _ when svx 0 -> Some (sprintf "ren_sv_copied(%s)" (a 0))
+      | Str_split when svx 0 ->
+          Some (sprintf "ren_sv_split(%s, %s, %s)" (a 0) (a 1) (site ()))
+      | Str_trim when svx 0 -> Some (sprintf "ren_sv_trim(%s)" (a 0))
+      | Vacant when svx 0 -> Some "ren_sv_vacant()"
+      | Bytes_at when svx 0 ->
+          Some (sprintf "ren_sv_at(%s, %s, %s)" (a 0) (a 1) (isite ()))
+      | Bytes_load acc when svx 0 ->
+          Some
+            (sprintf "ren_sv_load(%s, %s, %d, %b, %b, %s)" (a 0) (a 1) acc.width
+               acc.signed acc.big (site ()))
+      | (Bytes_store acc | Bytes_store_taking acc)
+        when (match atom_layout (List.hd args) with Cell l -> is_sv l | _ -> false) ->
+          Some
+            (sprintf "ren_sv_store(%s, %s, %s, %d, %b, %b, %b, %s)" (a 0) (a 1)
+               (a 2) acc.width acc.signed acc.big
+               (match rt with Bytes_store_taking _ -> true | _ -> false)
+               (site ()))
+      | (Bytes_set_var signed | Bytes_set_var_taking signed)
+        when (match atom_layout (List.hd args) with Cell l -> is_sv l | _ -> false) ->
+          Some
+            (sprintf "ren_sv_set_var(%s, %s, %s, %b, %b, %s)" (a 0) (a 1) (a 2)
+               signed
+               (match rt with Bytes_set_var_taking _ -> true | _ -> false)
+               (site ()))
+      | Str_join when svx 1 -> Some (sprintf "ren_sv_strs_join(%s, %s)" (a 0) (a 1))
+      | _ -> None
+  in
+  (* the functions of A strings a release build still calls, each given a
+     `Str` as an A slice on the stack: they only read it *)
+  let str_args =
+    match rt with
+    | Console_write | Console_error | Utf8_error | Utf8_incomplete | Utf8_lossy
+    | Char_bound _ | Str_code | Str_lower | Splice _ | Panic_str ->
+        true
+    | _ -> false
+  in
+  match b with
+  | Some c -> c
+  | None
+    when (match result with Some l -> is_sv l | None -> false)
+         && (str_args
+            ||
+            match rt with
+            | Show_int | Show_float | Show_bool | Show_any | Bytes_zeros
+            | Bytes_of | Str_of_code ->
+                true
+            | _ -> false) ->
+      (* a new owner, or what may be one of the strings given, an A
+         object, as two words *)
+      let fresh =
+        match rt with
+        | Show_int | Show_float | Show_bool | Bytes_zeros | Bytes_of
+        | Str_of_code | Str_lower | Splice _ ->
+            true
+        | _ -> false
+      in
+      sprintf "%s(%s)"
+        (if fresh then "ren_sv_of" else "ren_sv_take")
+        (runtime rt args site_arg)
+  | None ->
+  (* a `Str` given to a function of A objects is an A slice on the stack
+     for the call ([REN_SV_VIEW]) *)
+  let a i =
+    if str_args && svx i then sprintf "REN_SV_VIEW(%s)" (atom (List.nth args i))
+    else a i
+  in
+  let w i = if svx i then to_val (List.nth args i) else a i in
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
   (* an array of structs: each element its words, a stride the C knows *)
@@ -576,18 +681,18 @@ let runtime rt args site_arg =
         (a 0)
   | Console_write -> sprintf "ren_console_write(%s)" (a 0)
   | Console_error -> sprintf "ren_console_error(%s)" (a 0)
-  | Show_any -> sprintf "ren_show_any(%s, %s, %s)" (a 0) (a 1) (site ())
+  | Show_any -> sprintf "ren_show_any(%s, %s, %s)" (a 0) (w 1) (site ())
   | Equal_any what ->
-      sprintf "ren_equal_any(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2)
+      sprintf "ren_equal_any(%s, %s, %s, %s, %s)" (a 0) (w 1) (w 2)
         (c_string what) (site ())
   | Compare_any what ->
-      sprintf "ren_compare_any(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2)
+      sprintf "ren_compare_any(%s, %s, %s, %s, %s)" (a 0) (w 1) (w 2)
         (c_string what) (site ())
   | Nan_check what ->
       let y = if List.length args > 1 then a 1 else a 0 in
       sprintf "ren_nan_check(%s, %s, %s, %s)" (a 0) y (c_string what) (site ())
   | Nan_check_any what ->
-      sprintf "ren_nan_in(%s, %s, %s, %s)" (a 0) (a 1) (c_string what) (site ())
+      sprintf "ren_nan_in(%s, %s, %s, %s)" (a 0) (w 1) (c_string what) (site ())
   | Float_lanes -> sprintf "ren_desc_is_float(%s)" (a 0)
   | Float_sum ->
       let t = match site_arg with Some s -> tag s | None -> "0" in
@@ -606,9 +711,9 @@ let runtime rt args site_arg =
         | None -> "REN_OP_NEG"
         | Some _ -> bug "an operator through a dictionary that isn't one"
       in
-      let b = if op = None then "(ren_val){0}" else a 2 in
+      let b = if op = None then "(ren_val){0}" else w 2 in
       let t = match site_arg with Some s -> tag s | None -> "0" in
-      sprintf "ren_op_any(%s, %s, %s, %s, %s, %s)" (a 0) code (a 1) b (site ()) t
+      sprintf "ren_op_any(%s, %s, %s, %s, %s, %s)" (a 0) code (w 1) b (site ()) t
   | Value_any one -> sprintf "ren_value_any(%s, %b)" (a 0) one
   (* maps and sets (ren_rt.c, "maps and sets"): keys and values as words,
      each with its descriptor *)
@@ -618,6 +723,14 @@ let runtime rt args site_arg =
       sprintf "ren_map_find(%s, %s, %s, %s)" (a 0) (to_val (List.nth args 1)) (a 2)
         (site ())
   | Map_value -> sprintf "ren_map_value(%s, %s)" (a 0) (a 1)
+  (* a release build's `Str` key, boxed only if it's new *)
+  | (Map_set | Map_set_taking) when svx 1 ->
+      sprintf "ren_map_set_sv(%s, %s, %s, %s, %s, %b, %s)" (a 0) (a 1)
+        (to_val (List.nth args 2))
+        (a 3) (a 4) (rt = Map_set_taking) (site ())
+  | (Set_add | Set_add_taking) when svx 1 ->
+      sprintf "ren_map_set_sv(%s, %s, (ren_val){0}, %s, NULL, %b, %s)" (a 0)
+        (a 1) (a 2) (rt = Set_add_taking) (site ())
   | Map_set | Map_set_taking ->
       sprintf "ren_map_set(%s, %s, %s, %s, %s, %b, %s)" (a 0)
         (to_val (List.nth args 1))
@@ -650,6 +763,7 @@ let runtime rt args site_arg =
   | Str_of_code -> sprintf "ren_str_of_code(%s, %s)" (a 0) (site ())
   | Str_join -> sprintf "ren_strs_join(%s, %s)" (a 0) (a 1)
   | Panic_str -> sprintf "ren_panic_str(%s, %s)" (site ()) (a 0)
+  | Str_box | Str_unbox -> bug "a box of a string that isn't two words"
   | New_desc _ -> bug "a descriptor built outside a Let"
 
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]
@@ -680,7 +794,7 @@ let low_bits bits =
 
 (* What [r] computes, as a C expression; an [Alloc] is statements of its
    own ([stmt]). *)
-let rhs (r : rhs) =
+let rhs ?result (r : rhs) =
   match r with
   | Atom x -> atom x
   (* a release build's `Float` arithmetic is C's, which carries a NaN; a
@@ -759,7 +873,7 @@ let rhs (r : rhs) =
   | Hole (x, n) -> sprintf "((void*)&ren_fields(%s)[%d])" (atom x) n
   | Call (f, xs) -> sprintf "%s(%s)" f (String.concat ", " (List.map atom xs))
   | Runtime (rt, xs, s) ->
-      let call = runtime rt xs s in
+      let call = runtime ?result rt xs s in
       if gives_nothing rt then sprintf "(%s, (ren_unit)0)" call else call
   | Load v -> sprintf "(*%s)" (var v)
   | Addr v -> sprintf "(&%s)" (var v)
@@ -1148,7 +1262,8 @@ let rec stmt o d (s : stmt) =
      indexes where it is *)
   | Let (v, (Runtime (Array_data, _, _) as r)) ->
       line (sprintf "ren_val* %s = %s;" (var v) (rhs r))
-  | Let (v, r) -> line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (rhs r))
+  | Let (v, r) ->
+      line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (rhs ~result:v.layout r))
   | Decl v ->
       line (sprintf "%s %s = %s;" (ctype v.layout) (var v) (zero v.layout))
   | Set (v, x) -> line (sprintf "%s = %s;" (var v) (atom x))
@@ -1841,18 +1956,24 @@ let key_wrapper (fns : fn list) i name =
       (fun (v : var) m ->
         match v.layout with
         | Ev -> "((const ren_ev*)NULL)"
+        (* a release build's `Str`, which a word holds as its box *)
+        | l when is_sv l ->
+            if m = Owned then "ren_sv_unbox(v.o)" else "ren_sv_peek(v.o)"
         | l ->
             if m = Owned && counted l then add (sprintf "  ren_dup(v.o);\n");
             of_val l "v")
       f.params f.modes
   in
+  let call = sprintf "%s(%s)" f.name (String.concat ", " args) in
   add
     (sprintf "  return %s;\n}\n"
-       (word_of f.result (sprintf "%s(%s)" f.name (String.concat ", " args))));
+       (if is_sv f.result then sprintf "(ren_val){.o = ren_sv_box_taking(%s)}" call
+        else word_of f.result call));
   Buffer.contents b
 
 let parts ~restrict ~release ~site_pieces (p : program) =
   is_release := release;
+  sv := p.sv;
   numbered_tags := release;
   dispatch := if release then Some (Dispatch.make p) else None;
   dsites := Array.of_list p.dsites;
@@ -1928,9 +2049,11 @@ let parts ~restrict ~release ~site_pieces (p : program) =
     String.concat ""
       (List.mapi
          (fun n st ->
-           sprintf "typedef struct { ren_val s[%d]; } ren_struct_%d;\n"
-             (max 1 (List.length st.sfields))
-             n)
+           if p.sv = Some n then sprintf "typedef ren_sv ren_struct_%d;\n" n
+           else
+             sprintf "typedef struct { ren_val s[%d]; } ren_struct_%d;\n"
+               (max 1 (List.length st.sfields))
+               n)
          p.structs)
   in
   List.iter
@@ -2029,6 +2152,7 @@ let parts ~restrict ~release ~site_pieces (p : program) =
          p.start_desc
          (word_of p.start_result "r"));
   if is_object p.start_result then add "  ren_drop(r);\n";
+  if is_sv p.start_result then add "  ren_drop(r.s[0].o);\n";
   List.iter
     (fun (v : value) ->
       match v.vlayout with
@@ -2081,6 +2205,9 @@ let program ?(restrict = false) ?(release = false)
   let ps = parts ~restrict ~release ~site_pieces p in
   let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
+  (* a release build's `Str` and `Bytes` are two words (ren_rt.h,
+     "representation B"), and the runtime's arrays and walks of them know *)
+  if p.sv <> None then add "#define REN_SV 1\n";
   add Runtime_c.header;
   add "\n";
   add Runtime_c.source;

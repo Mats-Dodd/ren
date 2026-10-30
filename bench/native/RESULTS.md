@@ -9,6 +9,102 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Bytes stage, part two, step 4, part 1 (compiler.md, "Bytes stage, part two", "Step 4 (part 1), as built")
+
+Representation B in release builds: a `Str` or `Bytes` is two words, a
+root and a range, kept inline in locals, records, arrays and an object's
+fields declared one; a slice allocates nothing. The machine is step 3's:
+an x86_64 cloud container, 4 cores, shared, GCC 13.3 -O2, clang 18.1.3,
+rustc 1.97.0, go 1.24.7, **wall time** (no cycle counters here), numbers
+for ratios, which the owner re-measures on the M4 Max. Before is
+bb005eb (step 3 and the services stage's step 4), built by that commit's
+`ren`; after is this commit's. ms a round, (median at R rounds - median
+at 0) / R, 7 runs interleaved and rotated, the R-round runs' spread in
+brackets:
+
+```sh
+sh bench/native/strs/build.sh $before   # REN=<bb005eb's ren>
+sh bench/native/strs/build.sh $after
+python3 -I bench/native/strs/ab.py $before $after 7 tok:10 sort:5 map:5 group:5 logs:5 \
+  json_1m:5 json_plus_1m:5 logfmt_1m:5 logfmt_plus_1m:5 slices_logs:20 slices_logs_r:20 \
+  slices_json:20 slices_json_r:20 slices_pages:20 slices_pages_r:20 maps:20
+KERNELS=tok,sort,map,group,logs,json_1m,logfmt_1m,slices_logs,slices_logs_r,slices_json,slices_json_r,slices_pages,slices_pages_r,maps \
+  python3 -I bench/native/strs/measure.py $after 7 final.jsonl
+SHARED=1 WHO=ren KERNELS=tok,sort,logs,slices_json,slices_pages python3 -I bench/native/strs/measure.py $after 5
+```
+
+| kernel | before | after | after / before | Rust (measure.py) | after / Rust |
+|---|---|---|---|---|---|
+| tok | 57.43 (588-704) | 37.51 (422-535) | **0.65** | 27.56 | 1.51 |
+| sort | 1427.7 (7066-8009) | 503.1 (2658-3292) | **0.35** | 211.8 | 2.17 |
+| map | 2454.8 (12513-14945) | 2081.0 (10232-12891) | **0.85** | 1082.7 (FxHash), 1488.9 (std) | 1.88 / 1.37 |
+| group | 533.4 (2821-4088) | 535.4 (2946-3876) | **1.00** (11 runs: 0.85) | 426.8 (FxHash), 478.1 (std) | 1.06 / 0.95 |
+| logs | 423.8 (3208-4024) | 263.2 (2292-2832) | **0.62** | 259.3 | 1.19 |
+| out json, 1M, `+=` | 334.9 (2654-3358) | 271.4 (2564-3408) | 0.81 | 214.5 | 1.22 |
+| out json, 1M, `a + b` | 378.2 (3091-4149) | 349.5 (2807-3436) | 0.92 | | |
+| out logfmt, 1M, `+=` | 209.7 (2611-2997) | 177.1 (2179-2714) | 0.84 | 151.6 | 1.25 |
+| out logfmt, 1M, `a + b` | 184.0 (2401-2838) | 177.4 (2176-2588) | 0.96 | | |
+| slices logs | 30.49 (681-963) | 19.32 (464-555) | 0.63 | 15.09 | 1.48 |
+| slices logs_r | 19.91 (417-570) | 20.54 (466-654) | 1.03 | 22.19 | 0.93 |
+| slices json | 153.4 (3103-3319) | 105.1 (2128-2630) | 0.69 | 71.19 | 1.46 |
+| slices json_r | 82.39 (1716-1987) | 85.70 (1730-2005) | 1.04 | 43.72 | 1.96 |
+| slices pages | 15.48 (359-667) | 6.48 (271-369) | 0.42 | 2.69 | 2.82 |
+| slices pages_r | 5.24 (232-294) | 5.47 (228-311) | 1.04 | 2.63 | 1.78 |
+| maps | 158.2 (2563-3829) | 172.9 (2920-3902) | 1.09 (11 runs: 1.02) | 152.2 (FxHash) | 1.13 |
+
+The Rust column is measure.py's run, its own medians, with the after
+build beside the twins; "after / Rust" divides that run's Ren by its
+Rust (tok 41.62, sort 459.7, map 2032.4, group 452.5, logs 308.8, json
+1M 261.0, logfmt 1M 189.9, slices logs 22.34 and logs_r 20.66, json
+103.96 and json_r 85.82, pages 7.59 and pages_r 4.67, maps 172.5).
+The slices kernels against their `_r` forms: logs 0.94 (ab.py) and 1.08
+(measure.py), json 1.23 and 1.21, pages 1.18 and 1.63: pages' rounds are
+5 to 8 ms over 0-round runs of 170 to 190 ms, so its spread is wide;
+fifteen runs (`ab.py ... 15 slices_pages:20 slices_pages_r:20
+slices_json:20 slices_json_r:20`, before `lend_parts`) gave pages 7.83
+against 4.62 and json 118.65 against 86.39.
+
+**Fix by fix.** (1) B itself, the layout and the runtime's functions
+(3 runs, the first build against before): tok 0.69, sort 0.38, map
+0.92, group 1.06, logs 0.69, slices logs 0.73, json 0.76, pages 0.38.
+(2) A literal's two words counted as the constant they are (rc.ml's
+`Static`), and a map's key boxed only when the map keeps it
+(`ren_map_set_sv`): slices json 0.87 of (1) (5 runs), group 1.06 to
+1.01 of before. (3) `lend_parts` (rc.ml), the count and drop around a
+struct made of a field's part only read: against (2), 7 runs, pages
+0.71, json 0.91, tok 1.00, logs 0.99, slices logs 1.02. Tried and not
+kept: dropping a run of one root's elements at once when an array of
+strings is freed cut 19% of slices json's instructions (callgrind) and
+nothing of its time (0.99); a struct aliased to its one counted slot
+freed a string as an object, since Perceus's parts are by slot.
+
+**The clang fault** (VERIFY.md, problem 1). Built with
+`REN_CC=clang`, logs (7 runs, `ab.py`): before 408.4 (2864-3329),
+after 298.4 (2038-2478), **0.73**; with an empty `asm` on the index in
+`ren_buf_byte` (an experiment, `-DREN_LSR_BARRIER`, not kept) 289.2
+against 288.7, 1.00. The scan in `field_end`, inlined into `records`,
+steps 11 to 14 induction variables a byte, with spills, in clang's
+output before and after (`clang -O2 -S` of the `--emit-c` build.sh
+writes beside each binary); every other kernel's inner loops step 4 or
+fewer. So it isn't B's, and hoist.ml's length and data read into two
+locals before the loop didn't cure it.
+
+**Hot roots, uncounted contention** (`-DREN_RC_SHARED`, 5 runs, plain
+against shared): tok 42.2 / 38.7, sort 495.0 / 478.2, logs 291.8 /
+285.3, slices json 102.8 / 117.3 (1.14×), pages 10.3 / 8.4. Only json,
+which counts its root most, costs more than noise.
+
+**The rest of bench/native, once** (5 runs interleaved, each program's
+main.ren, before and after, ms, `python3 -I rest.py`, a loop like
+ab.py's over `<name>-before` and `<name>-after`): binary-trees 0.93,
+blocks 1.08 (11 runs: 0.92), bytes 1.01, cfold 1.03, deriv 1.00,
+dispatch 1.11 (0.98), fannkuch 1.01, frames 0.99, handlers 1.17 (0.95),
+inout 0.99, nbody 1.02, nested 1.04, nqueens 1.06 (1.02), rbtree 1.02,
+stack 0.98, vec 1.10 (0.99), and interp 1.29 (11 runs: 1.35, 129 against
+174 ms). interp's `eval` is the same machine code before and after, at
+another address (0x7c20, 0x9810), 878.8M instructions in callgrind in
+both: a placement effect, not B, whose program only prints a number.
+
 ## Bytes stage, part two, step 3 (compiler.md, "Bytes stage, part two", "Step 3, as built")
 
 Appending in place, on representation A: `+=`, and `a + b` where `a`

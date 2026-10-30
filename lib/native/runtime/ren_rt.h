@@ -83,6 +83,7 @@ typedef __UINTPTR_TYPE__ uintptr_t;
    -ffast-math, which would make it equal */
 #define isnan(x) ((x) != (x))
 void *memcpy(void *restrict dst, const void *restrict src, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
 void *malloc(size_t n);
 void *realloc(void *p, size_t n);
 void free(void *p);
@@ -270,6 +271,63 @@ typedef struct {
 static inline bool ren_str_is_slice(ren_obj *s) {
   return (s->nfields & REN_STR_SLICE) != 0;
 }
+
+/* A release build's `Str` and `Bytes`, two words: its root and its
+   range (representation B, "representation B" below). */
+typedef struct {
+  ren_val s[2];
+} ren_sv;
+
+_Static_assert(sizeof(ren_str) == 32, "a string's bytes are 32 bytes in");
+
+static inline int64_t ren_sv_off(ren_sv v) {
+  return (int64_t)(uint32_t)(uint64_t)v.s[1].i;
+}
+static inline int64_t ren_sv_len(ren_sv v) {
+  return (int64_t)((uint64_t)v.s[1].i >> 32);
+}
+static inline const char *ren_sv_data(ren_sv v) {
+  return ((ren_str *)v.s[0].o)->bytes + ren_sv_off(v);
+}
+
+/* An offset or a length past 32 bits: the escape, not built yet. */
+__attribute__((cold, noinline)) _Noreturn void ren_sv_too_big(int64_t off,
+                                                             int64_t len);
+
+/* [len] bytes of [root]'s from [off], taking a count of [root]. */
+static inline ren_sv ren_sv_make(ren_obj *root, int64_t off, int64_t len) {
+  if (__builtin_expect((uint64_t)off > UINT32_MAX || (uint64_t)len >= UINT32_MAX,
+                       0))
+    ren_sv_too_big(off, len);
+  ren_sv v;
+  v.s[0].o = root;
+  v.s[1].i = (int64_t)((uint64_t)off | (uint64_t)len << 32);
+  return v;
+}
+
+/* An owner, taken, as all of it. */
+static inline ren_sv ren_sv_of(ren_obj *o) {
+  return ren_sv_make(o, 0, ((ren_str *)o)->len);
+}
+
+/* [v] as an A object for a function that only reads it: the root
+   itself if [v] is all of it, else [tmp], made a slice of the root whose
+   count is 0. */
+static inline ren_obj *ren_sv_view(ren_str *tmp, ren_sv v) {
+  ren_str *r = (ren_str *)v.s[0].o;
+  int64_t off = ren_sv_off(v), len = ren_sv_len(v);
+  if (off == 0 && len == r->len)
+    return &r->h;
+  tmp->h.rc = 0;
+  tmp->h.tag = REN_TAG_STR;
+  tmp->h.nfields = REN_STR_SLICE;
+  tmp->h.objs = 0;
+  tmp->len = len;
+  tmp->data = r->bytes + off;
+  tmp->root = &r->h;
+  return &tmp->h;
+}
+#define REN_SV_VIEW(v) ren_sv_view(&(ren_str){{0}}, (v))
 
 /* Where a panic is, and what it prints: the compiler renders `ren run`'s
    message in pieces (diag.ml, [piece]), with a hole where the message
@@ -849,10 +907,29 @@ static inline void ren_sized_store(ren_obj *a, int64_t i, ren_val v) {
 }
 
 /* Element [i] as a word, of whatever kind the array's elements are:
-   what the walks read. */
+   what the walks read. A release build's `Str`, two words, is an A slice
+   made in [tmp] ([REN_SV_VIEW]): a walk only reads it. An array of
+   structs is never walked, but for that one (to_mem.ml,
+   [no_struct_elements]), so two words an element are a `Str`. */
 static inline ren_val ren_array_load(ren_obj *a, int64_t i) {
   return a->nfields ? ren_sized_load(a, i) : ((ren_array *)a)->data[i];
 }
+static inline ren_val ren_array_peek(ren_obj *a, int64_t i, ren_str *tmp) {
+  if (a->nfields)
+    return ren_sized_load(a, i);
+  ren_array *arr = (ren_array *)a;
+  if (__builtin_expect(arr->stride == 2, 0)) {
+    ren_val v;
+    v.o = ren_sv_view(tmp, ((ren_sv *)arr->data)[i]);
+    return v;
+  }
+  return arr->data[i];
+}
+
+/* A `Str`'s box, counted, from an array of two-word ones; and one of
+   those words, given a box, which it takes. */
+ren_obj *ren_sv_box_at(ren_obj *a, int64_t i);
+void ren_sv_put_at(ren_obj *a, int64_t i, ren_obj *box);
 
 /* [ren_array_get] and [ren_array_take] for a type variable's elements,
    whose array says how they're kept. */
@@ -862,14 +939,19 @@ static inline ren_val ren_array_get_w(ren_obj *a, int64_t i,
     ren_array_check(a, i, site);
     return ren_sized_load(a, i);
   }
+  /* a release build's `Str`s, two words each: an element's box */
+  if (__builtin_expect(ren_stride(a) == 2, 0)) {
+    ren_array_check(a, i, site);
+    ren_val v;
+    v.o = ren_sv_box_at(a, i);
+    return v;
+  }
   return ren_array_get(a, i, site);
 }
 static inline ren_val ren_array_take_w(ren_obj *a, int64_t i,
                                        const ren_site *site) {
-  if (__builtin_expect(a->nfields != 0, 0)) {
-    ren_array_check(a, i, site);
-    return ren_sized_load(a, i);
-  }
+  if (__builtin_expect(a->nfields != 0 || ren_stride(a) == 2, 0))
+    return ren_array_get_w(a, i, site);
   return ren_array_take(a, i, site);
 }
 
@@ -918,11 +1000,20 @@ static inline ren_obj *ren_array_set_taking_w(ren_obj *a, int64_t i, ren_val v,
     ren_sized_store(a, i, v);
     return a;
   }
+  if (__builtin_expect(ren_stride(a) == 2, 0)) {
+    ren_array_check(a, i, site);
+    a = ren_array_own(a);
+    ren_drop(ren_elems(a)[2 * i].o);
+    ren_sv_put_at(a, i, v.o);
+    return a;
+  }
   return ren_array_set_taking(a, i, v, site);
 }
 static inline void ren_array_init_w(ren_obj *a, int64_t i, ren_val v) {
   if (a->nfields)
     ren_sized_store(a, i, v);
+  else if (__builtin_expect(ren_stride(a) == 2, 0))
+    ren_sv_put_at(a, i, v.o);
   else
     ren_elems(a)[i] = v;
 }
@@ -1393,10 +1484,11 @@ static inline uint64_t ren_bswap(uint64_t x, int width) {
 
 /* The number at [at] of [b]: `b.u8(at)` to `b.i64_be(at)`; a `u64`'s
    is an `i64`'s, then [ren_u64_read]. */
-static inline int64_t ren_bytes_load(ren_obj *b, int64_t at, int width, bool sgn,
-                                     bool big, const ren_site *site) {
-  ren_bytes_room(ren_str_len(b), at, width, site);
-  const char *p = ren_str_data(b) + at;
+static inline int64_t ren_load_at(const char *data, int64_t len, int64_t at,
+                                  int width, bool sgn, bool big,
+                                  const ren_site *site) {
+  ren_bytes_room(len, at, width, site);
+  const char *p = data + at;
   switch (width) {
   case 1: {
     uint8_t v = (uint8_t)p[0];
@@ -1424,6 +1516,10 @@ static inline int64_t ren_bytes_load(ren_obj *b, int64_t at, int width, bool sgn
     return (int64_t)v;
   }
   }
+}
+static inline int64_t ren_bytes_load(ren_obj *b, int64_t at, int width, bool sgn,
+                                     bool big, const ren_site *site) {
+  return ren_load_at(ren_str_data(b), ren_str_len(b), at, width, sgn, big, site);
 }
 
 /* [x], the bits a `u64_le` (or `_be`) read at [at], which panics if
@@ -1468,15 +1564,8 @@ static inline char *ren_bytes_writable(ren_obj **cell, bool taking) {
   return ((ren_str *)b)->bytes;
 }
 
-/* `&b.set_u8(at, x)` to `&b.set_i64_be(at, x)`: the value checked, then
-   the offset, as the interpreter does (builtins.ml, [write_at]). */
-static inline void ren_bytes_store(ren_obj **cell, int64_t at, int64_t x, int width,
-                                   bool sgn, bool big, bool taking,
-                                   const ren_site *site) {
-  ren_bytes_fits(x, width, sgn, site);
-  ren_bytes_room(ren_str_len(*cell), at, width, site);
-  char *p = ren_bytes_writable(cell, taking) + at;
-  uint64_t v = (uint64_t)x;
+/* [v]'s low [width] bytes written at [p], little-endian or [big]. */
+static inline void ren_store_at(char *p, uint64_t v, int width, bool big) {
   switch (width) {
   case 1:
     p[0] = (char)(uint8_t)v;
@@ -1496,6 +1585,16 @@ static inline void ren_bytes_store(ren_obj **cell, int64_t at, int64_t x, int wi
     memcpy(p, &w, 8);
   }
   }
+}
+
+/* `&b.set_u8(at, x)` to `&b.set_i64_be(at, x)`: the value checked, then
+   the offset, as the interpreter does (builtins.ml, [write_at]). */
+static inline void ren_bytes_store(ren_obj **cell, int64_t at, int64_t x, int width,
+                                   bool sgn, bool big, bool taking,
+                                   const ren_site *site) {
+  ren_bytes_fits(x, width, sgn, site);
+  ren_bytes_room(ren_str_len(*cell), at, width, site);
+  ren_store_at(ren_bytes_writable(cell, taking) + at, (uint64_t)x, width, big);
 }
 
 /* The bits a `VarInt` ([sgn], zigzag) or a `VarUInt` of [x] is, the
@@ -1520,6 +1619,15 @@ static inline int64_t ren_var_size(int64_t x, bool sgn, const ren_site *site) {
   return ren_var_len(ren_var_bits(x, sgn, site));
 }
 
+/* [z]'s LEB128 bytes, [n] of them, written at [p]. */
+static inline void ren_var_write(unsigned char *p, uint64_t z, int n) {
+  for (int i = 0; i < n - 1; i++) {
+    p[i] = (unsigned char)(z | 0x80);
+    z >>= 7;
+  }
+  p[n - 1] = (unsigned char)z;
+}
+
 /* `&b.set_varuint(at, x)` and `&b.set_varint(at, x)`: how many bytes
    they wrote. */
 static inline int64_t ren_bytes_set_var(ren_obj **cell, int64_t at, int64_t x,
@@ -1528,14 +1636,188 @@ static inline int64_t ren_bytes_set_var(ren_obj **cell, int64_t at, int64_t x,
   uint64_t z = ren_var_bits(x, sgn, site);
   int n = ren_var_len(z);
   ren_bytes_room(ren_str_len(*cell), at, n, site);
-  unsigned char *p = (unsigned char *)ren_bytes_writable(cell, taking) + at;
-  for (int i = 0; i < n - 1; i++) {
-    p[i] = (unsigned char)(z | 0x80);
-    z >>= 7;
-  }
-  p[n - 1] = (unsigned char)z;
+  ren_var_write((unsigned char *)ren_bytes_writable(cell, taking) + at, z, n);
   return n;
 }
+
+/* ---- representation B (compiler.md, "Bytes stage, part two",
+   "Representation B in Mem IR") ----
+
+   A release build's `Str` and `Bytes` are two words, not a pointer to an
+   object: [s[0]] the root, the owner whose bytes they are, counted, and
+   [s[1]] the range, the offset in the root's bytes and the length,
+   [off | len << 32]. Making a slice is arithmetic and one count of the
+   root; nothing is allocated. A root is always an owner (a string made
+   at run time, or a literal, whose count is 0), so a value's bytes are
+   at the root's address plus [offsetof(ren_str, bytes)] plus the offset,
+   with no load: statics keep their bytes there too (emit_c.ml's
+   literals). The compiler keeps one inline in locals, parameters,
+   results, small records and arrays (a struct of two slots, the root's
+   counted: Mem's [Struct]), and in an object's field declared one, two
+   words, which [ren_ctor_info]'s [at] marks (128 bits). Where a value
+   must be one word (a type variable's, a map's key or value, a block's
+   argument) it's boxed: representation A, [ren_str], is the box, the
+   root itself when the value is all of it, else a 32-byte slice object
+   ([ren_sv_box]); [ren_sv_unbox] is the way back. A debug build keeps
+   representation A throughout.
+
+   An offset or a length that doesn't fit 32 bits would be the 4 GiB
+   escape (compiler.md, "The 4 GiB escape"), which isn't built yet: such
+   a value panics where it's made ([ren_sv_too_big]).
+
+   Every function below borrows the values it's given and counts what it
+   keeps, as the rest of the runtime's do, but for those named
+   [_taking]. A function of A objects is given a B value as an A slice
+   made on the stack for the call ([REN_SV_VIEW]): its count is 0, so
+   counting it does nothing, and it lives as long as the statement, so
+   only what keeps nothing of it is given one, which Mem Lint checks
+   (mem_lint.ml, [views]). */
+
+/* What a place holds while a `split_at` lends its value out (Mem's
+   [Vacant]): a scalar root, which nothing reads or counts. */
+static inline ren_sv ren_sv_vacant(void) {
+  ren_sv v;
+  v.s[0].o = ren_box(0);
+  v.s[1].i = 0;
+  return v;
+}
+
+
+/* The box of [v], counted again (its root itself if [v] is all of it);
+   [o], an A object, as two words, counted again; and the same taking
+   [o]. */
+ren_obj *ren_sv_box(ren_sv v);
+ren_sv ren_sv_unbox(ren_obj *o);
+ren_sv ren_sv_take(ren_obj *o);
+
+/* The same, [ren_sv_box] taking [v]; and [o] as two words borrowed from
+   it, counting nothing, which live while [o] does. */
+ren_obj *ren_sv_box_taking(ren_sv v);
+static inline ren_sv ren_sv_peek(ren_obj *o) {
+  ren_str *s = (ren_str *)o;
+  if (ren_str_is_slice(o)) {
+    ren_str *r = (ren_str *)s->root;
+    return ren_sv_make(&r->h, s->data - r->bytes, s->len);
+  }
+  return ren_sv_make(o, 0, s->len);
+}
+
+static inline bool ren_sv_eq(ren_sv a, ren_sv b) {
+  int64_t n = ren_sv_len(a);
+  return n == ren_sv_len(b) &&
+         (n == 0 || memcmp(ren_sv_data(a), ren_sv_data(b), (size_t)n) == 0);
+}
+
+/* `s[i..j]`, counting the root, inline: the checks, then arithmetic.
+   [ren_sv_slice_panic] says what's wrong, as [ren_str_slice] does. */
+__attribute__((cold, noinline)) _Noreturn void
+ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
+                   const ren_site *site);
+static inline bool ren_sv_boundary(ren_sv s, int64_t i) {
+  return i == ren_sv_len(s) || ((unsigned char)ren_sv_data(s)[i] & 0xc0) != 0x80;
+}
+static inline ren_sv ren_sv_slice(ren_sv s, int64_t i, int64_t j, bool str,
+                                  const ren_site *site) {
+  if (__builtin_expect(i > j || i < 0 || j > ren_sv_len(s) ||
+                           (str && !(ren_sv_boundary(s, i) && ren_sv_boundary(s, j))),
+                       0))
+    ren_sv_slice_panic(s, i, j, str, site);
+  ren_dup(s.s[0].o);
+  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+}
+
+/* A `split_at`'s halves, and the two joined back: one value if they're
+   next to each other in one root, else a new owner. */
+ren_sv ren_sv_before(ren_sv s, int64_t n, bool str, const ren_site *site);
+ren_sv ren_sv_after(ren_sv s, int64_t n);
+ren_sv ren_sv_join(ren_sv a, ren_sv b);
+
+/* `a + b`, a new owner of exactly its size; and the same taking [a],
+   which dies there (compiler.md, "Appending in place"): written after
+   [a]'s range in its root if the root's count is 1 and it has the room,
+   the root's bytes after the range dropped first, since a root whose
+   count is 1 is seen by [a] alone (rule U, "Uniqueness under B");
+   otherwise [ren_sv_concat_slow]. [b] may be in [a]'s range, never
+   after it, so it isn't written over. A release build has no report:
+   [site] is NULL. */
+ren_sv ren_sv_concat(ren_sv a, ren_sv b);
+ren_sv ren_sv_concat_slow(ren_sv a, ren_sv b, ren_append *site);
+/* GCC sees this inlined where [a]'s root is a literal, whose bytes have
+   no room, and warns of the write the count test (0, a literal's) never
+   lets happen. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+static inline ren_sv ren_sv_concat_taking(ren_sv a, ren_sv b, ren_append *site) {
+  ren_str *x = (ren_str *)a.s[0].o;
+  int64_t off = ren_sv_off(a), la = ren_sv_len(a), lb = ren_sv_len(b);
+  if (__builtin_expect(ren_rc(&x->h) == 1 && !ren_str_is_slice(&x->h) &&
+                           lb <= x->cap - off - la,
+                       1)) {
+    memcpy(x->bytes + off + la, ren_sv_data(b), (size_t)lb);
+    x->len = off + la + lb;
+    return ren_sv_make(&x->h, off, la + lb);
+  }
+  return ren_sv_concat_slow(a, b, site);
+}
+
+/* `copy()`: [s] counted again if it's all of its root, else a new owner. */
+ren_sv ren_sv_copied(ren_sv s);
+
+/* `s.split(sep)`, an array of [s]'s slices, two words each, and
+   `s.trim()`, as [ren_str_split] and [ren_str_trim]. */
+ren_obj *ren_sv_split(ren_sv s, ren_sv sep, const ren_site *site);
+ren_sv ren_sv_trim(ren_sv s);
+
+/* `xs.join(sep)` of an array of two-word strings. */
+ren_sv ren_sv_strs_join(ren_obj *xs, ren_sv sep);
+
+/* `Bytes`' byte [i], as [ren_bytes_at]. */
+static inline int64_t ren_sv_at(ren_sv b, int64_t i, const ren_site *site) {
+  if (site != REN_IN_BOUNDS &&
+      __builtin_expect((uint64_t)i >= (uint64_t)ren_sv_len(b), 0))
+    ren_bytes_index_panic(ren_sv_len(b), i, site);
+  return (unsigned char)ren_sv_data(b)[i];
+}
+
+/* Layer 3's reads and writes, as [ren_bytes_load], [ren_bytes_store] and
+   [ren_bytes_set_var]. A write is in place if it's [taking] and the
+   root's count is 1, whatever the range: nothing else sees the root
+   (rule U, "Uniqueness under B"); else the range is copied into an owner
+   of its own first ([ren_sv_unshare], which drops [*cell]'s root). */
+static inline int64_t ren_sv_load(ren_sv b, int64_t at, int width, bool sgn,
+                                  bool big, const ren_site *site) {
+  return ren_load_at(ren_sv_data(b), ren_sv_len(b), at, width, sgn, big, site);
+}
+ren_sv ren_sv_unshare(ren_sv b);
+static inline char *ren_sv_writable(ren_sv *cell, bool taking) {
+  ren_obj *r = cell->s[0].o;
+  if (!taking || __builtin_expect(!(ren_rc(r) == 1 && !ren_str_is_slice(r)), 0))
+    *cell = ren_sv_unshare(*cell);
+  return ((ren_str *)cell->s[0].o)->bytes + ren_sv_off(*cell);
+}
+static inline void ren_sv_store(ren_sv *cell, int64_t at, int64_t x, int width,
+                                bool sgn, bool big, bool taking,
+                                const ren_site *site) {
+  ren_bytes_fits(x, width, sgn, site);
+  ren_bytes_room(ren_sv_len(*cell), at, width, site);
+  ren_store_at(ren_sv_writable(cell, taking) + at, (uint64_t)x, width, big);
+}
+static inline int64_t ren_sv_set_var(ren_sv *cell, int64_t at, int64_t x,
+                                     bool sgn, bool taking,
+                                     const ren_site *site) {
+  uint64_t z = ren_var_bits(x, sgn, site);
+  int n = ren_var_len(z);
+  ren_bytes_room(ren_sv_len(*cell), at, n, site);
+  ren_var_write((unsigned char *)ren_sv_writable(cell, taking) + at, z, n);
+  return n;
+}
+
+/* Whether [d] describes a `Str` or `Bytes`, through what an opaque type
+   is represented as, in a build whose strings are two words: how an
+   array of them keeps its elements, two words each, its mask 1. */
+static inline bool ren_desc_sv(ren_obj *o);
 
 /* UTF-8 (ren_rt.c, "UTF-8"). Whether the [n] bytes at [p] are UTF-8, as
    OCaml's `String.is_valid_utf_8` says (no overlong form, no surrogate,
@@ -1840,15 +2122,38 @@ static inline uint8_t ren_desc_elem(ren_obj *o) {
   return d->kind == REN_D_SIZED ? (uint8_t)d->var : 0;
 }
 
+static inline bool ren_desc_sv(ren_obj *o) {
+#ifdef REN_SV
+  const ren_desc *d = (const ren_desc *)o;
+  while (d->kind == REN_D_NAMED && d->decl->kind == REN_DECL_REP) {
+    const ren_desc *r = d->decl->rep;
+    d = r->kind == REN_D_VAR ? d->args[r->var] : r;
+  }
+  return d->kind == REN_D_STR || d->kind == REN_D_BYTES;
+#else
+  (void)o;
+  return false;
+#endif
+}
+
 /* Field [i] of [o], a constructor or a record of [c], as a word: a packed
-   one's bits, unsigned, or the number a sized type's are. [c] NULL is a
+   one's bits, unsigned, or the number a sized type's are; a release
+   build's `Str` declared there, two words (128 bits), an A slice made in
+   [tmp] for a walk, which only reads it ([REN_SV_VIEW]). [c] NULL is a
    tuple's, never packed. */
 static inline ren_val ren_ctor_field(ren_obj *o, const ren_ctor_info *c,
-                                     int32_t i) {
+                                     int32_t i, ren_str *tmp) {
   if (c == NULL || c->at == NULL)
     return ren_fields(o)[i];
   uint32_t at = c->at[i], bits = at & 0xFF;
   ren_val v = ren_fields(o)[at >> 16];
+  if (bits == 128) {
+    ren_sv b;
+    b.s[0] = v;
+    b.s[1] = ren_fields(o)[(at >> 16) + 1];
+    v.o = ren_sv_view(tmp, b);
+    return v;
+  }
   if (bits < 64) {
     v.i = (int64_t)(((uint64_t)v.i >> ((at >> 8) & 0xFF)) &
                     ((UINT64_C(1) << bits) - 1));
@@ -2009,6 +2314,12 @@ static inline ren_val ren_map_value(ren_obj *m, int64_t i) {
    first key, and gets [v]. */
 void ren_map_set(ren_obj **cell, ren_val k, ren_val v, ren_obj *kd,
                  ren_obj *vd, bool taking, const ren_site *site);
+
+/* The same of a release build's `Str` key, two words, which is boxed
+   only if the map keeps it, a key it hasn't yet: a key it has is only
+   looked up, through an A slice on the stack. */
+void ren_map_set_sv(ren_obj **cell, ren_sv k, ren_val v, ren_obj *kd,
+                    ren_obj *vd, bool taking, const ren_site *site);
 
 /* `&m.remove(k)`, the same way, which borrows [k]: removing a key
    that isn't there changes nothing, and copies nothing. */

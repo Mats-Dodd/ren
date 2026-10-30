@@ -287,6 +287,16 @@ let struct_ty cx n =
 let scalar (l : layout) =
   match l with Int | Float | Bool | Unit | Enum | Sized _ -> true | _ -> false
 
+(* A release build's `Str` and `Bytes` (representation B): the root, an
+   object, and the range, a scalar, [off | len << 32]; and whether [l]
+   is it. *)
+let sv_strukt = { sfields = [ Boxed; Int ]; skind = Product }
+
+let is_sv cx (l : layout) =
+  match l with
+  | Struct (n, _) -> Hashtbl.find_opt cx.structs Ty.str = Some n
+  | _ -> false
+
 (* Whether the type [p]'s declaration reaches [p] again, through the
    types of its fields and theirs, whatever their arguments: a recursive
    type, which is never a small value, since its values can be as big as
@@ -339,11 +349,23 @@ type place = Slot of int | Bits of int * int * int | Flat of int list
 type shape = { tag : int; places : (place * layout) list; words : int }
 
 let shape tag layouts =
-  {
-    tag;
-    places = List.mapi (fun i l -> (Slot i, l)) layouts;
-    words = List.length layouts;
-  }
+  let next = ref 0 in
+  let places =
+    List.map
+      (fun (l : layout) ->
+        let k = !next in
+        match l with
+        (* a release build's `Str` or `Bytes`, its two words side by side,
+           the only struct an object's field is ([slot]) *)
+        | Struct _ ->
+            next := k + 2;
+            (Flat [ k; k + 1 ], l)
+        | _ ->
+            incr next;
+            (Slot k, l))
+      layouts
+  in
+  { tag; places; words = !next }
 
 (* How many bits a field of type [t] takes if it's a small scalar that can
    share a word: a [Bool] or a [Unit], a byte, or a sum none of whose
@@ -375,7 +397,14 @@ let rec small_bits cx (t : Ty.ty) =
    size (lean.h:592-612, [lean_ctor_get_uint8] and the rest, and
    [ctor_set_uint*]); Ren's header masks which words hold objects, so the
    order of the rest needn't change. [None] if packing saves no word. *)
-let pack cx (tys : Ty.ty list) : (place list * int) option =
+let pack cx ?layouts (tys : Ty.ty list) : (place list * int) option =
+  (* the words each field that isn't packed takes: two for a release
+     build's `Str` or `Bytes` ([shape]) *)
+  let width i =
+    match Option.map (fun ls -> List.nth ls i) layouts with
+    | Some (Struct _) -> 2
+    | _ -> 1
+  in
   let small =
     List.filter_map
       (fun (i, t) -> Option.map (fun b -> (i, b)) (small_bits cx t))
@@ -400,13 +429,22 @@ let pack cx (tys : Ty.ty list) : (place list * int) option =
   let packed = Array.length !used in
   if packed >= List.length small then None
   else
-    let plain = List.length tys - List.length small in
+    let plain =
+      List.fold_left ( + ) 0
+        (List.mapi
+           (fun i _ -> if List.mem_assoc i small then 0 else width i)
+           tys)
+    in
     let next = ref 0 in
     let places =
       List.mapi
         (fun i _ ->
           match (Hashtbl.find_opt where i, List.assoc_opt i small) with
           | Some (k, at), Some b -> Bits (plain + k, at, b)
+          | _ when width i = 2 ->
+              let n = !next in
+              next := n + 2;
+              Flat [ n; n + 1 ]
           | _ ->
               let n = !next in
               incr next;
@@ -432,6 +470,14 @@ let rec layout cx loc (t : Ty.ty) : layout =
      "Data stage", "Variant types") *)
   let t = Ty.erase_variants t in
   match t with
+  (* a release build's `Str` and `Bytes`: two slots, the root, an object,
+     and the range, [off | len << 32] (representation B, compiler.md,
+     "Bytes stage, part two", "Representation B in Mem IR"), one struct
+     for both, so a `Str`'s bytes are `Bytes` with no conversion. Never
+     demoted, which would undo it everywhere: where a value must be a
+     word it's boxed instead ([Str_box]) *)
+  | _ when cx.release && (t = Ty.str || t = bytes_ty) ->
+      Struct (struct_id cx Ty.str sv_strukt, true)
   | Con (p, args) when cx.release && not (Hashtbl.mem cx.boxed t) -> (
       match small cx loc p args with
       | Some (st, _) ->
@@ -705,7 +751,35 @@ let with_words cx n f =
    [Struct] can't be, so its type is kept boxed instead. *)
 let slot cx loc (t : Ty.ty) =
   match layout cx loc t with
+  | l when is_sv cx l -> l
   | Struct (n, _) -> raise (Demote (struct_ty cx n))
+  | l -> l
+
+(* The same, where a field's declared type is a type variable's, a
+   tuple's part or an error's payload: a word, whatever its type is
+   given, so generic code finds it where any other does, and a `Str` or
+   `Bytes` there is its box ([Str_box]). *)
+let boxed_slot cx loc (t : Ty.ty) =
+  match slot cx loc t with l when is_sv cx l -> Boxed | l -> l
+
+(* Whether [t] mentions a type variable. *)
+let rec has_var (t : Ty.ty) =
+  match t with
+  | Var _ -> true
+  | Con (_, ts) | Variant (_, _, ts) -> List.exists has_var ts
+  | _ -> false
+
+(* The layout of a field of an object, declared of type [declared] and
+   of type [t] here: a `Str` or `Bytes` takes its two words only if it's
+   declared one, so the type's layout doesn't change with its arguments
+   (compiler.md, "Bytes stage, part two": "An object's field whose
+   declared type is `Str` or `Bytes`"), and is boxed in a field declared
+   a type variable's. *)
+let field_slot cx loc ~(declared : Ty.ty) (t : Ty.ty) =
+  match slot cx loc t with
+  | l when is_sv cx l ->
+      if (not (has_var declared)) && is_sv cx (layout cx loc declared) then l
+      else Boxed
   | l -> l
 
 (* The [n]-th struct. *)
@@ -720,7 +794,11 @@ let element (_ : ctx) (l : layout) = l
 (* [l], where a value has to be a word: a [Struct]'s type is kept boxed
    instead. *)
 let word_only cx (l : layout) =
-  match l with Struct (n, _) -> raise (Demote (struct_ty cx n)) | _ -> ()
+  match l with
+  (* a `Str` or `Bytes` is boxed there instead ([Str_box]) *)
+  | l when is_sv cx l -> ()
+  | Struct (n, _) -> raise (Demote (struct_ty cx n))
+  | _ -> ()
 
 (* The declaration of the named type [t], and its arguments. *)
 let rec decl cx loc (t : Ty.ty) =
@@ -784,7 +862,7 @@ let packs cx loc (d : Iface.type_decl) (t : Ty.ty) =
 (* The shape of an object of [t], declared [d], whose fields, of types
    [tys], are given [layouts]: packed if it can be ([pack]). *)
 let placed cx loc d t tag tys layouts =
-  match if packs cx loc d t then pack cx tys else None with
+  match if packs cx loc d t then pack cx ~layouts tys else None with
   | Some (places, words) ->
       { tag; places = List.combine places layouts; words }
   | None -> shape tag layouts
@@ -812,7 +890,11 @@ let ctor_shape cx loc (t : Ty.ty) c =
             let tys =
               List.map (fun (f : Iface.field) -> subst args f.fty) k.cfields
             in
-            placed cx loc d t i tys (List.map (slot cx loc) tys)
+            placed cx loc d t i tys
+              (List.map2
+                 (fun (f : Iface.field) t ->
+                   field_slot cx loc ~declared:f.fty t)
+                 k.cfields tys)
         | _ :: rest -> find (i + 1) rest
       in
       find 0 ctors
@@ -845,6 +927,12 @@ let record_fields cx loc (t : Ty.ty) =
       unsupported loc (sprintf "a field of the opaque type `%s`" (ty_name t))
   | _ -> bug "fields of a type that isn't a record"
 
+(* A record's fields' types as it declares them, over its parameters. *)
+let record_declared cx loc (t : Ty.ty) =
+  match decl cx loc t with
+  | { body = Record fs; _ }, _ -> List.map (fun (f : Iface.field) -> f.fty) fs
+  | _ -> bug "fields of a type that isn't a record"
+
 let record_shape cx loc (t : Ty.ty) =
   match t with
   | Variant (_, c, _) ->
@@ -855,18 +943,21 @@ let record_shape cx loc (t : Ty.ty) =
       match small_of cx loc t with
       | Some (st, [ places ]) -> struct_shape cx loc st 0 places tys
       | _ ->
+          let declared = record_declared cx loc t in
           placed cx loc (fst (decl cx loc t)) t 0 tys
-            (List.map (slot cx loc) tys))
+            (List.map2
+               (fun declared t -> field_slot cx loc ~declared t)
+               declared tys))
 
 let tuple_shape cx loc (t : Ty.ty) =
   match (t, small_of cx loc t) with
   | Con (_, parts), Some (st, [ places ]) ->
       struct_shape cx loc st 0 places parts
-  | Con (_, parts), _ -> shape 0 (List.map (slot cx loc) parts)
+  | Con (_, parts), _ -> shape 0 (List.map (boxed_slot cx loc) parts)
   | _ -> bug "a tuple whose type isn't one"
 
 let error_shape cx loc name (payload : Ty.ty list) =
-  shape (tag_id cx name) (List.map (slot cx loc) payload)
+  shape (tag_id cx name) (List.map (boxed_slot cx loc) payload)
 
 (* Whether a value of [t] can hold a `Float`, a `Float32`'s included,
    through its declaration and its type arguments: what a NaN check of
@@ -1129,19 +1220,34 @@ and decl_id cx loc (p : Path.t) : int =
         | Opaque (Rep r) -> Rep_decl (tmpl r)
         | _ -> unsupported loc (sprintf "a value of type `%s`" p.name)
       in
-      (* where each field is, for the walks, as [placed] puts it *)
+      (* where each field is, for the walks, as [placed] puts it: a field
+         declared `Str` or `Bytes` in a release build is two words, its
+         root and its range, 128 bits ([field_slot]) *)
       let places (fs : Iface.field list) =
         let tys = List.map (fun (f : Iface.field) -> f.fty) fs in
-        match if packs cx loc d (Con (p, [])) then pack cx tys else None with
+        let layouts =
+          List.map
+            (fun t ->
+              match
+                if has_var t then (Int : layout)
+                else with_words cx 0 (fun () -> layout cx loc t)
+              with
+              | l when is_sv cx l -> l
+              | _ -> (Int : layout))
+            tys
+        in
+        let encode =
+          List.map (function
+            | Slot n -> (n lsl 16) lor 64
+            | Bits (n, at, bits) -> (n lsl 16) lor (at lsl 8) lor bits
+            | Flat (n :: _) -> (n lsl 16) lor 128
+            | Flat [] -> bug "a field of no words")
+        in
+        match if packs cx loc d (Con (p, [])) then pack cx ~layouts tys else None with
+        | Some (places, _) -> Some (encode places)
+        | None when List.exists is_struct layouts ->
+            Some (encode (List.map fst (shape 0 layouts).places))
         | None -> None
-        | Some (places, _) ->
-            Some
-              (List.map
-                 (function
-                   | Slot n -> (n lsl 16) lor 64
-                   | Bits (n, at, bits) -> (n lsl 16) lor (at lsl 8) lor bits
-                   | Flat _ -> bug "an object's field flattened")
-                 places)
       in
       let dplaces =
         match d.body with
@@ -1401,13 +1507,13 @@ let within ks place =
    flattened in its slots [ks] ([Flat]): those slots read, each counted
    again, and made a struct, which the variable given holds; nothing in
    scope owns it yet. *)
-let flat_var fs name (x : atom) ks (l : layout) : var =
+let flat_var ?(words = 0) fs name (x : atom) ks (l : layout) : var =
   let st =
     match l with Struct (n, _) -> struct_of fs.cx n | _ -> bug "a struct"
   in
   let parts =
     List.map2
-      (fun k l -> Var (field_var fs "$part" x (Slot k, l) 0))
+      (fun k l -> Var (field_var fs "$part" x (Slot k, l) words))
       ks st.sfields
   in
   List.iter (dup fs) parts;
@@ -1430,6 +1536,22 @@ let flat_slots fs (y : atom) : atom list =
   List.iter (dup fs) parts;
   drop_now fs y;
   parts
+
+(* [x], a release build's `Str` or `Bytes`, which is taken, as its box,
+   an object (representation A): [Str_box] counts the root again, and [x]
+   is dropped. *)
+let box_taken fs (x : atom) : atom =
+  let b = fresh fs "$box" Boxed in
+  emit fs (Let (b, Runtime (Str_box, [ x ], None)));
+  drop_now fs x;
+  Var b
+
+(* [b], a string's box, which is borrowed, as a release build's two
+   words, counted ([Str_unbox]). *)
+let unboxed fs (b : atom) : var =
+  let u = fresh fs "$unboxed" (Struct (Hashtbl.find fs.cx.structs Ty.str, true)) in
+  emit fs (Let (u, Runtime (Str_unbox, [ b ], None)));
+  u
 
 (* The statements [f] emits, as a block, and what it gives. *)
 let sub fs f =
@@ -1707,29 +1829,53 @@ let result_tag cx c =
       find 0 cs
   | _ -> bug "no `Result`"
 
-(* [x] as a word, borrowed: what a runtime walk is given. *)
+(* [x] as a word, borrowed: what a runtime walk is given. A release
+   build's `Str` or `Bytes` is given as its two words, which the walk
+   sees as an A slice made on the stack for the call (emit_c.ml,
+   [to_val]), since it keeps nothing of it. *)
 let as_word fs (x : atom) : atom =
   word_only fs.cx (atom_layout x);
   match atom_layout x with
   | Word _ -> x
+  | l when is_sv fs.cx l -> x
   | _ -> borrowed fs "$word" (Word 0) (To_word x)
 
+(* [x] as a word, borrowed, for a runtime function that keeps it, a map's
+   key or value: a `Str` or `Bytes` as its box, owned, which the caller
+   drops when it's done ([kept]). *)
+let kept_word fs env (x : atom) : atom * atom list =
+  match atom_layout x with
+  | l when is_sv fs.cx l ->
+      let b = owned fs env "$box" Boxed (Runtime (Str_box, [ x ], None)) in
+      (as_word fs b, [ b ])
+  | _ -> (as_word fs x, [])
+
 (* What [rhs] gives, a word, as an owned value of [l]: a type
-   variable's word as it is, anything else taken out of it. *)
+   variable's word as it is, anything else taken out of it; a `Str` or
+   `Bytes` unboxed, its box dropped. *)
 let from_word fs env name (rhs : rhs) (l : layout) : atom =
   word_only fs.cx l;
   match l with
   | Word _ -> owned fs env name l rhs
+  | l when is_sv fs.cx l ->
+      let w = borrowed fs name (Word 0) rhs in
+      let b = owned fs env name Boxed (Of_word (w, Boxed)) in
+      let u = unboxed fs b in
+      own env u;
+      drop fs env b;
+      Var u
   | _ ->
       let w = borrowed fs name (Word 0) rhs in
       owned fs env name l (Of_word (w, l))
 
 (* [x] as a value of [l], what a callee takes: a word if that's what it
-   takes and [x] isn't one. Taken. *)
+   takes and [x] isn't one, a `Str` or `Bytes` its box. Taken. *)
 let convert fs (x : atom) (l : layout) : atom =
   (match l with Word _ -> word_only fs.cx (atom_layout x) | _ -> ());
   match (l, atom_layout x) with
   | Word _, Word _ -> x
+  | Word _, lx when is_sv fs.cx lx ->
+      borrowed fs "$word" (Word 0) (To_word (box_taken fs x))
   | Word _, _ -> borrowed fs "$word" (Word 0) (To_word x)
   | _ -> x
 
@@ -1899,6 +2045,16 @@ let spine_var name ty : C.var =
 let is_spine_var (e : C.expr) =
   match e.kind with Local v -> v.id <= -1_000_000 | _ -> false
 
+(* The string literal [s], a [Lit], never freed: a release build's
+   two words, its root the literal and its range all of it. *)
+let str_literal fs env s : atom =
+  match literal fs.cx s with
+  | Lit _ as l when fs.cx.release ->
+      owned fs env "$lit"
+        (Struct (struct_id fs.cx Ty.str sv_strukt, true))
+        (Make_struct [ l; Int (Int64.shift_left (Int64.of_int (String.length s)) 32) ])
+  | l -> l
+
 let rec expr fs env (e : C.expr) : atom =
   (* the line it's at, while it's compiled, if it's in the function's
      file and not the prelude's *)
@@ -1918,7 +2074,7 @@ and expr_at fs env (e : C.expr) : atom =
   | Float f -> Float f
   | Bool b -> Bool b
   | Unit -> Unit
-  | Str s -> literal cx s
+  | Str s -> str_literal fs env s
   | Local v -> read fs env v
   (* an arm's `finally`: natively, nothing is cancelled, so it's a `let`
      of what it covers *)
@@ -2118,7 +2274,11 @@ and expr_at fs env (e : C.expr) : atom =
       let x = expr fs env base in
       let t =
         match place with
-        | Flat ks -> flat_var fs f x ks l
+        | Flat ks -> flat_var ~words fs f x ks l
+        (* a `Str` boxed in a field declared a type variable's, or a
+           tuple's, read as its two words, counted *)
+        | _ when l = Boxed && is_sv cx (lay e.ty) ->
+            unboxed fs (Var (field_var fs f x (place, l) words))
         | _ ->
             let t = field_var fs f x (place, l) words in
             dup fs (Var t);
@@ -2138,7 +2298,7 @@ and expr_at fs env (e : C.expr) : atom =
             if name = f then y
             else
               match place with
-              | Flat ks, l -> Var (flat_var fs name x ks l)
+              | Flat ks, l -> Var (flat_var ~words:sh.words fs name x ks l)
               | _ ->
                   let t = Var (field_var fs name x place sh.words) in
                   dup fs t;
@@ -2177,8 +2337,10 @@ and expr_at fs env (e : C.expr) : atom =
          compared by *)
       let xs = List.map (expr fs env) args in
       let ds = List.map (desc fs env) ds in
+      (* a `Str` in the payload is its box, as [error_shape] reads it *)
+      let word x = match atom_layout x with l when is_sv cx l -> Boxed | l -> l in
       alloc fs env
-        (shape (tag_id cx t) (List.map atom_layout (xs @ ds)))
+        (shape (tag_id cx t) (List.map word (xs @ ds)))
         (xs @ ds)
   | Fail x ->
       let err = expr fs env x in
@@ -2313,13 +2475,16 @@ and assert_message fs env (a : C.expr) : atom =
     | _ -> List.concat_map locals (C.children e)
   in
   let cat x y =
-    let r = owned fs env "$msg" Boxed (Runtime (Str_concat, [ x; y ], None)) in
+    let r =
+      owned fs env "$msg" (layout_at fs a.loc Ty.str)
+        (Runtime (Str_concat, [ x; y ], None))
+    in
     drop fs env x;
     drop fs env y;
     r
   in
   match List.sort_uniq compare (locals a) with
-  | [] -> literal cx (sprintf "%s needs `%s`, and it isn't so" who text)
+  | [] -> str_literal fs env (sprintf "%s needs `%s`, and it isn't so" who text)
   | vs ->
       List.fold_left
         (fun (msg, first) (v : C.var) ->
@@ -2329,8 +2494,8 @@ and assert_message fs env (a : C.expr) : atom =
           let shown =
             show fs env a.loc v.ty (C.Known v.ty) (read fs env v)
           in
-          (cat (cat msg (literal cx lead)) shown, false))
-        (literal cx (sprintf "%s needs `%s`, but " who text), true)
+          (cat (cat msg (str_literal fs env lead)) shown, false))
+        (str_literal fs env (sprintf "%s needs `%s`, but " who text), true)
         vs
       |> fst
 
@@ -2391,8 +2556,11 @@ and small_ctor fs env (l : layout) (sh : shape) xs =
 and packed_words fs (sh : shape) fields =
   let words = Array.make sh.words [] in
   List.iter2
-    (fun ((place : place), _) x ->
+    (fun ((place : place), (l : layout)) x ->
       match place with
+      (* a `Str` in a word of its own is its box ([field_slot]) *)
+      | Slot n when l = Boxed && is_sv fs.cx (atom_layout x) ->
+          words.(n) <- [ (box_taken fs x, -1, 0) ]
       | Slot n -> words.(n) <- [ (x, -1, 0) ]
       | Flat ks ->
           List.iter2
@@ -2494,7 +2662,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       | Int | Float | Bool | Unit | Enum | Sized _ ->
           check_nan what x y;
           owned fs env "$eq" Bool (Compare (c, x, y))
-      | Boxed when a.ty = Ty.str || a.ty = bytes_ty ->
+      | l when (l = Boxed || is_sv cx l) && (a.ty = Ty.str || a.ty = bytes_ty) ->
           let same =
             owned fs env "$eq" Bool (Runtime (Str_eq, [ x; y ], None))
           in
@@ -2567,7 +2735,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
         | After -> (After, None)
       in
       let r =
-        owned fs env "$slice" Boxed
+        owned fs env "$slice" (lay e.ty)
           (Runtime (Slice (sliced a.ty, part), x :: ys, at))
       in
       List.iter (drop fs env) (x :: ys);
@@ -2578,7 +2746,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let j = expr fs env j in
       let y = expr fs env w in
       let r =
-        owned fs env "$spliced" Boxed
+        owned fs env "$spliced" (lay e.ty)
           (Runtime (Splice (sliced a.ty), [ x; i; j; y ], None))
       in
       drop fs env x;
@@ -2588,7 +2756,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       let x = expr fs env a in
       let y = expr fs env b in
       let r =
-        owned fs env "$joined" Boxed
+        owned fs env "$joined" (lay e.ty)
           (Runtime (Join (sliced a.ty), [ x; y ], None))
       in
       drop fs env x;
@@ -2596,7 +2764,7 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       r
   | Vacant, [ a ] ->
       let x = expr fs env a in
-      let r = owned fs env "$vacant" Boxed (Runtime (Vacant, [ x ], None)) in
+      let r = owned fs env "$vacant" (lay e.ty) (Runtime (Vacant, [ x ], None)) in
       drop fs env x;
       r
   | Get_index b, [ a; i ] ->
@@ -2994,6 +3162,13 @@ and take_word fs env (r : atom) (l : layout) : atom =
   | Word _, Word _ ->
       consume env r;
       owned fs env "$word" l (Atom r)
+  | Word _, l when is_sv fs.cx l ->
+      consume env r;
+      let b = owned fs env "$unword" Boxed (Of_word (r, Boxed)) in
+      let u = unboxed fs b in
+      own env u;
+      drop fs env b;
+      Var u
   | Word _, _ ->
       consume env r;
       owned fs env "$unword" l (Of_word (r, l))
@@ -3013,8 +3188,22 @@ and block_arg fs (x : atom) =
    says it can fail, its error is raised here. *)
 and call_block ?(borrowed = 0) fs env ~result ~fails b ev xs =
   List.iter (fun x -> word_only fs.cx (atom_layout x)) xs;
+  (* a block's arguments and its value are words: a `Str` or `Bytes` its
+     box, taken ([lambda] unboxes it) *)
+  let xs =
+    List.map
+      (fun x -> if is_sv fs.cx (atom_layout x) then box_taken fs x else x)
+      xs
+  in
   let xs = List.map (block_arg fs) xs in
   word_only fs.cx result;
+  if is_sv fs.cx result then (
+    let r = call_block ~borrowed fs env ~result:Boxed ~fails b ev xs in
+    let u = unboxed fs r in
+    own env u;
+    drop fs env r;
+    Var u)
+  else
   let r = fresh fs "$result" result in
   let error = fresh fs "$error" Boxed in
   let on_error =
@@ -3031,8 +3220,10 @@ and call_block ?(borrowed = 0) fs env ~result ~fails b ev xs =
    it owns. A scalar's is the runtime's own, and anything else's walks
    the descriptor. *)
 and show fs env loc t (d : C.desc) x =
+  let shown = layout_at fs loc Ty.str in
   match layout_at fs loc t with
   | Boxed when t = Ty.str -> x
+  | l when is_sv fs.cx l && t = Ty.str -> x
   (* a sized type's value is shown as the number it is *)
   | Sized k ->
       show fs env loc (Sized.wide k) d
@@ -3051,11 +3242,11 @@ and show fs env loc t (d : C.desc) x =
       let site = if rt = Some Show_float then Some (new_site fs.cx loc) else None in
       let s =
         match rt with
-        | Some rt -> owned fs env "$shown" Boxed (Runtime (rt, [ x ], site))
+        | Some rt -> owned fs env "$shown" shown (Runtime (rt, [ x ], site))
         | None ->
             let d = desc fs env d in
             let s =
-              owned fs env "$shown" Boxed
+              owned fs env "$shown" shown
                 (Runtime
                    (Show_any, [ d; as_word fs x ], Some (new_site fs.cx loc)))
             in
@@ -3321,9 +3512,21 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
         | Set_add -> Set_add
         | _ -> Map_remove
       in
-      emit fs
-        (Do (Runtime (rt, (cell :: List.map (as_word fs) xs) @ ds, Some (site ()))));
-      List.iter (drop fs env) (xs @ ds);
+      (* a map keeps its keys and values as words: a `Str` value's box,
+         made for it ([kept_word]) *)
+      let words, boxes =
+        List.split
+          (List.mapi
+             (fun i x ->
+               (* a key [Map_remove] only reads, and one [Map_set] and
+                  [Set_add] box only if they keep it (ren_rt.h,
+                  [ren_map_set_sv]) *)
+               if rt = Map_remove || i = 0 then (as_word fs x, [])
+               else kept_word fs env x)
+             xs)
+      in
+      emit fs (Do (Runtime (rt, (cell :: words) @ ds, Some (site ()))));
+      List.iter (drop fs env) (xs @ List.concat boxes @ ds);
       Unit)
   | Map_of, [ k; v ], [ dk; dv ] -> (
       match values () with
@@ -3571,6 +3774,8 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
         let w =
           match atom_layout r with
           | Word _ -> r
+          | l when is_sv cx l ->
+              borrowed code "$word" (Word 0) (To_word (box_taken code r))
           | l ->
               word_only cx l;
               borrowed code "$word" (Word 0) (To_word r)
@@ -3657,7 +3862,15 @@ and lambda fs env ~name ~(params : C.param list) ~ev ~outer ~given ~captures
                  unsupported_at code body.loc "a block passed to a block"
              | _ -> ());
              word_only cx l;
-             let x = let_var code p.var.name l (Arg (args, i)) in
+             let x =
+               if is_sv cx l then (
+                 (* a `Str`'s box, which it takes ([call_block]) *)
+                 let b = let_var code p.var.name Boxed (Arg (args, i)) in
+                 let u = unboxed code (Var b) in
+                 drop_now code (Var b);
+                 u)
+               else let_var code p.var.name l (Arg (args, i))
+             in
              own cenv x;
              if typed && i = 0 then code.words <- (n, x) :: code.words;
              (bind cenv p.var x, i + 1)))
@@ -3795,7 +4008,9 @@ and install ?(site = true) fs env (e : C.expr) ~ev ~outer ~deps ~handler
       deps
   in
   let outer = borrow fs env outer in
-  let result = fresh fs "$with" (layout_at fs e.loc e.ty) in
+  let gives = layout_at fs e.loc e.ty in
+  (* what a `with` gives is a word: a `Str`'s box, unboxed after *)
+  let result = fresh fs "$with" (if is_sv cx gives then Boxed else gives) in
   word_only cx result.layout;
   let error = fresh fs "$error" Boxed in
   let on_error =
@@ -3825,17 +4040,44 @@ and install ?(site = true) fs env (e : C.expr) ~ev ~outer ~deps ~handler
   drop fs env d;
   drop fs env h;
   own env result;
-  Var result
+  if is_sv cx gives then (
+    let u = unboxed fs (Var result) in
+    own env u;
+    drop fs env (Var result);
+    Var u)
+  else Var result
 
 (* A handler's description: an object holding its tag, which finds its
    record, of its code, lifted, and what it captures, copied. A stateless
    handler's record has a method for each operation too ([method_code]). *)
+(* A handler's capture [v], read by [rhs] from its description, where
+   it's [x]: a `Str`'s box unboxed, owned by the arm ([handler]). *)
+and captured code cenv (v : C.var) x rhs =
+  match atom_layout x with
+  | Boxed when is_sv code.cx (layout code.cx code.here v.ty) ->
+      let b = let_var code v.name Boxed rhs in
+      let u = unboxed code (Var b) in
+      own cenv u;
+      u
+  | l -> let_var code v.name l rhs
+
 and handler fs env (e : C.expr) ~ev ~captures body =
   let cx = fs.cx in
   let values = List.map (read fs env) captures in
   (* what it captures is kept in its object's words: a [Struct]'s type,
-     a small record a handler is given, is kept boxed instead *)
+     a small record a handler is given, is kept boxed instead, and a
+     `Str` or `Bytes` is its box, which the arms unbox ([captured]) *)
   List.iter (fun x -> word_only cx (atom_layout x)) values;
+  let values =
+    List.map
+      (fun x ->
+        if is_sv cx (atom_layout x) then (
+          let b = owned fs env "$box" Boxed (Runtime (Str_box, [ x ], None)) in
+          drop fs env x;
+          b)
+        else x)
+      values
+  in
   let hdeps =
     match e.ty with
     | Impl { deps; _ } -> List.map (fun (d : Ty.dep) -> dep_id cx d.dpath) deps
@@ -3907,8 +4149,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
           List.fold_left
             (fun cenv (i, ((v : C.var), x)) ->
               bind cenv v
-                (let_var code v.name (atom_layout x)
-                   (Field (Var self, i + 1, size))))
+                (captured code cenv v x (Field (Var self, i + 1, size))))
             cenv
             (List.mapi (fun i c -> (i, c)) (List.combine captures values))
         in
@@ -4053,8 +4294,7 @@ and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
               List.fold_left
                 (fun cenv (i, ((v : C.var), x)) ->
                   bind cenv v
-                    (let_var code v.name (atom_layout x)
-                       (Field (Var self, i + 1, size))))
+                    (captured code cenv v x (Field (Var self, i + 1, size))))
                 cenv
                 (List.mapi (fun i c -> (i, c)) (List.combine captures values))
             in
@@ -4067,7 +4307,14 @@ and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
                      let l = layout_at code arm.loc p.var.ty in
                      word_only cx l;
                      let x =
-                       let_var code p.var.name l (Arg_borrowed (Var args, i))
+                       if is_sv cx l then (
+                         let b =
+                           let_var code p.var.name Boxed (Arg_borrowed (Var args, i))
+                         in
+                         let u = unboxed code (Var b) in
+                         own cenv u;
+                         u)
+                       else let_var code p.var.name l (Arg_borrowed (Var args, i))
                      in
                      (bind cenv p.var x, i + 1))
                    (cenv, 1) params)
@@ -4077,6 +4324,8 @@ and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
             let w =
               match atom_layout r with
               | Word _ -> r
+              | l when is_sv cx l ->
+                  borrowed code "$word" (Word 0) (To_word (box_taken code r))
               | l ->
                   word_only cx l;
                   borrowed code "$word" (Word 0) (To_word r)
@@ -4285,6 +4534,10 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
      matched: [pending] holds those of the path being tested, so a path
      that doesn't match has made nothing to drop. *)
   let flats = Hashtbl.create 4 in
+  (* the same for a `Str` boxed in a word of its subject's ([field_slot]):
+     a variable never set, whose box is in [boxes], unboxed where a name
+     bound to it has matched *)
+  let boxes = Hashtbl.create 4 in
   let pending = ref [] in
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
   let no_arm = new_site cx e.loc in
@@ -4304,8 +4557,11 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
     let made =
       List.rev_map
         (fun ((m : var), (f : var)) ->
-          let x, ks = Hashtbl.find flats f.id in
-          emit fs (Set (m, Var (flat_var fs m.name x ks m.layout)));
+          (match Hashtbl.find_opt boxes f.id with
+          | Some b -> emit fs (Set (m, Var (unboxed fs b)))
+          | None ->
+              let x, ks, words = Hashtbl.find flats f.id in
+              emit fs (Set (m, Var (flat_var ~words fs m.name x ks m.layout))));
           m)
         !pending
     in
@@ -4354,18 +4610,23 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
         (* the field at [place] of [x], to test: a flattened one a
            subject of its own, and one of a flattened one read from the
            slots it's kept in *)
-        let part (place, l) words =
-          let x, place =
+        let part (q : C.pattern) (place, l) words =
+          let x, place, words =
             match x with
             | Var f when Hashtbl.mem flats f.id ->
-                let x, ks = Hashtbl.find flats f.id in
-                (x, within ks place)
-            | _ -> (x, place)
+                let x, ks, words = Hashtbl.find flats f.id in
+                (x, within ks place, words)
+            | _ -> (x, place, words)
           in
           match place with
           | Flat ks ->
               let f = fresh fs "$flat" l in
-              Hashtbl.replace flats f.id (x, ks);
+              Hashtbl.replace flats f.id (x, ks, words);
+              Var f
+          | _ when l = Boxed && is_sv cx (layout_at fs q.ploc q.pty) ->
+              let b = Var (field_var fs "$box" x (place, l) words) in
+              let f = fresh fs "$unboxed" (layout_at fs q.ploc q.pty) in
+              Hashtbl.replace boxes f.id b;
               Var f
           | _ -> Var (field_var fs "$part" x (place, l) words)
         in
@@ -4374,14 +4635,14 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
             (fun ((q : C.pattern), place) ->
               match q.pkind with
               | PWild -> None
-              | _ -> Some (q, part place sh.words))
+              | _ -> Some (q, part q place sh.words))
             (List.combine ps sh.places)
         in
         (* [m] set to [x], then [k]: a flattened field is made only where
            the arm matches *)
         let set (m : var) k =
           match x with
-          | Var f when Hashtbl.mem flats f.id ->
+          | Var f when Hashtbl.mem flats f.id || Hashtbl.mem boxes f.id ->
               let saved = !pending in
               pending := (m, f) :: saved;
               k ();
@@ -4792,6 +5053,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
         (by_index cx.deps);
     dsites = List.rev cx.dsite_list;
     clones = [];
+    sv = Hashtbl.find_opt cx.structs Ty.str;
   }
 
 (* In a release build, a small value's type a value of which turns out

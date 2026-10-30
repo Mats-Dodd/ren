@@ -245,6 +245,15 @@ type rt =
           "Bytes stage, part two", "Appending in place"). Its site, a debug
           build's, is an [Appends] one, which the `+=` report counts *)
   | Str_eq
+  | Str_box
+      (** a release build's `Str` or `Bytes`, two words (representation B,
+          compiler.md, "Bytes stage, part two"), as one, where a value must
+          be a word: its box, representation A, counted again: the root
+          itself, if the value is all of it, or else a new 32-byte slice
+          object, which counts the root *)
+  | Str_unbox
+      (** an A object, a box or a debug build's string, as a release
+          build's two words, counting the root again *)
   | Slice of sliced * part
       (** a slice of an array, a `Str` or `Bytes` (foundations.md, decision
           17), sharing its root's buffer and counting the root: [Range] of
@@ -786,6 +795,9 @@ type program = {
   dep_infos : dep_info list;  (** by the dependency's number *)
   dsites : dsite list;  (** by number *)
   clones : clone list;  (** what clone.ml did, which a release build lists *)
+  sv : int option;
+      (** the [Struct] a release build keeps a `Str` and `Bytes` as, its root
+          and its range (representation B), if it has one *)
 }
 
 (* Whether the runtime's [rt] takes its [n]-th argument's reference: the

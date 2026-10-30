@@ -174,7 +174,7 @@ which `ren run` doesn't print, is silenced (`REN_NOTES=0`).
   bytes/proofs_shrink.ren, perceus: the same, exit 1, objects live at exit 2
   bytes/proofs_shrink.ren, naive: the same, exit 1, objects live at exit 2
   ren specialized: 3 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
-  bytes/proofs_shrink.ren, release: the same, exit 1, objects live at exit 2
+  bytes/proofs_shrink.ren, release: the same, exit 1, objects live at exit 1
   bytes/proofs_shrink.ren, tcc: the same, exit 1, objects live at exit 2
   bytes/proofs_shrink.ren, ren run --release: the same
   bytes/proofs_shrink_array.ren, perceus: the same, exit 1, objects live at exit 3

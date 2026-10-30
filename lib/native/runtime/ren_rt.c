@@ -209,11 +209,19 @@ ren_obj *ren_array_reserve_k(int64_t cap, uint8_t kind) {
   return ren_alloc_array_c(0, cap, false, 0, kind);
 }
 
+/* A type variable's elements, by its descriptor: a sized type's at its
+   width, and a release build's `Str` two words, its root counted
+   ([ren_desc_sv]), as the compiler keeps an array of them where it knows
+   the type, so the two meet. */
 ren_obj *ren_alloc_array_d(int64_t len, ren_obj *d) {
+  if (ren_desc_sv(d))
+    return ren_alloc_array_c(len, len, 1, 2, 0);
   return ren_alloc_array_c(len, len, ren_desc_counted(d), 0, ren_desc_elem(d));
 }
 
 ren_obj *ren_array_reserve_d(int64_t cap, ren_obj *d) {
+  if (ren_desc_sv(d))
+    return ren_alloc_array_c(0, cap, 1, 2, 0);
   return ren_alloc_array_c(0, cap, ren_desc_counted(d), 0, ren_desc_elem(d));
 }
 
@@ -633,7 +641,23 @@ void ren_array_push_taking(ren_obj **cell, ren_val v) {
 
 /* ---- arrays of a type variable's elements, or a sized type's ---- */
 
+ren_obj *ren_sv_box_at(ren_obj *a, int64_t i) {
+  return ren_sv_box(((ren_sv *)ren_elems(a))[i]);
+}
+
+void ren_sv_put_at(ren_obj *a, int64_t i, ren_obj *box) {
+  ((ren_sv *)ren_elems(a))[i] = ren_sv_take(box);
+}
+
 ren_obj *ren_array_set_w(ren_obj *a, int64_t i, ren_val v, const ren_site *site) {
+  if (ren_stride(a) == 2) {
+    /* a release build's `Str`s: [v] is a box, borrowed */
+    ren_check_index(a, i, site);
+    ren_obj *b = ren_array_copy(a, 0);
+    ren_drop(ren_elems(b)[2 * i].o);
+    ((ren_sv *)ren_elems(b))[i] = ren_sv_unbox(v.o);
+    return b;
+  }
   if (!a->nfields)
     return ren_array_set(a, i, v, site);
   ren_check_index(a, i, site);
@@ -644,6 +668,13 @@ ren_obj *ren_array_set_w(ren_obj *a, int64_t i, ren_val v, const ren_site *site)
 
 void ren_array_push_w(ren_obj **cell, ren_val v) {
   ren_obj *a = *cell;
+  if (ren_stride(a) == 2) {
+    ren_obj *b = ren_array_copy(a, 1);
+    ((ren_sv *)ren_elems(b))[((ren_array *)b)->len - 1] = ren_sv_unbox(v.o);
+    ren_drop(a);
+    *cell = b;
+    return;
+  }
   if (!a->nfields) {
     ren_array_push(cell, v);
     return;
@@ -656,6 +687,11 @@ void ren_array_push_w(ren_obj **cell, ren_val v) {
 
 void ren_array_push_taking_w(ren_obj **cell, ren_val v) {
   ren_obj *a = *cell;
+  if (ren_stride(a) == 2) {
+    ren_sv x = ren_sv_take(v.o);
+    ren_array_push_slots_taking(cell, x.s);
+    return;
+  }
   if (!a->nfields) {
     ren_array_push_taking(cell, v);
     return;
@@ -1381,6 +1417,190 @@ ren_obj *ren_bytes_unshare(ren_obj *b) {
   return c;
 }
 
+/* ---- representation B (ren_rt.h) ---- */
+
+void ren_sv_too_big(int64_t off, int64_t len) {
+  fflush(stdout);
+  fprintf(stderr,
+          "error: a string of %" PRId64 " bytes from %" PRId64
+          " is past 4 GiB, which a release build's strings don't hold yet\n",
+          len, off);
+  exit(1);
+}
+
+ren_obj *ren_sv_box(ren_sv v) {
+  int64_t off = ren_sv_off(v);
+  return ren_str_part(v.s[0].o, off, off + ren_sv_len(v));
+}
+
+ren_obj *ren_sv_box_taking(ren_sv v) {
+  ren_obj *b = ren_sv_box(v);
+  ren_drop(v.s[0].o);
+  return b;
+}
+
+ren_sv ren_sv_unbox(ren_obj *o) {
+  ren_str *s = (ren_str *)o;
+  if (ren_str_is_slice(o)) {
+    ren_str *r = (ren_str *)s->root;
+    ren_dup(&r->h);
+    return ren_sv_make(&r->h, s->data - r->bytes, s->len);
+  }
+  ren_dup(o);
+  return ren_sv_make(o, 0, s->len);
+}
+
+ren_sv ren_sv_take(ren_obj *o) {
+  ren_sv v = ren_sv_unbox(o);
+  ren_drop(o);
+  return v;
+}
+
+void ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
+                        const ren_site *site) {
+  ren_obj *o = REN_SV_VIEW(s);
+  ren_slice_check(o, ren_sv_len(s), i, j, str, site);
+  ren_chars_check(o, i, j, site);
+  abort();
+}
+
+ren_sv ren_sv_before(ren_sv s, int64_t n, bool str, const ren_site *site) {
+  ren_split_check(REN_SV_VIEW(s), ren_sv_len(s), n, str, site);
+  ren_dup(s.s[0].o);
+  return ren_sv_make(s.s[0].o, ren_sv_off(s), n);
+}
+
+ren_sv ren_sv_after(ren_sv s, int64_t n) {
+  ren_dup(s.s[0].o);
+  return ren_sv_make(s.s[0].o, ren_sv_off(s) + n, ren_sv_len(s) - n);
+}
+
+ren_sv ren_sv_join(ren_sv a, ren_sv b) {
+  if (a.s[0].o == b.s[0].o && ren_sv_off(a) + ren_sv_len(a) == ren_sv_off(b)) {
+    ren_dup(a.s[0].o);
+    return ren_sv_make(a.s[0].o, ren_sv_off(a), ren_sv_len(a) + ren_sv_len(b));
+  }
+  return ren_sv_concat(a, b);
+}
+
+ren_sv ren_sv_concat(ren_sv a, ren_sv b) {
+  int64_t la = ren_sv_len(a), lb = ren_sv_len(b);
+  ren_obj *o = ren_alloc_str(la + lb);
+  memcpy(((ren_str *)o)->bytes, ren_sv_data(a), (size_t)la);
+  memcpy(((ren_str *)o)->bytes + la, ren_sv_data(b), (size_t)lb);
+  return ren_sv_of(o);
+}
+
+ren_sv ren_sv_concat_slow(ren_sv a, ren_sv b, ren_append *site) {
+  ren_str *x = (ren_str *)a.s[0].o;
+  int64_t off = ren_sv_off(a), la = ren_sv_len(a), lb = ren_sv_len(b);
+  if (ren_rc(&x->h) == 1 && !ren_str_is_slice(&x->h)) {
+    if (lb <= x->cap - off - la) {
+      memcpy(x->bytes + off + la, ren_sv_data(b), (size_t)lb);
+      x->len = off + la + lb;
+      return ren_sv_make(&x->h, off, la + lb);
+    }
+    if (off == 0) {
+      /* all of it but the bytes after its range, which nothing else sees,
+         grown in place, as [ren_str_concat_slow] grows an owner; [b] may
+         be in its bytes, which growing moves */
+      const char *from = ren_sv_data(b);
+      bool inside = from >= x->bytes && from < x->bytes + la;
+      int64_t at = inside ? from - x->bytes : 0;
+      x->len = la;
+      ren_str *y = (ren_str *)ren_str_grow(&x->h, ren_str_room(x->cap, la + lb));
+      memcpy(y->bytes + la, inside ? y->bytes + at : from, (size_t)lb);
+      y->len = la + lb;
+      return ren_sv_make(&y->h, 0, la + lb);
+    }
+    /* a slice of a unique root that must grow: its range alone copied,
+       which drops the bytes before it too */
+  } else if (site != NULL && ren_rc(&x->h) != 0 && site->copies++ == 0) {
+    site->next = ren_appends;
+    ren_appends = site;
+  }
+  ren_obj *o = ren_alloc_str_cap(la + lb, ren_str_room(la, la + lb));
+  memcpy(((ren_str *)o)->bytes, ren_sv_data(a), (size_t)la);
+  memcpy(((ren_str *)o)->bytes + la, ren_sv_data(b), (size_t)lb);
+  ren_drop(&x->h);
+  return ren_sv_of(o);
+}
+
+ren_sv ren_sv_copied(ren_sv s) {
+  ren_str *r = (ren_str *)s.s[0].o;
+  if (ren_sv_off(s) == 0 && ren_sv_len(s) == r->len) {
+    ren_dup(&r->h);
+    return s;
+  }
+  return ren_sv_of(ren_str_of(ren_sv_data(s), ren_sv_len(s)));
+}
+
+ren_obj *ren_sv_split(ren_sv s, ren_sv sep, const ren_site *site) {
+  int64_t n = ren_sv_len(s), m = ren_sv_len(sep), off = ren_sv_off(s);
+  const char *d = ren_sv_data(s), *p = ren_sv_data(sep);
+  ren_obj *root = s.s[0].o;
+  if (m == 0)
+    ren_panic(site, "`split` needs a separator that isn't empty");
+  int64_t parts = 1;
+  for (int64_t i = 0; i + m <= n;)
+    if (memcmp(d + i, p, (size_t)m) == 0) {
+      parts++;
+      i += m;
+    } else
+      i++;
+  ren_obj *out = ren_alloc_array_n(parts, 2, 1);
+  ren_sv *xs = (ren_sv *)ren_elems(out);
+  int64_t from = 0, k = 0;
+  for (int64_t i = 0; i + m <= n;)
+    if (memcmp(d + i, p, (size_t)m) == 0) {
+      ren_dup(root);
+      xs[k++] = ren_sv_make(root, off + from, i - from);
+      i += m;
+      from = i;
+    } else
+      i++;
+  ren_dup(root);
+  xs[k] = ren_sv_make(root, off + from, n - from);
+  return out;
+}
+
+ren_sv ren_sv_trim(ren_sv s) {
+  int64_t i = 0, j = ren_sv_len(s);
+  const char *d = ren_sv_data(s);
+  while (i < j && ren_trimmed(d[i]))
+    i++;
+  while (j > i && ren_trimmed(d[j - 1]))
+    j--;
+  ren_dup(s.s[0].o);
+  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+}
+
+ren_sv ren_sv_strs_join(ren_obj *xs, ren_sv sep) {
+  int64_t n = ren_array_len(xs), m = ren_sv_len(sep);
+  const ren_sv *e = (const ren_sv *)ren_elems(xs);
+  int64_t len = n > 0 ? (n - 1) * m : 0;
+  for (int64_t i = 0; i < n; i++)
+    len += ren_sv_len(e[i]);
+  ren_obj *o = ren_alloc_str(len);
+  char *to = ((ren_str *)o)->bytes;
+  for (int64_t i = 0; i < n; i++) {
+    if (i > 0) {
+      memcpy(to, ren_sv_data(sep), (size_t)m);
+      to += m;
+    }
+    int64_t k = ren_sv_len(e[i]);
+    memcpy(to, ren_sv_data(e[i]), (size_t)k);
+    to += k;
+  }
+  return ren_sv_of(o);
+}
+
+ren_sv ren_sv_unshare(ren_sv b) {
+  ren_obj *c = ren_str_of(ren_sv_data(b), ren_sv_len(b));
+  ren_drop(b.s[0].o);
+  return ren_sv_of(c);
+}
+
 /* ---- UTF-8 (compiler.md, "Bytes stage, part two", "The validator") ----
 
    `Str.from_utf8` accepts what OCaml's `String.is_valid_utf_8` does, and
@@ -2092,7 +2312,7 @@ static void ren_show_fields(ren_buf *b, ren_obj *o, const ren_ctor_info *c,
       ren_puts(b, names[i]);
       ren_puts(b, ": ");
     }
-    ren_show_val(b, types[i], env, ren_ctor_field(o, c, i), w);
+    ren_show_val(b, types[i], env, ren_ctor_field(o, c, i, &(ren_str){{0}}), w);
   }
 }
 
@@ -2164,7 +2384,7 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     for (int64_t i = 0; i < a->len; i++) {
       if (i > 0)
         ren_puts(b, ", ");
-      ren_show_val(b, d->args[0], env, ren_array_load(v.o, i), w);
+      ren_show_val(b, d->args[0], env, ren_array_peek(v.o, i, &(ren_str){{0}}), w);
     }
     ren_puts(b, "]");
     break;
@@ -2268,8 +2488,8 @@ static bool ren_equal_fields(ren_obj *a, ren_obj *b, const ren_ctor_info *c,
                              int32_t n, ren_desc *const *types,
                              const ren_tenv *env, const ren_walk *w) {
   for (int32_t i = 0; i < n; i++)
-    if (!ren_equal_in(types[i], env, ren_ctor_field(a, c, i),
-                      ren_ctor_field(b, c, i), w))
+    if (!ren_equal_in(types[i], env, ren_ctor_field(a, c, i, &(ren_str){{0}}),
+                      ren_ctor_field(b, c, i, &(ren_str){{0}}), w))
       return false;
   return true;
 }
@@ -2297,8 +2517,8 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     if (x->len != y->len)
       return false;
     for (int64_t i = 0; i < x->len; i++)
-      if (!ren_equal_in(d->args[0], env, ren_array_load(a.o, i),
-                        ren_array_load(b.o, i), w))
+      if (!ren_equal_in(d->args[0], env, ren_array_peek(a.o, i, &(ren_str){{0}}),
+                        ren_array_peek(b.o, i, &(ren_str){{0}}), w))
         return false;
     return true;
   }
@@ -2461,18 +2681,67 @@ static void ren_merge_sort(ren_obj *d, ren_val *xs, ren_val *tmp, int64_t n,
   memcpy(xs, tmp, (size_t)n * sizeof(ren_val));
 }
 
+/* The order of two `Str`s or `Bytes`, two words each: their bytes, then
+   their lengths, as [ren_compare_in] orders them. */
+static inline int ren_sv_order(ren_sv a, ren_sv b) {
+  int64_t la = ren_sv_len(a), lb = ren_sv_len(b);
+  int c = memcmp(ren_sv_data(a), ren_sv_data(b), (size_t)(la < lb ? la : lb));
+  return c != 0 ? c : (la > lb) - (la < lb);
+}
+
+/* [ren_merge_sort] of a release build's strings, two words each, which
+   it compares directly: no walk, no NaN to look for. */
+static void ren_sv_merge_sort(ren_sv *xs, ren_sv *tmp, int64_t n) {
+  if (n < 2)
+    return;
+  int64_t h = n / 2;
+  ren_sv_merge_sort(xs, tmp, h);
+  ren_sv_merge_sort(xs + h, tmp, n - h);
+  int64_t i = 0, j = h, k = 0;
+  while (i < h && j < n)
+    tmp[k++] = ren_sv_order(xs[j], xs[i]) < 0 ? xs[j++] : xs[i++];
+  while (i < h)
+    tmp[k++] = xs[i++];
+  while (j < n)
+    tmp[k++] = xs[j++];
+  memcpy(xs, tmp, (size_t)n * sizeof(ren_sv));
+}
+
 ren_obj *ren_array_sort(ren_obj *a, ren_obj *d, const char *what,
                         const ren_site *site) {
   int64_t n = ren_array_len(a);
+  uint8_t kind = ((ren_desc *)d)->kind;
+  if (ren_stride(a) == 2 && (kind == REN_D_STR || kind == REN_D_BYTES)) {
+    /* a release build's `Str`s: the elements' words sorted in a new
+       array, each root counted again; the descriptor is a `Str`'s or an
+       opaque type's over one, ordered as it is */
+    ren_obj *r = ren_alloc_array_n(n, 2, 1);
+    ren_sv *xs = (ren_sv *)ren_elems(r);
+    memcpy(xs, ren_elems(a), (size_t)n * sizeof(ren_sv));
+    for (int64_t i = 0; i < n; i++)
+      ren_dup(xs[i].s[0].o);
+    ren_sv *tmp = malloc((size_t)(n + 1) * sizeof(ren_sv));
+    if (tmp == NULL)
+      ren_out_of_memory();
+    ren_sv_merge_sort(xs, tmp, n);
+    free(tmp);
+    (void)d;
+    (void)what;
+    (void)site;
+    return r;
+  }
   ren_val *xs = malloc((size_t)(2 * n + 1) * sizeof(ren_val));
   if (xs == NULL)
     ren_out_of_memory();
+  /* two words an element (an opaque type over `Str` with its own
+     `key`): each one's box, counted, which the new array takes */
+  bool boxed = ren_stride(a) == 2;
   for (int64_t i = 0; i < n; i++)
-    xs[i] = ren_array_load(a, i);
+    xs[i] = boxed ? (ren_val){.o = ren_sv_box_at(a, i)} : ren_array_load(a, i);
   ren_merge_sort(d, xs, xs + n, n, what, site);
   ren_obj *r = ren_alloc_array_d(n, d);
   for (int64_t i = 0; i < n; i++) {
-    if (r->objs)
+    if (r->objs && !boxed)
       ren_dup(xs[i].o);
     ren_array_init_w(r, i, xs[i]);
   }
@@ -2506,7 +2775,7 @@ static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
   case REN_D_ARRAY: {
     ren_array *a = (ren_array *)v.o;
     for (int64_t i = 0; i < a->len; i++)
-      ren_nan_val(d->args[0], env, ren_array_load(v.o, i), w);
+      ren_nan_val(d->args[0], env, ren_array_peek(v.o, i, &(ren_str){{0}}), w);
     break;
   }
   case REN_D_TUPLE:
@@ -2550,7 +2819,7 @@ static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
         decl->kind == REN_DECL_RECORD ? &decl->ctors[0]
                                       : &decl->ctors[ren_ctor_tag(decl, v)];
     for (int32_t i = 0; i < c->nfields; i++)
-      ren_nan_val(c->types[i], &inner, ren_ctor_field(v.o, c, i), w);
+      ren_nan_val(c->types[i], &inner, ren_ctor_field(v.o, c, i, &(ren_str){{0}}), w);
     break;
   }
   default:
@@ -2672,7 +2941,7 @@ static uint64_t ren_hash_fields(uint64_t h, ren_obj *o, const ren_ctor_info *c,
                                 int32_t n, ren_desc *const *types,
                                 const ren_tenv *env, const ren_walk *w) {
   for (int32_t i = 0; i < n; i++)
-    h = ren_mix(w, h, ren_hash_in(types[i], env, ren_ctor_field(o, c, i), w));
+    h = ren_mix(w, h, ren_hash_in(types[i], env, ren_ctor_field(o, c, i, &(ren_str){{0}}), w));
   return h;
 }
 
@@ -2696,7 +2965,7 @@ static uint64_t ren_hash_in(const ren_desc *d, const ren_tenv *env, ren_val v,
   case REN_D_ARRAY: {
     uint64_t h = 9;
     for (int64_t i = 0; i < ren_array_len(v.o); i++)
-      h = ren_mix(w, h, ren_hash_in(d->args[0], env, ren_array_load(v.o, i), w));
+      h = ren_mix(w, h, ren_hash_in(d->args[0], env, ren_array_peek(v.o, i, &(ren_str){{0}}), w));
     return h;
   }
   case REN_D_TUPLE:
@@ -3027,6 +3296,38 @@ void ren_map_set(ren_obj **cell, ren_val k, ren_val v, ren_obj *kd,
   ren_map_put(m, h, k, v, (ren_desc *)kd, &w, taking);
 }
 
+void ren_map_set_sv(ren_obj **cell, ren_sv k, ren_val v, ren_obj *kd,
+                    ren_obj *vd, bool taking, const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, false};
+  ren_str tmp;
+  ren_val kv = {.o = ren_sv_view(&tmp, k)};
+  uint64_t h = ren_key_hash((ren_desc *)kd, NULL, kv, &w), slot;
+  ren_map *m = ren_map_writable(cell, taking);
+  m->h.objs = ren_map_objs(kd, vd);
+  bool vobj = m->h.objs & 2;
+  int64_t e = ren_map_probe(m, h, kv, (ren_desc *)kd, NULL, &w, &slot);
+  if (e >= 0) {
+    /* there: its first key stays, with the new value, as [ren_map_put] */
+    if (taking)
+      ren_drop(k.s[0].o);
+    if (m->width > 2) {
+      ren_val *at = &m->entries[e * m->width + 2];
+      if (!taking && vobj)
+        ren_dup(v.o);
+      if (vobj)
+        ren_drop(at->o);
+      *at = v;
+    } else if (taking && vobj)
+      ren_drop(v.o);
+    return;
+  }
+  /* a new key: its box, which the map keeps */
+  if (!taking && vobj && m->width > 2)
+    ren_dup(v.o);
+  kv.o = taking ? ren_sv_box_taking(k) : ren_sv_box(k);
+  ren_map_put(m, h, kv, v, (ren_desc *)kd, &w, true);
+}
+
 void ren_map_remove(ren_obj **cell, ren_val k, ren_obj *kd, bool taking,
                     const ren_site *site) {
   ren_walk w = {site, "`hash` of a NaN", true, false};
@@ -3060,6 +3361,16 @@ ren_obj *ren_map_of(ren_obj *pairs, ren_obj *kd, ren_obj *vd, bool flat,
   int64_t n = ren_array_len(pairs);
   for (int64_t i = 0; i < n; i++) {
     ren_val k, v = {0};
+    if (set && ren_stride(pairs) == 2) {
+      /* a release build's `Str`s, two words each: each one's box, which
+         the map counts again, so it's dropped after */
+      ren_obj *box = ren_sv_box_at(pairs, i);
+      k.o = box;
+      ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, k, &w), k, v,
+                  (ren_desc *)kd, &w, false);
+      ren_drop(box);
+      continue;
+    }
     if (set)
       k = ren_array_load(pairs, i);
     else if (flat) {

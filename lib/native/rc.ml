@@ -538,6 +538,13 @@ let analyze fns (f : fn) : info =
                 | Cell Desc -> define v Borrowed_param
                 | _ -> define v (Cell_view c))
             | Global _ -> define v (if changes v then Owned else Borrowed_param)
+            (* a struct of constants, a release build's string literal (the
+               literal, never freed, and its range): never counted, as a
+               literal isn't *)
+            | Make_struct xs
+              when (not (changes v))
+                   && List.for_all (function Var _ -> false | _ -> true) xs ->
+                define v Static
             (* a method's description, which its caller keeps alive *)
             | Arg_borrowed _ when not (changes v) -> define v Borrowed_param
             | Call _ ->
@@ -1501,9 +1508,88 @@ let place_fn fns (f : fn) : fn =
   in
   { f with body = kill pl ~scope:cx.defined params ~live @ body }
 
+(* A struct made of a part, only read, then dropped, made of the part
+   uncounted (a release build's `Str` field, read for a length or a byte,
+   most often: compiler.md, "Bytes stage, part two", "Step 4, as built").
+   Perceus counts a part again to give it to the struct ([Make_struct]
+   takes its slots) and drops the struct after the read: [Dup p; let k =
+   Make_struct [p; scalars]; ...; Drop k]. Where nothing between them
+   drops, frees or gives away anything, calls anything, or branches, what
+   [p] is a part of holds it all along (rule B), so the count and the drop
+   are a pair that does nothing, and go; [k] is then a part too, which Mem
+   Lint checks as one. The block's inner pairs go first, so an outer
+   pair's interval holds none. *)
+let lend_parts ~lendable (b : block) : block =
+  let quiet k (s : stmt) =
+    let uses_k xs = List.exists (fun x -> x = Var k) xs in
+    match s with
+    | Let (_, (Atom (Var x))) -> x.id <> k.id
+    | Let (_, (Atom _ | Struct_get _ | Field _ | Arith _ | Neg _ | Compare _
+              | Not _ | Tag_of _ | Obj_tag _ | Unpack _ | Pack _)) ->
+        true
+    | Let (_, Runtime (rt, xs, _)) | Do (Runtime (rt, xs, _)) ->
+        (not (changes_cell rt))
+        && not (List.exists (fun (i, _) -> takes rt i) (List.mapi (fun i x -> (i, x)) xs))
+        && (match rt with Str_box | Str_concat_taking -> not (uses_k xs) | _ -> true)
+    (* a struct or an object made of other things gives them to it, but
+       frees nothing *)
+    | Let (_, (Make_struct xs | Alloc { fields = xs; at = None; _ })) -> not (uses_k xs)
+    | Dup _ -> true
+    | _ -> false
+  in
+  let rec go (b : stmt list) =
+    match b with
+    | Dup (Var p) :: (Let (k, Make_struct xs) as mk) :: rest
+      when lendable p
+           && (match k.layout with Struct (_, true) -> true | _ -> false)
+           && List.filter (function Var v -> counted v.layout | _ -> false) xs
+              = [ Var p ] -> (
+        let rec split acc = function
+          | Drop (Var k') :: after when k'.id = k.id -> Some (List.rev acc, after)
+          | s :: after when quiet k s -> split (s :: acc) after
+          | _ -> None
+        in
+        match split [] rest with
+        | Some (between, after) -> mk :: go (between @ after)
+        | None -> Dup (Var p) :: go (mk :: rest))
+    | s :: rest -> s :: go rest
+    | [] -> []
+  in
+  go b
+
+(* [lend_parts] over a function: a part [p] is lent so only if it's a
+   field read, [Struct_get] or [Field], counted by that one [Dup] alone
+   and kept by no [Free] or [Reset], so it holds no reference anywhere
+   else, as Mem Lint sees it: a part whose count is 0. *)
+let lend_fn (f : fn) : fn =
+  let parts = Hashtbl.create 16 and dups = Hashtbl.create 16 in
+  let bump x = Hashtbl.replace dups x (1 + Option.value (Hashtbl.find_opt dups x) ~default:0) in
+  iter_stmts
+    (fun s ->
+      match s with
+      | Let (v, (Struct_get _ | Field _)) -> Hashtbl.replace parts v.id ()
+      | Dup (Var v) -> bump v.id
+      | Free (_, kept) | Let (_, Reset (_, kept)) ->
+          List.iter (function _, Var v -> bump v.id; bump v.id | _ -> ()) kept
+      | Set (v, _) | Decl v -> bump v.id; bump v.id
+      | _ -> ())
+    f.body;
+  let lendable (p : var) =
+    Hashtbl.mem parts p.id && Hashtbl.find_opt dups p.id = Some 1
+  in
+  let rec block b = lend_parts ~lendable (List.map (map_blocks block) b) in
+  { f with body = block f.body }
+
 (* The program with its counting placed by Perceus: [prepare]d, and its
    parameters' modes decided by borrow.ml. *)
 let program (p : program) : program =
   let fns = Hashtbl.create 64 in
   List.iter (fun (f : fn) -> Hashtbl.replace fns f.name f) p.fns;
-  { p with fns = List.map (place_fn fns) p.fns }
+  {
+    p with
+    fns =
+      List.map
+        (fun f ->
+          lend_fn (place_fn fns f))
+        p.fns;
+  }

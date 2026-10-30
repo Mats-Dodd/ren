@@ -32,6 +32,9 @@ type env = {
   values : (string, layout) Hashtbl.t;
   ndescs : int;
   structs : strukt array;  (** each [Struct], by its number *)
+  str : layout;
+      (** a `Str`'s and `Bytes`': an object, or a release build's two words
+          (representation B), the program's [sv] *)
   fn : fn;  (** the function being checked *)
   defined : Ids.t;  (** the variables in scope here *)
   seen : (int, unit) Hashtbl.t;  (** every variable defined so far *)
@@ -120,7 +123,9 @@ let define env (v : var) =
   { env with defined = Ids.add v.id env.defined }
 
 (* What the runtime's [rt] takes and gives. *)
-let rt_sig (rt : rt) : layout list * layout =
+let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
+  (* what a slice is of, and gives *)
+  let of_ (s : sliced) = match s with Of_array_elems -> Boxed | _ -> str in
   match rt with
   | Array_len -> ([ Boxed ], Int)
   | Array_get l | Array_take l -> ([ Boxed; Int ], l)
@@ -138,34 +143,36 @@ let rt_sig (rt : rt) : layout list * layout =
   | Buf_check -> ([ Int; Int ], Unit)
   | Array_reserve (Word _) -> ([ Int; Desc ], Boxed)
   | Array_reserve _ -> ([ Int ], Boxed)
-  | Str_len -> ([ Boxed ], Int)
-  | Str_concat | Str_concat_taking -> ([ Boxed; Boxed ], Boxed)
-  | Str_eq -> ([ Boxed; Boxed ], Bool)
-  | Slice (_, Range) -> ([ Boxed; Int; Int ], Boxed)
-  | Slice (_, Before) -> ([ Boxed; Int ], Boxed)
-  | Slice (_, After) -> ([ Boxed; Int; Boxed ], Boxed)
-  | Vacant -> ([ Boxed ], Boxed)
-  | Str_split -> ([ Boxed; Boxed ], Boxed)
-  | Str_trim -> ([ Boxed ], Boxed)
-  | Splice _ -> ([ Boxed; Int; Int; Boxed ], Boxed)
-  | Join _ -> ([ Boxed; Boxed ], Boxed)
-  | Copied _ -> ([ Boxed ], Boxed)
-  | Bytes_at -> ([ Boxed; Int ], Int)
-  | Str_data -> ([ Boxed ], Ptr)
+  | Str_len -> ([ str ], Int)
+  | Str_concat | Str_concat_taking -> ([ str; str ], str)
+  | Str_eq -> ([ str; str ], Bool)
+  | Str_box -> ([ str ], Boxed)
+  | Str_unbox -> ([ Boxed ], str)
+  | Slice (s, Range) -> ([ of_ s; Int; Int ], of_ s)
+  | Slice (s, Before) -> ([ of_ s; Int ], of_ s)
+  | Slice (s, After) -> ([ of_ s; Int; of_ s ], of_ s)
+  | Vacant -> ([], Unit) (* its operand's, which [rhs] checks *)
+  | Str_split -> ([ str; str ], Boxed)
+  | Str_trim -> ([ str ], str)
+  | Splice s -> ([ of_ s; Int; Int; of_ s ], of_ s)
+  | Join s -> ([ of_ s; of_ s ], of_ s)
+  | Copied s -> ([ of_ s ], of_ s)
+  | Bytes_at -> ([ str; Int ], Int)
+  | Str_data -> ([ str ], Ptr)
   | Bytes_get -> ([ Ptr; Int; Int ], Int)
-  | Bytes_of -> ([ Boxed ], Boxed)
-  | Bytes_load _ -> ([ Boxed; Int ], Int)
-  | Bytes_store _ | Bytes_store_taking _ -> ([ Cell Boxed; Int; Int ], Unit)
-  | Bytes_set_var _ | Bytes_set_var_taking _ -> ([ Cell Boxed; Int; Int ], Int)
-  | Bytes_zeros -> ([ Int ], Boxed)
-  | Utf8_error -> ([ Boxed ], Int)
-  | Utf8_incomplete -> ([ Boxed; Int ], Bool)
-  | Utf8_lossy -> ([ Boxed ], Boxed)
+  | Bytes_of -> ([ Boxed ], str)
+  | Bytes_load _ -> ([ str; Int ], Int)
+  | Bytes_store _ | Bytes_store_taking _ -> ([ Cell str; Int; Int ], Unit)
+  | Bytes_set_var _ | Bytes_set_var_taking _ -> ([ Cell str; Int; Int ], Int)
+  | Bytes_zeros -> ([ Int ], str)
+  | Utf8_error -> ([ str ], Int)
+  | Utf8_incomplete -> ([ str; Int ], Bool)
+  | Utf8_lossy -> ([ str ], str)
   | U64_read _ -> ([ Int; Int ], Int)
   | Var_size _ -> ([ Int ], Int)
-  | Show_int -> ([ Int ], Boxed)
-  | Show_float -> ([ Float ], Boxed)
-  | Show_bool -> ([ Bool ], Boxed)
+  | Show_int -> ([ Int ], str)
+  | Show_float -> ([ Float ], str)
+  | Show_bool -> ([ Bool ], str)
   | Float_of_int -> ([ Int ], Float)
   | Float_sqrt -> ([ Float ], Float)
   | Float_round | Float_truncate -> ([ Float ], Int)
@@ -176,8 +183,8 @@ let rt_sig (rt : rt) : layout list * layout =
   | Narrow k -> ([ (if Sized.is_float k then Float else Int) ], Sized k)
   | Wrap_to k -> ([ Int ], Sized k)
   | Widen -> ([], Unit) (* its operand's, which [rhs] checks *)
-  | Console_write | Console_error -> ([ Boxed ], Unit)
-  | Show_any -> ([ Desc; Word 0 ], Boxed)
+  | Console_write | Console_error -> ([ str ], Unit)
+  | Show_any -> ([ Desc; Word 0 ], str)
   | Equal_any _ -> ([ Desc; Word 0; Word 0 ], Bool)
   | Compare_any _ -> ([ Desc; Word 0; Word 0 ], Int)
   | Nan_check _ -> ([ Float ], Unit) (* or two, which [rhs] checks *)
@@ -204,12 +211,22 @@ let rt_sig (rt : rt) : layout list * layout =
   | Map_keys | Map_values -> ([ Boxed; Desc ], Boxed)
   | Hash_fixed -> ([ Desc; Word 0 ], Int)
   | Array_sort _ -> ([ Boxed; Desc ], Boxed)
-  | Str_lower -> ([ Boxed ], Boxed)
-  | Char_bound _ -> ([ Boxed; Int ], Int)
-  | Str_code -> ([ Boxed ], Int)
-  | Str_of_code -> ([ Int ], Boxed)
-  | Str_join -> ([ Boxed; Boxed ], Boxed)
-  | Panic_str -> ([ Boxed ], Unit)
+  | Str_lower -> ([ str ], str)
+  | Char_bound _ -> ([ str; Int ], Int)
+  | Str_code -> ([ str ], Int)
+  | Str_of_code -> ([ Int ], str)
+  | Str_join -> ([ Boxed; str ], str)
+  | Panic_str -> ([ str ], Unit)
+
+(* Whether [rt] only reads what it's given as a word, keeping nothing of
+   it, so a release build's `Str` may be given as its two words, which the
+   C makes an A slice on the stack for the call (emit_c.ml, [to_val]). *)
+let views (rt : rt) =
+  match rt with
+  | Show_any | Equal_any _ | Compare_any _ | Nan_check_any _ | Hash_fixed
+  | Map_find | Map_remove | Map_remove_taking | Op_any _ ->
+      true
+  | _ -> false
 
 let args env what (want : layout list) xs =
   if List.length want <> List.length xs then
@@ -380,9 +397,32 @@ let rhs env (r : rhs) : layout =
             fail env
               (sprintf "slot %d of struct %d written as %s" k n (show_layout l))
       | _ -> ());
-      let want, gives = rt_sig r in
+      let want, gives = rt_sig ~str:env.str r in
+      (* a vacant place holds what it held's layout *)
+      let want = if r = Vacant then List.map (atom env) xs else want in
+      let want =
+        if
+          (views r || match r with
+                      | Map_set | Map_set_taking | Set_add | Set_add_taking -> true
+                      | _ -> false)
+          && env.str <> Boxed && List.length want = List.length xs
+        then
+          List.map2
+            (fun (i, (w : layout)) x ->
+              match w with
+              (* a map's key, which [ren_map_set_sv] boxes if it keeps it *)
+              | Word _ when atom env x = env.str && (views r || i = 1) -> env.str
+              | _ -> w)
+            (List.mapi (fun i w -> (i, w)) want) xs
+        else want
+      in
       args env (show_rt r) want xs;
-      gives
+      (match r with
+      | Vacant -> (
+          match xs with
+          | [ x ] -> atom env x
+          | _ -> fail env "a vacant place of no value")
+      | _ -> gives)
   | Load v -> (
       use env v;
       match v.layout with
@@ -764,7 +804,7 @@ and known_handler env (v : var) (r : rhs) =
       | Some _, _ -> fail env "a site known to be one handler's, on a constant")
   | _ -> ()
 
-let fn fns values ndescs structs ~reach ~ndsites (f : fn) =
+let fn fns values ndescs structs ~str ~reach ~ndsites (f : fn) =
   let changed = Hashtbl.create 8 in
   Rc.iter_stmts
     (function
@@ -777,6 +817,7 @@ let fn fns values ndescs structs ~reach ~ndsites (f : fn) =
       values;
       ndescs;
       structs;
+      str;
       fn = f;
       defined = Ids.empty;
       seen = Hashtbl.create 64;
@@ -1345,6 +1386,34 @@ let rc_let env st (v : var) (r : rhs) =
       match bundle_of st x with
       | Some p -> fresh_var env st v ~count:0 (B_part p)
       | None -> fresh_var env st v ~count:0 B_static)
+  (* a struct of constants, a string literal's, is never counted *)
+  | Make_struct xs when List.for_all (function Var _ -> false | _ -> true) xs ->
+      fresh_var env st v ~count:0 B_static
+  (* a struct of an uncounted part, its one counted slot, is a part of
+     the same object (rc.ml, [lend_parts]) *)
+  | Make_struct xs
+    when match
+           List.filter (function Var u -> counted u.layout | _ -> false) xs
+         with
+         | [ x ] -> (
+             match bundle_of st x with
+             | Some b -> (
+                 match IM.find_opt b st.kind with
+                 | Some (B_part _) -> get st.count b = 0
+                 | _ -> false)
+             | None -> false)
+         | _ -> false ->
+      List.iter (read env st) xs;
+      let p =
+        List.find_map
+          (fun x ->
+            match bundle_of st x with
+            | Some b -> (
+                match IM.find_opt b st.kind with Some (B_part p) -> Some p | _ -> None)
+            | None -> None)
+          xs
+      in
+      fresh_var env st v ~count:0 (B_part (Option.get p))
   (* a struct takes what it holds *)
   | Make_struct xs ->
       List.iter (read env st) xs;
@@ -1750,7 +1819,9 @@ let program (p : program) =
       p.handlers
   in
   List.iter
-    (fn fns values ndescs (Array.of_list p.structs) ~reach
+    (fn fns values ndescs (Array.of_list p.structs)
+       ~str:(match p.sv with Some n -> Struct (n, true) | None -> Boxed)
+       ~reach
        ~ndsites:(List.length p.dsites))
     p.fns;
   List.iter (counting fns) p.fns;

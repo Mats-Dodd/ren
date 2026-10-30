@@ -473,7 +473,13 @@ let fn (f : fn) =
    [Set] either, is the same object, and read through as [x] is. A
    [Decl]ed variable, which is [Set] later, is never one. *)
 
-let bytes (f : fn) =
+let bytes ?sv (f : fn) =
+  (* a string: an object, or a release build's two words (representation
+     B), whose length and bytes are its range's and its root's, which no
+     more change while it's held than an object's do *)
+  let stringy (l : layout) =
+    l = Boxed || match (l, sv) with Struct (n, _), Some m -> n = m | _ -> false
+  in
   let set = ref Ids.empty and lets = ref Ids.empty in
   let copy_of = Hashtbl.create 16 in
   List.iter (fun (v : var) -> lets := Ids.add v.id !lets) f.params;
@@ -487,12 +493,12 @@ let bytes (f : fn) =
       | Let (v, r) ->
           lets := Ids.add v.id !lets;
           (match r with
-          | Atom (Var w) when v.layout = Boxed -> Hashtbl.replace copy_of v.id w
+          | Atom (Var w) when stringy v.layout -> Hashtbl.replace copy_of v.id w
           | _ -> ())
       | _ -> ())
     f.body;
   let steady (v : var) =
-    v.layout = Boxed && Ids.mem v.id !lets && not (Ids.mem v.id !set)
+    stringy v.layout && Ids.mem v.id !lets && not (Ids.mem v.id !set)
   in
   (* the variable [x] is a copy of, through copies, that holds the same
      object all along *)
@@ -566,4 +572,5 @@ let bytes (f : fn) =
   in
   { f with body = block f.body }
 
-let program (p : program) = { p with fns = List.map (fun f -> bytes (fn f)) p.fns }
+let program (p : program) =
+  { p with fns = List.map (fun f -> bytes ?sv:p.sv (fn f)) p.fns }
