@@ -9,6 +9,186 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Bytes stage, part two: the baseline (briefs/stage-bytes-2.md, step 0)
+
+Where Ren's strings stand before part two: representation A, `+` and
+`+=` absent (`concat`, which copies both sides), `ren_utf8_valid` a
+byte at a time. bench/native/strs ports research/strings/track-b's
+workloads to Ren, each with a Rust and a Go twin, over the same inputs:
+gen.ren makes, byte for byte, what track-b/c/gen.c writes (the Rust
+twin's `dump` writes its files, and `cmp` finds them the same as gen.c's,
+built with clang, and as b5.c's texts). Every Ren, Rust and Go run of a
+workload printed the same check (measure.py stops if one doesn't), and
+main.ren's debug and release builds print what the twins do; tok's 1,030,229 tokens, map's 132,499
+keys, group's 1,996 cities and out's 105 MB of JSON and 133 MB of
+logfmt are the research's.
+
+**The machine:** an x86_64 cloud container, 4 cores, shared (an Intel
+Xeon at 2.10 GHz under KVM, 15 GiB, Linux 6.18.44); **numbers are for
+ratios; the owner re-measures on the M4 Max.** `ren build --release`
+compiles with `cc`, which is GCC 13.3.0 here (Apple clang on the M4
+Max), at -O2; rustc 1.97.0 (`-C opt-level=3 -C codegen-units=1`), go
+1.24.7; the compiler at 78b28ec. There are no cycle counters here
+(`perf_event_open` of cycles fails; no `perf`), so these are **wall
+times**, from just before a process starts to just after it's reaped,
+and peak RSS from `wait4`. Each workload runs at R rounds and at 0, a
+round is (median at R - median at 0) / R, and the spread is the R-round
+runs' least and most; seven runs, every build interleaved and the order
+rotated each run; load 1.1 to 2.4. The 0-round runs make the input in
+the program (a native build can't read a file yet), up to 1.8 s for
+logs, so a round of a short kernel carries that run's noise too.
+
+```sh
+sh bench/native/strs/build.sh $out    # every kernel at R and 0, plain and -DREN_RC_SHARED, the twins
+# the main session: every row but the 50,000-record ones
+SHARED=1 KERNELS=tok,sort,map,group,logs,json_append_5k,json_plus_5k,logfmt_append_5k,logfmt_plus_5k,json_1m,logfmt_1m,utf8_ascii,utf8_cjk,utf8_mixed,slices_logs,slices_logs_r,slices_json,slices_json_r,slices_pages,slices_pages_r,maps \
+  python3 -I bench/native/strs/measure.py $out 7 main.jsonl
+KERNELS=json_append_50k,json_plus_50k,logfmt_append_50k,logfmt_plus_50k \
+  python3 -I bench/native/strs/measure.py $out 3 q50k.jsonl
+# the inputs against gen.c's (track-b/gen.sh's data/)
+$out/strs-rust dump 1000000 dir && for f in tok.txt keys.txt sort.txt rows.csv logs.txt people.csv; do cmp dir/$f data/$f; done
+# the twins against `ren run small.ren`, and main.ren's release build
+cd bench/native/strs && ren run small.ren | diff - <(python3 -I agree.py $out/strs-rust 200 10 2)
+ren build main.ren --release -o m && ./m | diff - <(python3 -I agree.py $out/strs-go 1000000 5000 1)
+```
+
+`kernels` lists each workload's call, its R and its twins' arguments;
+`KERNELS=` narrows build.sh and measure.py to some of them.
+
+**The research's workloads** (track-b's B1 and B4), ms a round, the
+R-round runs' spread in brackets, peak RSS in MiB:
+
+| workload | R | Ren | Rust, FxHash | Rust, std | Go | Ren / Rust (Fx) | Ren / Rust (std) | RSS, Ren / Rust / Go | the research's A / Rust |
+|---|---|---|---|---|---|---|---|---|---|
+| tok | 10 | 37.4 (450-502) | 25.3 (253-308) | | 89.8 (951-1328) | 1.48× | | 68.5 / 31.5 / 118 | 1.22× |
+| sort | 5 | 737.5 (3891-4428) | 156.9 (901-1031) | | 306.9 (1951-2327) | 4.70× | | 113 / 38.8 / 92.7 | 2.33× |
+| map | 5 | 1110 (6137-7552) | 652.4 (3376-3733) | 886.8 (4419-4778) | 514.3 (3467-3980) | 1.70× | 1.25× | 207 / 103 / 412 | 1.08× (Fx), 0.76× (std) |
+| group | 5 | 475.9 (3393-3860) | 413.7 (2365-2719) | 461.4 (2498-2768) | 228.6 (2729-3025) | 1.15× | 1.03× | 194 / 112 / 496 | 0.92× (Fx), 0.78× (std) |
+| logs | 5 | 341.3 (3288-3631) | 238.6 (1434-1574) | | 624.9 (3977-5147) | 1.43× | | 400 / 198 / 697 | 1.31× |
+
+The Rust keeps `&str`s of the input (the research's fastest Rust,
+which needs a lifetime) and sorts with `sort_unstable`; its maps are
+std's `HashMap` with FxHash (rustc-hash 1's, written in main.rs) or
+std's SipHash, counting with `entry`; Go keeps substrings, `sort.Strings`
+and `map[string]int64`. Ren's map counts with a `get` and a `set`, two
+probes where Rust's `entry` makes one, since Ren has no entry API, and
+keeps each key a 32-byte slice object, as A does; its sort is
+`Array.sort`, the runtime's stable merge sort, comparing through the
+order's descriptor (ren_rt.c, [ren_array_sort]). The last column
+is the research's C model of A against Rust `&str` (B1's session 1) or
+Rust's Fx and std (B4) on the M4 Max: Ren today is slower than that
+model of itself on every workload, by most on sort.
+
+**Building output** (B3's json and logs), ms a round. `_append`
+appends one piece at a time (what `+=` will write); `_plus` adds each
+record's pieces in one expression (what `a + b` will). Both are
+`concat` today and copy the whole string each time. The Rust appends
+with `String::push_str` and `write!`, the Go with a `strings.Builder`
+and `strconv.AppendInt`; neither has a quadratic form to run.
+
+| records | Ren json, append | Ren json, plus | Ren logfmt, append | Ren logfmt, plus | Rust json | Rust logfmt | Go json | Go logfmt |
+|---|---|---|---|---|---|---|---|---|
+| 5,000 | 771.3 (3786-4087 for 5) | 477.7 (2342-2454) | 903.5 (4325-4873) | 913.8 (4358-4787) | 0.90 | 0.55 | 2.35 | 3.12 |
+| 50,000 | 304,990 (303,708-305,858 for 1) | 192,705 (190,004-195,135) | 307,890 (307,936-314,728) | 310,803 (305,766-312,307) | 12.5 (38-48 for 1) | 4.8 (39-40) | 38.1 | 54.3 |
+| 1,000,000 | | | | | 188.9 (1455-1572 for 5) | 142.2 (1192-1332) | 502.7 | 602.6 |
+
+At 5,000 records Ren takes 860× Rust's time on json and 1,640× on
+logfmt; 50,000 records take 395× (json, append), 403× (json, plus),
+341× and 340× (logfmt) what 5,000 do: ten times the records, a hundred
+times the bytes copied, and four times more again, since the string
+outgrows the caches (5,000 records' output is 260 to 470 KB, 50,000's
+2.6 to 4.7 MB). Ren at 1M records (105 and 133 MB) would take days and
+isn't run; at 50,000 a run takes five minutes, so that row is three
+runs, not seven, in a session of its own (the 5,000 and 1M rows are the
+main session's seven). The twins' 50,000 rows are a difference of runs
+of 30 to 190 ms, so only their order of magnitude means anything.
+json's plus form is faster than its append form because a record's
+escaped strings are built apart and appended once each, so it copies
+the whole output fewer times.
+
+**`Str.from_utf8`** of a 1 MiB text (B5's texts, 4,000 validations a
+run), GB/s:
+
+| text | Ren | Rust std | Go | the research, Ren today on the M4 Max |
+|---|---|---|---|---|
+| ascii | 1.64 | 36.75 | 12.32 | 2.61 |
+| cjk | 0.84 | 0.90 | 0.63 | 1.09 |
+| mixed (2% non-ASCII) | 1.17 | 1.92 | 1.19 | 1.71 |
+
+Rust's std validator skips ASCII a word at a time, which is its 36 GB/s
+here; step 1's target is the research's NEON numbers (73.1, 9.01 and
+13.5 on the M4 Max), which this machine can't run (no NEON).
+
+**The slices kernels** (bench/native/slices, "Slices" above), each
+alone at 200,000 for 20 rounds and for 0, ms a pass:
+
+| kernel | Ren slices | Ren offsets (`_r`) | slices / `_r` | Rust slices | Rust `_r` | Go slices | Go `_r` | Ren / Rust, slices | Ren / Rust, `_r` |
+|---|---|---|---|---|---|---|---|---|---|
+| logs | 24.4 (530-617) | 15.5 (372-475) | 1.58× | 11.4 | 17.2 | 15.7 | 15.6 | 2.14× | 0.90× |
+| json | 118.6 (1961-2558) | 70.1 (1427-1620) | 1.69× | 62.1 | 32.9 | 252.0 | 149.0 | 1.91× | 2.13× |
+| pages | 8.01 (304-389) | 3.90 (209-278) | 2.05× | 2.14 | 1.66 | 23.1 | 4.61 | 3.74× | 2.35× |
+
+Step 4's targets are against these: json and pages within 1.2× of `_r`
+and logs within 1.1× (today 1.69×, 2.05× and 1.58×), and every kernel
+within 2× of Rust (today logs and pages with slices, and json and pages
+with offsets, miss it).
+
+**The `Map` claim** (scope 7): bench/native/maps, 20 rounds and 0, ms a
+round; maps' Rust twin as it was (std's SipHash) and again with FxHash
+(maps/rust/fx.rs, the same program with the hasher swapped):
+
+| | Ren | Rust, std | Rust, FxHash | Go | Ren / Rust std | Ren / Rust Fx |
+|---|---|---|---|---|---|---|
+| maps | 64.6 (1212-1479) | 98.0 (1714-2425) | 65.3 (1186-1565) | 148.6 (2569-3581) | 0.66× | **0.99×** |
+
+compiler.md's 0.69× (the M4 Max, against SipHash) holds here as 0.66×,
+and against FxHash Ren's map runs at Rust's speed, 0.99×, not faster;
+the research put it at 1.02 to 1.05×. On the research's `Map<Str,
+Int>` workload (map above) Ren is 1.25× Rust's std and 1.70× its
+FxHash, two probes an update and a slice object a key included.
+
+**`-DREN_RC_SHARED`, uncontended** (decision 10's hot-root trap; brief,
+"Risks"): every Ren kernel built again with the C compiled
+-DREN_RC_SHARED, one thread, the same session, ms a round:
+
+| kernel | plain | -DREN_RC_SHARED | shared / plain | second session, 11 runs: plain, shared, ratio |
+|---|---|---|---|---|
+| tok | 37.4 | 41.1 | 1.10 | 47.1, 48.9, 1.04 |
+| sort | 737.5 | 778.4 | 1.06 | 873.7, 950.5, 1.09 |
+| map | 1110 | 1106 | 1.00 | 1280, 1271, 0.99 |
+| group | 475.9 | 424.8 | 0.89 | 466.7, 423.6, 0.91 |
+| logs | 341.3 | 281.7 | 0.83 | 356.9, 299.9, 0.84 |
+| out json, 5,000, append | 771.3 | 784.7 | 1.02 | |
+| out json, 5,000, plus | 477.7 | 477.1 | 1.00 | |
+| out logfmt, 5,000, append | 903.5 | 895.6 | 0.99 | |
+| out logfmt, 5,000, plus | 913.8 | 904.3 | 0.99 | |
+| utf8 ascii / cjk / mixed | 0.64 / 1.25 / 0.90 | 0.62 / 1.27 / 0.93 | 0.97 / 1.02 / 1.03 | |
+| slices logs | 24.4 | 26.2 | 1.07 | 26.4, 27.4, 1.04 |
+| slices logs_r | 15.5 | 17.0 | 1.10 | 16.5, 18.3, 1.11 |
+| slices json | 118.6 | 120.2 | 1.01 | 126.3, 126.4, 1.00 |
+| slices json_r | 70.1 | 71.7 | 1.02 | 79.3, 76.3, 0.96 |
+| slices pages | 8.01 | 8.05 | 1.00 | 8.79, 10.13, 1.15 |
+| slices pages_r | 3.90 | 3.80 | 0.97 | 4.38, 4.18, 0.95 |
+| maps | 64.6 | 67.4 | 1.04 | 76.0, 82.2, 1.08 |
+
+The second session ran at load 2 to 4.5, so its absolute times are
+higher:
+
+```sh
+SHARED=1 WHO=ren KERNELS=tok,sort,map,group,logs,slices_logs,slices_logs_r,slices_json,slices_json_r,slices_pages,slices_pages_r,maps \
+  python3 -I bench/native/strs/measure.py $out 11 shared.jsonl
+```
+
+The shared mode's hot paths are the plain mode's (ren_rt.h, "Counting
+has three modes"), and on one thread its counts are positive, so this
+is the cost of the relaxed loads and the thread-local heap: up to 10%
+(tok, sort, slices logs and logs_r, maps), within noise elsewhere, and
+group and logs 9 to 17% faster in both sessions, which nothing here
+explains (their rounds are the difference of 3 to 4 s runs whose input
+takes 1.4 to 1.9 s to make). The research's C model found no cost it
+could measure. The contended case, many tasks counting one root, waits
+for 11b.
+
 ## The data stage: the milestone (compiler.md, "Data stage", "The layout fixes (step 7)")
 
 The milestone: dispatch's `interp` kernel, research/dispatch.md's

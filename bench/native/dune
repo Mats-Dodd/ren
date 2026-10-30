@@ -24,4 +24,5 @@
   (glob_files rbtree/*.ren)
   (glob_files slices/*.ren)
   (glob_files stack/*.ren)
+  (glob_files strs/*.ren)
   (glob_files vec/*.ren)))

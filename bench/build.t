@@ -240,6 +240,8 @@ Every native benchmark, at its small size:
   native/slices/small.ren, naive: the same, exit 0, objects live at exit 0
   native/stack/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/stack/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/strs/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/strs/small.ren, naive: the same, exit 0, objects live at exit 0
   native/vec/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/vec/small.ren, naive: the same, exit 0, objects live at exit 0
 
@@ -454,6 +456,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/rbtree/small.ren, release: the same, exit 0, objects live at exit 0
   native/slices/small.ren, release: the same, exit 0, objects live at exit 0
   native/stack/small.ren, release: the same, exit 0, objects live at exit 0
+  native/strs/small.ren, release: the same, exit 0, objects live at exit 0
   native/vec/small.ren, release: the same, exit 0, objects live at exit 0
   $ for f in ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren ../examples/checkout/main.ren; do release $f; done
   ../examples/blocks.ren, release: the same, exit 0, objects live at exit 0
@@ -1719,6 +1722,8 @@ same objects alive at the end as clang's build above.
   native/slices/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/stack/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/stack/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/strs/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/strs/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/vec/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/vec/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   ../examples/blocks.ren, perceus, tcc: the same, exit 0, objects live at exit 0

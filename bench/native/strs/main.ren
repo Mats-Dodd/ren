@@ -1,0 +1,4 @@
+import bench
+
+// gen.c's sizes, each workload once; `out` at 5,000 records
+fn main() uses Console = bench.run(1_000_000, 5_000, 1)

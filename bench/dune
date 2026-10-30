@@ -39,6 +39,7 @@
   (glob_files native/rbtree/*.ren)
   (glob_files native/slices/*.ren)
   (glob_files native/stack/*.ren)
+  (glob_files native/strs/*.ren)
   (glob_files native/vec/*.ren)
   (glob_files 10d/*.ren)
   (glob_files 10d/*.expected)

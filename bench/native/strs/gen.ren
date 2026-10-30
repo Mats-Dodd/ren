@@ -1,0 +1,303 @@
+// The inputs the strings benchmark reads (bench.ren), made in the
+// program, since a native build can't read a file yet: byte for byte
+// what research/strings/track-b/c/gen.c writes at n = 1,000,000 (tok.txt,
+// keys.txt, sort.txt, rows.csv, logs.txt and people.csv), and b5.c's
+// texts. Each starts from the state gen.c's generator, splitmix64, is
+// in when it starts that file, so each is made alone. gen.c evaluates a
+// call's arguments left to right, as clang does, and these do the same.
+// The Rust and Go twins make the same bytes; the Rust's `dump` writes
+// them, to compare with gen.c's.
+
+// ---- splitmix64, in `Int`s ----
+
+// [z] shifted right by [k], 0 to 63, zeros in at the top: an unsigned
+// shift
+fn ushr(z: Int, k: Int) -> Int = if k == 0 then z else z.shr(k).bit_and(1.shl(64 - k) -% 1)
+
+// the generator's next number, its 64 bits as an `Int`
+pub fn next(inout s: Int) -> Int =
+  s = s.wrapping_add(-7046029254386353131)
+  var z = s
+  z = z.xor(ushr(z, 30)).wrapping_mul(-4658895280553007687)
+  z = z.xor(ushr(z, 27)).wrapping_mul(-7723592293110705685)
+  z.xor(ushr(z, 31))
+
+// the next number's remainder by [n], unsigned, as C's `rnd() % n`
+pub fn below(inout s: Int, n: Int) -> Int =
+  let z = next(&s)
+  if z >= 0 then z % n else (ushr(z, 1) % n * 2 + z.bit_and(1)) % n
+
+// gen.c's `P(pct)`: true [pct] times in a hundred
+fn chance(inout s: Int, pct: Int) -> Bool = below(&s, 100) < pct
+
+// where gen.c's generator is when it starts each file
+fn tok_seed() -> Int = 2685821657736338717
+fn keys_seed() -> Int = 1501143529475956227
+fn sort_seed() -> Int = -7166393251827448381
+fn rows_seed() -> Int = 3516444820516554288
+fn logs_seed() -> Int = -5780446136378338632
+fn people_seed() -> Int = 3851254842298927852
+
+// ---- a buffer of bytes, grown by doubling: `b[0..n]` is what's written ----
+
+fn grow(inout b: Bytes, n: Int) =
+  var c = Bytes.zeros(2 * b.len() + 4096)
+  for i in 0..n
+    &c.set_u8(i, b.at(i))
+  b = c
+
+fn put(inout b: Bytes, inout n: Int, c: Int) =
+  if n == b.len() then grow(&b, n)
+  &b.set_u8(n, c)
+  n += 1
+
+fn put_str(inout b: Bytes, inout n: Int, s: Str) =
+  let bs = s.bytes()
+  for i in 0..bs.len()
+    put(&b, &n, bs.at(i))
+
+// [b]'s first [n] bytes, which are UTF-8, as a `Str`
+fn finish(b: Bytes, n: Int) -> Str =
+  match attempt Str.from_utf8(b[0..n])
+    Ok(s) => s
+    Err(_) => ""
+
+// ---- the pieces ----
+
+fn words() -> Array<Str> = ["user", "id", "get", "set", "count", "item", "list", "map", "node", "value", "buf", "len", "next", "prev", "data", "key", "index", "name", "path", "time", "size", "read", "write", "parse", "token", "state", "error", "result", "config", "server", "client", "request", "response", "handler", "cache", "queue", "event", "stream", "frame", "table", "pool", "array", "bytes", "string", "order", "account", "price", "total", "line", "file", "entry", "temp", "flag", "mode", "kind", "type", "ref", "ptr", "ctx", "cur", "pos", "off", "max", "min"]
+fn keywords() -> Array<Str> = ["let", "fn", "if", "else", "return", "for", "in", "match", "var", "while"]
+fn syllables() -> Array<Str> = ["san", "por", "ber", "lin", "mad", "rid", "tok", "yo", "lon", "don", "par", "is", "osa", "ka", "new", "york", "chi", "ca", "go", "sao", "pau", "lo", "rio", "mel", "bour", "ne", "syd", "ney"]
+fn upper() -> Array<Str> = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
+fn hex() -> Str = "0123456789abcdef"
+
+fn word(ws: Array<Str>, inout s: Int) -> Str = ws[below(&s, 64)]
+
+// [w] with its first letter, `a` to `z`, made a capital
+fn capital(w: Str) -> Str = upper()[w.bytes().at(0) - 97].concat(w[1..w.len()])
+
+fn pad(x: Int, width: Int) -> Str =
+  var t = show(x)
+  while t.len() < width
+    t = "0".concat(t)
+  t
+
+// [x]'s 64 bits as 16 hex digits
+fn hex16(x: Int) -> Str =
+  var t = ""
+  for k in 0..16
+    let d = ushr(x, 60 - 4 * k).bit_and(15)
+    t = t.concat(hex()[d..d + 1])
+  t
+
+// one to three words joined by `_`, a number after one in five
+fn ident(ws: Array<Str>, inout s: Int) -> Str =
+  let parts = 1 + below(&s, 3)
+  var o = ""
+  for i in 0..parts
+    if i > 0 then o = o.concat("_")
+    o = o.concat(word(ws, &s))
+  if chance(&s, 20) then o = o.concat(show(below(&s, 100)))
+  o
+
+// a key from the mixed distribution: short identifiers, dotted metric
+// names, and URLs that share a long prefix
+fn key(ws: Array<Str>, inout s: Int, kind: Int) -> Str =
+  if kind < 60 then ident(ws, &s)
+  else if kind < 85 then
+    let w = word(ws, &s)
+    let a = ident(ws, &s)
+    let b = ident(ws, &s)
+    w.concat(".").concat(a).concat(".").concat(b)
+  else
+    let v = 1 + below(&s, 2)
+    let w = word(ws, &s)
+    let id = below(&s, 1000000)
+    let a = ident(ws, &s)
+    let page = below(&s, 50)
+    "https://api.example.com/v".concat(show(v)).concat("/").concat(w).concat("/").concat(show(id)).concat("/").concat(a).concat("?page=").concat(show(page))
+
+// ---- the files ----
+
+// tok.txt: code-like statements, [n] tokens or a few more
+pub fn tok(n: Int) -> Str =
+  var s = tok_seed()
+  let ws = words()
+  var b = Bytes.zeros(0)
+  var at = 0
+  var toks = 0
+  let lits = ["hello, world", "café au lait", "日本語", "a longer string literal with several words in it", "ok"]
+  while toks < n
+    let form = below(&s, 4)
+    if form == 0 then
+      // gen.c prints its first `ident(a)` after the second has
+      // overwritten it, so both are the second
+      let _ = ident(ws, &s)
+      let f = ident(ws, &s)
+      let k = ident(ws, &s)
+      let x = below(&s, 100000)
+      let a = ident(ws, &s)
+      put_str(&b, &at, "let ".concat(a).concat(" = ").concat(f).concat("(").concat(k).concat(", ").concat(show(x)).concat(") + ").concat(a).concat(";\n"))
+      toks += 12
+    else if form == 1 then
+      let a = ident(ws, &s)
+      let f = ident(ws, &s)
+      let x = below(&s, 1000)
+      let k = ident(ws, &s)
+      put_str(&b, &at, "if ".concat(a).concat(".").concat(f).concat(" >= ").concat(show(x)).concat(" {\n  return ").concat(k).concat(";\n}\n"))
+      toks += 11
+    else if form == 2 then
+      let a = ident(ws, &s)
+      let l = lits[below(&s, 5)]
+      put_str(&b, &at, a.concat(" += \"").concat(l).concat("\";\n"))
+      toks += 4
+    else
+      let w = keywords()[below(&s, 10)]
+      let a = ident(ws, &s)
+      let f = ident(ws, &s)
+      let k = ident(ws, &s)
+      put_str(&b, &at, w.concat(" ").concat(a).concat(" = ").concat(f).concat(" -> ").concat(k).concat(";\n"))
+      toks += 6
+  finish(b, at)
+
+// keys.txt: [lines] keys drawn from a pool of [pool], 80% of them from
+// its hottest tenth
+pub fn keys(pool: Int, lines: Int) -> Str =
+  var s = keys_seed()
+  let ws = words()
+  var ks: Array<Str> = []
+  for _ in 0..pool
+    let kind = below(&s, 100)
+    &ks.push(key(ws, &s, kind))
+  var b = Bytes.zeros(0)
+  var at = 0
+  for _ in 0..lines
+    let j = if chance(&s, 80) then below(&s, pool / 10) else below(&s, pool)
+    put_str(&b, &at, ks[j])
+    put(&b, &at, 10)
+  finish(b, at)
+
+// sort.txt: [n] keys, mostly distinct
+pub fn sorting(n: Int) -> Str =
+  var s = sort_seed()
+  let ws = words()
+  var b = Bytes.zeros(0)
+  var at = 0
+  for _ in 0..n
+    let kind = below(&s, 100)
+    put_str(&b, &at, key(ws, &s, kind))
+    put(&b, &at, 10)
+  finish(b, at)
+
+// rows.csv: [rows] rows, each a city of [cities], a department and an
+// amount
+pub fn rows(cities: Int, rows: Int) -> Str =
+  var s = rows_seed()
+  let ws = words()
+  var cs: Array<Str> = []
+  for i in 0..cities
+    var a = ""
+    let n = 2 + below(&s, 4)
+    for j in 0..n
+      a = a.concat(syllables()[below(&s, 28)])
+      if j == 1 && chance(&s, 40) then a = a.concat(" ")
+    a = capital(a)
+    if chance(&s, 5) then a = a.concat(" é")
+    &cs.push(a.concat(show(i % 7)))
+  var b = Bytes.zeros(0)
+  var at = 0
+  for _ in 0..rows
+    let c = cs[below(&s, cities)]
+    let d = ws[below(&s, 20)]
+    let x = below(&s, 100000)
+    put_str(&b, &at, c.concat(",").concat(d).concat(",").concat(show(x)).concat("\n"))
+  finish(b, at)
+
+// logs.txt: [lines] log lines
+pub fn logs(lines: Int) -> Str =
+  var s = logs_seed()
+  let ws = words()
+  let services = ["api-gateway", "auth", "billing", "search", "orders", "inventory", "notify", "users"]
+  let levels = ["INFO", "WARN", "ERROR", "DEBUG"]
+  let methods = ["GET", "POST", "PUT", "DELETE"]
+  var b = Bytes.zeros(0)
+  var at = 0
+  for _ in 0..lines
+    let r = below(&s, 100)
+    let l = if r < 85 then 0 else if r < 95 then 1 else if r < 99 then 2 else 3
+    let pk = below(&s, 5)
+    let path =
+      if pk == 0 then "/v1/users/".concat(show(below(&s, 100000))).concat("/orders")
+      else if pk == 1 then "/v2/items/".concat(show(below(&s, 1000000)))
+      else if pk == 2 then "/health"
+      else if pk == 3 then "/v1/search?q=".concat(word(ws, &s))
+      else "/v1/users/".concat(show(below(&s, 100000)))
+    let status = if chance(&s, 2) then 500 else if chance(&s, 5) then 404 else 200
+    let mm = below(&s, 60)
+    let ss = below(&s, 60)
+    let ms = below(&s, 1000)
+    let svc = services[below(&s, 8)]
+    let m = methods[below(&s, 4)]
+    let dur = 1 + below(&s, 2000)
+    let req = next(&s)
+    put_str(&b, &at, "2026-10-29T09:".concat(pad(mm, 2)).concat(":").concat(pad(ss, 2)).concat(".").concat(pad(ms, 3)).concat("Z "))
+    put_str(&b, &at, levels[l].concat(" ").concat(svc).concat(" ").concat(m).concat(" ").concat(path).concat(" "))
+    put_str(&b, &at, show(status).concat(" ").concat(show(dur)).concat("ms req_id=").concat(hex16(req)).concat("\n"))
+  finish(b, at)
+
+// people.csv: [n] people, each an id, a name, an email, a score and 0 to
+// 3 tags, tab-separated
+pub fn people(n: Int) -> Str =
+  var s = people_seed()
+  let ws = words()
+  var b = Bytes.zeros(0)
+  var at = 0
+  for i in 0..n
+    let w1 = word(ws, &s)
+    let w2 = word(ws, &s)
+    var name = capital(w1.concat(" ").concat(w2))
+    if chance(&s, 3) then name = name.concat(" \"jr\"")
+    if chance(&s, 5) then name = name.concat(" Muñoz")
+    let e1 = word(ws, &s)
+    let e2 = word(ws, &s)
+    let e3 = below(&s, 1000)
+    let score = below(&s, 1000000)
+    put_str(&b, &at, show(i).concat("\t").concat(name).concat("\t").concat(e1).concat(".").concat(e2).concat(show(e3)))
+    put_str(&b, &at, "@example.com\t".concat(show(score)).concat("\t"))
+    let tags = below(&s, 4)
+    for t in 0..tags
+      if t > 0 then put(&b, &at, 59)
+      put_str(&b, &at, word(ws, &s))
+    put(&b, &at, 10)
+  finish(b, at)
+
+// a code point's UTF-8
+fn put_code(inout b: Bytes, inout n: Int, c: Int) =
+  if c < 128 then put(&b, &n, c)
+  else if c < 2048 then
+    put(&b, &n, 192 + c / 64)
+    put(&b, &n, 128 + c % 64)
+  else
+    put(&b, &n, 224 + c / 4096)
+    put(&b, &n, 128 + c / 64 % 64)
+    put(&b, &n, 128 + c % 64)
+
+// b5.c's text of [kind], `ascii`, `cjk` or `mixed`, [n] bytes, ending
+// on a character: lines of about 200 characters; mixed is mostly ASCII,
+// 2% not, as logs with names are
+pub fn text(kind: Str, n: Int) -> Bytes =
+  var s = 42
+  var b = Bytes.zeros(0)
+  var at = 0
+  while at < n - 4
+    let r = below(&s, 100)
+    let c =
+      if r == 99 && next(&s).bit_and(1) == 1 then 10
+      else if kind == "ascii" then (if r < 15 then 32 else 97 + below(&s, 26))
+      else if kind == "cjk" then (if r < 10 then 32 else 19968 + below(&s, 20000))
+      else if r < 98 then (if r < 15 then 32 else 97 + below(&s, 26))
+      else if r < 99 then 233
+      else 26085
+    put_code(&b, &at, c)
+  while at < n
+    put(&b, &at, 32)
+  b[0..at]

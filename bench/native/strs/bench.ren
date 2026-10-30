@@ -1,0 +1,403 @@
+// Strings (strings.md; briefs/stage-bytes-2.md, step 0): the workloads
+// research/strings/track-b measured on a C model of Ren's runtime,
+// written in Ren as it is before the bytes stage's part two, over the
+// same inputs (gen.ren). Each kernel takes its input whole, as a `Str`,
+// and gives a check, the numbers the research's `check=` printed, which
+// the Rust and Go twins give too:
+//
+// - tok: a tokenizer of 6 MB of code-like text, keeping all 1,030,229
+//   tokens, each a kind and a slice of the text (track-b's B1).
+// - map: a `Map<Str, Int>` counting 4M keys from a pool of 200k, then
+//   4M lookups (B1 and B4).
+// - sort: 1M mostly distinct keys, kept as slices and sorted (B1).
+// - group: the sum of an amount by city, over 5M CSV rows (B1).
+// - logs: 1M log lines parsed into records keeping six `Str` fields and
+//   two `Int`s, then three queries (B1).
+// - out: 1M people as one JSON array and 1M log records as logfmt,
+//   built by appending to a `Str` (B3). `_append` appends a piece at a
+//   time, what `s += x` will write; `_plus` adds each record's pieces in
+//   one expression, what `a + b` will. `Str` has no `+` yet, so both are
+//   `concat`, and both copy the whole string each time: quadratic.
+// - utf8: `Str.from_utf8` of a 1 MiB text, ASCII, CJK or mixed (B5).
+//
+// Ren today has no `byte_len` (`len` is in bytes), no interpolation and
+// no `starts_with` natively; later steps rename these lines.
+import gen
+
+fn join(xs: Array<Int>) -> Str =
+  var out = ""
+  for i in 0..xs.len()
+    if i > 0 then out = out.concat(",")
+    out = out.concat(show(xs[i]))
+  out
+
+fn letter(c: Int) -> Bool = c == 95 || c >= 97 && c <= 122 || c >= 65 && c <= 90
+
+fn digit(c: Int) -> Bool = c >= 48 && c <= 57
+
+// whether [s] begins with [prefix], byte by byte
+fn begins(s: Str, prefix: Str) -> Bool =
+  let a = s.bytes()
+  let b = prefix.bytes()
+  var same = a.len() >= b.len()
+  var i = 0
+  while same && i < b.len()
+    same = a.at(i) == b.at(i)
+    i += 1
+  same
+
+// the number in bytes [from] to [to] of [p], in decimal
+fn number(p: Bytes, from: Int, to: Int) -> Int =
+  var n = 0
+  for k in from..to
+    n = n * 10 + p.at(k) - 48
+  n
+
+// ---- tok: a tokenizer keeping every token ----
+
+// 0 an identifier, 1 a number, 2 a string, 3 punctuation
+type Tok = { kind: Int, text: Str }
+
+fn tokens(src: Str) -> Array<Tok> =
+  let p = src.bytes()
+  let n = p.len()
+  var ts: Array<Tok> = []
+  var i = 0
+  while i < n
+    let c = p.at(i)
+    if c == 32 || c == 10 || c == 9 then i += 1
+    else
+      var j = i + 1
+      var kind = 3
+      if letter(c) then
+        while j < n && (letter(p.at(j)) || digit(p.at(j)))
+          j += 1
+        kind = 0
+      else if digit(c) then
+        while j < n && digit(p.at(j))
+          j += 1
+        kind = 1
+      else if c == 34 then
+        while j < n && p.at(j) != 34
+          j += 1
+        j += 1
+        kind = 2
+      else if j < n && ((c == 61 || c == 33 || c == 60 || c == 62 || c == 43) && p.at(j) == 61 || c == 45 && p.at(j) == 62) then
+        j += 1
+      &ts.push(Tok { kind: kind, text: src[i..j] })
+      i = j
+  ts
+
+fn tok(src: Str) -> Str =
+  let ts = tokens(src)
+  var returns = 0
+  var idents = 0
+  var total = 0
+  for t in ts
+    if t.text == "return" then returns += 1
+    if t.kind == 0 then idents += 1
+    total += t.text.len()
+  join([ts.len(), returns, idents, total])
+
+// ---- map: `Map<Str, Int>` counts of 4M keys, then 4M lookups ----
+
+fn map(src: Str) -> Str =
+  let p = src.bytes()
+  var m: Map<Str, Int> = Map.empty
+  var a = 0
+  for j in 0..p.len()
+    if p.at(j) == 10 then
+      let k = src[a..j]
+      match m.get(k)
+        Some(c) => &m.set(k, c + 1)
+        None => &m.set(k, 1)
+      a = j + 1
+  var sum = 0
+  a = 0
+  for j in 0..p.len()
+    if p.at(j) == 10 then
+      match m.get(src[a..j])
+        Some(c) => sum += c
+        None => sum -= 1
+      a = j + 1
+  join([m.len(), sum])
+
+// ---- sort: 1M strings, slices of the input ----
+
+fn lines(src: Str) -> Array<Str> =
+  let p = src.bytes()
+  var xs: Array<Str> = []
+  var a = 0
+  for j in 0..p.len()
+    if p.at(j) == 10 then
+      &xs.push(src[a..j])
+      a = j + 1
+  xs
+
+fn sorting(src: Str) -> Str =
+  let xs = lines(src).sort()
+  var check = 0
+  var k = 0
+  while k < xs.len()
+    check += xs[k].len() * k + xs[k].bytes().at(0)
+    k += 1000
+  join([xs.len(), check])
+
+// ---- group: the sum of the amount by city, over 5M CSV rows ----
+
+fn grouping(src: Str) -> Str =
+  let p = src.bytes()
+  var m: Map<Str, Int> = Map.empty
+  var a = 0
+  for j in 0..p.len()
+    if p.at(j) == 10 then
+      var c = a
+      while p.at(c) != 44
+        c += 1
+      var k = j
+      while p.at(k - 1) != 44
+        k -= 1
+      let amount = number(p, k, j)
+      let city = src[a..c]
+      match m.get(city)
+        Some(x) => &m.set(city, x + amount)
+        None => &m.set(city, amount)
+      a = j + 1
+  var check = 0
+  var total = 0
+  for (city, x) in m
+    check = check.xor(city.len() * 1000003 + x)
+    total += x
+  join([m.len(), total, check])
+
+// ---- logs: 1M lines parsed into records that keep their fields ----
+
+type Rec = { ts: Str, level: Str, svc: Str, method: Str, path: Str, req: Str, status: Int, dur: Int }
+
+// where the field from [q] ends: the next space
+fn field_end(p: Bytes, q: Int) -> Int =
+  var e = q
+  while p.at(e) != 32
+    e += 1
+  e
+
+fn records(src: Str) -> Array<Rec> =
+  let p = src.bytes()
+  var rs: Array<Rec> = []
+  var a = 0
+  for j in 0..p.len()
+    if p.at(j) == 10 then
+      let e0 = field_end(p, a)
+      let e1 = field_end(p, e0 + 1)
+      let e2 = field_end(p, e1 + 1)
+      let e3 = field_end(p, e2 + 1)
+      let e4 = field_end(p, e3 + 1)
+      let e5 = field_end(p, e4 + 1)
+      let e6 = field_end(p, e5 + 1)
+      &rs.push(Rec { ts: src[a..e0], level: src[e0 + 1..e1], svc: src[e1 + 1..e2], method: src[e2 + 1..e3], path: src[e3 + 1..e4], req: src[e6 + 8..j], status: number(p, e4 + 1, e5), dur: number(p, e5 + 1, e6 - 2) })
+      a = j + 1
+  rs
+
+fn logs(src: Str) -> Str =
+  let rs = records(src)
+  var errors = 0
+  var slow = 0
+  var users = 0
+  for r in rs
+    if r.level == "ERROR" then errors += 1
+    if r.status >= 500 then slow += r.dur
+    if begins(r.path, "/v1/users") then users += 1
+  join([rs.len(), errors, slow, users])
+
+// ---- out: building output by appending ----
+
+type Person = { id: Int, score: Int, name: Str, email: Str, tags: Array<Str> }
+
+// the first [limit] people of people.csv
+fn people(src: Str, limit: Int) -> Array<Person> =
+  let p = src.bytes()
+  var ps: Array<Person> = []
+  var a = 0
+  var j = 0
+  while ps.len() < limit && j < p.len()
+    var ends: Array<Int> = []
+    var q = a
+    while ends.len() < 5
+      if p.at(q) == 9 || p.at(q) == 10 then &ends.push(q)
+      q += 1
+    var tags: Array<Str> = []
+    var t = ends[3] + 1
+    for k in ends[3] + 1..ends[4] + 1
+      if k == ends[4] || p.at(k) == 59 then
+        if k > t then &tags.push(src[t..k])
+        t = k + 1
+    &ps.push(Person { id: number(p, a, ends[0]), score: number(p, ends[2] + 1, ends[3]), name: src[ends[0] + 1..ends[1]], email: src[ends[1] + 1..ends[2]], tags: tags })
+    j = ends[4]
+    a = j + 1
+  ps
+
+// [s] as a JSON string, appended to [o]: the runs that need no escape go
+// on as they are
+fn put_json(inout o: Str, s: Str) =
+  let p = s.bytes()
+  o = o.concat("\"")
+  var run = 0
+  for i in 0..p.len()
+    let c = p.at(i)
+    if c == 34 || c == 92 || c < 32 then
+      if i > run then o = o.concat(s[run..i])
+      o = o.concat(if c == 34 then "\\\"" else "\\\\")
+      run = i + 1
+  if p.len() > run then o = o.concat(s[run..p.len()])
+  o = o.concat("\"")
+
+// one piece at a time: later `o += x`
+fn json_append(ps: Array<Person>) -> Str =
+  var o = "["
+  for r in 0..ps.len()
+    let x = ps[r]
+    if r > 0 then o = o.concat(",")
+    o = o.concat("{\"id\":")
+    o = o.concat(show(x.id))
+    o = o.concat(",\"name\":")
+    put_json(&o, x.name)
+    o = o.concat(",\"email\":")
+    put_json(&o, x.email)
+    o = o.concat(",\"score\":")
+    o = o.concat(show(x.score))
+    o = o.concat(",\"tags\":[")
+    for t in 0..x.tags.len()
+      if t > 0 then o = o.concat(",")
+      put_json(&o, x.tags[t])
+    o = o.concat("]}")
+  o = o.concat("]")
+  join([ps.len(), o.len()])
+
+// [s] as a JSON string
+fn json_quoted(s: Str) -> Str =
+  var o = ""
+  put_json(&o, s)
+  o
+
+// each record's pieces added in one expression: later `o = o + a + b`
+fn json_plus(ps: Array<Person>) -> Str =
+  var o = "["
+  for r in 0..ps.len()
+    let x = ps[r]
+    var tags = ""
+    for t in 0..x.tags.len()
+      tags = tags.concat(if t > 0 then "," else "").concat(json_quoted(x.tags[t]))
+    o = o.concat(if r > 0 then "," else "").concat("{\"id\":").concat(show(x.id)).concat(",\"name\":").concat(json_quoted(x.name)).concat(",\"email\":").concat(json_quoted(x.email)).concat(",\"score\":").concat(show(x.score)).concat(",\"tags\":[").concat(tags).concat("]}")
+  o = o.concat("]")
+  join([ps.len(), o.len()])
+
+fn logfmt_append(rs: Array<Rec>) -> Str =
+  var o = ""
+  for r in rs
+    o = o.concat("ts=")
+    o = o.concat(r.ts)
+    o = o.concat(" level=")
+    o = o.concat(r.level)
+    o = o.concat(" svc=")
+    o = o.concat(r.svc)
+    o = o.concat(" method=")
+    o = o.concat(r.method)
+    o = o.concat(" path=\"")
+    o = o.concat(r.path)
+    o = o.concat("\" status=")
+    o = o.concat(show(r.status))
+    o = o.concat(" dur_ms=")
+    o = o.concat(show(r.dur))
+    o = o.concat(" req_id=")
+    o = o.concat(r.req)
+    o = o.concat("\n")
+  join([rs.len(), o.len()])
+
+fn logfmt_plus(rs: Array<Rec>) -> Str =
+  var o = ""
+  for r in rs
+    o = o.concat("ts=").concat(r.ts).concat(" level=").concat(r.level).concat(" svc=").concat(r.svc).concat(" method=").concat(r.method).concat(" path=\"").concat(r.path).concat("\" status=").concat(show(r.status)).concat(" dur_ms=").concat(show(r.dur)).concat(" req_id=").concat(r.req).concat("\n")
+  join([rs.len(), o.len()])
+
+// ---- each workload: its input made, its size printed, then each round's check ----
+
+// gen.c's 2,000 cities at 1,000,000, and at least 4
+fn cities(n: Int) -> Int = if n >= 2000 then n / 500 else 4
+
+// [n] scales every input: at 1,000,000 each is gen.c's
+pub fn run_tok(n: Int, rounds: Int) uses Console =
+  let src = gen.tok(n)
+  print(src.len())
+  for _ in 0..rounds
+    print(tok(src))
+
+pub fn run_map(n: Int, rounds: Int) uses Console =
+  let src = gen.keys(n / 5, 4 * n)
+  print(src.len())
+  for _ in 0..rounds
+    print(map(src))
+
+pub fn run_sort(n: Int, rounds: Int) uses Console =
+  let src = gen.sorting(n)
+  print(src.len())
+  for _ in 0..rounds
+    print(sorting(src))
+
+pub fn run_group(n: Int, rounds: Int) uses Console =
+  let src = gen.rows(cities(n), 5 * n)
+  print(src.len())
+  for _ in 0..rounds
+    print(grouping(src))
+
+pub fn run_logs(n: Int, rounds: Int) uses Console =
+  let src = gen.logs(n)
+  print(src.len())
+  for _ in 0..rounds
+    print(logs(src))
+
+// [n] records, of [n] people or log lines
+pub fn run_json(n: Int, rounds: Int, plus: Bool) uses Console =
+  let src = gen.people(n)
+  print(src.len())
+  let ps = people(src, n)
+  for _ in 0..rounds
+    print(if plus then json_plus(ps) else json_append(ps))
+
+pub fn run_logfmt(n: Int, rounds: Int, plus: Bool) uses Console =
+  let src = gen.logs(n)
+  print(src.len())
+  let rs = records(src)
+  for _ in 0..rounds
+    print(if plus then logfmt_plus(rs) else logfmt_append(rs))
+
+// [rounds] validations of a text of [size] bytes; how many were valid
+// and their bytes
+pub fn run_utf8(kind: Str, size: Int, rounds: Int) uses Console =
+  let b = gen.text(kind, size)
+  print(b.len())
+  var ok = 0
+  var total = 0
+  for _ in 0..rounds
+    match attempt Str.from_utf8(b)
+      Ok(s) =>
+        ok += 1
+        total += s.len()
+      Err(_) => ok -= 1
+  print(join([ok, total]))
+
+// every workload at scale [n], `out` at [records], the texts of [n] *
+// 1.048576 bytes (1 MiB at 1,000,000), each [rounds] times
+pub fn run(n: Int, records: Int, rounds: Int) uses Console =
+  run_tok(n, rounds)
+  run_map(n, rounds)
+  run_sort(n, rounds)
+  run_group(n, rounds)
+  run_logs(n, rounds)
+  run_json(records, rounds, false)
+  run_json(records, rounds, true)
+  run_logfmt(records, rounds, false)
+  run_logfmt(records, rounds, true)
+  let size = n * 1048576 / 1000000
+  run_utf8("ascii", size, rounds)
+  run_utf8("cjk", size, rounds)
+  run_utf8("mixed", size, rounds)

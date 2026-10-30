@@ -6608,7 +6608,10 @@ step 3", has the numbers: a round, release, Ren **108** Mcyc, Rust 157,
 Go 255 (0.69× Rust); the debug build takes 2.9 s to Go's 0.85.
 That's against SipHash. Against Rust with FxHash or aHash, the strings
 measurements put the same map at 1.02–1.05×: the same speed, not
-faster ([strings.md](strings.md#representation)).
+faster ([strings.md](strings.md#representation)). Measured again in part two
+("Bytes stage, part two", "The baseline"), on an x86_64 cloud
+container: 0.66× of this twin, and **0.99×** of the same twin with
+FxHash (bench/native/maps/rust/fx.rs).
 
 ### Step 4, the review
 
@@ -9393,6 +9396,61 @@ No panic is added for the escape: a slice past 4 GiB is the escape, and
    docs and tooling (README's status and roadmap row, stdlib.md,
    strings.md's "Already built" line, the grammar). **Done when** what
    blocks is fixed and the rest is listed with its severity.
+
+### The baseline
+
+Measured on an x86_64 cloud container (4 cores, shared), at 78b28ec,
+release builds by GCC 13.3 -O2 (`cc` here), rustc 1.97.0 and Go 1.24.7:
+numbers for ratios, which the owner re-measures on the M4 Max. Wall
+time, since the container has no cycle counters: 7 runs interleaved,
+medians, ms a round, each workload run at R rounds and at 0, a round
+(median at R - median at 0) / R. bench/native/RESULTS.md, "Bytes stage,
+part two: the baseline", has the spreads and the commands
+(bench/native/strs/build.sh and measure.py). The workloads,
+bench/native/strs, are research/strings/track-b's over gen.c's inputs,
+byte for byte; every Ren, Rust and Go run prints the same check.
+
+| kernel | Ren | Rust | Go | Ren / Rust |
+|---|---|---|---|---|
+| tok | 37.4 | 25.3 | 89.8 | 1.48× |
+| sort | 737.5 | 156.9 | 306.9 | 4.70× |
+| map (Rust FxHash / std) | 1110 | 652.4 / 886.8 | 514.3 | 1.70× / 1.25× |
+| group (FxHash / std) | 475.9 | 413.7 / 461.4 | 228.6 | 1.15× / 1.03× |
+| logs | 341.3 | 238.6 | 624.9 | 1.43× |
+| out json, 5,000, piece by piece / a record at a time | 771.3 / 477.7 | 0.90 | 2.35 | about 860× |
+| out json, 50,000 (3 runs) | 304,990 / 192,705 | 12.5 | 38.1 | |
+| out logfmt, 5,000 | 903.5 / 913.8 | 0.55 | 3.12 | about 1,640× |
+| out logfmt, 50,000 (3 runs) | 307,890 / 310,803 | 4.8 | 54.3 | |
+| out json / logfmt, 1M | not run (quadratic) | 188.9 / 142.2 | 502.7 / 602.6 | |
+| utf8 ASCII / CJK / mixed, GB/s | 1.64 / 0.84 / 1.17 | 36.75 / 0.90 / 1.92 | 12.32 / 0.63 / 1.19 | |
+| slices logs, slices / `_r` | 24.4 / 15.5 (1.58×) | 11.4 / 17.2 | 15.7 / 15.6 | 2.14× / 0.90× |
+| slices json | 118.6 / 70.1 (1.69×) | 62.1 / 32.9 | 252.0 / 149.0 | 1.91× / 2.13× |
+| slices pages | 8.01 / 3.90 (2.05×) | 2.14 / 1.66 | 23.1 / 4.61 | 3.74× / 2.35× |
+| maps (Rust std / FxHash) | 64.6 | 98.0 / 65.3 | 148.6 | 0.66× / 0.99× |
+
+Ren is slower than the research's C model of A on every workload: tok
+1.48× Rust (the model's 1.22×), sort 4.70× (2.33×), logs 1.43× (1.31×).
+Appending is quadratic: 50,000 records take 340 to 403 times what 5,000
+do. Ren's map counts with `get` and `set`, two probes an update, as it
+has no entry API; Rust sorts with `sort_unstable`. The 50,000-record
+`out` rows are 3 runs, since one Ren run takes about 5 minutes.
+`ren run main.ren` can't finish: the interpreter's `set_u8` copies the
+buffer, so making a 100 MB input is quadratic there.
+
+**Hot roots, uncounted contention.** Built with `-DREN_RC_SHARED`,
+every count atomic: up to 10% slower on tok, sort, slices' logs and
+`logs_r` and maps, within noise elsewhere; group and logs ran 9 to 17%
+faster in two sessions, unexplained (their rounds are differences of 3
+to 4 s runs whose input takes up to 1.9 s to make). The contended case
+is 11b's.
+
+**The `Map` claim, restated.** The bytes stage's step 3 "0.69×" was
+against Rust's default SipHash. Here bench/native/maps runs at 0.66× of
+that twin and **0.99× of the same twin with FxHash**
+(bench/native/maps/rust/fx.rs): Ren's `Map` matches Rust written for
+speed, it doesn't beat it. On the research's `Map<Str, Int>` workload
+(map, above) Ren is 1.25× Rust's std and 1.70× FxHash, with keys
+boxed; step 4 unboxes them.
 
 ### Where this stage may differ
 

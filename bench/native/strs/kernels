@@ -1,0 +1,18 @@
+tok|bench.run_tok(1_000_000, ROUNDS)|10|tok|1000000
+sort|bench.run_sort(1_000_000, ROUNDS)|5|sort|1000000
+map|bench.run_map(1_000_000, ROUNDS)|5|map|1000000
+group|bench.run_group(1_000_000, ROUNDS)|5|group|1000000
+logs|bench.run_logs(1_000_000, ROUNDS)|5|logs|1000000
+json_append_5k|bench.run_json(5_000, ROUNDS, false)|5|out_json|5000
+json_plus_5k|bench.run_json(5_000, ROUNDS, true)|5||
+logfmt_append_5k|bench.run_logfmt(5_000, ROUNDS, false)|5|out_logs|5000
+logfmt_plus_5k|bench.run_logfmt(5_000, ROUNDS, true)|5||
+json_append_50k|bench.run_json(50_000, ROUNDS, false)|1|out_json|50000
+json_plus_50k|bench.run_json(50_000, ROUNDS, true)|1||
+logfmt_append_50k|bench.run_logfmt(50_000, ROUNDS, false)|1|out_logs|50000
+logfmt_plus_50k|bench.run_logfmt(50_000, ROUNDS, true)|1||
+json_1m||5|out_json|1000000
+logfmt_1m||5|out_logs|1000000
+utf8_ascii|bench.run_utf8("ascii", 1_048_576, ROUNDS)|4000|utf8_ascii|1048576
+utf8_cjk|bench.run_utf8("cjk", 1_048_576, ROUNDS)|4000|utf8_cjk|1048576
+utf8_mixed|bench.run_utf8("mixed", 1_048_576, ROUNDS)|4000|utf8_mixed|1048576
