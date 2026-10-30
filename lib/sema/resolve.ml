@@ -191,7 +191,18 @@ type env = {
       (** the module's own wirings, by name, flattened ([wiring_shape]) *)
   wiring_defs : (string, Parsed.wiring_def) Hashtbl.t;
       (** and as they're written *)
+  services : (string, service) Hashtbl.t;
+      (** the module's own services, by name ([service_items]) *)
+  installs : (Loc.t, unit) Hashtbl.t;
+      (** where a `with` or a wiring installs a service, `Kv(cfg)`, by where
+          that's written: the only place a service's name is called
+          ([installed]) *)
 }
+
+(* A service of the module (language.md §4), as its members see it: its
+   members' names, and how many parameters it has, which each member
+   takes first ([service_items]). *)
+and service = { members : string list; shared : int }
 
 (* Where a type is written, which says what rows it can name, `..e` and
    `..d` (ast.ml): a function's signature names them, and its body can
@@ -256,6 +267,10 @@ and fn_state = {
       (** the last node this pass numbered in the function, for what a wiring
           is flattened into ([use_wiring]): below -1, apart from the parser's
           and Test_items' *)
+  mutable member_of : (string * service * binder list) option;
+      (** the service the function is a member of, if it's one, and the
+          parameters it shares, the function's first, which a call of
+          another member passes on ([service_items]) *)
 }
 
 let report env ?help ?notes ?labels loc msg =
@@ -2039,6 +2054,88 @@ let use_wiring env sc ~go (it : Parsed.with_item) (r : wiring_ref) =
           bound,
         items )
 
+(* ---- services (language.md §4), where they're used ----
+
+   A service is a `dep`, a handler of the service's name and a function
+   for each member ([service_items], below). Where it's used, three
+   things are its own: a `with` or a wiring installs it by calling the
+   handler, `Kv(cfg)`, which reads as a constructor and is the only place
+   its name is called; a member calls another directly, `call(req)`,
+   which passes on the parameters they share; and a member's
+   `Kv.get(k)`, which would reach the `Kv` installed outside, is
+   refused. *)
+
+(* A node for an expression this pass makes in the function (see
+   [fn_state.made]). *)
+let fresh sc =
+  sc.fn.made <- sc.fn.made - 1;
+  sc.fn.made
+
+let is_capital s = s <> "" && Char.uppercase_ascii s.[0] = s.[0] && s.[0] <> '_'
+
+(* Whether [x], where it's read, is another member of the service the
+   function is a member of: not a local, which hides it. *)
+let member_named sc x =
+  (not (Env.mem x sc.locals))
+  &&
+  match sc.fn.member_of with
+  | Some (_, s, _) -> List.mem x s.members
+  | None -> false
+
+(* The handler the service [name] is made with, if [name], in scope bare,
+   is a service's: the module's own, unless a constructor of its own
+   sums has that name, which it then is, or one imported by name, whose
+   module has a public handler of its name, which only a service makes
+   (a handler's name is otherwise lowercase). *)
+let service_named env name =
+  match Hashtbl.find_opt env.types name with
+  | Some ((p : Path.t), _) when p.home = env.home ->
+      let ctor =
+        Hashtbl.fold
+          (fun _ cs found ->
+            found || List.exists (fun (c : Iface.ctor) -> c.cname = name) cs)
+          env.own_sums false
+      in
+      if Hashtbl.mem env.services name && not ctor then Some p else None
+  | Some (p, _) -> (
+      match List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces with
+      | Some iface when Iface.find_value iface name <> None ->
+          Some (Path.make p.home name)
+      | _ -> None)
+  | None -> None
+
+(* The link [e] of a `with`'s item or a wiring's is where a service may
+   be installed: `Kv(cfg)` or `kv.Kv(cfg)`, which [expr] makes a call of
+   its handler there, and refuses anywhere else. *)
+let installed env (e : Parsed.expr) =
+  match e.kind with
+  | Con ({ qual = None; _ }, _) -> Hashtbl.replace env.installs e.loc ()
+  | Call ({ kind = Field ({ kind = Var (Bare _); _ }, _); loc; _ }, _) ->
+      Hashtbl.replace env.installs loc ()
+  | _ -> ()
+
+(* The service [written] used where it isn't installed: [called], as
+   `Kv(cfg)`, or as a value, `Kv`. *)
+let not_installed env loc ~written ~called =
+  if called then
+    report env loc
+      ~notes:
+        [
+          "a `with` item is never a value, so `" ^ written
+          ^ "(...)` there can't be read as a constructor";
+        ]
+      ~help:(sprintf "install it where it's used: `with %s(...) in ...`" written)
+      (sprintf "`%s(...)` installs a service, so it's written in a `with` or a \
+                wiring"
+         written)
+  else
+    report env loc
+      ~help:
+        (sprintf "install it, `with %s(...) in ...`, and call its operations: \
+                  `%s.op(...)`"
+           written written)
+      "a service isn't a value"
+
 let rec expr env sc (e : Parsed.expr) : Resolved.expr =
   let e = as_item env sc e in
   let go = expr env sc in
@@ -2100,6 +2197,13 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               ~help:(sprintf "name a tag, and its payload: `%s.fail(Down)`" x)
               (sprintf "`%s.fail(...)` takes the error to fail with" x);
             Unit)
+    | Var (Bare x) when member_named sc x ->
+        let sname, _, _ = Option.get sc.fn.member_of in
+        report env e.loc
+          ~help:(sprintf "call it in a block: `fn(...) => %s(...)`" x)
+          (sprintf "`%s` is a function of `%s`, so it's called, not passed" x
+             sname);
+        Var (Global (Path.make env.home (sname ^ "$" ^ x)))
     | Var (Bare x) ->
         let v = lookup env sc e.loc ~what:"variable" x in
         (match v with Local b when is_tags sc b -> tags_used env e.loc x | _ -> ());
@@ -2113,6 +2217,25 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           (n, { kind = Var (Local (Env.find x sc.locals)); loc = a.loc; node = a.node })
     | Named (n, a) -> Named (n, go a)
     | Tag_set es -> Tag_set (errors env ~params:sc.tparams es)
+    | Var (Item (t, f))
+      when t.tmod = None
+           &&
+           match sc.fn.member_of with
+           | Some (sname, _, _) -> sname = t.tid.name
+           | None -> false ->
+        (* `Kv.get` would go to the `Kv` installed outside, and a member
+           shares its service's `uses`, which never names the service *)
+        report env e.loc
+          ~notes:
+            [
+              sprintf
+                "`%s.%s` calls the `%s` installed where the call is, which \
+                 isn't this one"
+                t.tid.name f.name t.tid.name;
+            ]
+          ~help:(sprintf "call it directly: `%s(...)`" f.name)
+          (sprintf "a function of `%s` calls another directly" t.tid.name);
+        Var (item env sc t f)
     | Var (Item (t, f)) -> Var (item env sc t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
     | Binop (op, a, b, n) ->
@@ -2126,6 +2249,18 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         (* an operation of the implementation under this handler *)
         let op = Option.get (next_callee env sc f) in
         Call ({ kind = Var op; loc = f.loc; node = f.node }, List.map go args)
+    | Call (({ kind = Var (Bare x); _ } as f), args) when member_named sc x ->
+        (* another member of the service, given the parameters they share
+           first (see [service_items]) *)
+        let sname, _, shared = Option.get sc.fn.member_of in
+        let p = Path.make env.home (sname ^ "$" ^ x) in
+        sc.fn.calls <- p :: sc.fn.calls;
+        let passed b : Resolved.expr =
+          { kind = Var (Local b); loc = f.loc; node = fresh sc }
+        in
+        Call
+          ( { kind = Var (Global p); loc = f.loc; node = f.node },
+            List.map passed shared @ List.map go args )
     | Call (f, args) ->
         let f =
           let f = as_item env sc f in
@@ -2174,6 +2309,28 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Block (stmts, last) ->
         let stmts, sc = block_stmts env sc stmts in
         Block (stmts, expr env sc last)
+    | Con ({ qual = None; name }, args) when service_named env name.name <> None
+      -> (
+        (* `Kv(cfg)`: a service, made as a handler is, where a `with` or a
+           wiring installs it ([installed]) *)
+        let p = Option.get (service_named env name.name) in
+        match Hashtbl.find_opt env.installs e.loc with
+        | Some () ->
+            if p.home = env.home then
+              check_private env name.loc ~key:name.name name.name;
+            sc.fn.calls <- p :: sc.fn.calls;
+            let arg (label, a) : Resolved.expr =
+              let a = go a in
+              match label with
+              | None -> a
+              | Some n -> { kind = Named (n, a); loc = a.loc; node = fresh sc }
+            in
+            Call
+              ( { kind = Var (Global p); loc = name.loc; node = fresh sc },
+                List.map arg args )
+        | None ->
+            not_installed env e.loc ~written:name.name ~called:(e.loc <> name.loc);
+            Unit)
     | Con (c, args) ->
         let c = ctor_ref env sc c in
         Con (c, List.map (fun (l, a) -> (l, go a)) args)
@@ -2201,6 +2358,29 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let base = go base in
         Update
           { target; base; fields = List.map (fun (f, v) -> (f, go v)) fields }
+    | Field ({ kind = Var (Bare m); _ }, f)
+      when Env.mem m env.modules && is_capital f.name -> (
+        (* `kv.Kv(cfg)`, which the parser makes a call of `kv.Kv`: another
+           module's service, installed only where a `with` or a wiring
+           does ([installed]) *)
+        let ((_, iface) as imp) = Env.find m env.modules in
+        let written = m ^ "." ^ f.name in
+        match Iface.find_value iface f.name with
+        | Some _ when Hashtbl.mem env.installs e.loc ->
+            Var (qualified env sc imp f)
+        | Some _ ->
+            not_installed env e.loc ~written ~called:true;
+            Var (qualified env sc imp f)
+        | None ->
+            Hashtbl.replace env.used m ();
+            report env e.loc
+              ~help:
+                (sprintf
+                   "write one of its constructors after it, like `%s.Name`, or \
+                    a record, `%s { ... }`"
+                   written written)
+              (sprintf "`%s` is a type, so it can't be used as a value" written);
+            Var (Global (Path.make iface.home f.name)))
     | Field ({ kind = Var (Bare m); _ }, f) when Env.mem m env.modules ->
         Var (qualified env sc (Env.find m env.modules) f)
     | Field (r, f) -> Field (go r, f)
@@ -2346,7 +2526,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           {
             chain =
               List.map
-                (fun (l : Parsed.with_link) -> { l with link = go l.link })
+                (fun (l : Parsed.with_link) ->
+                  installed env l.link;
+                  { l with link = go l.link })
                 i.chain;
             under = uses env ~params:sc.tparams i.under;
             alias =
@@ -2873,7 +3055,7 @@ let no_opaque_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Opaque { rep = t; _ }; _ } as td) ->
           Hashtbl.replace reps td.type_name.name t
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
   (* the opaque type of this module that [t] is, if it's one *)
   let opaque (t : Resolved.ty) =
@@ -2908,7 +3090,7 @@ let no_opaque_cycles env (items : Resolved.program) =
             | None -> ()
           in
           follow [ start.name ] t
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 (* A named error set can include others, but never itself, by way of
@@ -2921,7 +3103,7 @@ let no_set_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Errors es; _ } as td) ->
           Hashtbl.replace sets td.type_name.name es
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
   (* the module's own sets [n] includes directly, in the order written *)
   let includes n =
@@ -2964,7 +3146,7 @@ let no_set_cycles env (items : Resolved.program) =
                 (sprintf "`%s` includes itself: %s" n
                    (String.concat " → " (n :: way)))
           | None -> ())
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 (* Whether the written type [t] mentions the type parameter [name]. *)
@@ -3178,6 +3360,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
           typed = [];
           test = f.test;
           made = lowest_node f.body;
+          member_of = None;
         };
       next =
         (match f.body.kind with
@@ -3249,6 +3432,22 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
         { p with pty = Some owner_ty } :: rest
     | _ -> ps
   in
+  (* a service's member, `Kv$get`, a name only [service_items] gives,
+     shares the service's parameters, its first *)
+  (match String.index_opt f.name.name '$' with
+  | Some i when owner = None && is_capital f.name.name -> (
+      let sname = String.sub f.name.name 0 i in
+      match Hashtbl.find_opt env.services sname with
+      | Some s ->
+          sc.fn.member_of <-
+            Some
+              ( sname,
+                s,
+                List.filteri
+                  (fun j _ -> j < s.shared)
+                  (List.map (fun (p : Resolved.param) -> p.pname) ps) )
+      | None -> ())
+  | _ -> ());
   let ret = ty_opt env ~params:sc.tparams ~rows f.ret in
   let errs = Option.map (errors env ~params:sc.tparams ~rows) f.errors in
   let deps = Option.map (uses_of env ~params:sc.tparams ~rows) f.uses in
@@ -3985,7 +4184,7 @@ let no_kept_blocks env (items : Resolved.program) =
           List.iter
             (fun (o : Resolved.op) -> fn ~value:(o.op_kind = Op_value) o.op_fn)
             td.type_ops
-      | Import _ | Testing _ | Wiring _ -> ())
+      | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 let no_leaks env ~private_ ~groups (items : Resolved.program) =
@@ -4118,7 +4317,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
               no_private_errors env ~private_ es
                 ~set:(sprintf "`pub type %s` includes `%s`" t)
                 ~tag:(sprintf "`pub type %s`'s error `%s` mentions `%s`" t))
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 (* What isn't used is reported once: the whole import, or one of the types
@@ -4165,7 +4364,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
     List.filter_map
       (function
         | Type (td : Resolved.type_def) -> Some td
-        | Fn _ | Import _ | Testing _ | Wiring _ -> None)
+        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       items
   in
   let method_ (td : Resolved.type_def) =
@@ -4200,9 +4399,21 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
    ([wiring_fns]), and the wiring a function of that name checks. *)
 let check_fn name = name ^ "$wiring"
 
+(* The service the function [f] is a member of, `Kv` for `Kv$get`: a
+   name only [service_items] gives. *)
+let service_member (f : Path.t) =
+  match (f.member, String.index_opt f.name '$') with
+  | None, Some i when is_capital f.name -> Some (String.sub f.name 0 i)
+  | _ -> None
+
+(* Whether the function [f] is the handler a service is made with, named
+   as the service is, which no other function can be. *)
+let service_handler (f : Path.t) =
+  f.member = None && is_capital f.name && not (String.contains f.name '$')
+
 let checked_wiring (f : Path.t) =
   let suffix = "$wiring" in
-  if f.member = None && String.ends_with ~suffix f.name then
+  if f.member = None && (not (is_capital f.name)) && String.ends_with ~suffix f.name then
     Some (String.sub f.name 0 (String.length f.name - String.length suffix))
   else None
 
@@ -4274,6 +4485,7 @@ let wiring_fns env (defs : Parsed.wiring_def list) =
         (* the link [body], as a function of what it reads, or a
            parameter passed on *)
         let link_fn (body : Parsed.expr) : Iface.link =
+          installed env body;
           match body.kind with
           | Var (Bare p) when index p <> None -> Passed (Option.get (index p))
           | _ ->
@@ -4472,6 +4684,232 @@ let wiring_fns env (defs : Parsed.wiring_def list) =
     defs;
   List.rev !made
 
+(* ---- services (language.md §4), declared ----
+
+   A service is exactly a `dep` and a handler, and its members are
+   functions the handler's arms call (compiler.md, "Services stage",
+   "Step 2b"):
+
+     pub service Kv(c: Cfg) uses Http ! E =
+       pub fn get(k: Key) -> Str ! KvError = ...
+       fn call(req: Request) -> Response ! KvError = ...
+
+   is
+
+     pub dep Kv =
+       get: fn(Key) -> Str ! KvError
+     pub handler Kv(c: Cfg) for Kv uses Http ! E =
+       get(k) => try Kv$get(c, k)
+     fn Kv$get(c: Cfg, k: Key) -> Str ! KvError uses Http = ...
+     fn Kv$call(c: Cfg, req: Request) -> Response ! KvError uses Http = ...
+
+   The handler is named as the service is, and each member after it and a
+   `$`: names no one can write, so neither meets a name of the program's
+   (nor `--release`'s, which names an arm it lifts `handler.op`), and a
+   message about a member names it as `Kv.get` (Ast.fn_name). Each member takes
+   the service's parameters first, and its `uses` is the service's, a
+   bound each keeps to, or inferred for a private service, so what the
+   members need is required where the service is installed (deps.md).
+   A member is a function, not an arm, so members call each other in any
+   order, recursively too ([expr] passes the shared parameters on); that
+   is also why a service keeps no state yet: a function can't reach a
+   handler's `var`s ("Where this stage may differ"). A `pub fn`'s result
+   and errors are as written, `()` and none if left out, as a public
+   function's are, since they're the dependency's operation. *)
+let service_items env (s : Parsed.service_def) : Parsed.program =
+  let sname = s.sname.name in
+  let shared = List.map (fun (p : Parsed.param) -> p.pname.name) s.sparams in
+  let writes (u : Parsed.uses) =
+    String.concat ", " (List.map (fun (d : tyname dep_ref) -> show_tyname d.dep) u.deps)
+  in
+  no_duplicates env "functions in a service"
+    (List.map (fun (m : Parsed.fn_def) -> m.name) s.members);
+  List.iter
+    (fun (m : Parsed.fn_def) ->
+      (match m.uses with
+      | Some u ->
+          let all =
+            match s.suses with Some su -> writes su ^ ", " ^ writes u | None -> writes u
+          in
+          report env u.uloc
+            ~notes:
+              [
+                sprintf
+                  "what its functions need is required where `%s` is \
+                   installed, so it's written once, on `%s`"
+                  sname sname;
+              ]
+            ~help:
+              (sprintf "move it to the service's: `service %s(...) uses %s`"
+                 sname all)
+            (sprintf "`%s` shares `%s`'s `uses`, so it doesn't write its own"
+               m.name.name sname)
+      | None -> ());
+      if m.pub then (
+        if m.tparams <> [] then
+          report env m.name.loc
+            ~help:"make it a function of its own, outside the service"
+            (sprintf
+               "`%s` is an operation of `%s`, so it can't take type parameters"
+               m.name.name sname);
+        List.iter
+          (fun (p : Parsed.param) ->
+            if p.pty = None then
+              report env p.pname.loc
+                ~help:(sprintf "write its type: `%s: T`" p.pname.name)
+                (sprintf
+                   "`%s` is an operation of `%s`, so its parameters have \
+                    types"
+                   m.name.name sname)
+            else if p.pmode = Inout then
+              report env p.pname.loc
+                ~help:"take it, and return what it becomes"
+                (sprintf
+                   "`%s` is an operation of `%s`, so its parameter can't be \
+                    `inout`"
+                   m.name.name sname))
+          m.params))
+    s.members;
+  let ops = List.filter (fun (m : Parsed.fn_def) -> m.pub) s.members in
+  if ops = [] then
+    report env s.sname.loc
+      ~help:"mark the functions its callers call `pub fn`"
+      (sprintf "`%s` has no operations: a service's operations are its `pub \
+                fn`s"
+         sname);
+  Hashtbl.replace env.services sname
+    {
+      members = List.map (fun (m : Parsed.fn_def) -> m.name.name) s.members;
+      shared = List.length s.sparams;
+    };
+  (* what this makes is numbered below the parser's, in the handler *)
+  let fresh = ref 0 in
+  let mk loc kind : Parsed.expr =
+    decr fresh;
+    { kind; loc; node = !fresh }
+  in
+  let unit loc : Parsed.ty =
+    TyName ({ tmod = None; tid = { name = "Unit"; loc } }, [])
+  in
+  (* an operation's result and errors, as a `pub fn`'s are *)
+  let ret (m : Parsed.fn_def) =
+    match m.ret with Some t -> t | None -> unit m.name.loc
+  in
+  let errs (m : Parsed.fn_def) : Parsed.errors =
+    match m.errors with
+    | Some es -> es
+    | None -> { errs = []; etail = None; eloc = m.name.loc }
+  in
+  let dep : Parsed.type_def =
+    {
+      type_pub = s.spub;
+      type_name = s.sname;
+      type_params = [];
+      type_body =
+        Dep
+          (List.map
+             (fun (m : Parsed.fn_def) : Parsed.field ->
+               {
+                 field_name = m.name;
+                 field_ty =
+                   TyFn
+                     ( List.filter_map
+                         (fun (p : Parsed.param) -> p.pty)
+                         m.params,
+                       Some (ret m),
+                       m.errors,
+                       None,
+                       m.loc );
+                 field_default = None;
+                 (* a parameter's default is the operation's, as a
+                    dependency's operation writes one *)
+                 op_defaults =
+                   List.concat
+                     (List.mapi
+                        (fun i (p : Parsed.param) ->
+                          match p.pdefault with
+                          | Some d -> [ (i, p.pname.name, d) ]
+                          | None -> [])
+                        m.params);
+               })
+             ops);
+      type_ops = [];
+    }
+  in
+  let arm (m : Parsed.fn_def) : Parsed.handler_arm =
+    let at = m.name.loc in
+    let var n = mk at (Var (Bare n)) in
+    let call =
+      mk at
+        (Call
+           ( var (sname ^ "$" ^ m.name.name),
+             List.map var shared
+             @ List.map (fun (p : Parsed.param) -> var p.pname.name) m.params ))
+    in
+    {
+      arm_op = Bare m.name.name;
+      arm_name = m.name;
+      arm_impl =
+        mk at
+          (Lambda
+             ( List.map
+                 (fun (p : Parsed.param) -> { p with pty = None; pdefault = None })
+                 m.params,
+               if m.errors = None then call else mk at (Try call) ));
+    }
+  in
+  let handler : Parsed.fn_def =
+    {
+      pub = s.spub;
+      name = s.sname;
+      tparams = [];
+      tneeds = [];
+      params = s.sparams;
+      ret = None;
+      errors = None;
+      uses = None;
+      body =
+        mk s.sname.loc
+          (Handler
+             {
+               deps = [ { dep = { tmod = None; tid = s.sname }; dargs = [] } ];
+               over = false;
+               any = false;
+               fails = s.serrors;
+               needs = s.suses;
+               state = [];
+               arms = List.map arm ops;
+             });
+      owner = None;
+      overload = 0;
+      test = false;
+      loc = s.sloc;
+    }
+  in
+  let member (m : Parsed.fn_def) : Parsed.item =
+    Fn
+      {
+        m with
+        pub = false;
+        name = { name = sname ^ "$" ^ m.name.name; loc = m.name.loc };
+        params =
+          List.map (fun (p : Parsed.param) -> { p with pdefault = None }) s.sparams
+          @ m.params;
+        ret = (if m.pub then Some (ret m) else m.ret);
+        errors = (if m.pub then Some (errs m) else m.errors);
+        (* a public service's members are checked against its `uses`, none
+           if it writes none, as a public handler's arms are, so what one
+           needs that isn't there is reported where it's used
+           (infer_declared.ml) *)
+        uses =
+          (match s.suses with
+          | Some u -> Some u
+          | None when s.spub -> Some { deps = []; dtail = None; uloc = s.sname.loc }
+          | None -> None);
+      }
+  in
+  (Type dep :: Fn handler :: List.map member s.members)
+
 let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     (prog : Parsed.program) =
   (* tests are functions by now (test_items.ml); any left are ignored *)
@@ -4483,7 +4921,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       (function
         | Import (i : import) ->
             Some (i, List.find (fun (m : Iface.t) -> m.home = i.path) imports)
-        | Fn _ | Type _ | Testing _ | Wiring _ -> None)
+        | Fn _ | Type _ | Testing _ | Wiring _ | Service _ -> None)
       prog
   in
   let env =
@@ -4514,7 +4952,16 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       used_types = Hashtbl.create 8;
       wirings = Hashtbl.create 8;
       wiring_defs = Hashtbl.create 8;
+      services = Hashtbl.create 8;
+      installs = Hashtbl.create 8;
     }
+  in
+  (* each service, a `dep`, a handler and its members' functions from
+     here on, where it's written (see [service_items]) *)
+  let prog =
+    List.concat_map
+      (function Service s -> service_items env s | item -> [ item ])
+      prog
   in
   (* what's in scope bare: the prelude, which every module imports
      without asking, and the module's own names. Another module's are
@@ -4614,7 +5061,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                     (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
                     td.type_ops,
                 fields )
-      | Fn _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     prog;
   let first_local = Hashtbl.create 16 in
   List.iter
@@ -4668,7 +5115,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
               Hashtbl.replace first_local name.name name.loc;
               Hashtbl.replace env.types name.name
                 (Path.make home name.name, List.length td.type_params))
-      | Fn _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     prog;
   (* the sum types in scope bare, and their by-name constructors, which a
      bare `Name { ... }` can mean ([braces_name]) *)
@@ -4770,7 +5217,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     List.filter_map
       (function
         | Fn (f : Parsed.fn_def) -> Some f
-        | Type _ | Import _ | Testing _ | Wiring _ -> None)
+        | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       prog
   in
   List.iter
@@ -4830,7 +5277,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                let f', calls, dots = fn_def env f in
                (Fn f', [ (Ast.fn_path home f', calls, dots) ])
            | Import i -> (Import i, [])
-           | Testing _ | Wiring _ -> (* left out above *) assert false)
+           | Testing _ | Wiring _ | Service _ -> (* left out above *) assert false)
          prog)
   in
   let private_ = Hashtbl.create 8 in
@@ -4838,7 +5285,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     (function
       | Type (td : Resolved.type_def) when not td.type_pub ->
           Hashtbl.replace private_ td.type_name.name td.type_name.loc
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
   no_leaks env ~private_ ~groups items;
   no_opaque_cycles env items;
@@ -4857,7 +5304,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                 when intrinsic.body = Builtin ->
                   Iface.join intrinsic d
               | _ -> d)
-        | Fn _ | Import _ | Testing _ | Wiring _ -> None)
+        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       items
   in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one
@@ -4922,10 +5369,11 @@ let written (r : t) ~(other : Path.t -> string option) =
   List.iter
     (function
       | Fn (f : Resolved.fn_def) -> Hashtbl.replace bodies f.name.name f.body
-      | Type _ | Import _ | Testing _ | Wiring _ -> ())
+      | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     r.prog;
   let is_link (p : Path.t) =
     p.member = None && String.contains p.name '$' && checked_wiring p = None
+    && service_member p = None
   in
   let rec text name =
     match Hashtbl.find_opt bodies name with

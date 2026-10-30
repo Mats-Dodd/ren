@@ -1054,7 +1054,7 @@ let types ?(lint = false) ?load ~file src =
                     td.type_name.name
                     (String.concat " | " errors);
                 ]
-            | Type _ | Import _ | Testing _ | Wiring _ -> [])
+            | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
           resolved.prog ))
     modules
 

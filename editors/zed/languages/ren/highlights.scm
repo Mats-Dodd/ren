@@ -66,6 +66,7 @@
   "has"
   "wiring"
   "provides"
+  "service"
 ] @keyword
 
 (visibility) @keyword
@@ -92,6 +93,8 @@
 (dependency (type_identifier) @type.dependency)
 (dependency module: (identifier) @namespace)
 (dependency_definition name: (type_identifier) @type.dependency)
+; a service is a dependency, declared with its one implementation
+(service_definition name: (type_identifier) @type.dependency)
 ; a named row stands for whatever a closure or an implementation uses, or
 ; fails with
 (uses_clause row: (named_row) @type.dependency)
@@ -132,6 +135,8 @@
 (import (type_identifier) @type)
 
 ; ---- types and constructors ----
+; another module's service installed, `kv.Kv(cfg)`
+(constructor_ref module: (identifier) @namespace)
 
 (type_name name: (type_identifier) @type)
 (constructor_ref name: (type_identifier) @constructor)

@@ -183,7 +183,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
           | Errors es -> errors_ es
           | Dep_alias _ | Builtin -> ());
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
-      | Import _ | Testing _ | Wiring _ -> ())
+      | Import _ | Testing _ | Wiring _ | Service _ -> ())
     prog
 
 (* The error sets and `Result`s written in the module make sense: an
@@ -480,7 +480,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
                 if o.op_kind = Op_value then Some (Ast.fn_path r.home o.op_fn)
                 else None)
               td.type_ops
-        | Fn _ | Import _ | Testing _ | Wiring _ -> [])
+        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
       r.prog
   in
   (* a function that makes an implementation of [p] *)
@@ -1232,7 +1232,7 @@ let check_keeps_rules env so_far (r : Resolve.t) =
     (function
       | Type ({ type_pub = true; type_body = Fields _ | Ctors _; _ } as td) ->
           check td
-      | Type _ | Fn _ | Import _ | Testing _ | Wiring _ -> ())
+      | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     r.prog
 
 (* ---- the client view ---- *)
@@ -1250,7 +1250,7 @@ let client_view env (r : Resolve.t) =
       (function
         | Type (td : type_def) when td.type_pub ->
             Some (Path.make r.home td.type_name.name)
-        | Type _ | Fn _ | Import _ | Testing _ | Wiring _ -> None)
+        | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       r.prog
   in
   List.map
@@ -2140,7 +2140,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                 if o.op_kind = Op_value then Some (Ast.fn_path home o.op_fn)
                 else None)
               td.type_ops
-        | Fn _ | Import _ | Testing _ | Wiring _ -> [])
+        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
       r.prog
   in
   let is_value (f : fn_def) = List.mem (Ast.fn_path home f) values in
@@ -2155,7 +2155,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                 report env
                   (Infer_msg.key_loops o.op_fn.name.loc ~owner:td.type_name.name))
             td.type_ops
-      | Fn _ | Import _ | Testing _ | Wiring _ -> ())
+      | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     r.prog;
   let so_far =
     { schemes = Hashtbl.create 16; tables = Hashtbl.create 16; withheld = [] }

@@ -9979,6 +9979,7 @@ where it's built; none is argued again here.
 | What's decided 10, decision 2's row narrowed, built in excl.ml with `release` | `release`, deadlocks and `Proc.run(kill:)` (step 4) |
 | What's decided 11, defaults: a literal, a variant with no fields, or a variant whose fields all have defaults, written bare (`by: By = Key` is `Key(n: 16)`) | The grammar; "Where this stage may differ" (lands in step 4) |
 | 2026-10-29: decision 20 moved `actors` and `striped` to std over a runtime primitive; What's decided 5 to 8 rewritten; superseded entries give way | this section, re-specified (the progress log's second step 0 line); superseded rows struck below |
+| 2026-10-29: `service`, a dependency and its one implementation written once (language.md §4), step 2b; a signature's `uses` a bound; private functions don't write `uses` | Step 2b: service |
 | Sequencing: after the data stage | the data stage is merged (83924d5) before step 0 |
 | By-name arguments: defaults only, a variant allowed as one; std's defaults `max:` 10_000, `mailbox:` 10_000, `cap:` 16, `Key`'s `n` 16; no default `merge:` | The grammar; Stripes; Actors; Pull arguments (`cap`) |
 | `striped(h, by: Key(n: 16) \| Worker, merge:)`, one function (~~`striped(h, n: Int = 16, by: Key)`~~, superseded) | Stripes (step 6) |
@@ -10563,6 +10564,173 @@ bench/services/wiring.ren.
 Natively a wiring is nothing new: its link functions are functions
 that return descriptions, which 10d's dispatch already compiles, and
 the `with` is a `with`. bench/services/wiring checks it.
+
+### Step 2b: service
+
+Decided after the draft (2026-10-29; language.md §4, "A service: a dep
+and its implementation, written once"): a dependency whose interface
+comes from its one implementation is declared with it. It lands as step
+2b, right after wirings and, in the order the steps were built, beside
+step 3 (built in parallel, from 84ac5d3; neither depends on the other),
+through the whole pipeline, natively too.
+
+```ren
+pub service Kv(c: ClientCfg) uses Http, Clock, Random =
+  pub fn get(k: Key) -> Option<Entry> ! ClientError | Conflict | StoreFull = ...
+  pub fn put(k: Key, v: Bytes, cond: Cond) -> Version ! KvError = ...
+  fn call(req: Request, idempotent: Bool) -> Response ! KvError = ...   // reads c.token
+```
+
+**The grammar** (parser.ml's notation):
+
+```
+item     := ... | ["pub"] service
+service  := "service" UIDENT "(" param, ... ")" [uses] [errors] "="
+            INDENT member { NEWLINE member } DEDENT
+                                              (`service` is a word only
+                                                at an item's start, before a
+                                                capitalized name; `uses` and
+                                                `!` in either order, as a
+                                                wiring's)
+member   := ["pub"] fn_def                    (its operations are its
+                                                `pub fn`s)
+primary  := ... | IDENT "." UIDENT "(" ...    (`kv.Kv(cfg)`, another
+                                                module's service installed:
+                                                a call of `kv.Kv`, which
+                                                was a parse error)
+```
+
+The parameters are written even when there are none, `service
+Counter() =`, as a handler's are, and it's installed with them,
+`Counter()`. A `var`, a `let` or a `finally` among the members is the
+parser's "a service's members are functions" (below, and "Where this
+stage may differ"). The AST gains `Service of service_def` (`spub`,
+`sname`, `sparams`, `suses`, `serrors`, `members`, `sloc`), as parsed
+only, as a `Wiring` is.
+
+**It lowers to exactly a `dep` and a handler** (rule 1), in Resolve,
+first thing, where it's written in the module (`service_items`), so
+nothing after Resolve knows services exist:
+
+```ren
+pub dep Kv =
+  get: fn(Key) -> Option<Entry> ! ClientError | Conflict | StoreFull
+  put: fn(Key, Bytes, Cond) -> Version ! KvError
+pub handler Kv(c: ClientCfg) for Kv uses Http, Clock, Random =
+  get(k) => try Kv$get(c, k)
+  put(k, v, cond) => try Kv$put(c, k, v, cond)
+fn Kv$get(c: ClientCfg, k: Key) -> ... uses Http, Clock, Random = ...
+fn Kv$put(c: ClientCfg, ...) -> ... uses Http, Clock, Random = ...
+fn Kv$call(c: ClientCfg, req: Request, idempotent: Bool) -> ... uses Http, Clock, Random = ...
+```
+
+- **The operations are the `pub fn`s** (rule 1), each a field of the
+  `dep` with its signature as written: `->` left out is `()` and `!`
+  left out is none, as a public function's, since they're the
+  interface. An operation's parameters have types; it takes no type
+  parameters and no `inout`, as a dependency's operation doesn't.
+- **The handler is named as the service is,** `Kv`, which no
+  function can otherwise be (a function's name is lowercase), so a
+  `with` installs it by calling it, and another module finds it among a
+  `pub` service's values. Its `uses` is the service's (written for a
+  `pub` one, inferred for a private one, as a handler's), its `!` the
+  service's, its arms each a call of the member, `try` in front where
+  the operation can fail.
+- **Each member is a function,** named `Kv$get`: a name no one can
+  write, which `--release` doesn't make either (it names an arm it
+  lifts `handler.op`, which `Kv.get` would have met), shown as `Kv.get`
+  in a message (`Ast.fn_name`) and left out of `ren types`, as a
+  wiring's link functions are. It's private, taking the
+  service's parameters first, then its own (rule 2). Its `uses` is the
+  service's: written, a bound it keeps to (below), or none for a `pub`
+  service that writes none; inferred for a private service. A member
+  that writes its own `uses` is refused, with the help that moves it to
+  the service's.
+- **Members call each other directly** (rule 2): inside a member, a
+  call of another member's name that no local hides, `call(req, true)`,
+  is Resolve's call of `Kv$call(c, req, true)`, the shared parameters'
+  binders passed first, so a local of the same name as a parameter
+  can't take their place. Members call each other in any order, and
+  recursively, as functions do. A member used as a value, not called,
+  is refused, since it would need its shared arguments: "`get` is a
+  function of `Kv`, so it's called, not passed". A member in a chain,
+  `s |> pad(n)`, is `Kv$pad(fill, s, n)`: the step's `Piped` follows the
+  shared arguments, which infer_expr.ml's `infer_pipe` and `piped_why`
+  allow for. `Kv.get(k)` written inside a member would reach the `Kv`
+  installed where the call runs, not this one, and is refused.
+- **Callers see only `Kv`** (rule 3): the dependency, its operations,
+  `uses Kv`; never the parameters or the `uses`.
+
+**Installed like a handler** (rule 4). A `with`'s link and a wiring's
+link are where `Kv(cfg)`, which the parser reads as a constructor, and
+`kv.Kv(cfg)` are installs: Resolve marks where each is written
+(`installed`, `env.installs`), and makes it there a call of the handler
+(`service_named` finds it: the module's own service, unless a
+constructor of its own sums has that name, or a type imported by name
+whose module has a public value of that name). Anywhere else a service's
+name is refused (below). So a wiring item, `wiring live(c) provides Kv
+= Kv(c), mem_store()`, needs nothing new: its link function's body is
+the handler's call. `ren explain-wiring` shows it as written.
+
+**Replaced by any handler** (rule 5): it's a `dep`, so `test handler
+fake_kv() for Kv` installs in its place, in a test or anywhere.
+
+**A signature's `uses` is a bound** (decided with it): listing a
+dependency the body doesn't use is accepted, as it was; errors stay
+exact. A member's `uses`, the service's, is checked as one: what a
+member uses past it is reported at the member, at the call that brings
+it in, "`Kv.get` uses `Console`, which `Kv` doesn't declare", and not
+again at the handler, whose arms only call members
+(infer_declared.ml's `check_needs` skips a service's handler).
+**Private functions don't write `uses`:** the examples step 2 touched
+(checkout, server) lose theirs; ledger had none on a private function.
+
+**Natively** a service is a handler and functions, which 10d already
+compiles; bench/services/service builds one installed by a wiring and
+replaced by a handler, in build.t's `same`, `release` and `tcc_same`
+loops.
+
+**Its errors** (Resolve's, but the parser's first), each with help:
+
+```
+error: `get` shares `Kv`'s `uses`, so it doesn't write its own
+  = what its functions need is required where `Kv` is installed, so it's written once, on `Kv`
+  help: move it to the service's: `service Kv(...) uses Clock, Console`
+
+error: a service isn't a value
+  help: install it, `with Kv(...) in ...`, and call its operations: `Kv.op(...)`
+
+error: `Kv(...)` installs a service, so it's written in a `with` or a wiring
+  = a `with` item is never a value, so `Kv(...)` there can't be read as a constructor
+  help: install it where it's used: `with Kv(...) in ...`
+
+error: a function of `Kv` calls another directly
+  = `Kv.get` calls the `Kv` installed where the call is, which isn't this one
+  help: call it directly: `get(...)`
+
+error: `get` is a function of `Kv`, so it's called, not passed
+  help: call it in a block: `fn(...) => get(...)`
+
+error: `Kv.get` uses `Console`, which `Kv` doesn't declare            (Infer)
+  = a service's functions share its `uses`, which is what a `with` that installs `Kv` needs
+  help: add `Console` to `Kv`'s `uses`
+
+error: `get` is an operation of `Kv`, so its parameters have types
+  help: write its type: `k: T`
+
+error: `Kv` has no operations: a service's operations are its `pub fn`s
+  help: mark the functions its callers call `pub fn`
+
+error: a service's members are functions                             (parser)
+  = its members are functions, which share its parameters and its `uses`; state a service keeps comes later
+  help: keep state in a handler: `dep Kv = ...` and `handler kv(...) for Kv`
+```
+
+The tests are test/test_service.ml's (`[s2b accept]`, `[s2b reject]`),
+a file of their own since step 3 changes test_services.ml beside this
+step; tree-sitter's `service_definition` and the `kv.Kv(...)`
+constructor, the corpus (service.txt), the highlights and Zed's
+outline.
 
 ### Background work (step 3)
 
@@ -11613,6 +11781,14 @@ error: `tests/build.journal` is a version 2 journal, which this `ren` doesn't re
   explain-wiring`, `ren types`' line); tree-sitter, corpus, Zed;
   examples/ledger and examples/server, deps.md's and the README's
   `with_fake_net`.
+- **Step 2b:** parser.ml (`parse_service`, `kv.Kv(...)`), ast.ml
+  (`Service`), resolve.ml (`service_items`, `installed`,
+  `service_named`, a member's calls, the errors), infer_declared.ml and
+  infer_msg.ml (a member's `uses`, the handler not reported twice),
+  infer_expr.ml (a chain's `Piped` after a member's shared arguments);
+  tree-sitter, corpus, Zed; bench/services/service; examples/checkout
+  and examples/server without a private function's `uses`; language.md's
+  table, the README, deps.md.
 - **Step 3:** prelude.ml (`beside`, `background`, `Background`),
   intrinsic.ml, builtins.ml and sched.ml (`task_beside`,
   `task_background`; `beside`, `frame.bg`, `context` and `leave_with`'s
@@ -11682,6 +11858,20 @@ fit the code, each to revisit if a step finds it wrong:
 - **A wiring a test splits is `pub`.** language.md §5's test splits a
   private `core`, but a test sees what an importer sees (testing.md),
   so in a test the split wiring is `pub`, its `uses` written.
+- **A service keeps no state yet.** language.md §4's rule 4 lets one
+  keep state in `var`s; its members are functions, so they call each
+  other in any order and recursively, and a function can't reach a
+  handler's `var`s. A `var`, `let` or `finally` among the members is
+  refused, with the help to write a `dep` and a handler, until a
+  service's state is designed with its members (a record the handler
+  keeps, passed to them `inout`, is one way). Its `! E` is accepted, as
+  a handler's is, with nothing yet that can fail to start.
+- **A service is installed with its parentheses,** `Kv()` when it takes
+  nothing, as a handler is; `Kv` alone where a `with` lists it is the
+  same call.
+- **A member used as a value is refused,** rather than made a closure
+  over the shared arguments: §4 says members call each other, and a
+  block that calls one says the same.
 - **Two parser errors language.md §8 doesn't list:** a trailing block on
   a step that isn't the last ("decided after the draft" allows one only
   in the last link), and a field of a value as a step (Resolve's, since
@@ -11972,6 +12162,7 @@ Chosen in step 4, as built:
 | 2 | 7b18441 | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
 | 3 | d5f31e2 | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
 | 4 | this commit | `release` through the whole pipeline: the word in `parse_unary`, `Release` (ast.ml), Infer's check and Excl's (outside an operation), Lower's write-back, `arm_release`, the call in a `Finally` with `arm_retake` and the reads again (`Lower.released`), `Sched.let_go`, `retake`, `take_back`, natively nothing (bench/services/release in the loops); decision 2's row narrowed in excl.ml (`Lets_go`: `release` and `Async.until`, and block parameters' calls); the deadlock and cycle panics naming what each task holds (`waits_of`); `sim`'s fair choice in `released`; defaults that are variants written bare, a one-field variant's field default, an operation's parameters' defaults; `Kill`, `Proc.run(kill:)`, lib/eval/ren_spawn.c, the group killed, `SimProc.kills()`; examples/breaker and bench/services/breaker_held (bench/tasks.t); the journals' `Proc.run` lines; tree-sitter's `release_expression`, defaults, corpus (release.txt), highlights; test_services.ml's s4 all on; language.md's table, deps.md, testing.md | steps 5 to 9; the review's `release` programs (state read across it, `release` inside `until`'s condition) |
+| 2b | this commit | `service`, a dependency and its one implementation written once (language.md §4), through the whole pipeline: `parse_service` (`service` a word before a capitalized name) and `kv.Kv(...)` in the parser, `Service` (ast.ml); Resolve's `service_items`, exactly a `dep`, a handler named as the service is and a private function per member, `Kv.get`, taking the service's parameters first, its `uses` the service's; a member's calls of another, the shared parameters passed on, recursion and chains included (infer_expr.ml's `Piped` after them); `installed`, `service_named` and the three errors of the brief with help, and a member passed as a value, a member's `Kv.get(...)`, an operation's untyped parameter, no `pub fn`, state among members; a member's need past the service's `uses` reported once, at the member (infer_declared.ml, infer_msg.ml's `service_undeclared`); test/test_service.ml's s2b (a test installs a service and replaces it with a test handler; a service in a wiring; another module's; the `uses` bound pinned); natively, bench/services/service in the `same`, `release` and `tcc_same` loops; tree-sitter's `service_definition` and the module's constructor, the corpus (service.txt), the highlights and Zed's outline; examples/checkout and examples/server without a private function's `uses` (no example moved to `service`: checkout's `Orders` and `Discounts` are ports, the ledger's `Sql` keeps state and has `transaction()` over it, the server's `Line` keeps a `finally`); language.md's table, the README, deps.md. Built in parallel with step 3, from 84ac5d3 | a service's state (`var`s among the members: "Where this stage may differ"); steps 3 to 9 |
 
 ## The runtime model
 

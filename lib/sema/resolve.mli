@@ -75,6 +75,12 @@ val program :
    one: `live` for `live$wiring`. *)
 val checked_wiring : Path.t -> string option
 
+(* The service a function is a member of, `Kv` for `Kv.get`, and whether
+   a function is the handler a service is made with (resolve.ml,
+   "Services"). *)
+val service_member : Path.t -> string option
+val service_handler : Path.t -> bool
+
 (* How each link function of the module's wirings is written in the
    wiring that lists it, `pg_db(url)`, by its name. [other] says that of
    another module's. *)

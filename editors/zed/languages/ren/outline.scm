@@ -1,4 +1,5 @@
-; The outline: every function, type, dependency and handler, and under a
+; The outline: every function, type, dependency, handler, wiring and
+; service, with a service's functions under it, and under a
 ; type its members, under a dependency its operations and members, and
 ; under a handler its `finally`s and the operations it implements, with a
 ; `finally` in an arm under the arm; and every test, group and group run,
@@ -61,5 +62,10 @@
   (visibility)? @context
   "wiring" @context
   name: (identifier) @name) @item
+
+(service_definition
+  (visibility)? @context
+  "service" @context
+  name: (type_identifier) @name) @item
 
 (comment) @annotation

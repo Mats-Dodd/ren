@@ -16,7 +16,7 @@ pub wiring live(url: Str) provides Orders, Discounts uses Net ! DbDown =
 pub fn main() ! DbDown uses Console, Net, Os =
   try with live(Os.args()[0]) in serve()
 
-fn serve() uses Console, Orders, Discounts =
+fn serve() =
   print(attempt checkout.checkout(ann(), cart_of_20()))   // Ok(Receipt { id: OrderId(1), total: Money(1500) })
   print(attempt checkout.checkout(ann(), cart_of_20()))   // Ok(Receipt { id: OrderId(2), total: Money(2000) })
   print(attempt checkout.checkout(ann(), Cart { lines: [] }))   // Err(Empty)

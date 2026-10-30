@@ -58,7 +58,9 @@ handler frozen_clock(at: Time) for Clock =
   `service`: `pub service Kv(c: ClientCfg) uses Http, Clock = pub fn
   get(k: Key) -> ...`, whose operations are its `pub fn`s and whose
   needs are met where it's installed, `with Kv(cfg)`. It lowers to a
-  `dep` and a handler ([language.md §4](language.md#a-service-a-dep-and-its-implementation-written-once)).
+  `dep` and a handler ([language.md §4](language.md#a-service-a-dep-and-its-implementation-written-once);
+  built in the services stage's step 2b, compiler.md). It keeps no
+  state yet: one that does is a `dep` and a handler.
 - **A signature's `uses` is the most the function may use,** and its
   errors are exact. A private function's `uses` is inferred and isn't
   written.

@@ -23,7 +23,7 @@ fn validate(cart: Cart) -> Array<Line> ! Empty =
   if cart.lines.len() == 0 then fail Empty
   cart.lines
 
-fn place(o: Order) -> Receipt ! DbDown uses Orders =
+fn place(o: Order) -> Receipt ! DbDown =
   let id = try Orders.save(o)
   Receipt { id, total: o.total() }
 

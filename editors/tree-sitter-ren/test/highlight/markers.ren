@@ -395,3 +395,17 @@ pub wiring live(url: Str) provides Users uses Console =
 //                        ^ keyword
 //                                 ^ type.dependency
   pg_db(url), console_audit(), db_users()
+
+// a service: a dependency and its one implementation, written once
+pub service Kv(c: Cfg) uses Http =
+// <- keyword
+//  ^ keyword
+//          ^ type.dependency
+//                     ^ keyword
+  pub fn get(k: Key) -> Str = call(k)
+//       ^ function
+  fn call(k: Key) -> Str = c.base
+
+fn install() = with kv.Kv(cfg) in run()
+//                  ^ namespace
+//                     ^ constructor

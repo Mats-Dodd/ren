@@ -1814,6 +1814,15 @@ and op_method env cx (e : expr) ~onode (a : expr) ta b path =
    [x]'s type: as a field is, by [through_type], except that a method can
    be in a type of any kind, not only a record. [changed] is where the `&`
    is, if it's `&x.m(...)`. *)
+(* A chain's step's arguments: the [Piped] that stands for the subject is
+   its first, after the parameters a service's member shares, which
+   Resolve passes on before it (resolve.ml, "Services"). *)
+and is_piped (a : expr) = a.kind = Piped
+
+and after_piped args =
+  let rec drop = function a :: rest when is_piped a -> rest | _ :: rest -> drop rest | [] -> [] in
+  drop args
+
 (* A chain's link, [e], `subject |> step` (language.md §8): [step] is
    checked as the call it is, `f(subject, a)`, its first argument the
    [Piped] that stands for [subject]'s value, but [subject] is inferred
@@ -1844,7 +1853,8 @@ and infer_pipe env cx (e : expr) subject step =
         let chain () =
           let step (c : expr) =
             match c.kind with
-            | Call (f, _ :: rest) ->
+            | Call (f, args) when List.exists is_piped args ->
+                let rest = after_piped args in
                 let fails =
                   match Option.map repr (Hashtbl.find_opt cx.nodes f.node) with
                   | Some (TFun (_, _, errs, _)) ->
@@ -1876,7 +1886,8 @@ and infer_pipe env cx (e : expr) subject step =
   Hashtbl.remove inner_links subject.node;
   Hashtbl.remove chain_heads subject.node;
   match (call step).kind with
-  | Call (f, ({ kind = Piped; _ } as hole) :: _) ->
+  | Call (f, args) when List.exists is_piped args ->
+      let hole = List.find is_piped args in
       Hashtbl.replace cx.nodes hole.node t;
       (* `|> Array.len`: a method of the subject's own type is called with
          `.`, so `|>` keeps meaning a step from elsewhere *)
@@ -2843,6 +2854,11 @@ and check_args env cx ~name ?callee ~written ps args =
    (language.md §8): `|>` always passes it first. If another parameter
    would take it, the message says which, and the help passes it there. *)
 and piped_why env cx ~name ps args (a : expr) =
+  (* a service's member is given the parameters it shares first
+     (resolve.ml, "Services"), so the subject is first of the rest *)
+  let shared = List.length args - List.length (after_piped args) - 1 in
+  let ps = List.filteri (fun i _ -> i >= shared) ps in
+  let args = List.filteri (fun i _ -> i >= shared) args in
   let fn = Option.value name ~default:"this" in
   let subject = Hashtbl.find_opt piped_subjects a.node in
   let shown = Option.value (Option.bind subject env.source) ~default:"this" in

@@ -1,0 +1,43 @@
+// The services stage, step 2b (compiler.md, "Services stage"): a
+// service, a dependency and its one implementation written once
+// (language.md §4), built natively and checked against `ren run`. `Kv`'s
+// members share its parameter and its `uses`, call each other directly,
+// one recursively, and one as a chain's step; a wiring installs it with
+// the `Store` it needs; and a handler of `Kv` replaces it, as a test's
+// would.
+
+type Cfg = { prefix: Str, tries: Int }
+
+dep Store =
+  read: fn(k: Str) -> Option<Str>
+
+handler mem_store() for Store uses Console =
+  finally(r) =>
+    print("store closed")
+    try r
+  read(k) => if k == "kv/a" then Some("1") else None
+
+service Kv(c: Cfg) uses Store =
+  pub fn get(k: Str) -> Str ! Missing =
+    match Store.read(key(k))
+      Some(v) => v |> padded(c.tries)
+      None => fail Missing
+  pub fn keys() -> Int = count(c.tries)
+  fn key(k: Str) -> Str = c.prefix + k
+  fn padded(v: Str, n: Int) -> Str = if n == 0 then v else padded(v + ".", n - 1)
+  fn count(n: Int) -> Int = if n == 0 then 0 else 1 + count(n - 1)
+
+handler one_kv() for Kv =
+  get(k) => "fixed " + k
+  keys() => 1
+
+wiring live(c: Cfg) provides Kv = Kv(c), mem_store()
+
+fn report() =
+  print(attempt Kv.get("a"))                       // Ok("1..") / Ok("fixed a")
+  print(attempt Kv.get("b"))                       // Err(Missing) / Ok("fixed b")
+  print(Kv.keys())                                 // 2 / 1
+
+fn main() uses Console =
+  with live(Cfg { prefix: "kv/", tries: 2 }) in report()
+  with one_kv() in report()

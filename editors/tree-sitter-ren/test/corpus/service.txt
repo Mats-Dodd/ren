@@ -1,0 +1,155 @@
+================================================================================
+service: its operations are its pub fns, sharing its parameters and uses
+================================================================================
+
+pub service Kv(c: ClientCfg) uses Http, Clock ! Down =
+  pub fn get(k: Key) -> Option<Entry> ! KvError = call(k)
+  pub fn put(k: Key, v: Bytes)
+      ! KvError =
+    try call(k)
+  fn call(k: Key) -> Response ! KvError = todo
+
+service Counter() =
+  pub fn next() -> Int = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (service_definition
+    (visibility)
+    (type_identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (uses_clause
+      (dependency
+        (type_identifier))
+      (dependency
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (function_definition
+      (visibility)
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (named_type
+        (type_name
+          (type_identifier))
+        (type_arguments
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (error_set
+        (error_tag
+          (type_identifier)))
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier))))
+    (function_definition
+      (visibility)
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier))))
+        (parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (error_set
+        (error_tag
+          (type_identifier)))
+      (block
+        (try_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier))))))
+    (function_definition
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (named_type
+        (type_name
+          (type_identifier)))
+      (error_set
+        (error_tag
+          (type_identifier)))
+      (todo)))
+  (service_definition
+    (type_identifier)
+    (parameters)
+    (function_definition
+      (visibility)
+      (identifier)
+      (parameters)
+      (named_type
+        (type_name
+          (type_identifier)))
+      (number))))
+
+================================================================================
+service: installed in a `with` and a wiring, another module's too
+================================================================================
+
+wiring live provides Kv = http.live(), Kv(cfg.client)
+
+fn main() uses Console =
+  with kv.Kv(cfg), Counter() in run()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (wiring_definition
+    (identifier)
+    (dependency
+      (type_identifier))
+    (method_call_expression
+      (identifier)
+      (identifier)
+      (arguments))
+    (constructor_expression
+      (constructor_ref
+        (type_identifier))
+      (constructor_arguments
+        (field_expression
+          (identifier)
+          (identifier)))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (with_expression
+        (constructor_expression
+          (constructor_ref
+            (identifier)
+            (type_identifier))
+          (constructor_arguments
+            (identifier)))
+        (constructor_expression
+          (constructor_ref
+            (type_identifier))
+          (constructor_arguments))
+        (call_expression
+          (identifier)
+          (arguments))))))

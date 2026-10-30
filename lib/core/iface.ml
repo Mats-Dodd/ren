@@ -721,7 +721,7 @@ let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
         (function
           | Ast.Type td when td.type_pub ->
               Some (public (of_type_def ~home ~sets td))
-          | Type _ | Fn _ | Import _ | Testing _ | Wiring _ -> None)
+          | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
         prog;
     (* a public test item is in its own tier, which only tests read *)
     values = public_fns ~test:false;

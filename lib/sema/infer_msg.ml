@@ -3197,6 +3197,29 @@ let undeclared_use ?(why = []) ?(notes = []) ?alias (f : Ast.Resolved.fn_def) de
            else sprintf "add `%s` to its `uses`" dep)
         (sprintf "`%s` doesn't declare `%s`" name dep)
 
+(* A function of the service [service], [f], that uses [dep], which the
+   service's `uses` doesn't list (language.md §4): its members share it. *)
+let service_undeclared (f : Ast.Resolved.fn_def) ~service dep call =
+  Diag.make f.name.loc
+    ~labels:
+      (match call with
+      | Some (l, what) -> [ (l, sprintf "%s `%s`" (user what) dep) ]
+      | None -> [])
+    ~notes:
+      [
+        sprintf
+          "a service's functions share its `uses`, which is what a `with` \
+           that installs `%s` needs"
+          service;
+      ]
+    ~help:
+      (match f.uses with
+      | Some { deps = []; _ } | None ->
+          sprintf "add it to the service: `service %s(...) uses %s`" service dep
+      | Some _ -> sprintf "add `%s` to `%s`'s `uses`" dep service)
+    (sprintf "`%s` uses `%s`, which `%s` doesn't declare" (Ast.fn_name f) dep
+       service)
+
 (* A handler whose operations or state use [dep], which its `uses`
    doesn't list ([written] says whether it has one). *)
 let undeclared_need ~written (f : Ast.Resolved.fn_def) dep call =

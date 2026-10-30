@@ -7,7 +7,7 @@
 
      program  := item { NEWLINE item } EOF       (imports come first)
      item     := import | ["pub"] (fn_def | type_def | dep_def | handler
-                                   | group) | test | run
+                                   | group | wiring | service) | test | run
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
      fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
@@ -64,6 +64,11 @@
                                                     items may go on the line
                                                     after the `=`, indented,
                                                     and on lines after a `,`)
+     service  := "service" UIDENT "(" param, ... ")" [uses] [errors] "="
+                 INDENT ["pub"] fn_def { NEWLINE ["pub"] fn_def } DEDENT
+                                                   (`service` is a word only
+                                                    here; its operations are
+                                                    its `pub fn`s)
      op       := ["pub"] fn_def
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
@@ -1964,6 +1969,12 @@ and parse_primary p =
               (* `Shape.Rect { w: 2, h: 3 }`, a by-name constructor *)
               parse_record p start (Some (`Ctor c))
           | _ -> mk (Con (c, [])) start p)
+      | LPAREN when t.tmod <> None ->
+          (* `kv.Kv(cfg)`: another module's service installed, a call of
+             what it's made, as `kv.f(x)` is (resolve.ml, "Services") *)
+          let m = Option.get t.tmod in
+          let v = node p (Var (Bare m.name)) m.loc in
+          mk (Field (v, t.tid)) start p
       | _ when t.tmod <> None ->
           Diag.error
             (Loc.span start (last_loc p))
@@ -3350,6 +3361,102 @@ let parse_wiring p ~pub =
     wloc = Loc.span start (last_loc p);
   }
 
+(* A service (language.md §4): `service Kv(c: ClientCfg) uses Http ! E =`,
+   then its members, each a function on a line of its own, indented
+   under it. `service` is a word only at the start of an item, before a
+   capitalized name, so it isn't reserved. What a member may write is
+   Resolve's to check, so a member that writes `uses` is reported with
+   the rest (resolve.ml, "Services"). *)
+let parse_service p ~pub =
+  let start = loc p in
+  advance p;
+  let sname = upper_ident p "a service's name" in
+  if peek p <> LPAREN then
+    Diag.error (loc p)
+      ~help:
+        (Printf.sprintf
+           "write its parameters, `service %s() =`, even if it has none"
+           sname.name)
+      (Printf.sprintf "expected `(` after the service's name, found %s"
+         (describe (peek p)));
+  advance p;
+  let sparams = sep_list p ~close:RPAREN parse_param in
+  (* as a handler's signature: what it needs, then what it fails to
+     start with, each of which may start a line of its own, indented *)
+  let suses =
+    if peek p = USES then Some (parse_uses ~greedy:true p) else None
+  in
+  let serrors = if peek p = BANG then Some (parse_errors p) else None in
+  let suses =
+    if suses = None && peek p = USES then Some (parse_uses ~greedy:true p)
+    else suses
+  in
+  if peek p <> EQ then
+    Diag.error (loc p)
+      ~help:"write `=`, then its functions, indented under it"
+      (Printf.sprintf
+         "expected `uses`, `!` or `=` after a service's parameters, found %s"
+         (describe (peek p)));
+  advance p;
+  if peek p <> INDENT then
+    Diag.error (loc p)
+      ~help:
+        "put each of its functions on a line of its own, indented under it, \
+         like `pub fn get(k: Key) -> Str = ...`"
+      (Printf.sprintf "expected the functions of the service `%s`, found %s"
+         sname.name
+         (describe (peek p)));
+  advance p;
+  let member p =
+    let pub = peek p = PUB in
+    if pub then advance p;
+    match peek p with
+    | FN -> parse_fn p ~pub
+    | LET | VAR | FINALLY ->
+        Diag.error (loc p)
+          ~notes:
+            [
+              "its members are functions, which share its parameters and its \
+               `uses`; state a service keeps comes later";
+            ]
+          ~help:
+            (Printf.sprintf
+               "keep state in a handler: `dep %s = ...` and `handler %s(...) \
+                for %s`"
+               sname.name
+               (String.uncapitalize_ascii sname.name)
+               sname.name)
+          "a service's members are functions"
+    | _ ->
+        Diag.error (loc p)
+          ~help:
+            "write its operations as `pub fn`s, and the functions they share \
+             as `fn`s"
+          (Printf.sprintf "expected a function of `%s`, found %s" sname.name
+             (describe (peek p)))
+  in
+  let rec members acc =
+    let m = member p in
+    match peek p with
+    | NEWLINE ->
+        advance p;
+        members (m :: acc)
+    | DEDENT ->
+        advance p;
+        List.rev (m :: acc)
+    | _ -> fail_expected p "the end of the line"
+  in
+  let members = members [] in
+  {
+    spub = pub;
+    sname;
+    sparams;
+    suses;
+    serrors;
+    members;
+    sloc = Loc.span start (last_loc p);
+  }
+
 let parse_item ~prelude p =
   p.node <- 0;
   let pub = peek p = PUB in
@@ -3362,6 +3469,9 @@ let parse_item ~prelude p =
   | GROUP -> parse_group p ~pub
   | IDENT "wiring" when (match peek2 p with IDENT _ -> true | _ -> false) ->
       Wiring (parse_wiring p ~pub)
+  | IDENT "service"
+    when match peek2 p with IDENT n -> is_upper n | _ -> false ->
+      Service (parse_service p ~pub)
   | TEST when peek2 p = FN || peek2 p = HANDLER ->
       (* a test item, `test fn` or `test handler`, which only tests see
          (testing.md, "Test items") *)

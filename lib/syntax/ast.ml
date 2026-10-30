@@ -695,6 +695,30 @@ type ('v, 'b, 't) wiring_def = {
   wloc : Loc.t;  (** the whole declaration *)
 }
 
+(* A service (language.md §4): a dependency and its one implementation,
+   written once:
+
+     pub service Kv(c: ClientCfg) uses Http, Clock =
+       pub fn get(k: Key) -> Option<Entry> ! KvError = ...
+       fn call(req: Request) -> Response ! KvError = ...
+
+   Its operations are its `pub fn`s, whose signatures are written in
+   full; every member shares the service's parameters and its `uses`,
+   and writes no `uses` of its own. It's installed as a handler is,
+   `with Kv(cfg)`. None reaches inference: Resolve makes each exactly a
+   `dep` and a handler, and each member a function the handler's arms
+   call (resolve.ml, "Services"). *)
+type ('v, 'b, 't) service_def = {
+  spub : bool;
+  sname : ident;
+  sparams : ('b, 't) param list;
+  suses : 't uses option;
+  serrors : 't errors option;
+      (** what installing it fails with, the handler's `!` *)
+  members : ('v, 'b, 't) fn_def list;  (** in source order *)
+  sloc : Loc.t;  (** the whole declaration *)
+}
+
 type ('v, 'b, 't) item =
   | Fn of ('v, 'b, 't) fn_def
   | Type of ('v, 'b, 't) type_def
@@ -702,6 +726,9 @@ type ('v, 'b, 't) item =
   | Testing of ('v, 'b, 't) testing
   | Wiring of ('v, 'b, 't) wiring_def
       (** only as parsed: Resolve makes each functions (see [wiring_def]) *)
+  | Service of ('v, 'b, 't) service_def
+      (** only as parsed: Resolve makes each a `dep`, a handler and
+          functions (see [service_def]) *)
 
 type ('v, 'b, 't) program = ('v, 'b, 't) item list
 
@@ -712,7 +739,7 @@ let functions (prog : ('v, 'b, 't) program) =
     (function
       | Fn f -> [ f ]
       | Type td -> List.map (fun o -> o.op_fn) td.type_ops
-      | Import _ | Testing _ | Wiring _ -> [])
+      | Import _ | Testing _ | Wiring _ | Service _ -> [])
     prog
 
 (* The path of [f], declared in module [home]: a member's is its type's,
@@ -724,10 +751,18 @@ let fn_path home (f : ('v, 'b, 't) fn_def) =
 
 (* How [f] is written in its own module, for a message: `Stack.push` for a
    member, after its type. *)
-let fn_name (f : ('v, 'b, 't) fn_def) =
+let rec fn_name (f : ('v, 'b, 't) fn_def) =
   match f.owner with
   | Some t -> t.name ^ "." ^ f.name.name
-  | None -> f.name.name
+  | None -> service_member_name f.name.name
+
+(* A service's member, `Kv$get` (resolve.ml, "Services"), as it's
+   written, `Kv.get`; any other name as it is. *)
+and service_member_name n =
+  match String.index_opt n '$' with
+  | Some i when n.[0] = Char.uppercase_ascii n.[0] && n.[0] <> '_' ->
+      String.sub n 0 i ^ "." ^ String.sub n (i + 1) (String.length n - i - 1)
+  | _ -> n
 
 (* Whether [f]'s signature is written out in full, so that its declaration
    says everything about its type: it's public, so no `->` means Unit and
@@ -922,6 +957,7 @@ module Parsed = struct
   type nonrec test_def = (vname, ident, tyname) test_def
   type nonrec testing = (vname, ident, tyname) testing
   type nonrec wiring_def = (vname, ident, tyname) wiring_def
+  type nonrec service_def = (vname, ident, tyname) service_def
   type nonrec program = (vname, ident, tyname) program
 end
 
@@ -950,6 +986,7 @@ module Resolved = struct
   type nonrec fn_def = (name, binder, tname) fn_def
   type nonrec item = (name, binder, tname) item
   type nonrec wiring_def = (name, binder, tname) wiring_def
+  type nonrec service_def = (name, binder, tname) service_def
   type nonrec program = (name, binder, tname) program
 end
 
@@ -1433,6 +1470,27 @@ let show_item : item -> string = function
           ]
         @ uses @ errors
         @ List.map show_with_item w.witems)
+  | Service s ->
+      let uses =
+        match s.suses with Some u -> [ parens [ show_uses u ] ] | None -> []
+      in
+      let errors =
+        match s.serrors with
+        | Some es -> [ parens [ show_errors es ] ]
+        | None -> []
+      in
+      let member (f : fn_def) =
+        parens ((if f.pub then [ "pub" ] else []) @ [ show_fn f ])
+      in
+      parens
+        ((if s.spub then [ "pub" ] else [])
+        @ [
+            "service";
+            s.sname.name;
+            parens (List.map show_param s.sparams);
+          ]
+        @ uses @ errors
+        @ List.map member s.members)
 
 (* ---- code as it's written, for messages ----
 

@@ -83,11 +83,12 @@ module.exports = grammar({
 
   conflicts: ($) => [
     // `billing.Plan` is a module's type, and `user.plan` a field: the token
-    // after the dot decides
-    [$._primary, $.type_name],
+    // after the dot decides; `kv.Kv(cfg)` is another module's service
+    // installed, which the `(` after it decides
+    [$._primary, $.type_name, $._module_constructor_ref],
     // and after `on:`, `bank.Refusal` may be a named error set among tags,
     // which the `|` after it decides
-    [$._primary, $.type_name, $.error_set_name],
+    [$._primary, $.type_name, $.error_set_name, $._module_constructor_ref],
     // the next line of an indented sum type may start with `|`
     [$.sum_type],
     // so may the next line after an `if`'s indented `then` block, with
@@ -104,7 +105,7 @@ module.exports = grammar({
     // after `over` in a `with`, `Prices` is the one installed outside it,
     // and `Prices.fixed(1)` a link: the token after the name decides
     [$.dependency, $.constructor_ref],
-    [$.dependency, $.type_name, $._primary],
+    [$.dependency, $.type_name, $._primary, $._module_constructor_ref],
     // in `<T has eq, ord, U>`, the token after a comma decides whether it
     // goes on with a requirement or starts the next type parameter
     [$.constrained_type_parameter],
@@ -128,6 +129,7 @@ module.exports = grammar({
         $.group_definition,
         $.group_run,
         $.wiring_definition,
+        $.service_definition,
       ),
 
     comment: (_) => token(seq('//', /[^\n]*/)),
@@ -540,6 +542,31 @@ module.exports = grammar({
       ),
 
     _wiring_items: ($) => commaSep1Strict(field('item', $._with_item)),
+
+    // a service (language.md §4), a dependency and its one
+    // implementation, written once:
+    //
+    //   pub service Kv(c: ClientCfg) uses Http, Clock =
+    //     pub fn get(k: Key) -> Option<Entry> ! KvError = ...
+    //     fn call(req: Request) -> Response ! KvError = ...
+    //
+    // `service` is a word only here. Its operations are its `pub fn`s;
+    // the compiler refuses a member that writes `uses`, and anything but
+    // a function among them
+    service_definition: ($) =>
+      seq(
+        optional($.visibility),
+        'service',
+        field('name', $.type_identifier),
+        field('parameters', $.parameters),
+        optional(field('uses', $.uses_clause)),
+        optional(field('errors', $.error_set)),
+        optional(field('uses', $.uses_clause)),
+        '=',
+        $._indent,
+        sep1(field('member', $.function_definition), $._newline),
+        $._dedent,
+      ),
 
     // group "frozen" = clock_conforms(Clock.frozen(Time.epoch)): a run of
     // a group's tests, with these arguments; the compiler checks it's a call
@@ -1246,7 +1273,17 @@ module.exports = grammar({
           optional($._record_body),
           '}',
         ),
+        // kv.Kv(cfg): another module's service, installed in a `with` or
+        // a wiring (language.md §4), which the compiler reads as a call of
+        // it
+        seq(
+          field('constructor', alias($._module_constructor_ref, $.constructor_ref)),
+          field('arguments', $.constructor_arguments),
+        ),
       ),
+
+    _module_constructor_ref: ($) =>
+      seq(field('module', $.identifier), '.', field('name', $.type_identifier)),
 
     _qualified_constructor_ref: ($) =>
       seq(field('type', $.type_name), '.', field('name', $.type_identifier)),

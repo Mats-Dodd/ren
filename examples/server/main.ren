@@ -21,7 +21,7 @@ handler line(conn: Conn) for Line uses Net =
 
 // answers "done" to every request, after the time it asks for: "slow"
 // takes three seconds, "stuck" a minute
-fn handle(conn: Conn) ! NetError uses Net, Clock =
+fn handle(conn: Conn) ! NetError =
   with line(conn) in
     let req = try Line.read()
     if req == "slow".bytes() then Clock.sleep(Duration.seconds(3))
@@ -53,13 +53,13 @@ pub wiring simulated provides Net, SimNet uses Async = sim.net()
 test fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
 
 // the server, in a task: one that fails says so
-test fn run_server() uses Net, Clock, Console, Async =
+test fn run_server() =
   match attempt serve(here())
     Ok(_) => ()
     Err(_) => Console.error("serve failed")
 
 // connects, and sends `req`
-test fn send(req: Str) -> Conn ! NetError uses Net, SimNet =
+test fn send(req: Str) -> Conn ! NetError =
   let c = try SimNet.connect(here())
   try Net.write(c, req.bytes())
   c

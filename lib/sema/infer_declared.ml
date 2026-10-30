@@ -138,6 +138,11 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
               wiring_undeclared f.name.loc ~wiring ~dep:shown ~call:item
                 ~written:
                   (match f.uses with Some u -> u.deps <> [] | None -> false)
+          | None when Resolve.service_member (Ast.fn_path env.home f) <> None ->
+              (* a service's `uses` (resolve.ml, [service_items]) *)
+              service_undeclared f
+                ~service:(Option.get (Resolve.service_member (Ast.fn_path env.home f)))
+                shown call
           | None when is_value f -> value_uses f shown call
           | None -> undeclared_use ~why ~notes ?alias f shown call))
     (sorted_labels cx.uses)
@@ -210,6 +215,11 @@ let check_needs env (f : fn_def) n =
         report env (handler_uses_itself f shown ~over:false (call_of dep))
       else
         match n.ndeclared with
+        | Some _ when Resolve.service_handler (Ast.fn_path env.home f) ->
+            (* a service's arms only call its members, each checked
+               against the service's `uses` already, where the need is
+               reported at the call that brings it in *)
+            ()
         | Some declared when not (has_dep declared dep) ->
             report env (undeclared_need ~written f shown (call_of dep))
         | _ -> ())
