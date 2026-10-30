@@ -1,0 +1,50 @@
+---
+// A function signature drawn as an IC datasheet pinout.
+// Inputs (params, uses) on the left, outputs (return, errors) on the right,
+// pins numbered counter-clockwise from the notch, effects as lamps along the base.
+import * as stylex from '@stylexjs/stylex';
+import { pinout as s } from './styles';
+import Frame from '../primitives/Frame.astro';
+import { EFFECTS, type Signature } from '../../lib/schema';
+interface Props { sig: Signature; fig: string; caption?: string }
+const { sig, fig, caption } = Astro.props;
+
+const left = [...sig.params.map((p) => ({ label: `${p.name}: ${p.type}`, kind: 'in' })), ...sig.uses.map((u) => ({ label: `uses ${u}`, kind: 'uses' }))];
+const right = [{ label: sig.returns, kind: 'out' }, ...sig.errors.map((e) => ({ label: e, kind: 'err' }))];
+const n = Math.max(left.length, right.length, 2);
+const W = 640, cx0 = 220, cx1 = 420, pitch = 34, top = 24, pinTop = top + 34;
+const bodyH = 34 + (n - 1) * pitch + 34;
+const lampH = 40;
+const H = top + bodyH + lampH + 12;
+const y = (i: number) => pinTop + i * pitch;
+const lampX = (i: number) => cx0 + 34 + i * ((cx1 - cx0 - 68) / (EFFECTS.length - 1));
+const title = `${sig.name}(${sig.params.map((p) => p.name).join(', ')})`;
+---
+<Frame tab={`FIG ${fig} · PINOUT`} tabRight={sig.module} caption={caption} scroll>
+  <svg viewBox={`0 0 ${W} ${H}`} {...stylex.attrs(s.svg)} role="img" aria-label={`Pinout of ${title}: inputs ${left.map((l) => l.label).join(', ') || 'none'}; outputs ${right.map((r) => r.label).join(', ')}; effects ${sig.effects.join(', ') || 'none'}`}>
+    <path d={`M${cx0},${top} H${(cx0 + cx1) / 2 - 10} A10,10 0 0 0 ${(cx0 + cx1) / 2 + 10},${top} H${cx1} V${top + bodyH + lampH} H${cx0} Z`} {...stylex.attrs(s.body)} />
+    <line x1={cx0} x2={cx1} y1={top + bodyH} y2={top + bodyH} {...stylex.attrs(s.hair)} />
+
+    <text x={(cx0 + cx1) / 2} y={top + bodyH / 2} text-anchor="middle" {...stylex.attrs(s.name)}>{sig.name}</text>
+    {sig.module && <text x={(cx0 + cx1) / 2} y={top + bodyH / 2 + 18} text-anchor="middle" {...stylex.attrs(s.sub)}>{sig.module.toUpperCase()}</text>}
+
+    {left.map((p, i) => <g>
+      <line x1={cx0 - 44} x2={cx0} y1={y(i)} y2={y(i)} {...stylex.attrs(s.stroke)} />
+      <rect x={cx0 - 47} y={y(i) - 3} width="6" height="6" {...stylex.attrs(s.pad)} />
+      <text x={cx0 - 56} y={y(i) + 4} text-anchor="end" {...stylex.attrs(s.text)}>{p.label}</text>
+      <text x={cx0 + 8} y={y(i) + 4} {...stylex.attrs(s.pin)}>{i + 1}</text>
+    </g>)}
+
+    {right.map((p, i) => <g>
+      <line x1={cx1} x2={cx1 + 44} y1={y(i)} y2={y(i)} {...stylex.attrs(s.stroke)} />
+      <rect x={cx1 + 41} y={y(i) - 3} width="6" height="6" {...stylex.attrs(s.pad)} />
+      <text x={cx1 + 56} y={y(i) + 4} {...stylex.attrs(s.text)}>{p.kind === 'err' ? <><tspan {...stylex.attrs(s.bang)}>! </tspan>{p.label}</> : p.label}</text>
+      <text x={cx1 - 8} y={y(i) + 4} text-anchor="end" {...stylex.attrs(s.pin)}>{2 * n - i}</text>
+    </g>)}
+
+    {EFFECTS.map((e, i) => <g>
+      <circle cx={lampX(i)} cy={top + bodyH + 15} r="4.5" {...stylex.attrs(sig.effects.includes(e) ? s.lampOn : s.lampOff)} />
+      <text x={lampX(i)} y={top + bodyH + 32} text-anchor="middle" {...stylex.attrs(s.lampLabel)}>{e}</text>
+    </g>)}
+  </svg>
+</Frame>

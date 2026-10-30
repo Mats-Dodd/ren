@@ -1,0 +1,7 @@
+$ ren run check.ren
+error: `check` can fail, and nothing handles it
+  ┌─ check.ren:6:9
+6 │   print(check(4))
+  │         ^^^^^^^^
+  │         ----- it can fail with `Negative(Int)`
+  help: pass the errors on with `try`, or handle them with `match`

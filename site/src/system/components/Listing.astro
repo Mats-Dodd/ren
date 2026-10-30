@@ -1,0 +1,48 @@
+---
+// Numbered, captioned code listing. Notes are keyed to lines and set in the margin.
+import * as stylex from '@stylexjs/stylex';
+import { listing } from './styles';
+import { layout, type } from '../primitives/styles';
+import Frame from '../primitives/Frame.astro';
+import { highlightLine } from '../../lib/highlight';
+interface Props {
+  n: string; title?: string; code: string; file?: string;
+  lang?: 'ren' | 'shell' | 'plain';
+  notes?: { line: number; text: string }[];
+  faultLines?: number[];
+}
+const { n, title, code, file, lang = 'ren', notes = [], faultLines = [] } = Astro.props;
+const lines = code.replace(/\n$/, '').split('\n');
+const marks = '①②③④⑤⑥⑦⑧⑨';
+const markFor = new Map(notes.map((x, i) => [x.line, marks[i]]));
+const tab = `LISTING ${n}${title ? ' · ' + title.toUpperCase() : ''}`;
+---
+{notes.length > 0 && (
+  <aside {...stylex.attrs(layout.aside)}>
+    <ol {...stylex.attrs(listing.notes)}>
+      {notes.map((x, i) => (
+        <li {...stylex.attrs(listing.note)}><span {...stylex.attrs(listing.noteMark)}>{marks[i]}</span><span>{x.text}</span></li>
+      ))}
+    </ol>
+  </aside>
+)}
+<Frame tab={tab} tabRight={file} panel>
+  <pre {...stylex.attrs(listing.pre)}><code>{lines.map((l, i) => {
+    const num = i + 1;
+    const isFault = faultLines.includes(num);
+    if (lang === 'shell') {
+      const isCmd = l.startsWith('$ ');
+      return <span {...stylex.attrs(listing.lineBare)}>{isCmd
+        ? <><span {...stylex.attrs(listing.prompt)}>$ </span>{l.slice(2)}</>
+        : <span {...stylex.attrs(isFault ? listing.fault : listing.output)}>{l || ' '}</span>}</span>;
+    }
+    if (lang === 'plain') {
+      return <span {...stylex.attrs(listing.lineBare, isFault && listing.fault)}>{l || ' '}</span>;
+    }
+    return <span {...stylex.attrs(listing.line)}>
+      <span {...stylex.attrs(listing.gutter)} aria-hidden="true">{num}</span>
+      <span {...stylex.attrs(listing.code, isFault && listing.fault)}>{highlightLine(l).map((t) => <span {...stylex.attrs(listing[t.t])}>{t.v}</span>)}{l === '' && ' '}</span>
+      <span {...stylex.attrs(listing.marker)}>{markFor.get(num) ?? ''}</span>
+    </span>;
+  })}</code></pre>
+</Frame>

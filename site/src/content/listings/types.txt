@@ -1,0 +1,4 @@
+$ ren types check.ren
+-- check
+fn check(n: Int) -> Int ! Negative(Int)
+fn main() ! Negative(Int) uses Console

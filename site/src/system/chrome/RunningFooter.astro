@@ -1,0 +1,13 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { chrome } from './styles';
+import { type } from '../primitives/styles';
+import { DOC } from '../../lib/doc';
+interface Props { prev?: { href: string; label: string }; next?: { href: string; label: string } }
+const { prev, next } = Astro.props;
+---
+<footer {...stylex.attrs(chrome.footer)}>
+  <span>{prev && <a href={prev.href} {...stylex.attrs(type.label, type.labelInk, chrome.nav)}>← {prev.label}</a>}</span>
+  <span {...stylex.attrs(type.label, chrome.center)}>{DOC.id} · REV {DOC.rev} · {DOC.date}</span>
+  <span {...stylex.attrs(chrome.end)}>{next && <a href={next.href} {...stylex.attrs(type.label, type.labelInk, chrome.nav)}>{next.label} →</a>}</span>
+</footer>

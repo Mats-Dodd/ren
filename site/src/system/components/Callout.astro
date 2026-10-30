@@ -1,0 +1,12 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { callout } from './styles';
+import { type } from '../primitives/styles';
+interface Props { kind?: 'note' | 'caution' | 'design' }
+const { kind = 'note' } = Astro.props;
+const label = { note: 'Note', caution: 'Caution', design: 'Design note' }[kind];
+---
+<aside {...stylex.attrs(callout.root, kind === 'caution' && callout.caution, kind === 'design' && callout.design)}>
+  <span {...stylex.attrs(type.label, kind === 'caution' ? type.labelSignal : type.labelInk)}>{label}</span>
+  <div {...stylex.attrs(callout.body)}><slot /></div>
+</aside>

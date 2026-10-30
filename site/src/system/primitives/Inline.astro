@@ -1,0 +1,7 @@
+---
+// Renders a plain string, turning `backtick spans` into <Code>. Keeps props free of HTML.
+import Code from './Code.astro';
+const { text } = Astro.props as { text: string };
+const parts = text.split(/(`[^`]+`)/g);
+---
+{parts.map((p) => p.startsWith('`') && p.endsWith('`') ? <Code>{p.slice(1, -1)}</Code> : p)}

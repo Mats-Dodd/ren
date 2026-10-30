@@ -1,0 +1,24 @@
+---
+// Chapter opener: what you need, what you'll get, what it touches.
+import * as stylex from '@stylexjs/stylex';
+import { spec } from './styles';
+import { type } from '../primitives/styles';
+import Inline from '../primitives/Inline.astro';
+import Frame from '../primitives/Frame.astro';
+import LampPanel from './LampPanel.astro';
+import type { Effect } from '../../lib/schema';
+interface Props { section: string; rows: [string, string][]; effects?: Effect[] }
+const { section, rows, effects } = Astro.props;
+---
+<Frame tab={`SPEC · §${section}`}>
+  <dl {...stylex.attrs(spec.dl)}>
+    {rows.map(([k, v]) => <>
+      <dt {...stylex.attrs(type.label, spec.dt)}>{k}</dt>
+      <dd {...stylex.attrs(spec.dd)}><Inline text={v} /></dd>
+    </>)}
+    {effects && <>
+      <dt {...stylex.attrs(type.label, spec.dt)}>Effects</dt>
+      <dd {...stylex.attrs(spec.dd)}><LampPanel on={effects} /></dd>
+    </>}
+  </dl>
+</Frame>

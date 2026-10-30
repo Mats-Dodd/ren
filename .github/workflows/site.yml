@@ -1,0 +1,33 @@
+# The manual's website (site/): regenerate the design tokens from
+# palette.ts and build every page, so a broken component or listing
+# fails here and not on deploy. Only runs when the site changes.
+
+name: site
+
+on:
+  push:
+    paths: ["site/**", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["site/**", ".github/workflows/site.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
+      # tokens.stylex.ts is generated, and committed so editors see the
+      # types: it has to be what palette.ts generates
+      - run: git diff --exit-code -- src/system/tokens.stylex.ts

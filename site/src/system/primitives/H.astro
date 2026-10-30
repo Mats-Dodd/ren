@@ -1,0 +1,9 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { type } from './styles';
+interface Props { level?: 1 | 2 | 3; n?: string; id?: string }
+const { level = 2, n, id } = Astro.props;
+const Tag = `h${level}` as 'h1' | 'h2' | 'h3';
+const slug = id ?? (n ? `s${n.replaceAll('.', '-')}` : undefined);
+---
+<Tag id={slug} {...stylex.attrs(type[`h${level}`])}>{n && <span {...stylex.attrs(type.num)}>§{n}</span>}<slot /></Tag>

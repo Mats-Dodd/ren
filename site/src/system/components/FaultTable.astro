@@ -1,0 +1,20 @@
+---
+// A troubleshooting entry, in the compiler's own words: its `error:` line,
+// what it means, and its `help:`. The manual and the compiler say the same thing.
+import * as stylex from '@stylexjs/stylex';
+import { fault } from './styles';
+import { type } from '../primitives/styles';
+import Code from '../primitives/Code.astro';
+import Inline from '../primitives/Inline.astro';
+interface Props { message: string; meaning: string; help: string; see?: string; id?: string }
+const { message, meaning, help, see, id } = Astro.props;
+---
+<section {...stylex.attrs(fault.root)} id={id} aria-label="Fault">
+  <div {...stylex.attrs(fault.head)}>
+    <span {...stylex.attrs(type.label, type.labelSignal)}>Fault</span>
+    <span {...stylex.attrs(fault.message)}><Inline text={message} /></span>
+  </div>
+  <div {...stylex.attrs(fault.row)}><span {...stylex.attrs(type.label, fault.k)}>Means</span><span><Inline text={meaning} /></span></div>
+  <div {...stylex.attrs(fault.row)}><span {...stylex.attrs(type.label, fault.k)}>Help</span><span><Code>{help}</Code></span></div>
+  {see && <div {...stylex.attrs(fault.row)}><span {...stylex.attrs(type.label, fault.k)}>See</span><span>{see}</span></div>}
+</section>

@@ -1,0 +1,40 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import Page from '../layouts/Page.astro';
+import P from '../system/primitives/P.astro';
+import Label from '../system/primitives/Label.astro';
+import { cover } from '../system/pages/styles';
+import { type } from '../system/primitives/styles';
+import { DOC } from '../lib/doc';
+const toc: { n: string; title: string; href?: string; sub?: boolean }[] = [
+  { n: '1', title: 'Installation and bring-up' },
+  { n: '1.1', title: 'Installation', sub: true },
+  { n: '1.2', title: 'Smoke test', href: 'book/1-2-smoke-test.html', sub: true },
+  { n: '2', title: 'Bench exercise: guessing game' },
+  { n: '3', title: 'Values, types and records' },
+  { n: '4', title: 'Value semantics and inout' },
+  { n: '9', title: 'Fault handling' },
+  { n: 'S', title: 'Standards appendix', href: 'standards.html' },
+];
+---
+<Page title="Programmer's Manual" description="The Ren programmer's manual.">
+  <section {...stylex.attrs(cover.root)}>
+    <Label>Document {DOC.id}</Label>
+    <h1 {...stylex.attrs(cover.id)}>Ren</h1>
+    <P lede>The programmer's manual. Read like a script, checked like a proof.</P>
+    <div {...stylex.attrs(cover.meta)}>
+      <Label tone="ink">Rev {DOC.rev}</Label><Label>{DOC.date}</Label><Label>Research edition</Label>
+    </div>
+    <ol {...stylex.attrs(cover.toc)}>
+      {toc.map((e) => (
+        <li {...stylex.attrs(cover.entry, e.sub && cover.sub)}>
+          <span {...stylex.attrs(type.label, type.labelInk)}>§{e.n}</span>
+          {e.href
+            ? <a href={e.href} {...stylex.attrs(cover.title, cover.live)}>{e.title}</a>
+            : <span {...stylex.attrs(cover.title, cover.pending)}>{e.title}</span>}
+          <span {...stylex.attrs(type.label)}>{e.href ? '' : 'In preparation'}</span>
+        </li>
+      ))}
+    </ol>
+  </section>
+</Page>

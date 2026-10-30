@@ -1,0 +1,211 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import Page from '../layouts/Page.astro';
+import H from '../system/primitives/H.astro';
+import P from '../system/primitives/P.astro';
+import Code from '../system/primitives/Code.astro';
+import Label from '../system/primitives/Label.astro';
+import Frame from '../system/primitives/Frame.astro';
+import Aside from '../system/primitives/Aside.astro';
+import LampPanel from '../system/components/LampPanel.astro';
+import Listing from '../system/components/Listing.astro';
+import SpecBlock from '../system/components/SpecBlock.astro';
+import FaultTable from '../system/components/FaultTable.astro';
+import Callout from '../system/components/Callout.astro';
+import Pinout from '../system/components/Pinout.astro';
+import MemoryMap from '../system/components/MemoryMap.astro';
+import TimingDiagram from '../system/components/TimingDiagram.astro';
+import { spec } from '../system/pages/styles';
+import { type } from '../system/primitives/styles';
+import { color, size, space, rule, font } from '../system/palette';
+import { contrast, grade } from '../lib/contrast';
+import type { Signature, MemoryRow, Trace } from '../lib/schema';
+
+const modes = ['light', 'dark'] as const;
+const pairs: [keyof typeof color, keyof typeof color, string][] = [
+  ['ink', 'paper', 'Body text'],
+  ['ink', 'panel', 'Listings'],
+  ['ink2', 'paper', 'Captions, labels'],
+  ['ink2', 'panel', 'Comments in listings'],
+  ['signal', 'paper', 'Fault codes'],
+  ['signal', 'panel', 'Fault lines in listings'],
+];
+
+const fetchUser: Signature = {
+  name: 'fetch_user', module: 'accounts',
+  params: [{ name: 'id', type: 'UserId' }],
+  uses: ['db', 'log'],
+  returns: 'User',
+  errors: ['NotFound', 'DbError'],
+  effects: ['IO', 'FAIL', 'ASYNC'],
+};
+const sum: Signature = {
+  name: 'sum', module: 'core.math',
+  params: [{ name: 'xs', type: 'Slice[Int]' }],
+  uses: [], returns: 'Int', errors: [], effects: [],
+};
+
+const aos: MemoryRow[] = [
+  { label: 'Particle[0]', fields: [{ name: 'pos', bytes: 12, kind: 'hot' }, { name: 'pad', bytes: 4, kind: 'pad' }, { name: 'vel', bytes: 12 }, { name: 'pad', bytes: 4, kind: 'pad' }, { name: 'mass', bytes: 4 }, { name: 'id', bytes: 8 }, { name: 'flags', bytes: 4 }, { name: 'pad', bytes: 16, kind: 'pad' }] },
+];
+const soa: MemoryRow[] = [
+  { label: 'pos[0..5]', fields: [{ name: 'pos₀', bytes: 12, kind: 'hot' }, { name: 'pos₁', bytes: 12, kind: 'hot' }, { name: 'pos₂', bytes: 12, kind: 'hot' }, { name: 'pos₃', bytes: 12, kind: 'hot' }, { name: 'pos₄', bytes: 12, kind: 'hot' }, { name: '', bytes: 4, kind: 'pad' }] },
+];
+
+const trace: Trace = {
+  ticks: 600, step: 100,
+  lanes: ['client', 'node a', 'node b', 'node c'],
+  messages: [
+    { from: 0, to: 1, t0: 20, t1: 80 },
+    { from: 1, to: 2, t0: 100, t1: 170 },
+    { from: 1, to: 3, t0: 100, t1: 190 },
+    { from: 2, to: 1, t0: 210, t1: 280 },
+    { from: 1, to: 0, t0: 300, t1: 360 },
+  ],
+  events: [
+    { lane: 0, t: 20, label: 'PUT k' },
+    { lane: 1, t: 100, label: 'REPLICATE' },
+    { lane: 2, t: 210, label: 'ACK' },
+    { lane: 3, t: 412, label: 'FAULT T+412 · DISK FULL', fault: true },
+    { lane: 0, t: 360, label: 'OK' },
+  ],
+};
+
+const sample = `// the signature carries the detail; the body stays short
+pub fn upgrade(id: UserId, seats: Int) -> User ! NotFound | PaymentFailed | Conflict
+    uses Users, Billing =
+  var user = Users.get(id) orelse fail NotFound
+  try Billing.charge(user.id, price(seats))
+  user.plan = Pro(seats)
+  try Users.save(user)
+  user`;
+---
+<Page title="Standards appendix" section="§S STANDARDS" prev={{ href: 'book/1-2-smoke-test.html', label: '§1.2 Smoke test' }}>
+  <H level={1} n="S">Standards appendix</H>
+  <P lede>The rules this manual is built from. Every value on this page is read from the same source files the pages use. If this page is wrong, every page is wrong.</P>
+
+  <H n="S.1">Principles</H>
+  <dl {...stylex.attrs(spec.dl)}>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>01 Information</dt><dd>Every mark carries information. Rules, boxes and labels are diagrams or structure. Nothing is decoration.</dd>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>02 Interface first</dt><dd>Spec before chapter, pinout before body. You know what a thing touches before you read how it works.</dd>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>03 One way</dt><dd>Three faces, six colors, one accent, two rules, six sizes. No exceptions per page.</dd>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>04 Calm</dt><dd>Nothing moves unless state changed.</dd>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>05 Revision</dt><dd>The document states its revision and what changed.</dd>
+  </dl>
+
+  <H n="S.2">Color</H>
+  <P>Six tokens. Light is the default; dark is opt-in from the header. Signal is the only accent and means one thing: look here.</P>
+  <div {...stylex.attrs(spec.swatches)}>
+    {Object.entries(color).map(([k, v]) => (
+      <div {...stylex.attrs(spec.sw)}>
+        <div {...stylex.attrs(spec.chip)}>
+          <span {...stylex.attrs(spec.half)} style={`background:${v.light}`} />
+          <span {...stylex.attrs(spec.half)} style={`background:${v.dark}`} />
+        </div>
+        <Label tone="ink">{k}</Label>
+        <span {...stylex.attrs(type.mono)}>{v.light} / {v.dark}</span>
+        <span {...stylex.attrs(type.muted)}>{v.use}</span>
+      </div>
+    ))}
+  </div>
+
+  <H level={3}>Contrast, computed at build</H>
+  <Frame tab="TABLE S-1 · CONTRAST" scroll>
+    <table {...stylex.attrs(spec.table)}>
+      <thead><tr>
+        <th {...stylex.attrs(spec.th, type.label)}>Pair</th>
+        <th {...stylex.attrs(spec.th, type.label)}>Use</th>
+        {modes.map((m) => <th {...stylex.attrs(spec.th, type.label)}>{m}</th>)}
+      </tr></thead>
+      <tbody>
+        {pairs.map(([fg, bg, use]) => (
+          <tr>
+            <td {...stylex.attrs(spec.td, type.mono)}>{fg} / {bg}</td>
+            <td {...stylex.attrs(spec.td)}>{use}</td>
+            {modes.map((m) => {
+              const r = contrast(color[fg][m], color[bg][m]);
+              return <td {...stylex.attrs(spec.td, type.mono, r < 4.5 && spec.fail)}>{r.toFixed(1)} {grade(r)}</td>;
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </Frame>
+
+  <H n="S.3">Type</H>
+  <dl {...stylex.attrs(spec.dl)}>
+    {Object.entries(font).map(([k, v]) => <>
+      <dt {...stylex.attrs(type.label, type.labelInk)}>{k}</dt>
+      <dd><span style={`font-family:${v.stack};${k === 'display' ? 'font-stretch:112.5%;font-weight:650;' : ''}`}>{v.stack.split(',')[0].replaceAll("'", '')}</span> · <span {...stylex.attrs(type.muted)}>{v.use}</span></dd>
+    </>)}
+  </dl>
+  <Frame tab="FIG S-1 · SCALE" tabRight="6 SIZES">
+    {Object.entries(size).reverse().map(([k, v]) => (
+      <div {...stylex.attrs(spec.scaleRow)}>
+        <Label>{k} · {v.px}</Label>
+        <span style={`font-size:${v.px / 16}rem;line-height:1.2;${['h1','h2','h3'].includes(k) ? "font-family:'Archivo Variable';font-stretch:112.5%;font-weight:650;" : k === 'label' ? "font-family:'IBM Plex Mono';letter-spacing:.08em;text-transform:uppercase;font-weight:500;" : ''}`}>{k === 'label' ? 'FIG 3-1 · LISTING 1-4 · REV A' : 'Read like a script'}</span>
+      </div>
+    ))}
+  </Frame>
+
+  <H n="S.4">Space and rules</H>
+  <Frame tab="FIG S-2 · SPACE" tabRight="4 PX BASE">
+    {Object.entries(space).map(([k, v]) => (
+      <div {...stylex.attrs(spec.scaleRow)}>
+        <Label>{k} · {v}</Label>
+        <span {...stylex.attrs(spec.bar)} style={`width:${v / 16}rem`} />
+      </div>
+    ))}
+  </Frame>
+  <Frame tab="FIG S-3 · RULES" tabRight="2 WEIGHTS">
+    <div {...stylex.attrs(spec.scaleRow)}><Label>hair · {rule.hair}</Label><span {...stylex.attrs(spec.hair)} /></div>
+    <div {...stylex.attrs(spec.scaleRow)}><Label>heavy · {rule.heavy}</Label><span {...stylex.attrs(spec.heavy)} /></div>
+  </Frame>
+  <P>Hairlines for structure. Heavy rules under § headings, above faults and above cautions. Nothing else.</P>
+
+  <H n="S.5">Components</H>
+  <P>Eight components. Adding a ninth is a deliberate decision, like adding a language feature.</P>
+
+  <H level={3}>S.5.1 SpecBlock</H>
+  <SpecBlock section="4.3" rows={[['Requires', '§4.1, §4.2'], ['Introduces', '`inout`, the `&` marker, value semantics'], ['Time', '25 minutes']]} effects={['ALLOC']} />
+
+  <H level={3}>S.5.2 Pinout</H>
+  <Aside>Generated from a <Code>Signature</Code> record. When <Code>ren doc</Code> exists it will emit the same shape from real code.</Aside>
+  <P>Signatures drawn as datasheet pinouts. Inputs left, outputs right, effects as lamps.</P>
+  <Pinout sig={fetchUser} fig="S-4" caption="Two inputs on uses pins, two fault outputs. Lamps show IO, FAIL and ASYNC." />
+  <Pinout sig={sum} fig="S-5" caption="A pure function. No dependencies, no faults, no lamps lit." />
+
+  <H level={3}>S.5.3 LampPanel</H>
+  <P>Inline effect row. Lit means the function performs that effect: <LampPanel on={['IO', 'FAIL']} /></P>
+
+  <H level={3}>S.5.4 Listing</H>
+  <Listing n="S-6" title="Highlighting" file="users.ren" code={sample} notes={[{ line: 2, text: 'Keywords by weight. Types at medium weight. Comments italic, secondary ink.' }, { line: 5, text: 'No color in highlighting. Color is reserved for faults.' }]} />
+  <Listing n="S-7" title="Fault line" lang="plain" code={'error: `set_u8` changes `b`, so the call needs `&`\n  ┌─ test.ren:3:3'} faultLines={[1]} />
+
+  <H level={3}>S.5.5 FaultTable</H>
+  <FaultTable message="`set_u8` changes `b`, so the call needs `&`" meaning="A call that changes its receiver or an argument is marked with `&`, so a reader sees at the call that `b` is changed." help="&b.set_u8(0, 1)" see="§4.3 Value semantics and inout" />
+
+  <H level={3}>S.5.6 Callout</H>
+  <Callout><span>Notes are for context the reader needs and would otherwise miss.</span></Callout>
+  <Callout kind="caution"><span>Cautions are for consequences: data loss, undefined behavior, a guarantee that does not hold.</span></Callout>
+  <Callout kind="design"><span>Design notes explain why the language works the way it does. Ren is a research project; the reasoning is part of the product.</span></Callout>
+
+  <H level={3}>S.5.7 MemoryMap</H>
+  <P>One row per 64-byte cache line, to scale. Hot fields are shaded; padding is hatched.</P>
+  <MemoryMap rows={aos} fig="S-8" title="Array of structs" caption="Each particle spends 24 of 64 bytes on padding, and the hot field pos shares its line with fields the update loop never reads." />
+  <MemoryMap rows={soa} fig="S-9" title="Struct of arrays" caption="Five positions per line. The update loop reads only what it uses." />
+
+  <H level={3}>S.5.8 TimingDiagram</H>
+  <P>Deterministic simulation traces, drawn as a logic-analyzer capture. The seed reproduces the run exactly.</P>
+  <TimingDiagram trace={trace} fig="S-10" title="Replicated put" seed="0x5EED7A" caption="Node C fails at T+412 after acknowledging nothing. Node A has already answered the client from B's ack." />
+
+  <H n="S.6">Voice</H>
+  <dl {...stylex.attrs(spec.dl)}>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>Write</dt><dd>“<Code>&amp;</Code> marks an inout argument.”</dd>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>Not</dt><dd {...stylex.attrs(spec.dont)}>“Let's explore how the awesome & operator works!”</dd>
+    <dt {...stylex.attrs(type.label, type.labelInk)}>Rules</dt><dd>Present tense. Short declaratives. No exclamation marks, no “simply”, no “just”. Explain why once, then move on.</dd>
+  </dl>
+
+  <H n="S.7">Prohibited</H>
+  <P>Scanlines, glow, CRT curvature, pixel fonts, blinking cursors, fake terminal windows, figlet banners, gradients, rounded corners, shadows, emoji, colored syntax highlighting, a second accent, motion.</P>
+</Page>
