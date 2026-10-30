@@ -944,8 +944,8 @@ try Docs.at(id) fn() => Doc.edit(op)
   10 says for every instance. The `at` block pins it, so it isn't
   evicted while the block runs, but other callers' operations
   interleave between the block's calls.
-- **Setup.** The actor is made when `at` is entered, so setup's errors
-  are `at`'s: `try Docs.at(id)`. An actor's `with` is deferred to `at`,
+- **Setup.** The actor is made when `at` is entered, or a post is
+  made, so setup's errors are theirs: `try Docs.at(id)`. An actor's `with` is deferred to `at`,
   so its setup's errors move with it, and the family's declaration
   states them, `Actors<DocId, Doc> ! StoreDown`, as a dependency states
   its operations' errors; the handler given to `actors` must fit them. Callers waiting on the same key's setup
@@ -972,36 +972,61 @@ try Docs.at(id) fn() => Doc.edit(op)
   error. A task that pins an actor may wait for a slot only in a family
   installed outside the families it pins; anywhere else a full family
   fails at once with `Full`, the inner-to-outer rule of decision 10.
+  This covers the two waits a family has, for a slot and for room in
+  the mailbox (below): a sibling's post never waits, which is what makes
+  actors posting to each other in a cycle safe, and an actor made for
+  a post never waits for a slot.
 - **`post` is Erlang's cast: a message, and messages are data.**
   `Docs.post(k).edit(op)` puts one operation of `D`, with its arguments,
   in k's mailbox and returns. The arguments are evaluated when it's
   posted and are data, copied as an Erlang message is; no block is kept.
   A mailbox holds the enum of `D`'s operations the compiler writes
   (language.md §6), and the journal records posts as data. `at` is the
-  call, `post` the cast.
+  call, `post` the cast. research/actors-post/ model-checks these rules.
   - **Only an operation that returns `()` and can't fail may be
     posted**, since there's no caller to give a result or an error to.
     Anything else is a compile error whose help says to handle it inside
     the actor, or to use `at`.
+  - **`post` makes its actor, as `at` does,** so setup's errors are
+    `post`'s, `try Docs.post(k).edit(op)`, the only errors a post has; a
+    sibling's post handles them in the operation that posts. Queued
+    posts count as waiting for the actor, so an actor with mail is never
+    evicted, and a delivery never runs setup. An actor made for a post
+    may go past `max:` when none is evictable, rather than wait for a
+    slot: the excess is bounded by the keys with mail.
   - **Order:** posts from one task to one actor run in the order posted,
-    each as one operation, on a task the family's `with` owns.
+    each as one operation, on a task the family's `with` owns. The
+    mailbox belongs to the key, not the actor, so order holds across
+    eviction.
   - **Siblings:** an actor names its own family in its handler's `uses`,
     `handler doc(id: DocId) for Doc uses Store, Docs`, and may only
     `post` to it, never `at`: a post holds nothing, so it can't close a
     cycle. The handler's parameter, its key, is its `self()`.
   - **Back-pressure at the family's edge.** A family has one bound,
-    `mailbox: Int = 10_000`. A post from outside the family waits while
-    the family is over it; a post from an actor to a sibling never waits,
-    so two actors posting to each other can't deadlock. Posts inside a
-    family are caused by work that came in from outside, so the edge
-    bounds the whole; debug builds and `sim` report each family's
-    high-water mark, which is how an actor posting in a loop is found.
+    `mailbox: Int = 10_000`, and every call from outside the family is
+    metered by it: a post waits while the family's mail is over it, and
+    so does an operation called through `at`, before it takes the actor
+    (the compiler may meter only operations that post). A post from an
+    actor to a sibling never waits. So the mail that work from outside
+    causes is at most `mailbox`, plus one operation's posts per live
+    actor.
+  - **A chain reaction panics.** Mail between siblings is recursion: an
+    operation that posts twice around a cycle grows without end. A
+    sibling's post past twice `mailbox:` panics, as a stack overflow
+    does, and debug builds and `sim` report each family's high-water
+    mark, which is how it's found before then. Waiting would deadlock,
+    dropping would lose posts, and a post can't fail with it.
 - **Policies are data.** `evict: Lru`, the default, or `Lfu`. Expiry
   after a time without use or since a write (`expire:`) and a weight
   per actor (`weigh:`) are designed with the server milestone, as
   Caffeine's knobs are.
-- **Teardown** runs the actors' `finally`s in reverse creation order, as
-  nested `with`s run. `Docs.count()` and counts of actors made and
+- **Teardown drains, then** runs the actors' `finally`s in reverse
+  creation order, as nested `with`s run. Posts still queued when the
+  family's body returns are delivered first (and may post more), since
+  the family's `with` owns the task that runs them and a scope waits for
+  its tasks (decision 7); dropping them would make a post's return
+  meaningless. Two actors posting to each other forever keep the family
+  from ending, as a loop does. `Docs.count()` and counts of actors made and
   evicted are exposed, which is how leaks and thrashing are found.
 - **`sim` is faithful to the policy.** Eviction happens only through
   `max:`, `evict_idle` and `evict`, which depend only on the schedule

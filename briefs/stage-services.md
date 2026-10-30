@@ -161,13 +161,23 @@ Each is decided; cite it in the spec, don't re-argue it.
    `D`, its arguments evaluated when posted and copied as data, in k's
    mailbox, and returns; only an operation that returns `()` and can't
    fail can be posted (anything else is a compile error with help);
-   posts from one task to one actor run in order, each as one
-   operation, on a task the family's `with` owns; an actor names its
-   own family in its handler's `uses` and may only `post` to it, never
-   `at`; back-pressure is at the family's edge: a post from outside
-   waits while the family's mailboxes are over `mailbox:`, a sibling's
-   post never waits; debug builds and `sim` report each family's
-   high-water mark; posts are journaled as data;
+   **a post makes its actor as `at` does**, so its only errors are
+   setup's, `try Docs.post(k).op(args)`, queued mail counts as waiting
+   for the actor (never evicted), a delivery never runs setup, and an
+   actor made for a post goes past `max:` when none is evictable
+   instead of waiting; posts from one task to one actor run in order,
+   each as one operation, on a task the family's `with` owns, the
+   mailbox belonging to the key so order survives eviction; an actor
+   names its own family in its handler's `uses` and may only `post` to
+   it, never `at`; back-pressure is at the family's edge: **every call
+   from outside is metered**, a post and an operation called through
+   `at` (before it takes the actor) both wait while the family's mail
+   is over `mailbox:`; a sibling's post never waits, and **past twice
+   `mailbox:` it panics** (a chain reaction is runaway recursion);
+   debug builds and `sim` report each family's high-water mark; posts
+   are journaled as data; **teardown drains** queued posts, then runs
+   the `finally`s; research/actors-post/ is the FizzBee model of these
+   rules, and its counterexamples are tests;
    `evict: Lru` by default; teardown in reverse creation order;
    partitions with their own map, exact LRU and a cap of `max / parts`,
    so a journal from one thread replays on many; under `sim`, eviction
@@ -360,7 +370,14 @@ what's finished, and write down exactly what's missing.
    can `post` to its own family and `at` on it is refused; two actors
    posting to each other past `mailbox:` don't deadlock while an
    outside poster waits; the high-water mark is reported; a run with
-   posts replays from its journal.
+   posts replays from its journal; and research/actors-post/README.md's
+   counterexamples, in Ren, each behave as the fixed rules say: a post
+   from inside `at` while the mailbox is full and its target isn't live
+   completes (no deadlock); a session looping an `at` operation that
+   posts to a sibling is held at the edge; a chain reaction panics past
+   twice `mailbox:` with the high-water mark; a post whose setup fails
+   returns setup's error and loses nothing; teardown with posts queued
+   delivers them before the `finally`s.
 8. **The milestone.** examples/docs: language.md §11's document server
    behind a wiring, sessions over `sim.net`, a test store, and tests
    that every subscriber sees one order of edits and that the store

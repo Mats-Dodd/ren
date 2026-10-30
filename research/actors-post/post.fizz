@@ -1,0 +1,380 @@
+---
+# Decision 18's `post` under decision 10, for one actor family.
+#
+# A family `Docs = Actors<K, D>` with keys 0..KEYS-1, `max: MAX` live actors
+# and one bound `mailbox: MAILBOX` on the posts queued in it. Outside tasks
+# run small programs of `Docs.post(k).op()` and `Docs.at(k) fn() => ...`
+# blocks. Posts run on delivery tasks the family's `with` owns, one per key
+# (so one operation at a time per actor, mailbox order). An operation, run by
+# a delivery or by an `at` caller, may post to siblings; it takes the actor
+# for one call (decision 10), so `at` blocks and deliveries interleave
+# between calls.
+#
+# Every step is one atomic action; waits are `require`s. Knobs choose the
+# design (DESIGN rows in README.md) and the program.
+options:
+  max_actions: 400
+  crash_on_yield: false
+deadlock_detection: true
+liveness: "false"
+---
+
+# ---- knobs (override with --preinit-hook) ---------------------------------
+KEYS = 2
+MAX = 1                  # max: live actors
+MAILBOX = 1              # mailbox: bound on queued posts in the family
+CEIL = 4                 # Bounded fails if the family ever queues more than this
+
+SIB = "never_wait"       # a sibling post: never_wait | wait | panic_over
+HEADROOM = 1             # panic_over: a sibling post panics at MAILBOX + HEADROOM queued
+AT_METER = False         # an outside `at` caller's op call waits at the edge while full
+DELIVERY_OVER_MAX = False  # an actor made for a post may go past max: when nothing is evictable
+EAGER = False            # a post makes its actor when it's posted (as `at` does), and fails
+                         # with setup's errors; a key with queued posts is waited for
+COVER_EVICT = True       # expect a run that evicts an actor with queued posts (coverage)
+COVER_FAIL = False       # expect a run where a sibling post's setup fails (coverage, EAGER)
+MBOX_HOME = "key"        # key: the mailbox is the family's, per key | actor: it dies with the actor
+EVICT_NONEMPTY = True    # may an actor with queued posts be evicted?
+CHAOS = False            # sim's evict: AnyIdle - evict any evictable actor at any point
+SETUP_FAIL_KEYS = []     # keys whose setup may fail (each attempt, nondeterministically)
+SETUP_POLICY = "drop"    # what a delivery does when setup fails: drop | drop_all | retry | panic
+SETUP_DOWN = False       # True: setup of SETUP_FAIL_KEYS always fails (the store is down for good)
+TEARDOWN = "drain"       # family end: drain (run queued posts, then finallys) | drop
+
+# What an operation posts when it runs: [target, op] with target
+# "next" = (k+1) % KEYS, "self" = k, "all" = every sibling.
+OPS = {
+    "nop":    [],
+    "ping":   [["next", "pong"]],          # a ping-pong cycle, two hops
+    "pong":   [["next", "nop"]],
+    "fan":    [["all", "nop"]],            # fan-out to every sibling
+    "loop":   [["next", "loop"]],          # ping-pong forever, one message in flight
+    "double": [["next", "double"], ["next", "double"]],   # chain reaction
+    "notify": [["next", "nop"]],           # Doc.edit telling a sibling, run via `at`
+}
+
+# Outside tasks. Steps: ["post", k, op] | ["at", k] | ["call", op] |
+# ["calls", op] (call it any number of times: a session's `for op in ...`) |
+# ["end"] (the `at` block returns).
+PROGS = [
+    [["post", 0, "ping"], ["post", 1, "nop"]],
+    [["at", 0], ["call", "nop"], ["post", 1, "nop"], ["end"]],
+]
+
+atomic func targets(k, tgt):
+    if tgt == "next":
+        return [(k + 1) % KEYS]
+    if tgt == "self":
+        return [k]
+    return [j for j in range(KEYS) if j != k]
+
+atomic func expand(k, op):
+    # the list of [key, op] posts an operation makes, in order
+    out = []
+    for p in OPS[op]:
+        ts = targets(k, p[0])
+        for j in ts:
+            out.append([j, p[1]])
+    return out
+
+atomic func total():
+    n = 0
+    for k in range(KEYS):
+        n = n + len(mbox[k])
+    return n
+
+atomic func victims(k):
+    vs = []
+    for j in live:
+        if j == k:
+            continue
+        a = live[j]
+        if a["pins"] == 0 and busy[j] == -1 and ((EVICT_NONEMPTY and not EAGER) or len(mbox[j]) == 0):
+            vs.append(j)
+    return vs
+
+atomic func evict(j):
+    live.pop(j)
+    if len(mbox[j]) > 0:
+        evicted_with_mail = True
+    if MBOX_HOME == "actor" and len(mbox[j]) > 0:
+        for m in mbox[j]:
+            lost.append([j] + m)
+        mbox[j] = []
+
+atomic func enqueue(poster, k, op, origin):
+    s = (seq.get(str(poster) + ">" + str(k), 0) + 1) % 4   # mod 4 keeps loops finite
+    seq[str(poster) + ">" + str(k)] = s
+    mbox[k].append([poster, s, op, origin])
+
+# One post from an actor's operation (poster is the task running it).
+# Returns True if it went in, False if it has to wait.
+atomic func sib_post(poster, k, op):
+    n = total()
+    if SIB == "wait" and n >= MAILBOX:
+        return False
+    if SIB == "panic_over" and n >= MAILBOX + HEADROOM:
+        panicked = True
+        why = "sibling post over mailbox + headroom"
+        return True
+    if EAGER and not (k in live):
+        r = make(k, True)
+        if r == "fail":
+            sib_fails.append(k)             # the posting operation handles setup's error
+            return True
+    enqueue(poster, k, op, "in")
+    return True
+
+atomic func deliver_check(k, m):
+    key = str(m[0]) + ">" + str(k)
+    # posts from one task to one actor run in order, none skipped
+    if len(lost) == 0 and m[1] != (done_seq.get(key, 0) + 1) % 4:
+        fifo_bad = True
+    done_seq[key] = m[1]
+
+atomic action Init:
+    mbox = {}
+    busy = {}
+    for k in range(KEYS):
+        mbox[k] = []
+        busy[k] = -1          # task running an operation on k's actor, or -1
+    live = {}                 # key -> {"pins"}
+    pc = [0 for p in PROGS]   # outside tasks' program counters
+    pinned = [-1 for p in PROGS]
+    texec = [None for p in PROGS]     # [op, posts left] while a task runs an op
+    dexec = {}                        # key -> [op, posts left] while its delivery runs one
+    seq = {}
+    done_seq = {}
+    lost = []                 # posts dropped by eviction or setup failure
+    dropped_td = []           # posts dropped at teardown
+    fifo_bad = False
+    panicked = False
+    why = ""
+    phase = "run"             # run | teardown | done
+    evicted_with_mail = False
+    sib_fails = []
+    dead_mail = False
+    last = ""
+
+# ---- making an actor --------------------------------------------------------
+# Returns "ok", "fail" (setup failed) or "wait" (no slot).
+atomic func make(k, for_post):
+    if k in live:
+        return "ok"
+    if len(live) >= MAX:
+        vs = victims(k)
+        if len(vs) > 0:
+            v = oneof vs                  # any evictable: covers LRU and LFU
+            evict(v)
+        elif not (for_post and DELIVERY_OVER_MAX):
+            return "wait"
+    if k in SETUP_FAIL_KEYS:
+        if SETUP_DOWN:
+            return "fail"
+        r = oneof ["ok", "fail"]
+        if r == "fail":
+            return "fail"
+    live[k] = {"pins": 0}
+    return "ok"
+
+# ---- outside tasks -----------------------------------------------------------
+atomic action Outside:
+    require phase == "run" and not panicked
+    t = oneof [i for i in range(len(PROGS)) if pc[i] < len(PROGS[i])]
+    st = PROGS[t][pc[t]]
+    kind = st[0]
+    last = "T" + str(t) + " " + str(st)
+    if texec[t] != None:
+        # inside an op called through `at`: its sibling posts, then return
+        ex = texec[t]
+        k = pinned[t]
+        if len(ex[1]) > 0:
+            p = ex[1][0]
+            ok = sib_post(t, p[0], p[1])
+            require ok
+            texec[t] = [ex[0], ex[1][1:]]
+            last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " posts " + p[1] + " to " + str(p[0])
+            return
+        busy[k] = -1
+        texec[t] = None
+        last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " returns"
+        if kind == "call":
+            pc[t] = pc[t] + 1
+        return
+    if kind == "post":
+        n = total()
+        require n < MAILBOX                 # outside: waits while the family is full
+        if EAGER:
+            r = make(st[1], True)
+            require r != "wait"
+            if r == "fail":
+                pc[t] = pc[t] + 1           # `try Docs.post(k)` fails: nothing queued
+                last = last + " fails with setup's error"
+                return
+        enqueue(t, st[1], st[2], "out")
+        pc[t] = pc[t] + 1
+    elif kind == "at":
+        r = make(st[1], False)
+        require r != "wait"
+        if r == "fail":
+            # `try Docs.at(k)` fails with setup's error: skip the block
+            j = pc[t]
+            for i in range(pc[t], len(PROGS[t])):
+                if PROGS[t][i][0] == "end":
+                    j = i
+                    break
+            pc[t] = j + 1
+            last = last + " setup fails"
+            return
+        live[st[1]]["pins"] = live[st[1]]["pins"] + 1
+        pinned[t] = st[1]
+        pc[t] = pc[t] + 1
+    elif kind == "call" or kind == "calls":
+        k = pinned[t]
+        if kind == "calls":
+            more = oneof [True, False]
+            if not more:
+                pc[t] = pc[t] + 1
+                last = "T" + str(t) + " leaves the loop"
+                return
+        if AT_METER:
+            n = total()
+            require n < MAILBOX
+        require busy[k] == -1               # takes the actor for one call
+        busy[k] = t
+        ps = expand(k, st[1])
+        texec[t] = [st[1], ps]
+        last = "T" + str(t) + " calls " + st[1] + " on " + str(k)
+    elif kind == "end":
+        k = pinned[t]
+        live[k]["pins"] = live[k]["pins"] - 1
+        pinned[t] = -1
+        pc[t] = pc[t] + 1
+
+# ---- delivery tasks, one per key, owned by the family's `with` -------------
+atomic action Deliver:
+    require not panicked and phase != "done"
+    k = oneof [j for j in range(KEYS) if (len(mbox[j]) > 0 and busy[j] == -1) or j in dexec]
+    if k in dexec:
+        ex = dexec[k]
+        if len(ex[1]) > 0:
+            p = ex[1][0]
+            ok = sib_post(100 + k, p[0], p[1])
+            require ok
+            dexec[k] = [ex[0], ex[1][1:]]
+            last = "D" + str(k) + " " + ex[0] + " posts " + p[1] + " to " + str(p[0])
+        else:
+            busy[k] = -1
+            dexec.pop(k)
+            last = "D" + str(k) + " " + ex[0] + " returns"
+        return
+    if not (k in live):
+        if EAGER:
+            dead_mail = True                # EAGER: queued posts keep their actor live
+    r = make(k, True)
+    require r != "wait"
+    if r == "fail":
+        # a post can't fail: the policy decides what happens to the mailbox
+        last = "D" + str(k) + " setup fails"
+        if SETUP_POLICY == "drop":
+            m = mbox[k][0]
+            lost.append([k] + m)
+            mbox[k] = mbox[k][1:]
+        elif SETUP_POLICY == "drop_all":
+            for m in mbox[k]:
+                lost.append([k] + m)
+            mbox[k] = []
+        elif SETUP_POLICY == "panic":
+            panicked = True
+            why = "setup failed under a post"
+        else:
+            pass                            # retry: the post stays queued, try again later
+        return
+    m = mbox[k][0]
+    mbox[k] = mbox[k][1:]
+    deliver_check(k, m)
+    busy[k] = 100 + k
+    ps = expand(k, m[2])
+    dexec[k] = [m[2], ps]
+    who = "T" + str(m[0])
+    if m[0] >= 100:
+        who = "D" + str(m[0] - 100)
+    last = "D" + str(k) + " runs " + m[2] + " from " + who + "#" + str(m[1])
+
+# sim's evict: AnyIdle, and the program's own Docs.evict(k)
+atomic action Chaos:
+    require CHAOS and phase == "run" and not panicked
+    vs = victims(-1)
+    v = oneof vs
+    evict(v)
+    last = "evict " + str(v)
+
+# ---- the family's end ---------------------------------------------------------
+atomic action Teardown:
+    require phase == "run" and not panicked
+    require all([pc[i] == len(PROGS[i]) for i in range(len(PROGS))])
+    phase = "teardown"
+    last = "body returns: family ends"
+    if TEARDOWN == "drop":
+        for k in range(KEYS):
+            for m in mbox[k]:
+                dropped_td.append([k] + m)
+            mbox[k] = []
+
+atomic action Finallys:
+    require phase == "teardown" and not panicked
+    require len(dexec) == 0
+    if TEARDOWN == "drop":
+        for k in range(KEYS):
+            for m in mbox[k]:
+                dropped_td.append([k] + m)
+            mbox[k] = []
+    n = total()
+    require n == 0
+    live = {}
+    phase = "done"
+    last = "finallys run"
+
+atomic action Finished:
+    require phase == "done" or panicked
+    pass
+
+# ---- properties ------------------------------------------------------------------
+always assertion FifoPerPosterActor:
+    return not fifo_bad
+
+always assertion NoLostPost:
+    return len(lost) == 0
+
+always assertion EveryAcceptedPostRan:
+    if phase == "done":
+        # drain ran every post (mailboxes are empty); nothing was dropped or lost
+        return len(dropped_td) == 0 and len(lost) == 0
+    return True
+
+always assertion OutsidePostsWithinBound:
+    return len([m for k in range(KEYS) for m in mbox[k] if m[3] == "out"]) <= MAILBOX
+
+always assertion Bounded:
+    return len([m for k in range(KEYS) for m in mbox[k]]) <= CEIL
+
+always assertion MaxRespected:
+    if DELIVERY_OVER_MAX:
+        return len(live) <= MAX + KEYS    # past max: by at most one per delivery
+    return len(live) <= MAX
+
+always assertion NoPanic:
+    return not panicked
+
+# ---- coverage: the runs really reach the interesting states --------------------
+exists assertion FamilyEnds:
+    return phase == "done"
+
+exists assertion EvictedWithQueuedPosts:
+    return evicted_with_mail or not COVER_EVICT
+
+always assertion EagerKeepsMailedActorsLive:
+    return not dead_mail
+
+exists assertion SiblingPostSetupFails:
+    return len(sib_fails) > 0 or not COVER_FAIL

@@ -1286,12 +1286,15 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   operation does (foundations.md decision 10), and the `at` block keeps
   it from being evicted. So a read and a write in two operations race,
   as in every actor system: a read-modify-write is one operation.
-- **`post` is Erlang's cast.** `Docs.post(k).edit(op)` puts one
+- **`post` is Erlang's cast.** `try Docs.post(k).edit(op)` puts one
   operation, with its arguments evaluated now, in k's mailbox and
   returns: a message, which is data. Only an operation that returns `()`
-  and can't fail can be posted. An actor posts to its siblings by naming
-  its family in `uses`. A post from outside waits while the family is
-  over its `mailbox:` bound; a sibling's post never waits.
+  and can't fail can be posted; the post itself makes the actor, as
+  `at` does, so it fails only with setup's errors. An actor posts to its
+  siblings by naming its family in `uses`. Every call from outside, a
+  post or an `at`, waits while the family's mail is over its `mailbox:`
+  bound; a sibling's post never waits, and past twice the bound it
+  panics, as runaway recursion does.
 
 The rest, setup, eviction, periodic work, deadlock and what `sim` does,
 is in [foundations.md decision 18](foundations.md#18-actors-and-stripes).
