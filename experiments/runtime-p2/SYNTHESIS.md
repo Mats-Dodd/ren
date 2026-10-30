@@ -36,7 +36,7 @@ the documents. Sections 2 and 3 are proposed text for the owner.
   cloud machines, whose shared cores make these numbers noise". The cloud
   runs bear that out, and most latency tails below are NOISY.
 
-Sources: [k1b/results/cloud/](k1b/results/cloud/) (no SUMMARY.md; see 1),
+Sources: [k1b/results/cloud/](k1b/results/cloud/) (headline grid and VERIFY-headline.md; see 1a),
 [percore/results/cloud/SUMMARY.md](percore/results/cloud/SUMMARY.md),
 [spin/results/cloud/SUMMARY.md](spin/results/cloud/SUMMARY.md),
 [switch/results/cloud/SUMMARY.md](switch/results/cloud/SUMMARY.md), each
@@ -50,15 +50,20 @@ an exact LRU and a cap of max/parts (three lock round trips per `at`);
 oldest of k = 3, 5 or 10 sampled unpinned slots, under one global cap;
 **c_clock**, where `take` stores a use bit and a CLOCK hand picks the victim.
 
-### 1a. The cloud run is incomplete
+### 1a. Which cloud runs exist
 
-The deterministic sections finished (sim, parts, mem). **The threaded
-throughput section did not.** `throughput-20261030-063029.txt` holds 13
-lines of 576 (the measure report says 9; the file has 12 a_lru lines and 1
-b_sampled line). Extras and the oversubscription check never ran. There is
-no `k1b/results/cloud/SUMMARY.md`. The commands to finish are in the k1b
-measure report: `k1b/measure-cloud.sh throughput extras` in the background,
-then the `oversub` section.
+The deterministic sections finished (sim, parts, mem). The full threaded
+grid (`throughput-20261030-063029.txt`, 576 configurations at 200 ms)
+stopped after 13 lines and is kept only as a record. The orchestrator then
+ran a reduced grid, `measure-cloud.sh headline`, at 1000 ms a rep:
+`headline-20261030-122017.txt`, 104 configurations, 0 failures, 52 NOISY.
+It covers C and Rust, a/b/c, zipf99 and uniform, max 10k, hits only
+(U = 0.9) and under real eviction (U = 2), at 1, 2, 4 and 8 workers, plus
+sampled k = 3 and 10 under eviction. An independent agent re-ran 15 point
+claims and 4 derived claims from its own build
+(`results/cloud/VERIFY-headline.md`): all reproduce, 8 within 10% on clean
+runs, 7 NOISY with medians on the claim. The extras (os lock, parts sweep)
+were not run on cloud.
 
 ### 1b. Hit rate under eviction (cloud, verified)
 
@@ -86,29 +91,60 @@ scripts say the derived default (32 at max 50k). So the plru column at max
 50k was simulated with 8 partitions, on both machines. The other policies do
 not read parts.
 
-### 1c. Throughput on the hit path (cloud: partial; macOS: complete)
+### 1c. Throughput on the hit path (cloud, verified)
 
-Cloud data, C unless stated, zipf99, max 10k, U = 0.9, spin lock, Mops/s:
+Spin lock, max 10k, k = 5, Mops/s, C (Rust within 10% unless noted).
+N = NOISY. Verified medians from VERIFY-headline.md in brackets where they
+were re-run.
 
-| workers | a_lru C | a_lru Rust | b_sampled C |
-|---|---|---|---|
-| 1 | 30.91 [28.76..34.84] NOISY | 27.39 NOISY | 32.41 [24.89..33.20] NOISY |
-| 2 | 6.64 NOISY | 6.63 [6.38..6.82] | — |
-| 3 | 6.06 [5.88..6.20] | 5.60 NOISY | — |
-| 4 | 5.48 [5.31..5.59] | 5.47 [5.36..5.58] | — |
-| 8 (oversubscribed) | 2.79 NOISY | 2.61 NOISY | — |
-| 16 (oversubscribed) | 1.62 NOISY | 1.42 NOISY | — |
+**Hits only (U = 0.9, hit rate 1.0, 0 evictions):**
 
-- **a_lru: N workers still do less total work than one.** 4 workers do
-  0.18× of 1 worker. That is within the core count, so it is the design
-  (the partition line moving on every hit), as in phase 1.
-- **The one cloud b/a ratio at 1 worker is 1.05×** (32.41 against 30.91,
-  both NOISY). PLAN 1 predicted 1.5 to 2×; macOS gave 1.37×.
-- **Cloud single-worker throughput is about half of macOS** (a_lru 30.9
-  against 64.2 Mops/s).
-- No cloud data exists for b or c at 2 to 16 workers, on uniform keys, in
-  the miss regime, or with the os lock. **So whether b scales on cloud is
-  unmeasured.**
+| keys | workers | a_lru | b_sampled | c_clock | b/a |
+|---|---|---|---|---|---|
+| uniform | 1 | 23.3 N | 28.3 N | 30.1 N | 1.22 |
+| uniform | 2 | 7.42 | 32.9 | 31.5 | 4.4 |
+| uniform | 4 | **6.79** (6.83) | **50.5** (51.6) | **51.0** (53.0) | **7.4** (7.55) |
+| uniform | 8 (oversub) | 3.57 | 39.7 N | 40.3 N | 11 |
+| zipf99 | 1 | 26.8 N | 32.9 (30.8 N) | 30.5 N | 1.22 |
+| zipf99 | 2 | 6.64 | 27.8 | 27.3 N | 4.2 |
+| zipf99 | 4 | **5.21** (5.33) | **25.0** (26.7 N) | 26.5 | **4.8** (5.0) |
+| zipf99 | 8 (oversub) | 2.79 | 19.4 N | 19.8 N | 6.9 |
+
+Rust b_sampled, uniform, 4 workers: 53.3 (53.0 verified).
+
+**Under real eviction (U = 2; hit rate 0.90 on zipf99, 0.50 on uniform):**
+
+| keys | workers | a_lru | b_sampled k=5 | c_clock | b k=3 | b k=10 |
+|---|---|---|---|---|---|---|
+| zipf99 | 1 | 22.0 N | 21.7 N | 21.3 | 22.2 N | 21.3 N |
+| zipf99 | 4 | **4.49** (4.62) | **11.2** (11.1 N) | **6.81** (6.78 N) | 10.9 N | 10.9 |
+| uniform | 1 | 12.7 N | 10.1 N | 9.77 N | 10.8 N | 8.47 |
+| uniform | 4 | **2.55** N (2.41) | **3.13** (3.02) | **1.96** N (1.91 N) | 2.63 N | 2.54 |
+
+- **Hits: sampled (b) and CLOCK (c) scale where a_lru collapses.** At 4
+  workers b is 7.4× a on uniform keys and 4.8× on zipf99 (worst verified
+  pairing 3.97×). b and c are within 6% of each other on every hit cell.
+- **Do N workers beat one?** On uniform hits, yes: b at 4 workers is 1.78×
+  b at 1 (verified 1.88 to 2.05×). On zipf99 hits, **no**: 0.76× (verified
+  0.76 to 0.88×), because the hottest instances' lines still move on every
+  take. a_lru stays at 0.18 to 0.29× of one worker on every load.
+- **Under eviction nothing scales.** No variant's 4-worker total beats its
+  own 1-worker total (0.15 to 0.5×, verified). b still leads a at 4
+  workers: 2.5× on zipf99, but only 1.2× on uniform with half the accesses
+  missing. The miss path (shard write lock, sampling, claim) is the cost
+  there, not the hit.
+- **CLOCK under eviction is worse than sampling, and on uniform worse than
+  exact LRU** (1.96 against 2.55 at 4 workers; verified 1.60 to 1.96
+  against 2.41). The global hand is a contended line. So CLOCK loses on the
+  axis it was meant to win.
+- **k under eviction:** k = 3, 5 and 10 are within 10% of each other on
+  zipf99 at 4 workers. On uniform, k = 5 is 1.2× k = 3 and k = 10.
+- **Retries** (claims that lost a race and resampled) are 31 to 33% of
+  misses under uniform eviction at 4 workers for b and c, against PLAN 11's
+  < 20%; 13 to 17% on zipf99.
+- **Cloud single-worker throughput is about half of macOS** (a_lru 27
+  against 64 Mops/s), and every 1-worker cell is NOISY on this machine even
+  at 1000 ms reps: read 1-worker absolutes as ±10%.
 
 macOS (phase 2, k1b/results/analysis.txt), for reference only:
 
@@ -117,26 +153,27 @@ macOS (phase 2, k1b/results/analysis.txt), for reference only:
   So b16/a16 = 8.9 to 27.9.
 - 16 workers against 1, zipf99: b 0.14 to 0.23×, a 0.08 to 0.16×.
   So b16/a16 = 2.3 to 3.4.
-- The PLAN 2 deciding test ("b at 16 workers is at least 4× a") holds on
-  uniform and zipf70. It fails on zipf99 (2.3 to 3.4×).
-- "b at 16 workers is at least 6× b at 1" fails everywhere (best 3.38×).
 - p99 at 16 workers, uniform: b 167 to 333 ns, a 4.2 to 34.7 µs.
 - c is within 10% of b on 67 of 72 hit-path cells.
+
+Cloud and macOS agree in shape: b/a is 4 to 8× by 4 workers on hits,
+uniform hits scale with b, zipf99 hits don't scale with anything.
 
 ### 1d. Verdict
 
 - **Hit rate (cloud): sampled eviction is good enough.** k = 5 is never more
   than 0.55 points below exact LRU, and it beats LRU on scans. CLOCK is
   within 1.15 points. Both meet the PLAN's bounds.
-- **Hit-path throughput: no cloud verdict.** The cloud run stopped after 13
-  lines. The only scaling data, for a_lru, repeats phase 1: 4 workers do
-  0.18× of one worker. On macOS the stamp design (b) removes most of that
-  loss on uniform keys (b16/a16 = 9 to 28). It does not remove it on
-  Zipf(0.99), where hot keys' lines move in every variant and **N workers
-  still do less than one** (macOS b 0.14 to 0.23×).
-- **Do N workers now beat one?** On cloud: not shown for b or c; a does not.
-  On macOS: yes on uniform and Zipf(0.7) (up to 3.4×, peaking at 4 to 8
-  workers); no on Zipf(0.99).
+- **Hit-path throughput (cloud, verified): "the runtime records each use,
+  the library samples the victim" wins.** At 4 workers b is 7.4× exact
+  LRU-per-partition on uniform hits and 4.8× on zipf99 hits, and 1.2 to
+  2.5× under real eviction. CLOCK matches b on hits but loses to b under
+  eviction everywhere, and to exact LRU on uniform eviction. **Pick
+  sampled k = 5, not CLOCK.**
+- **Do N workers now beat one?** On uniform hits, yes (b: 1.8 to 2.0× at 4
+  workers). On zipf99 hits, no (0.76 to 0.88×), on cloud as on macOS. Under
+  eviction, no variant does. The hit path is fixed; hot keys and the miss
+  path are not.
 - **Does `parts:` still pick the victim?** Under b and c, no. The victim
   sequence is identical at parts 1, 8 and 64, and VERIFY extended this to
   parts 2 and 32 at all four universes (32/32). Under a it changes in every
@@ -156,9 +193,12 @@ macOS (phase 2, k1b/results/analysis.txt), for reference only:
 
 ## 2. Proposed change to briefs/stage-services.md, Steps, step 7
 
-**Gate.** Adopt this only after the cloud K1b throughput run finishes and
-shows b at 4 workers ahead of a at 4 workers on uniform keys. The hit-rate
-half is cloud-verified now. The scaling half rests on macOS alone.
+**Gate: met.** The gate was "b at 4 workers ahead of a at 4 workers on
+uniform keys" on cloud. It is 7.4× ahead on hits (verified 7.55×) and 1.2×
+under eviction. Both halves (hit rate and scaling) are now cloud-verified.
+Two things the text below does not promise, because cloud shows they are
+false: hot keys (Zipf 0.99) still do less at 4 workers than at one, and a
+miss-heavy family does not scale.
 
 **Current text (step 7, first sentence):**
 
@@ -411,7 +451,12 @@ Each is stated as measured. None is explained away.
    - Under skew `per_core` loses (0.59×) and its tail is the worst.
    - So the ranking depends on the load, not only on the hop's price.
 3. **Phase 1's "N workers do less than one" persists for a_lru on cloud**
-   (0.18× at 4 workers). K1b does not show on cloud that b fixes it.
+   (0.18× at 4 workers). b fixes it for uniform hits (1.8 to 2.0×) but not
+   for zipf99 hits (0.76 to 0.88×) and not under eviction (0.15 to 0.5×
+   for every variant).
+5. **CLOCK was expected to tie sampling.** It ties on hits and loses under
+   eviction (0.6× b on zipf99, and below exact LRU on uniform), because
+   the hand is one global contended counter.
 4. **The model's work_stealing reasoning holds for throughput under skew**
    (it beats both alternatives), but its tail is not the best for light
    requests. place_at_spawn's light p99 is 2 to 6.5× lower.
@@ -419,7 +464,9 @@ Each is stated as measured. None is explained away.
 **Against PLAN predictions.**
 
 - **K1b**
-  - P1: b/a at 1 worker is 1.05× on cloud (NOISY), against 1.5 to 2×.
+  - P1: b/a at 1 worker is 1.22× on cloud (both NOISY), against 1.5 to 2×.
+  - P11: retries are 31 to 33% of misses under uniform eviction at 4
+    workers, against < 20%.
   - Cloud single-worker a_lru is 0.48× macOS.
   - From macOS: P2's "b at 16 workers ≥ 6× b at 1" fails (max 3.38×).
     P2's "b16 ≥ 4× a16" fails on zipf99 (2.3 to 3.4×). P4's "b's zipf99
@@ -502,6 +549,13 @@ Verdicts are VERIFY's: *confirmed* (within 10%, not NOISY), *within-noise*
 |---|---|---|---|---|
 | k1b | parts fingerprint (s3/s5/s10/clock invariant, plru changes) | 8/8 ok | 8/8 in 7 reps; 32/32 at all U, parts 1/2/8/32/64 | confirmed |
 | k1b | sim bit-identical to macOS, C = Rust | 32/32 | 32/32 (C, Rust, gcc, other agent's run) | confirmed ("under real eviction" overstates: simulator only) |
+| k1b | b4/a4 uniform hits | 7.4× (50.5 / 6.79) | 7.55× (51.6 / 6.83) | confirmed |
+| k1b | b4/a4 zipf99 hits | 4.8× (25.0 / 5.21) | 5.0× (26.7 N / 5.33); 3.97× worst pairing | confirmed, thin margin |
+| k1b | b uniform hits, 4 workers / 1 | 1.78× | 1.88 to 2.05× | confirmed |
+| k1b | b zipf99 hits, 4 workers / 1 | 0.76× | 0.76 to 0.88× | confirmed |
+| k1b | U = 2: no variant's 4-worker total beats its 1-worker | holds | 0.15 to 0.5× for all six | confirmed |
+| k1b | U = 2 uniform: c4 < a4 | 1.96 N < 2.55 N | 1.60 to 1.96 < 2.41 | confirmed |
+| k1b | Rust b uniform hits w4 | 53.3 | 53.0 | confirmed |
 | percore | skewed thr, ws | 0.340 [0.332..0.366] | 0.328 [0.315..0.336] | confirmed |
 | percore | skewed thr, pc (0.59× ws) | 0.201 | 0.194, 0.59× | confirmed |
 | percore | skewed thr, pas 3+1 (0.29×) | 0.098 | 0.097, 0.30× | confirmed |
