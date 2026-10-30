@@ -332,7 +332,21 @@ pub fn decode<T>(text: Str, s: Settings = DEFAULT) -> T ! Error
   code.
 - **So settings must be known while building:** a literal, or a
   top-level value. Settings known only at run time are a build error
-  at the call, whose help says to bind them with a top-level `let`.
+  at the call, whose help says to bind them with a top-level `let`, or,
+  for a limit, to pass it as `limits:`.
+- **What shapes the code is known while building; what bounds the work
+  is a value.** Settings shape the plan (casing, unknown keys, looks,
+  tags), so they're constants. Limits only bound the work (bytes,
+  depth, items, a string's bytes), one comparison each at run time, so
+  they're values, read from config if a program likes. A library takes
+  them as their own argument with safe defaults, `limits:`, never as
+  fields of its settings: `json.decode<Order>(text, API, limits:
+  cfg.limits)`. Every format shares std's one record, `Limits { bytes:
+  16.mib, depth: 64, items: 1_000_000, str_bytes: 1.mib }`; a library
+  with other limits (http's header and body sizes) declares its own the
+  same way. It's library policy (decision 20, rule 5); the language's
+  part is only that a signature `let` reads what's known while
+  building, which forces the split.
 
 ### Recursion
 
@@ -542,13 +556,15 @@ let CLI = cli.spec<Cmd>(positional: ["key"], short: [("json", "j")], formats: [A
 ```
 
 - **Each std library has one settings record.** Its fields are its
-  knobs (casing, unknown keys, limits) and `formats: Array<Look>`.
+  knobs (casing, unknown keys) and `formats: Array<Look>`. Limits
+  aren't settings: they're the `limits:` argument (above).
   This is a convention, not a language rule; a third-party library may
   do otherwise.
 - **Settings are data,** known while building. `{ ..API, unknown:
   Ignore }` is record update, in a top-level `let`.
-- **`max_depth: Int = 64`** in every std library's settings. Past it is
-  `TooDeep(at, limit)`.
+- **`Limits.depth`, 64 by default,** in every format library's
+  `limits:`. Past it is `TooDeep(at, limit)`; past the others,
+  `TooLarge(at, what, limit)`.
 
 ### Names, casing and renames
 
@@ -768,6 +784,3 @@ anything here.
   function they're the same. For a private one, the inferred set is what's
   true.
 - **What's the build's time budget,** and can a module raise it?
-- **Limits read at run time.** Settings are known while building, so
-  where a `max_bytes` from config goes is open
-  ([formats.md, Open](formats.md#open)).

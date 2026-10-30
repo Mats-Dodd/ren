@@ -404,6 +404,7 @@ pub type Problem = ! Missing(at: Str, field: Str)
                    | Invalid(at: Str, why: Str)
                    | NoCase(at: Str, tag: Str)
                    | TooDeep(at: Str, limit: Int)
+                   | TooLarge(at: Str, what: Str, limit: Int)
 ```
 
 - **`at` uses the look's names,** the ones in the input:
@@ -416,7 +417,7 @@ pub type Problem = ! Missing(at: Str, field: Str)
 - **The doors can stop at the first problem or collect all.** It's a
   parameter of `build<T>`. Which one a library uses by default is its
   policy.
-- **`Unknown` and `TooDeep` are raised by libraries,** which share the
+- **`Unknown`, `TooDeep` and `TooLarge` are raised by libraries,** which share the
   tags so every library spells them one way. When a library raises
   them is its policy.
 - **A library adds its own tags around `Problem`** (a syntax error with
@@ -543,7 +544,21 @@ code in that library, run the same way.
 
 - **So a settings record must be known while building:** a literal, or
   a top-level value. Settings known only at run time are a build error
-  at the call, whose help says to bind them with a top-level `let`.
+  at the call, whose help says to bind them with a top-level `let`, or,
+  for a limit, to pass it as `limits:`.
+- **What shapes the code is known while building; what bounds the work
+  is a value.** Settings shape the plan (casing, unknown keys, looks,
+  tags), so they're constants. Limits only bound the work (bytes,
+  depth, items, a string's bytes), one comparison each at run time, so
+  they're values, read from config if a program likes. A library takes
+  them as their own argument with safe defaults, `limits:`, never as
+  fields of its settings: `json.decode<Order>(text, API, limits:
+  cfg.limits)`. Every format shares std's one record, `Limits { bytes:
+  16.mib, depth: 64, items: 1_000_000, str_bytes: 1.mib }`; a library
+  with other limits (http's header and body sizes) declares its own the
+  same way. It's library policy (decision 20, rule 5); the language's
+  part is only that a signature `let` reads what's known while
+  building, which forces the split.
 - **A top-level `let` checks too.** `let KEYS_V1 =
   http.mount<Keys>(...)` fails the build if http's check fails, like
   any top-level failure.
@@ -1361,10 +1376,6 @@ pub format rest for Keys.Error, writes =
 
 ## Open
 
-- **Limits read at run time.** A settings record is known while
-  building, but a `max_bytes` that comes from config isn't. Where such
-  a limit goes, a separate argument or a run-time part of the settings,
-  is open.
 - **The spelling of http's header and raw-body lines,** for the http
   stage.
 - **The envelope's spec:** call id, reply, defect, cancel, a reserved
