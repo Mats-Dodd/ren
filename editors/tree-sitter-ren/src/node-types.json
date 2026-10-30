@@ -1143,6 +1143,32 @@
     }
   },
   {
+    "type": "calls_type",
+    "named": true,
+    "fields": {
+      "dependency": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_name",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "constrained_type_parameter",
     "named": true,
     "fields": {
@@ -1295,6 +1321,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "calls_type",
+            "named": true
+          },
           {
             "type": "type_name",
             "named": true

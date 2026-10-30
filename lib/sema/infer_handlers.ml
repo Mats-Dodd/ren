@@ -128,7 +128,7 @@ and handler_parts core env cx ~node ~loc ~own ~over ~fails state arms ~needs
           | _ -> [])
         paths
   in
-  Hashtbl.replace cx.found node (Handler_facts { forwards; body_ty = None; any_vars = None });
+  Hashtbl.replace cx.found node (Handler_facts { forwards; body_ty = None; any_vars = None; call_vars = None });
   (* its state, arms and `finally` run while an operation does, or as
      one, so they can call `next` *)
   let hcx = lambda_cx cx [] [] ~errs:fails ~uses:needs in
@@ -191,6 +191,8 @@ and handler_parts core env cx ~node ~loc ~own ~over ~fails state arms ~needs
       match (op, a.arm_impl.kind, tags) with
       | _, Lambda ([], body), Some tags when a.arm_op = Call_op "any" ->
           any_arm core env cx hcx ~node ~needs ~tags a.arm_impl body
+      | _, Lambda (params, body), _ when a.arm_op = Call_op "clause" ->
+          call_clause core env cx hcx ~node ~needs ~own a.arm_impl params body
       | Some (p, op, ps, r, errs), Lambda (params, body), _
         when List.length params = List.length ps ->
           arm core env cx hcx ~needs ~dep:p ~op ~ps ~r ~errs a.arm_impl params
@@ -250,6 +252,97 @@ and any_arm core env cx hcx ~node ~needs ~tags (impl : expr) body =
   core.check env acx body res;
   env.any_call <- around;
   Hashtbl.replace cx.nodes impl.node (TFun ([], res, open_errs, needs))
+
+(* A handler's `call` clause, the lambda [impl] of [params] and [body]
+   (compiler.md, "Services stage", "`D.Call`"), in a handler of [own],
+   one dependency, whose context is [hcx] and whose needs are [needs]:
+   `call(c) => ...`, which runs for each operation the handler doesn't
+   write an arm for, `c` that call, a value of the dependency's `D.Call`;
+   or a merge's `call(c, a, b) => ...`, which folds [a] and [b], two
+   results of the call [c]. It's checked once, for a call in general, as
+   an arm `over any` is: the result of the operation [c] calls is a
+   skolem, and its errors a row the clause can't name, which become
+   variables of the handler's function's, and lowering puts each
+   operation's in their place. A `match` on [c] refines the result in
+   each arm to its case's operation's ([Infer_env.clause]). A handler
+   `for D`, [D] a type parameter, has `D.Call<R ! E>`, the prelude's
+   `Call<D, R, ! E>`, which it can only pass on: what it's a call of
+   isn't known. The clause gives the operation's result, and fails with
+   at most its errors; a merge's fails with nothing. *)
+and call_clause core env cx hcx ~node ~needs ~own (impl : expr) params body =
+  let rid = fresh_id env.st and eid = fresh_id env.st in
+  let res = TSkol (rid, "R") and errs = RSkol (eid, "E") in
+  Hashtbl.replace env.clauses cx.self (node, rid, eid);
+  (* the call's type, and each case's operation's result, at the
+     handler's types *)
+  let call_ty, cases =
+    match own with
+    | [ { dpath; dargs = [ d ] } ] when dpath = Ty.param_path ->
+        (TCon (Ty.generic_call, [ d; res; TErrors errs ]), [])
+    | [ d ] -> (
+        let cp = Ty.call_path d.dpath in
+        let ops =
+          Iface.dep_fields
+            (Hashtbl.find_opt env.types)
+            {
+              Ty.dpath = d.dpath;
+              dargs = List.mapi (fun i _ -> Ty.Var i) d.dargs;
+            }
+        in
+        match (Hashtbl.find_opt env.types cp, ops) with
+        | Some _, Some ops ->
+            ( TCon (cp, d.dargs),
+              List.filter_map
+                (fun (o : Iface.field) ->
+                  match field_type ~tvars:d.dargs o with
+                  | TFun (_, r, _, _) -> Some (Ty.call_case o.fname, r)
+                  | _ -> None)
+                ops )
+        | _ ->
+            report env (clause_not_data impl.loc ~dep:(shown_deps env [ d ]));
+            (TError, []))
+    | _ -> (TError, [])
+  in
+  let qs =
+    List.mapi
+      (fun i (p : Resolved.param) ->
+        let t = if i = 0 then call_ty else res in
+        (* a type written for one is checked against it, but generic
+           code's `D.Call`, which is only ever its call's *)
+        (match p.pty with
+        | Some (TyName ({ tref = Named g; _ }, _)) when g = Ty.generic_call -> ()
+        | Some _ ->
+            let w = param_type env ~tparams:cx.tparams ~named:cx.named p in
+            ignore (unifies env plain p.pname.ident.loc ~found:w.ty ~expected:t)
+        | None -> ());
+        { mode = Read; ty = t })
+      params
+  in
+  let fold = List.length params = 3 in
+  let open_errs = if fold then REmpty else fresh_row env.st in
+  name_lambda cx impl.node;
+  bind_params hcx params qs;
+  let acx =
+    { (lambda_cx hcx params qs ~errs:open_errs ~uses:needs) with calls = hcx.calls }
+  in
+  let around = env.clause in
+  env.clause <-
+    (match params with
+    | (c : Resolved.param) :: _ when cases <> [] ->
+        Some { cbinder = c.pname.id; rid; cases }
+    | _ -> None);
+  core.check env acx body res;
+  env.clause <- around;
+  (* it fails with at most what its call can, which only the call's
+     own errors' row stands for *)
+  if not fold then
+    defer env
+      (Later
+         (fun () ->
+           match fst (row_parts open_errs) with
+           | [] -> close_row open_errs
+           | l :: _ -> report env (clause_fails impl.loc ~tag:l.name)));
+  Hashtbl.replace cx.nodes impl.node (TFun (qs, res, open_errs, needs))
 
 (* An arm, the lambda [impl] of [params] and [body], of the operation
    [op] of [dep], whose parameters are [ps], result [r] and errors
@@ -520,7 +613,18 @@ and classify core env cx (lk : with_link) : link =
       (* a handler, or a function that makes an implementation, given too
          few arguments: what's missing isn't its body *)
       let short ps ret =
-        List.length ps > List.length args
+        (* a parameter with a default is given, by its name or not *)
+        let defaults =
+          match f.kind with
+          | Var (Global p) ->
+              List.length (Option.value (Hashtbl.find_opt env.defaults_of p) ~default:[])
+          | _ -> 0
+        in
+        let named =
+          List.length
+            (List.filter (fun (a : expr) -> match a.kind with Named _ -> true | _ -> false) args)
+        in
+        List.length ps > List.length args - named + defaults
         && impl_parts (reveal env.st ret) <> None
         &&
         match reveal env.st (List.nth ps (List.length ps - 1)).ty with

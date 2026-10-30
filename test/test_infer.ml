@@ -1277,6 +1277,7 @@ fn main() = print(Some(true))
       | Some (Args _) -> print_endline "arguments in order"
       | Some Pulls_block -> print_endline "a block pulled"
       | Some (Pulled _) -> print_endline "a pull argument"
+      | Some (For_param k) -> print_endline ("for its variable " ^ string_of_int k)
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect

@@ -1345,13 +1345,37 @@ let wrong_arity loc name n given =
        (plural n) given)
 
 (* [shown] is the type of what's called *)
-(* `sync.keyed(16, 16)`: what it keeps instances of, [arg], of the type
-   [shown], isn't a handler's description. *)
-let keyed_not_described loc ~arg shown =
+(* `striped(16)`: [fn], a handler `for D`, given [arg], of the type
+   [shown], where its `D`, a handler's description, goes (compiler.md,
+   "Services stage", "Stripes"). *)
+let not_described loc ~fn ~arg shown =
   Diag.make loc
-    ~help:"describe the handler whose instances it keeps: `keyed(16, accounts())`"
-    (sprintf "`keyed` takes a handler's description, and `%s` is %s" arg
+    ~help:
+      (sprintf "describe the handler whose dependency it implements: `%s(counter())`" fn)
+    (sprintf "`%s` takes a handler's description, and `%s` is %s" fn arg
        (article shown))
+
+(* A handler of [dep], whose operations aren't all data, has a `call`
+   clause, or a handler `for D` is given one of it: a call of it isn't a
+   value (formats.md, "Dependencies as data"). *)
+let clause_not_data loc ~dep =
+  Diag.make loc
+    ~help:
+      "a call is a value only where every argument and result is data: no \
+       block, and no argument the operation changes"
+    (sprintf "`%s.Call` needs every operation of `%s` to be data" dep dep)
+
+(* A `call` clause that fails with [tag], which no operation it runs for
+   need declare. *)
+let clause_fails loc ~tag =
+  Diag.make loc
+    ~notes:
+      [
+        "it runs for each operation it isn't written for, and fails with at \
+         most what that one can";
+      ]
+    ~help:"handle it inside the clause"
+    (sprintf "the `call` clause can fail with `%s`, which its call can't" tag)
 
 let not_a_function loc name shown =
   Diag.make loc
@@ -4181,6 +4205,19 @@ let any_kept loc ~name ~what =
       ]
     ~help:"keep something derived from it instead, `show(call.args)`"
     (sprintf "`%s` keeps `%s`, which only lasts the call" name what)
+
+(* A `var` of a handler with a `call` clause, [name], that keeps the
+   result of the call the clause runs for, which is each operation's
+   own. *)
+let clause_kept loc ~name =
+  Diag.make loc
+    ~notes:
+      [
+        "the `call` clause runs for each operation, whose result is a type \
+         of its own, and the state is shared by them all";
+      ]
+    ~help:"keep something derived from it instead, `show(...)` of it"
+    (sprintf "`%s` keeps the result of a call, which only lasts the call" name)
 
 (* A parameter of `Tags`, [param], of [fn], given without its name. [arg]
    is what was written. *)

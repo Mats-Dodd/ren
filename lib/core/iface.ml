@@ -701,6 +701,10 @@ let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
             let scheme =
               match f.body.kind with
               | Handler { any = true; _ } -> found (Path.make home f.name.name)
+              (* and a handler `for D`'s lists what `D` is, as only
+                 inference writes it (Ty.param_path) *)
+              | Handler { deps = [ { dep = { tref = Param _; _ }; _ } ]; _ } ->
+                  found (Path.make home f.name.name)
               | _ -> signature ~sets f
             in
             Some

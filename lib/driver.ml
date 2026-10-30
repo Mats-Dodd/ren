@@ -27,7 +27,10 @@ let pass name f =
     | Eval.Uncaught _ | Eval.Went_differently _ | Sched.Signalled _
     | Internal_error _ ) as e ->
       raise e
-  | e -> raise (Internal_error { pass = name; message = Printexc.to_string e })
+  | e ->
+      (* `REN_DEBUG_ICE=1` with `OCAMLRUNPARAM=b` prints where it was *)
+      if Sys.getenv_opt "REN_DEBUG_ICE" <> None then Printexc.print_backtrace stderr;
+      raise (Internal_error { pass = name; message = Printexc.to_string e })
 
 (* Run a pass that reports diagnostics to a sink. If it reported any, the
    program stops here: later passes would only trip over the same mistakes,
@@ -909,7 +912,8 @@ let types ?(lint = false) ?load ~file src =
                            (fun (d : Ast.tname Ast.dep_ref) ->
                              match d.dep.tref with
                              | Named p -> Some p
-                             | Param _ -> None)
+                             (* `for D`, what it's given *)
+                             | Param _ -> Some Ty.param_path)
                            deps)
                       (Path.Map.find (Ast.fn_path home f) inferred.schemes);
                   ]

@@ -19,6 +19,11 @@ val runtime : Intrinsic.t -> bool
    dependency's [real] calls it, which Core Lint checks. *)
 val reaches : Intrinsic.t -> (string * string) option
 
+(* The member of `Instances` that calls [x], if it's one of the keyed
+   instance family's intrinsics: `family_call` is [("Instances",
+   "call")]. Only that member calls it, which Core Lint checks. *)
+val runtime_of : Intrinsic.t -> (string * string) option
+
 type builtin_type = {
   name : string;
   arity : int;  (** type arguments *)

@@ -207,6 +207,9 @@ type env = {
       (** each member function of a dependency written through an alias of
           it, `Events.items` for `dep Events = Chan<Event>`, by its node, with
           the alias ([t.through]) *)
+  not_data : (string, string * string) Hashtbl.t;
+      (** the module's own dependencies that have no `D.Call`, by name, each
+          with an operation that isn't data and why ([call_types]) *)
 }
 
 (* A service of the module (language.md §4), as its members see it: its
@@ -612,6 +615,82 @@ let variant_type env (t : tyname) (found : tref) (c : ident) =
                 (sprintf "`%s` has no variant `%s`" shown c.name);
               false))
 
+(* `D.Call` written as a type, `Doc.Call` (compiler.md, "Services stage",
+   "`D.Call`"): with [t] a dependency, its sum of calls, if every one of
+   its operations is data, and otherwise which isn't, reported; with [t]
+   one of the type parameters [params], generic code's, `Call<D>` here,
+   which only a handler's `call` clause's parameter is written as
+   (Infer_handlers.call_clause). [None] if [t] is neither, for the caller
+   to report as any `T.Call`. *)
+let calls_type env ~params (t : tyname) (c : ident) args : Resolved.ty option =
+  let loc = tyname_loc t in
+  let unit () = TyName ({ tref = Named (Path.prelude "Unit"); tloc = loc }, []) in
+  match (t.tmod, index_of t.tid.name 0 params) with
+  | None, Some i ->
+      Some
+        (TyName
+           ( { tref = Named Ty.generic_call; tloc = Loc.span loc c.loc },
+             [ TyName ({ tref = Param i; tloc = loc }, []) ] ))
+  | _ -> (
+      match find_named env ~params t with
+      | Some (Named p, n) when dep_ops env p <> None -> (
+          let cp = Ty.call_path p in
+          let iface () =
+            List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces
+          in
+          let found =
+            if p.home = env.home then Hashtbl.mem env.types cp.name
+            else
+              match iface () with
+              | Some i -> Iface.find_type i cp.name <> None
+              | None -> false
+          in
+          if found then (
+            let given = List.length args in
+            if n <> given then
+              report env loc
+                (sprintf "`%s.Call` takes %d type argument%s but was given %d"
+                   (show_tyname t) n (plural n) given);
+            Some (TyName ({ tref = Named cp; tloc = Loc.span loc c.loc }, args)))
+          else
+            (* which operation isn't data, and why *)
+            let reason =
+              if p.home = env.home then Hashtbl.find_opt env.not_data p.name
+              else
+                match Option.bind (iface ()) (fun i -> Iface.find_type i p.name) with
+                | Some { body = Dep ops; _ } ->
+                    List.find_map
+                      (fun (o : Iface.field) ->
+                        match o.fty with
+                        | Fun (ps, r, _, _) ->
+                            let block (t : Ty.ty) =
+                              match t with Fun _ -> true | _ -> false
+                            in
+                            if List.exists (fun (q : Ty.param) -> q.mode = Inout) ps
+                            then Some (o.fname, "changes an argument")
+                            else if List.exists (fun (q : Ty.param) -> block q.ty) ps
+                            then Some (o.fname, "takes a block")
+                            else if block r then Some (o.fname, "gives a block")
+                            else None
+                        | _ -> None)
+                      ops
+                | _ -> None
+            in
+            let shown = show_tyname t in
+            report env (Loc.span loc c.loc)
+              ~help:
+                "a call is a value only where every argument and result is data: no block, and no argument the operation changes"
+              (match reason with
+              | Some (op, why) ->
+                  sprintf
+                    "`%s.Call` needs every operation of `%s` to be data, and `%s` %s"
+                    shown shown op why
+              | None ->
+                  sprintf "`%s.Call` needs every operation of `%s` to be data"
+                    shown shown);
+            Some (unit ()))
+      | _ -> None)
+
 (* The named row [n], written as a row of kind [kind]. *)
 let row_name env ~rows kind (n : ident) =
   let what = function
@@ -694,6 +773,14 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) ?(tags = false)
       TyFn (ps, ret, errs, Option.map (uses_of env ~params ~rows) u, l)
   | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
   | TyTuple (ts, l) -> TyTuple (List.map (ty env ~params ~rows) ts, l)
+  | TyVariant (t, c, args)
+    when c.name = "Call"
+         && (t.tmod = None && index_of t.tid.name 0 params <> None
+            || match alias_target env t with
+               | Some p -> dep_ops env p <> None
+               | None -> false) ->
+      let args = List.map (ty env ~params ~rows ~arg:true) args in
+      Option.get (calls_type env ~params t c args)
   | TyVariant (t, c, args) -> (
       (* the sum's name, as a [TyName]'s, then the variant: a variant type
          has its sum's type arguments *)
@@ -894,7 +981,10 @@ and uses env ~params ?(rows = Declaration) (deps : tyname dep_ref list) :
     let declared =
       Hashtbl.fold
         (fun name ((p : Path.t), _) acc ->
-          if dep_ops env p <> None then name :: acc else acc)
+          (* not the runtime's `Instances`, which no `uses` names *)
+          match dep_ops env p with
+          | Some (_ :: _) -> name :: acc
+          | Some [] | None -> acc)
         env.types []
     in
     List.sort_uniq String.compare (declared @ Prelude.dependencies)
@@ -1102,7 +1192,7 @@ let default_of env (t : Resolved.ty option) ((lit, loc, node) as d) =
       | _ -> d)
   | _ -> d
 
-let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
+let param env sc ?rows ?(top = false) ?(defaults = top) bound (p : Parsed.param) :
     Resolved.param * scope =
   let rows = Option.value rows ~default:(Body sc.rows) in
   (* a named function's parameter may be of `Tags` *)
@@ -1122,7 +1212,7 @@ let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
         Ordinary
   in
   (match p.pdefault with
-  | Some (_, at, _) when not top ->
+  | Some (_, at, _) when not defaults ->
       report env at ~help:"remove it, and give it where it's called"
         "only a named function's parameter has a default"
   | _ -> ());
@@ -1131,7 +1221,7 @@ let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
       pty;
       pmode = p.pmode;
       pblock;
-      pdefault = (if top then Option.map (default_of env pty) p.pdefault else None);
+      pdefault = (if defaults then Option.map (default_of env pty) p.pdefault else None);
     },
     sc )
 
@@ -1146,11 +1236,11 @@ let receiver_type sc (r : Resolved.expr) =
       Some p
   | _ -> None
 
-let params env sc ?rows ?top bound ps =
+let params env sc ?rows ?top ?defaults bound ps =
   let ps, sc =
     List.fold_left
       (fun (acc, sc) (p : Parsed.param) ->
-        let p, sc = param env sc ?rows ?top (bound p) p in
+        let p, sc = param env sc ?rows ?top ?defaults (bound p) p in
         (p :: acc, sc))
       ([], sc) ps
   in
@@ -2773,6 +2863,71 @@ let or_list = function
 let rec handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
     Resolved.expr_kind =
   match e.kind with
+  | Handler
+      {
+        deps = [ { dep = { tmod = None; tid = d }; dargs = [] } ];
+        over = false;
+        any = false;
+        fails;
+        state;
+        arms;
+        _;
+      }
+    when index_of d.name 0 sc.tparams <> None ->
+      (* `handler striped<D>(h: D, ...) for D`: a handler of whatever
+         dependency [D] is an implementation of, which a call of it gives
+         it, one `call` clause its every operation (compiler.md, "Services
+         stage", "Stripes"). It's made for each dependency it's given, as
+         a handler `over any` is for each it's installed over *)
+      let i = Option.get (index_of d.name 0 sc.tparams) in
+      let fails = Option.map (errors env ~params:sc.tparams) fails in
+      let sc = { sc with next = In_for (name.name, []) } in
+      let state, sc = block_stmts ~finally:true env sc state in
+      let one_clause loc =
+        report env loc
+          ~notes:
+            [
+              sprintf
+                "it implements whatever dependency `%s` is, whose operations aren't known here"
+                d.name;
+            ]
+          ~help:"write one arm, its `call` clause: `call(c) => ...`"
+          (sprintf "`%s` is a handler for `%s`, so its one arm is `call(c) => ...`"
+             name.name d.name)
+      in
+      let clause (a : Parsed.handler_arm) =
+        match a.arm_impl.kind with
+        | Lambda ([ p ], _) when a.arm_name.name = "call" && p.pname.loc <> a.arm_name.loc -> true
+        | _ -> false
+      in
+      let arms : Resolved.handler_arm list =
+        match List.filter clause arms with
+        | (a : Parsed.handler_arm) :: rest ->
+            List.iter
+              (fun (b : Parsed.handler_arm) -> if b != a then one_clause b.arm_name.loc)
+              (List.filter (fun b -> not (clause b)) arms @ rest);
+            [
+              {
+                arm_op = Call_op "clause";
+                arm_name = a.arm_name;
+                arm_impl = arm_lambda env sc a.arm_impl;
+              };
+            ]
+        | [] ->
+            List.iter (fun (b : Parsed.handler_arm) -> one_clause b.arm_name.loc) arms;
+            if arms = [] then one_clause name.loc;
+            []
+      in
+      Handler
+        {
+          deps = [ { dep = { tref = Param i; tloc = d.loc }; dargs = [] } ];
+          over = false;
+          any = false;
+          fails;
+          needs;
+          state;
+          arms;
+        }
   | Handler { deps; over; any; fails; state; arms; _ } ->
       let after = if over then "over" else "for" in
       let seen = Hashtbl.create 4 in
@@ -2846,6 +3001,35 @@ let rec handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
       let ops (p : Path.t) = Option.value (dep_ops env p) ~default:[] in
       let shown (p : Path.t) = sprintf "`%s`" p.name in
       let given = Hashtbl.create 8 in
+      (* `call(c) => ...`, or a merge's `call(c, a, b) => ...`: the `call`
+         clause, a lambda of the call, which runs for each operation the
+         handler doesn't write an arm for, or folds two of their results
+         (compiler.md, "Services stage", "`D.Call`"), unless an operation
+         is named `call` *)
+      let is_clause (a : Parsed.handler_arm) =
+        a.arm_name.name = "call"
+        && (match a.arm_impl.kind with
+           | Lambda ([ p ], _) -> p.pname.loc <> a.arm_name.loc
+           | Lambda (_, _) -> true
+           | _ -> false)
+        && not (List.exists (fun ((p : Path.t), _) -> List.mem "call" (ops p)) deps)
+      in
+      let clause (a : Parsed.handler_arm) : Resolved.handler_arm =
+        (match a.arm_impl.kind with
+        | Lambda (([ _ ] | [ _; _; _ ]), _) -> ()
+        | _ ->
+            report env a.arm_name.loc
+              ~help:
+                "write `call(c) => ...` to run for each operation it doesn't \
+                 implement, or `call(c, a, b) => ...` to fold two results of \
+                 the call `c`"
+              "a `call` clause takes the call, and for a fold its two results");
+        if over then
+          report env a.arm_name.loc
+            ~help:"write it in a handler `for` the dependency"
+            "a handler that goes `over` another doesn't write a `call` clause";
+        { arm_op = Call_op "clause"; arm_name = a.arm_name; arm_impl = arm_lambda env sc a.arm_impl }
+      in
       let arm (a : Parsed.handler_arm) : Resolved.handler_arm =
         let op = a.arm_name.name in
         (* `Console.write(line) => ...` names its dependency, which has to
@@ -2974,12 +3158,30 @@ let rec handler_body env sc (name : ident) ~needs (e : Parsed.expr) :
                   (sprintf "`%s => ...` is the arm of a handler `over any`"
                      a.arm_name.name))
             arms;
-          List.map arm
+          List.map
+            (fun a -> if is_clause a then clause a else arm a)
             (List.filter (fun a -> not (any_arm a)) arms))
       in
+      let clauses =
+        List.filter
+          (fun (a : Resolved.handler_arm) -> a.arm_op = Call_op "clause")
+          arms
+      in
+      (match clauses with
+      | _ :: (b : Resolved.handler_arm) :: _ ->
+          report env b.arm_name.loc ~help:"remove one of them"
+            "a handler has one `call` clause"
+      | _ -> ());
+      (match (clauses, deps) with
+      | _ :: _, _ :: _ :: _ ->
+          report env (List.hd clauses).arm_name.loc
+            ~help:"write it in a handler of one dependency"
+            "a handler of several dependencies doesn't write a `call` clause"
+      | _ -> ());
       (* every operation of every dependency is implemented, unless it goes
-         over another implementation, which does the rest *)
-      (if not over then
+         over another implementation, which does the rest, or it has a
+         `call` clause, which runs for the rest, or folds *)
+      (if not over && clauses = [] then
          let missing =
            List.concat_map
              (fun ((p : Path.t), _) ->
@@ -3309,7 +3511,10 @@ let check_tparams env (f : Parsed.fn_def) =
   | Handler { deps; _ } ->
       List.iter
         (fun (t : ident) ->
-          if not (List.exists (dep_mentions t.name) deps) then
+          (* or, `handler striped<D>(h: D) for D`, what it implements
+             (handler_body) *)
+          let named (d : tyname dep_ref) = d.dep.tmod = None && d.dep.tid.name = t.name in
+          if not (List.exists (fun d -> dep_mentions t.name d || named d) deps) then
             report env t.loc
               ~help:
                 (sprintf
@@ -3470,6 +3675,9 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
        made for the dependency it's installed over, if it's `over any` *)
     params env sc ~rows
       ~top:(match f.body.kind with Handler _ -> false | _ -> true)
+      (* a handler's may have a default, as a function's: `striped(h, by:
+         By = Key, ...)` (compiler.md, "Services stage", "Stripes") *)
+      ~defaults:true
       (fun p -> match p.pmode with Inout -> By_inout | Read -> By_param)
       (* `self`'s type is the owner's, never what's written *)
       (List.map
@@ -3849,7 +4057,13 @@ let type_def env (td : Parsed.type_def) :
             f.op_defaults
       | _ -> []
     in
-    { field_name = f.field_name; field_ty; field_default = f.field_default; op_defaults }
+    {
+      field_name = f.field_name;
+      field_ty;
+      field_default = f.field_default;
+      op_defaults;
+      op_params = f.op_params;
+    }
   in
   let type_body : tname type_body =
     match td.type_body with
@@ -4992,6 +5206,11 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
                           | Some d -> [ (i, p.pname.name, d) ]
                           | None -> [])
                         m.params);
+                 op_params =
+                   List.filter_map
+                     (fun (p : Parsed.param) ->
+                       Option.map (fun _ -> p.pname.name) p.pty)
+                     m.params;
                })
              ops);
       type_ops = [];
@@ -5085,6 +5304,105 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
   in
   (Type dep :: Fn handler :: List.map member s.members)
 
+(* ---- `D.Call` (compiler.md, "Services stage", "`D.Call`") ----
+
+   For each dependency whose operations are all data, the compiler writes
+   `D.Call`, a sum with a case per operation, the operation's name in
+   upper camel case, its parameters as fields by name: the calls of `D`
+   as values (formats.md, "Dependencies as data"). It's written beside the
+   dependency, public if it is, before anything is resolved, so it's an
+   ordinary sum from here on: built, matched, compared and shown as any
+   is. *)
+
+(* Why the operation [f] isn't data, if it isn't: it takes a block, or
+   changes an argument, or gives a block. A description or a handle
+   among its arguments isn't caught here: only what the parser can see
+   is (compiler.md, "Where this stage may differ"). *)
+let not_data (f : Parsed.field) =
+  match f.field_ty with
+  | TyFn (ps, ret, _, _, _) -> (
+      let rec block : Parsed.ty -> bool = function
+        | TyFn _ -> true
+        | TyTuple (ts, _) -> List.exists block ts
+        | TyName (_, ts) | TyVariant (_, _, ts) -> List.exists block ts
+        | _ -> false
+      in
+      match
+        List.find_opt
+          (fun (t : Parsed.ty) ->
+            match t with TyInout _ -> true | t -> block t)
+          ps
+      with
+      | Some (TyInout _) -> Some "changes an argument"
+      | Some _ -> Some "takes a block"
+      | None -> (
+          match ret with
+          | Some t when block t -> Some "gives a block"
+          | _ -> None))
+  | _ -> Some "isn't an operation"
+
+(* [prog] with each dependency's `D.Call` after it, for those whose
+   operations are all data. A parameter written without a name is a field
+   named by its place, `_1`. *)
+let call_types env (prog : Parsed.program) =
+  List.concat_map
+    (fun (item : Parsed.item) ->
+      match item with
+      | Type ({ type_body = Dep ops; _ } as td)
+        when List.exists (fun f -> not_data f <> None) ops ->
+          (match
+             List.find_map
+               (fun (f : Parsed.field) ->
+                 Option.map (fun why -> (f.field_name.name, why)) (not_data f))
+               ops
+           with
+          | Some reason -> Hashtbl.replace env.not_data td.type_name.name reason
+          | None -> ());
+          [ item ]
+      | Type ({ type_body = Dep (_ :: _ as ops); _ } as td) ->
+          let case (f : Parsed.field) : Parsed.ctor =
+            let ps =
+              match f.field_ty with TyFn (ps, _, _, _, _) -> ps | _ -> []
+            in
+            let loc = f.field_name.loc in
+            let ctor_fields =
+              List.mapi
+                (fun i (t : Parsed.ty) : Parsed.field ->
+                  let name =
+                    match List.nth_opt f.op_params i with
+                    | Some n when n <> "" -> n
+                    | _ -> sprintf "_%d" (i + 1)
+                  in
+                  {
+                    field_name = { name; loc };
+                    field_ty = t;
+                    field_default = None;
+                    op_defaults = [];
+                    op_params = [];
+                  })
+                ps
+            in
+            {
+              ctor_name = { name = Ty.call_case f.field_name.name; loc };
+              ctor_fields;
+              ctor_named = ctor_fields <> [];
+            }
+          in
+          [
+            item;
+            Type
+              {
+                type_pub = td.type_pub;
+                type_name =
+                  { td.type_name with name = td.type_name.name ^ ".Call" };
+                type_params = td.type_params;
+                type_body = Ctors (List.map case ops);
+                type_ops = [];
+              };
+          ]
+      | item -> [ item ])
+    prog
+
 let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     (prog : Parsed.program) =
   (* tests are functions by now (test_items.ml); any left are ignored *)
@@ -5130,6 +5448,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       wiring_defs = Hashtbl.create 8;
       services = Hashtbl.create 8;
       installs = Hashtbl.create 8;
+      not_data = Hashtbl.create 4;
     }
   in
   (* each service, a `dep`, a handler and its members' functions from
@@ -5139,6 +5458,9 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       (function Service s -> service_items env s | item -> [ item ])
       prog
   in
+  (* each dependency's sum of calls, `D.Call`, beside it (see
+     [call_types]) *)
+  let prog = if home = Path.prelude_home then prog else call_types env prog in
   (* what's in scope bare: the prelude, which every module imports
      without asking, and the module's own names. Another module's are
      written with its alias. *)
@@ -5343,10 +5665,13 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                    cs)
           | _ -> None
       in
+      (* a dependency's `D.Call` is named only with its dependency's name
+         in front, so its constructors are never bare *)
       Option.iter
         (fun cs ->
-          Hashtbl.replace env.sums name ();
-          List.iter (fun c -> Hashtbl.replace env.named_ctors c name) cs)
+          if Ty.call_dep p = None then (
+            Hashtbl.replace env.sums name ();
+            List.iter (fun c -> Hashtbl.replace env.named_ctors c name) cs))
         ctors)
     env.types;
   (* the functions in scope: the prelude's, then this module's own *)

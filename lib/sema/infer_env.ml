@@ -53,6 +53,7 @@ type 'l found_ =
       forwards : (Path.t * string * Ty.ty) list;
       body_ty : int option;
       any_vars : (int * int * int) option;
+      call_vars : (int * int) option;
     }
       (** at a handler: the operations it leaves out, which go to the
           implementation under it, each with its dependency's declared type
@@ -97,6 +98,11 @@ type 'l found_ =
           block parameter `fn() -> Option<T>` as `for` takes it, which
           Lower makes the block that pulls it, named [name] as a lambda is
           (streams.md, rule 3) *)
+  | For_param of int
+      (** at a call of a handler `for D`'s own node ([for_node]): which of its
+          scheme's variables is [D], whose type argument there is the
+          implementation it's made for (compiler.md, "Services stage",
+          "Stripes") *)
 
 (* What a pull argument is: a collection, pulled by a snapshot of it, its
    elements, a `Map`'s entries or a `Set`'s members, in order; or a
@@ -114,6 +120,7 @@ let default_node node i = -((node * 256) + i + 1)
    far below every default's ([default_node]). *)
 let pulled_node node = min_int + (node * 4)
 let next_node node = min_int + (node * 4) + 1
+let for_node node = min_int + (node * 4) + 2
 
 (* A default, [lit], as the expression a call that leaves it out is
    given, at [loc]: a literal, or a variant written bare, a constructor of
@@ -187,6 +194,15 @@ type why = {
       (** for a lambda: how to word its body giving the wrong type, given what
           it gives and what it has to, if not as any lambda's is *)
 }
+
+(* A `call` clause being checked, `call(c) => ...` or a merge's `call(c,
+   a, b) => ...`, in a handler of one dependency (compiler.md, "Services
+   stage", "`D.Call`"): the binder of its call, [c], and the skolem [rid]
+   that stands for the result of the operation it's a call of, which a
+   `match` on [c] refines in each arm to that case's operation's, [cases],
+   by the case's name, since a case is a call of that operation and of no
+   other. *)
+type clause = { cbinder : int; rid : int; cases : (string * ty) list }
 
 type env = {
   st : Types.state;
@@ -266,6 +282,14 @@ type env = {
   mutable any_call : (ty * ty * row) option;
       (** while an arm `over any` is checked: `call.args`'s type, the
           result's, and the errors' row, `call.forward()`'s *)
+  clauses : (Path.t, int * int * int) Hashtbl.t;
+      (** each handler with a `call` clause, by its function: its body's node,
+          and the skolems of the result and the errors' row of the call it
+          runs for, which become variables of the function's as an `over
+          any`'s do (compiler.md, "Services stage", "`D.Call`") *)
+  mutable clause : clause option;
+      (** while a `call` clause of a handler of one dependency is checked,
+          what a `match` on its call refines ([clause]) *)
   params_of : (Path.t, string list) Hashtbl.t;
   defaults_of : (Path.t, (int * string * Ast.literal) list) Hashtbl.t;
       (** each function's parameters with defaults, by its path, each by its

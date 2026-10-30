@@ -109,6 +109,9 @@ module.exports = grammar({
     // in `<T has eq, ord, U>`, the token after a comma decides whether it
     // goes on with a requirement or starts the next type parameter
     [$.constrained_type_parameter],
+    // `Doc.Call.Edit`: whether `Doc.Call` is a constructor or the type of
+    // one, the token after it decides
+    [$.constructor_ref, $.calls_type],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -1294,13 +1297,22 @@ module.exports = grammar({
       seq(field('module', $.identifier), '.', field('name', $.type_identifier)),
 
     _qualified_constructor_ref: ($) =>
-      seq(field('type', $.type_name), '.', field('name', $.type_identifier)),
+      seq(
+        field('type', choice($.type_name, $.calls_type)),
+        '.',
+        field('name', $.type_identifier),
+      ),
 
     constructor_ref: ($) =>
       seq(
-        optional(seq(field('type', $.type_name), '.')),
+        optional(seq(field('type', choice($.type_name, $.calls_type)), '.')),
         field('name', $.type_identifier),
       ),
+
+    // Doc.Call, a dependency's sum of calls, before one of its cases:
+    // Doc.Call.Edit { op } (compiler.md, "Services stage", "`D.Call`")
+    calls_type: ($) =>
+      seq(field('dependency', $.type_name), '.', field('name', $.type_identifier)),
 
     constructor_arguments: ($) =>
       seq('(', commaSep(choice($.labeled_argument, $._expression)), ')'),

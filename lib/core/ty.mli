@@ -113,6 +113,21 @@ val erase_variants : ty -> ty
 val any_path : Path.t
 val is_any : dep -> bool
 
+(* The dependency a handler declared `for D`, [D] one of its type
+   parameters, lists until a call gives it an implementation of one, and
+   whether a dependency is it. Its one type argument is [D]'s. *)
+val param_path : Path.t
+val is_param : dep -> bool
+
+(* `D.Call` (compiler.md, "Services stage", "`D.Call`"): the path of the
+   dependency at [d]'s sum of calls, `Doc.Call`; the dependency whose sum
+   of calls a path is, if it's one; an operation's case in it, `evict_idle`'s
+   `EvictIdle`; and generic code's, the prelude's `Call<D, R, ! E>`. *)
+val call_path : Path.t -> Path.t
+val call_dep : Path.t -> Path.t option
+val call_case : string -> string
+val generic_call : Path.t
+
 (* A parameter that isn't `inout`. *)
 val read : ty -> param
 
@@ -167,6 +182,13 @@ val own_args : ty -> args
    of [a.tys] for [Var n], and for a row ending in row variable [n], the
    n-th of [a.rows]'s labels added to the row's, ending in its tail. *)
 val apply : args -> ty -> ty
+
+(* [t], made from another by putting types in for its variables, with
+   what's known once a dependency is: generic code's `Call<D, R, ! E>` of
+   an implementation of one dependency is that one's `D.Call`, and what a
+   handler `for D` implements, [D] one of one, is that one, needing what
+   both need. [apply] does it. *)
+val known : ty -> ty
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, type and row variables separately, and its

@@ -142,6 +142,8 @@
 (constructor_ref name: (type_identifier) @constructor)
 ; a variant type, `Order.Placed`, is a type: its variant's name too
 (variant_type variant: (type_identifier) @type)
+; a dependency's calls, `Doc.Call` in `Doc.Call.Edit`, is a type too
+(calls_type name: (type_identifier) @type)
 
 ; ---- errors ----
 

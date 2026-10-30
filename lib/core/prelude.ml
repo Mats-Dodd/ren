@@ -932,6 +932,10 @@ pub dep Async =
   // The tasks live exactly as long as `body`
   pub fn map_pull<T, U, R>(src: fn() -> Option<T>, max: Int = 64, f: concurrent fn(x: T) -> U, body: fn(results: fn() -> Option<U>) -> R) -> R uses Async =
     try task_map_pull(src, max, f, fn(i) => try body(fn() => try inbox_take(i)))
+  // the worker the calling task runs on: 0 under `single`; under `sim`,
+  // 0 or 1, two virtual workers, each task's drawn from the tape, so
+  // routing by worker is found and replayed by a seed
+  pub fn worker() -> Int uses Async = async_worker()
   // the runtime on one thread, in real time, with real I/O
   pub fn single() -> Async = single_runtime()
   let real: Async = single_runtime()
@@ -992,6 +996,80 @@ pub type Task<T> = builtin
   // asks the task to stop, and returns at once: it stops at its next
   // dependency call, or now, if it's waiting
   pub fn cancel(self) uses Async = task_cancel(self)
+
+// ---- the keyed instance family (foundations.md, decision 18) ----
+//
+// Where instances live is the runtime's, as the scheduler is: a library
+// that keeps many of one handler's, `striped` or `actors`, keeps them in
+// a family, which makes one for a key, runs a call on one, evicts one
+// and lists them, by the rules of decision 18. Which to evict, when, how
+// many to keep and how to route are the library's (compiler.md,
+// "Services stage", "The keyed instance family").
+
+// a family `Instances.open` made: data, naming it in the runtime, kept
+// in the state of the handler that opened it, never an instance
+pub type Family<K, D> = builtin
+
+// what a family counts: its live instances, those made and evicted, and
+// the most calls queued at once
+pub type InstanceCounts = { live: Int, made: Int, evicted: Int, high_water: Int }
+
+// the runtime's keyed instance family. Nothing installs it and no
+// `uses` names it: it's the runtime's, as the scheduler is, and only
+// these members reach it
+pub dep Instances =
+  // a family of the instances `make` describes, one per key, in `parts`
+  // partitions of at most `cap` live instances each. Calls from outside
+  // it are metered against `mailbox` (step 7)
+  pub fn open<K, D>(make: spawned fn(k: K) -> D, parts: Int, cap: Int, mailbox: Int) -> Family<K, D> =
+    family_open(make, parts, cap, mailbox)
+  // `c` as one operation of `k`'s instance, made first if it isn't
+  // live, the instance kept from eviction meanwhile; waiting while its
+  // partition is full
+  pub fn call<K, D, R>(f: Family<K, D>, k: K, c: Call<D, R, ! ..e>) -> R ! ..e uses Async =
+    try family_call(f, k, c)
+  // `k`'s instance made now, if it isn't live, waiting while its
+  // partition is full
+  pub fn make<K, D>(f: Family<K, D>, k: K) uses Async = family_make(f, k)
+  // the live keys, in the order they were made
+  pub fn keys<K, D>(f: Family<K, D>) -> Array<K> = family_keys(f)
+  // the evictable keys, least recently released first
+  pub fn evictable<K, D>(f: Family<K, D>) -> Array<K> = family_evictable(f)
+  // evicts `k`'s instance now, running its `finally` on this task, if
+  // it's live and evictable: whether it did
+  pub fn evict<K, D>(f: Family<K, D>, k: K) -> Bool uses Async = family_evict(f, k)
+  pub fn counts<K, D>(f: Family<K, D>) -> InstanceCounts = family_counts(f)
+  // the family's end: the live instances' `finally`s, the last made's
+  // first
+  pub fn close<K, D>(f: Family<K, D>) uses Async = family_close(f)
+
+// a call of an operation of whatever dependency `D` implements, which
+// gives `R` and fails with `E`: generic code's `D.Call<R ! E>`, what a
+// handler `for D`'s `call` clause is given. Made for a dependency, it's
+// that one's `D.Call` (compiler.md, "Services stage", "`D.Call`")
+pub type Call<D, R, E> = builtin
+  // its first argument's hash, by its type's `key`, the same in every
+  // run; `None` for an operation of no parameters
+  pub fn first_hash(self) -> Option<Int> = call_first_hash(self)
+  // two of its results: added (`add` is `+`'s), the larger, the
+  // smaller, or joined, an `Array`'s or a `Str`'s. Each panics for a
+  // result that can't be
+  pub fn sum(self, a: R, b: R) -> R = call_add(self, a, b)
+  pub fn max(self, a: R, b: R) -> R = call_max(self, a, b)
+  pub fn min(self, a: R, b: R) -> R = call_min(self, a, b)
+  pub fn concat(self, a: R, b: R) -> R = call_concat(self, a, b)
+  // two of its results folded by `m`'s `call` clause, a merge's, `call(c,
+  // a, b) => ...`; `m` has no state
+  pub fn fold(self, m: D, a: R, b: R) -> R = call_fold(self, m, a, b)
+
+// an operation of a dependency, as data: its name, how many parameters
+// it takes, its result's type as an error writes it, `Int`, and whether
+// that adds, orders and joins
+pub type Operation = { name: Str, params: Int, gives: Str, adds: Bool, orders: Bool, concats: Bool }
+
+// the operations of the dependency `h` implements, in the order it
+// declares them: its declarations as data (decision 20, rule 3)
+pub fn operations<D>(h: D) -> Array<Operation> = call_operations(h)
 
 // ---- trying again (handlers.md, "Functions that run a block") ----
 
@@ -1185,6 +1263,12 @@ let map k v = Ty.Con (Path.prelude "Map", [ k; v ])
 let set t = Ty.Con (Path.prelude "Set", [ t ])
 let journal = Ty.Con (Path.prelude "Journal", [])
 let net_outcome t = Ty.Con (Path.prelude "NetOutcome", [ t ])
+let family k d = Ty.Con (Path.prelude "Family", [ k; d ])
+
+(* A call of [d] giving [r], `Call<D, R, E>`, as `Call`'s members take
+   it: they don't fail with what it fails with, so its error set is only
+   a type variable to them, [Var 2], as the source's `self` writes it. *)
+let call d r = Ty.Con (Ty.generic_call, [ d; r; Var 2 ])
 
 (* Each built-in function's type scheme, by its id. Each parameter's mode
    ([inout] or not) is part of the type. A built-in type's method has its
@@ -1654,6 +1738,72 @@ let scheme (x : Intrinsic.t) =
      instances of the handler [h] describes, which the checker makes sure
      it is (excl.ml) *)
   | Sync_keyed -> fn [ read int; read (Var 0) ] (Var 0)
+  (* fn() -> Int: the worker the calling task runs on, `Async.worker()`:
+     0 under `single`; under `sim`, 0 or 1, two virtual workers, a task's
+     drawn from the tape the first time it asks (sched.ml) *)
+  | Async_worker -> fn [] int
+  (* The keyed instance family's (family.ml; compiler.md, "Services
+     stage", "The keyed instance family"), which `Instances`' members
+     call, and nothing else (Core Lint). fn<K, D>(make: fn(k: K) -> D,
+     parts: Int, cap: Int, mailbox: Int) -> Family<K, D>: a family whose
+     instances [make] describes, by key, in [parts] partitions of at most
+     [cap] live ones each *)
+  | Family_open ->
+      fn
+        [
+          read (Fun ([ read (Var 0) ], Var 1, open_row 2, open_row 3));
+          read int;
+          read int;
+          read int;
+        ]
+        (family (Var 0) (Var 1))
+  (* fn<K, D, R>(f: Family<K, D>, k: K, c: Call<D, R, ! E>) -> R ! E: [c]
+     run as one operation of [k]'s instance, which is made first if it
+     isn't live *)
+  | Family_call ->
+      scheme_of
+        (Fun
+           ( [
+               read (family (Var 0) (Var 1));
+               read (Var 0);
+               read (Con (Ty.generic_call, [ Var 1; Var 2; Errors (open_row 0) ]));
+             ],
+             Var 2,
+             open_row 0,
+             open_row 1 ))
+  (* fn<K, D>(f: Family<K, D>, k: K): [k]'s instance made now, if it
+     isn't live *)
+  | Family_make -> fn [ read (family (Var 0) (Var 1)); read (Var 0) ] unit
+  (* fn<K, D>(f: Family<K, D>) -> Array<K>: the live keys, in the order
+     they were made; and those evictable, least recently released first *)
+  | Family_keys | Family_evictable -> fn [ read (family (Var 0) (Var 1)) ] (array (Var 0))
+  (* fn<K, D>(f: Family<K, D>, k: K) -> Bool: [k]'s instance evicted, its
+     `finally` run on this task, if it's live and evictable *)
+  | Family_evict -> fn [ read (family (Var 0) (Var 1)); read (Var 0) ] bool
+  (* fn<K, D>(f: Family<K, D>) -> InstanceCounts *)
+  | Family_counts ->
+      fn [ read (family (Var 0) (Var 1)) ] (Con (Path.prelude "InstanceCounts", []))
+  (* fn<K, D>(f: Family<K, D>): the family's end: its instances' `finally`s
+     run, the last made's first *)
+  | Family_close -> fn [ read (family (Var 0) (Var 1)) ] unit
+  (* `Call`'s members (compiler.md, "Services stage", "`D.Call`"), each
+     of a call [c] of [D], giving [R]. fn<D, R>(c: Call<D, R, ! E>) ->
+     Option<Int>: its first argument's hash, by its type's `key`, the
+     same in every run, or [None] for an operation of no parameters *)
+  | Call_first_hash -> fn [ read (call (Var 0) (Var 1)) ] (option int)
+  (* fn<D, R>(c: Call<D, R, ! E>, a: R, b: R) -> R: two of its results
+     added, the larger, the smaller, or joined, panicking for a result
+     that can't be *)
+  | Call_add | Call_max | Call_min | Call_concat ->
+      fn [ read (call (Var 0) (Var 1)); read (Var 1); read (Var 1) ] (Var 1)
+  (* fn<D, R>(c: Call<D, R, ! E>, m: D, a: R, b: R) -> R: two of its
+     results folded by [m]'s `call` clause, a merge's *)
+  | Call_fold ->
+      fn [ read (call (Var 0) (Var 1)); read (Var 0); read (Var 1); read (Var 1) ] (Var 1)
+  (* fn<D>(h: D) -> Array<Operation>: the operations of the dependency
+     [h] implements, as data *)
+  | Call_operations ->
+      fn [ read (Var 0) ] (array (Con (Path.prelude "Operation", [])))
   (* fn(seed: Int, below: Int) -> Option<Int>: in a spawned task, a
      number from 0 below [below] from the task's own stream of the test
      `Random` seeded with [seed]; [None] in a root task, which draws from
@@ -1700,6 +1850,9 @@ let reaches (x : Intrinsic.t) =
   | Task_produce | Task_map_pull | Outbox_send | Inbox_take | Async_yield
   | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
+  | Async_worker | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
+  | Family_counts | Family_close | Call_first_hash | Call_add | Call_max | Call_min
+  | Call_concat | Call_fold | Call_operations
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_byte_len | Str_index | Str_split
@@ -1742,11 +1895,30 @@ let caller (x : Intrinsic.t) =
       | Task_produce | Task_map_pull | Outbox_send | Inbox_take
       | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-      | Sim_advance | Sim_alarm | Sync_keyed | Task_drain | Hash ) ) ->
+      | Sim_advance | Sim_alarm | Sync_keyed | Task_drain | Hash | Async_worker
+      | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
+      | Family_counts | Family_close | Call_first_hash | Call_add | Call_max
+      | Call_min | Call_concat | Call_fold | Call_operations ) ) ->
       Internal
   | None, _ -> Any
 
 let runtime x = caller x <> Any
+
+(* The keyed instance family's intrinsics, each with the member of the
+   prelude's `Instances` that calls it, the only one that may (Core
+   Lint; compiler.md, "Services stage", "The keyed instance family"), as
+   [reaches] says which real implementation may call the world's. *)
+let runtime_of (x : Intrinsic.t) =
+  match x with
+  | Family_open -> Some ("Instances", "open")
+  | Family_call -> Some ("Instances", "call")
+  | Family_make -> Some ("Instances", "make")
+  | Family_keys -> Some ("Instances", "keys")
+  | Family_evict -> Some ("Instances", "evict")
+  | Family_evictable -> Some ("Instances", "evictable")
+  | Family_counts -> Some ("Instances", "counts")
+  | Family_close -> Some ("Instances", "close")
+  | _ -> None
 
 (* The built-in functions that aren't a type's members, in the order the
    prelude's interface lists them. *)
@@ -1816,6 +1988,22 @@ let fns : Intrinsic.t list =
     Sim_advance;
     Sim_alarm;
     Sync_keyed;
+    Async_worker;
+    Family_open;
+    Family_call;
+    Family_make;
+    Family_keys;
+    Family_evict;
+    Family_evictable;
+    Family_counts;
+    Family_close;
+    Call_first_hash;
+    Call_add;
+    Call_max;
+    Call_min;
+    Call_concat;
+    Call_fold;
+    Call_operations;
     Task_random;
     Task_drain;
     Hash;
@@ -1924,6 +2112,11 @@ let types =
        (compiler.md, "Services stage", step 5) *)
     t "Outbox" ~arity:1;
     t "Inbox" ~arity:2;
+    (* a keyed instance family's handle, and generic code's `D.Call<R !
+       E>`, whose third argument is an error set (compiler.md, "Services
+       stage"); their members are the source's *)
+    t "Family" ~arity:2;
+    t "Call" ~arity:3;
     t "Map" ~arity:2
       ~methods:
         [

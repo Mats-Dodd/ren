@@ -265,7 +265,8 @@ The Strategy pattern written as handlers can do none of that.
 
 Tested against the compiler on 2026-10-30, after the data stage and the
 services stage's pipe, wirings, background work, `release`, services,
-and pull arguments, channels and producers:
+pull arguments, channels and producers, and the keyed instance family
+and `D.Call`:
 
 | Feature | Today |
 |---|---|
@@ -298,6 +299,9 @@ and pull arguments, channels and producers:
 | Producers | `Async.produce(cap: 16, fn() => crawl(root)) fn(items) => ...`: the producer runs on a task beside the body and sends with `Send.send(x)`, through the `Send<T>` the call installs, at most `cap` ahead; `items` gives what it sent, in order, then `None`, or fails with what it failed with (`for p in try items`); when the body ends, by finishing, `break` or a failure, the producer is cancelled and waited for. `Async.map_pull(src, max:, f) fn(results) => ...`, `map`'s results as a stream. In the interpreter; `ren build` refuses both as it refuses `Async.scope` (examples/crawler) |
 | `Proc.run(kill:)` | `Tree`, the default, starts the program in a process group of its own and a cancel kills the group, so `sh -c "sleep 5; true"` leaves no `sleep`; `Child` kills the program alone, as before, and keeps it in this program's group, where it can read the terminal; `sim.proc()`'s `SimProc.kills()` says which each cancelled run had |
 | Services | `service Kv(c: Cfg) uses Http = pub fn get(k: Key) -> Str ! KvError = ...`, a `dep` and its handler written once: its operations are its `pub fn`s, its members share its parameters and its `uses` and call each other directly, and it's installed as a handler is, `with Kv(cfg)`, in a `with` or a wiring, `kv.Kv(cfg)` from another module, and replaced by any handler of `Kv`; in the interpreter and natively. A member's own `uses`, a service used as a value and `Kv(...)` outside a `with` are errors with help. It keeps state as a handler does, `var n: Int = 0` first, set up when it's installed and failing with its `! E`, which its functions read and write as they call each other. A signature's `uses` is a bound (bench/services/service) |
+| A call as a value, `D.Call` | the compiler writes `Doc.Call` for each dependency whose operations are all data, a case per operation, `Doc.Call.Edit { op }`, built, matched, compared and shown as any sum; its cases are named only after `Doc.Call`; `Docs.Call` of one that takes a block is an error naming the operation. Not yet: its result and errors as type arguments, `Doc.Call<()>`, which `post` takes (step 7) |
+| A `call` clause | a handler writes `call(c) => ...` beside its operations, run for each it doesn't write, `c` that call, a `match` on it giving each case its operation's result type; a merge writes `call(c, a, b) => ...`, folding two results; a handler `for D`, `handler striped<D>(h: D) for D`, writes only that clause, made for the dependency it's given |
+| The keyed instance family | the runtime's, in the interpreter: `Instances.open(fn(k) => h, parts, cap, mailbox)` and `Instances.call(fam, k, c)`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`, which only the prelude's `Instances` reaches; `Async.worker()` is 0 under `single` and one of two virtual workers under `sim`, from the tape. Refused by `ren build`. Not yet: `pin` for a block, `post` and the family's queues (step 7) |
 | Layout, natively | a small record or tuple inside a small value is flattened into its parent's slots; an array of small records that hold objects keeps them inline, counted by the mask of the slots that hold them; a sum's tag is a byte, and a sum with one constructor that has fields, the rest without, has no tag, a pointer niche: `Option<Item>` is two words, not three. `show`, `==` and `hash` of a small value still box its type program-wide (bench/native/RESULTS.md, "Data stage: layout") |
 
 The core is right. What's missing is convenience, and two layout rules

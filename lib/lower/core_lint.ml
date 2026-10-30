@@ -1535,18 +1535,38 @@ and pattern env sc (p : pattern) t =
 and operations env sc loc (d : Ty.dep) needs fs =
   let ops = dep_fields env loc d in
   let declared = List.map (fun (o : Iface.field) -> o.fname) ops in
+  (* a merge's folds, `fold op`, one for each operation, beside them
+     (Lower.clause_ops): each takes the call and two of its results *)
+  let folds, fs =
+    List.partition (fun (f, _) -> String.starts_with ~prefix:"fold " f) fs
+  in
   if List.sort compare declared <> List.sort compare (List.map fst fs) then
     fail env loc "an implementation doesn't have its dependency's operations";
+  if folds <> [] && List.length folds <> List.length ops then
+    fail env loc "a merge doesn't fold each of its dependency's operations";
+  let op f = List.find_opt (fun (o : Iface.field) -> o.fname = f) ops in
   List.iter
     (fun (f, (v : expr)) ->
       expr env sc v;
       let expected : Ty.ty =
-        match (List.find (fun (o : Iface.field) -> o.fname = f) ops).fty with
-        | Fun (ps, r, errs, _) -> Fun (ps, r, errs, needs)
-        | t -> t
+        match op f with
+        | Some { fty = Fun (ps, r, errs, _); _ } -> Fun (ps, r, errs, needs)
+        | Some o -> o.fty
+        | None -> Error
       in
       same env v.loc ("the operation `" ^ f ^ "`") v.ty expected)
-    fs
+    fs;
+  List.iter
+    (fun (f, (v : expr)) ->
+      expr env sc v;
+      let name = String.sub f 5 (String.length f - 5) in
+      match op name with
+      | Some { fty = Fun (_, r, _, _); _ } ->
+          let c : Ty.ty = Con (Ty.call_path d.dpath, d.dargs) in
+          same env v.loc ("the fold of `" ^ name ^ "`") v.ty
+            (Fun (List.map Ty.read [ c; r; r ], r, Ty.closed, needs))
+      | _ -> fail env v.loc ("a fold of no operation, `" ^ name ^ "`"))
+    folds
 
 (* An installed handler instance is never a value (compiler.md, "No
    cycles"): an [Instance] is only ever the end of a [Handler]'s body,
@@ -2030,7 +2050,9 @@ let test_code ~tests (prog : program) =
 (* Every intrinsic that reaches the world (Prelude.reaches) is called
    only by the real implementation of the dependency it's an operation
    of, `fs_read` by `real_fs`, the prelude's handler that `Fs.real`
-   describes: so every call a program makes to the world
+   describes; and each of the keyed instance family's only by its member
+   of `Instances` (Prelude.runtime_of), the family's one way in, which
+   no program can install another of: so every call a program makes to the world
    is a call of an operation, which the journal records (handlers.md,
    "Recording and replaying"). And a journal's file is read only for a
    test, by `replay`, so `ren run` reads nothing but through a
@@ -2055,6 +2077,21 @@ let world (prog : program) =
                   (sprintf
                      "`%s` reaches the world, so only `%s.real` can call it"
                      (Intrinsic.name x) dep)
+            | _ when Prelude.runtime_of x <> None -> (
+                (* the keyed instance family's, only by the member of
+                   `Instances` that's its, or a copy a release build made
+                   of that one (Core.origin) *)
+                let dep, op = Option.get (Prelude.runtime_of x) in
+                let own = Path.member (Path.prelude dep) op in
+                match f.origin with
+                | _ when f.path = own -> ()
+                | Copy p when p = own -> ()
+                | _ ->
+                    wrong e
+                      (sprintf
+                         "`%s` is the keyed instance family's, so only `%s.%s` \
+                          can call it"
+                         (Intrinsic.name x) dep op))
             | _ when x = Journal_load && not f.test ->
                 wrong e
                   "`journal_load` reads a file, so only test code can call it"
@@ -2224,6 +2261,11 @@ let whole ~everyone (linked : program list) =
         (fun (td : Iface.type_decl) ->
           match td.body with
           | Dep _ | Dep_alias _ ->
+              Hashtbl.replace deps td.path td;
+              Hashtbl.replace base.types td.path td
+          (* and its `D.Call`, which a function another module makes for
+             it, the prelude's `striped$test.Hits`, builds and matches *)
+          | Sum _ when Ty.call_dep td.path <> None ->
               Hashtbl.replace deps td.path td;
               Hashtbl.replace base.types td.path td
           | Record _ | Sum _ | Builtin | Opaque _ | Errors _ -> ())

@@ -36,6 +36,12 @@ let named_row ~named (n : ident option) =
 (* The dependencies a `uses` lists or an implementation's type joins, with
    their type arguments as checker types. *)
 let written_deps env ~tvars (ds : tname dep_ref list) =
+  match ds with
+  | [ { dep = { tref = Param i; _ }; _ } ] ->
+      (* a handler `for D`, [D] its type parameter (resolve.ml: nothing
+         else has one here): whatever [D] stands for *)
+      [ { dpath = Ty.param_path; dargs = [ List.nth tvars i ] } ]
+  | ds ->
   List.map
     (fun (d : Ty.dep) ->
       {
@@ -233,6 +239,8 @@ let instance env (td : Iface.type_decl) =
         tvars
     else if td.path = Path.prelude "Background" then
       List.map (fun _ -> TErrors (fresh_row env.st)) tvars
+    else if td.path = Ty.generic_call then
+      List.mapi (fun i t -> if i = 2 then TErrors (fresh_row env.st) else t) tvars
     else tvars
   in
   match td.body with

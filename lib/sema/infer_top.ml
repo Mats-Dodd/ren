@@ -214,6 +214,9 @@ let check_written sink ~sets ~names (prog : program) =
     | TyName ({ tref = Named p; _ }, [ TyErrors _ ])
       when p = Path.prelude "Background" ->
         ()
+    (* generic code's `D.Call<R ! E>`, whose third is the set the call
+       fails with (prelude.ml) *)
+    | TyName ({ tref = Named p; _ }, [ _; _; TyErrors _ ]) when p = Ty.generic_call -> ()
     | TyName ({ tref = Named p; _ }, args)
     | TyVariant ({ tref = Named p; _ }, _, args) ->
         List.iter
@@ -684,7 +687,22 @@ let new_env sink ~reachable (r : Resolve.t) =
   (* the types step 2 of a lookup through a type looks in: those the
      module can name bare. [r.scope] is sorted by name, and two of its
      types never share one. *)
-  let visible = List.map (fun (_, p) -> Hashtbl.find types p) r.scope in
+  let visible =
+    List.filter_map
+      (fun (_, p) ->
+        (* a dependency's `D.Call` is found only where it's expected:
+           its cases are never bare (compiler.md, "Services stage",
+           "`D.Call`"); nor are the prelude's `striped` policies', whose
+           names a program's own constructors, `Key` or `Max`, may have,
+           since they're written only where one is expected, `by:
+           Key(n: 4)` *)
+        if
+          Ty.call_dep p <> None
+          || List.mem p [ Path.prelude "By"; Path.prelude "Fold" ]
+        then None
+        else Some (Hashtbl.find types p))
+      r.scope
+  in
   (* how each function a wiring's link was made into is written in the
      wiring, `pg_db(url)`: a message shows a `with`'s items so *)
   let wired = Hashtbl.create 8 in
@@ -738,6 +756,8 @@ let new_env sink ~reachable (r : Resolve.t) =
     anys = Hashtbl.create 4;
     any_skolems = Hashtbl.create 4;
     any_call = None;
+    clauses = Hashtbl.create 4;
+    clause = None;
     params_of = Hashtbl.create 16;
     defaults_of = Hashtbl.create 16;
     wired_from = Hashtbl.create 4;
@@ -1500,6 +1520,59 @@ let canonical env so_far (f : fn_def) =
             (Handler_facts { f with body_ty = Some k })
       | _ -> ())
   | None -> ());
+  (* whether the type [t] has the skolem [id] in it *)
+  let rec mentions id (t : ty) =
+    match repr t with
+    | TSkol (id', _) -> id' = id
+    | TVar _ | TError -> false
+    | TCon (_, ts) | TVariant (_, _, ts) -> List.exists (mentions id) ts
+    | TErrors r -> row_mentions id r
+    | TImpl i ->
+        List.exists
+          (fun (d : dep) -> List.exists (mentions id) d.dargs)
+          i.deps
+    | TFun (ps, r, e, _) ->
+        List.exists (fun (p : param) -> mentions id p.ty) ps
+        || mentions id r || row_mentions id e
+  and row_mentions id r =
+    List.exists
+      (fun (l : label) -> List.exists (mentions id) l.payload)
+      (fst (row_parts r))
+  in
+  (* a handler's `call` clause: the result and the errors' row of the
+     call it runs for, skolems while it was checked, are variables of the
+     function's now, as an `over any`'s are (compiler.md, "Services
+     stage", "`D.Call`") *)
+  (match Hashtbl.find_opt env.clauses path with
+  | Some (node, rid, eid) -> (
+      (* its state is shared by every operation's copy, so it can't keep
+         a result, which is a different type for each *)
+      (match f.body.kind with
+      | Handler { state; _ } ->
+          List.iter
+            (function
+              | Let { name; _ } -> (
+                  match Hashtbl.find_opt cx.locals name.id with
+                  | Some t when mentions rid t ->
+                      report env
+                        (clause_kept name.ident.loc ~name:name.ident.name)
+                  | _ -> ())
+              | _ -> ())
+            state
+      | _ -> ());
+      let r = generic_var env.st and e = generic_row env.st in
+      Hashtbl.replace env.st.skolem_vars rid r;
+      Hashtbl.replace env.st.skolem_rows eid e;
+      match
+        ( canon_ty c ~all:true r,
+          (canon_row c ~all:true e).tail,
+          Hashtbl.find_opt cx.found node )
+      with
+      | Var kr, Some ke, Some (Handler_facts facts) ->
+          Hashtbl.replace cx.found node
+            (Handler_facts { facts with call_vars = Some (kr, ke) })
+      | _ -> ())
+  | None -> ());
   (* a handler `over any`: its arm's call's arguments' type and result,
      and its errors' row, skolems while it was checked, are variables of
      the function's now, as a `finally`'s are, which lowering puts each
@@ -1519,24 +1592,6 @@ let canonical env so_far (f : fn_def) =
         [ (aid, "call.args"); (rid, "call.forward()") ];
       (* its state is shared by every operation's arm, so it can't keep
          either *)
-      let rec mentions id (t : ty) =
-        match repr t with
-        | TSkol (id', _) -> id' = id
-        | TVar _ | TError -> false
-        | TCon (_, ts) | TVariant (_, _, ts) -> List.exists (mentions id) ts
-        | TErrors r -> row_mentions id r
-        | TImpl i ->
-            List.exists
-              (fun (d : dep) -> List.exists (mentions id) d.dargs)
-              i.deps
-        | TFun (ps, r, e, _) ->
-            List.exists (fun (p : param) -> mentions id p.ty) ps
-            || mentions id r || row_mentions id e
-      and row_mentions id r =
-        List.exists
-          (fun (l : label) -> List.exists (mentions id) l.payload)
-          (fst (row_parts r))
-      in
       (match f.body.kind with
       | Handler { state; _ } ->
           List.iter
@@ -1611,7 +1666,8 @@ let canonical env so_far (f : fn_def) =
         | Tags_given ts -> Tags_given ts
         | Args xs -> Args xs
         | Pulls_block -> Pulls_block
-        | Pulled p -> Pulled p)
+        | Pulled p -> Pulled p
+        | For_param k -> For_param k)
       (Hashtbl.find_opt cx.found id)
   in
   let nodes =

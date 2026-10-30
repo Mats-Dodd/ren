@@ -684,75 +684,7 @@ let rec eval cx env (e : expr) =
       (* the call, on the instance numbered [inst] whose implementation
          is [ops] *)
       let on ops outer inst =
-          match List.assoc_opt op ops with
-          | Some f -> (
-              (* a handler's arm of the program's runs as `handler.op` *)
-              let cx =
-                match f with
-                | VClosure { site; _ } when site <> "" ->
-                    { cx with site = site ^ "." ^ op }
-                (* the prelude's, `Clock.sleep`'s, waits at this call *)
-                | VClosure _ when e.loc.file <> Prelude.file ->
-                    { cx with call = Some e.loc }
-                | _ -> cx
-              in
-              (* the task is in the operation until it returns, and then
-                 the instance is released, which `Async.until` waits for;
-                 a shared, exclusive one's operations don't interleave, so
-                 the call waits while another task is in one (sched.ml,
-                 [holding]). A call back into the one its own task is in,
-                 by a block passed there that Infer couldn't see, a block
-                 parameter, could never go on *)
-              let name = Printf.sprintf "`%s.%s`" dep.name op in
-              let reentered () =
-                panic_at e.loc
-                  ~notes:
-                    [
-                      "an operation keeps its instance until it returns, and \
-                       this task is in one of its operations";
-                    ]
-                  ~help:
-                    "a block passed to an operation gets its dependencies \
-                     only from its parameter's type: call it before the \
-                     operation, outside the block"
-                  (Printf.sprintf
-                     "%s calls back into the instance its own task is in, so \
-                      it would wait for itself"
-                     name)
-              in
-              (* a wait that would close a cycle: each task in it waits
-                 for an instance the next one is in *)
-              let cycle waits =
-                panic_at e.loc ~notes:waits
-                  ~help:
-                    "a block passed to an operation gets its dependencies \
-                     only from its parameter's type: call it before the \
-                     operation, outside the block"
-                  (Printf.sprintf
-                     "%s would wait for a task that waits for this one, so \
-                      neither could go on"
-                     name)
-              in
-              let at =
-                if e.loc.file = Prelude.file then at_call cx else Some (where e.loc)
-              in
-              let call () =
-                (* under `sim`, where two tasks' calls of a shared,
-                   exclusive instance can be seen in either order, a
-                   scheduling point *)
-                if Sched.locked inst then Sched.point ?at ();
-                Sched.holding ?at
-                  ~what:(Printf.sprintf "waits for `%s`, which another task is in" dep.name)
-                  ~reentered ~cycle inst ~dep:dep.name cx.site
-                  (fun () -> fst (call_at cx e.loc f args (VEvidence outer)))
-              in
-              match cx.trace with
-              (* the recorder's own call of what it's over isn't one the
-                 program made *)
-              | Some t when not (next && e.loc.file = Prelude.file) ->
-                  ok (traced cx t ~dep:dep.name ~op fty args call)
-              | _ -> ok (call ()))
-          | None -> bug (what ^ " on an implementation without it")
+        dep_op cx ~loc:e.loc ~dep ~op ~fty ~next ~what args ops outer inst
       in
       match
         List.find_opt
@@ -829,7 +761,7 @@ let rec eval cx env (e : expr) =
           (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
           Env.empty captures
       in
-      VHandler { ev = ev.id; body; env }
+      VHandler { ev = ev.id; body; env; site = cx.site }
   | Instance { impls; finally; exclusive } ->
       let values = eval_all cx env (List.map snd impls) in
       VInstance
@@ -1266,6 +1198,83 @@ and ending cx env (loc : Loc.t) finally desc outer installed body =
            with Failed _ | Sched.Cancelled -> ());
           raise p)
 
+(* A call of the operation [op] of [dep], given [args], on the instance
+   numbered [inst], whose implementation is [ops], installed with
+   [outer], from [loc]: [Dep_call]'s, and the keyed instance family's,
+   whose instance the deadlock panic names [held], `hits[0]#1`, rather
+   than as its dependency. *)
+and dep_op cx ~loc ~(dep : Path.t) ~op ~fty ~next ~what ?(held = dep.name) args ops
+    outer inst =
+  match List.assoc_opt op ops with
+  | Some f -> (
+      (* a handler's arm of the program's runs as `handler.op` *)
+      let cx =
+        match f with
+        | VClosure { site; _ } when site <> "" ->
+            { cx with site = site ^ "." ^ op }
+        (* the prelude's, `Clock.sleep`'s, waits at this call *)
+        | VClosure _ when loc.file <> Prelude.file ->
+            { cx with call = Some loc }
+        | _ -> cx
+      in
+      (* the task is in the operation until it returns, and then
+         the instance is released, which `Async.until` waits for;
+         a shared, exclusive one's operations don't interleave, so
+         the call waits while another task is in one (sched.ml,
+         [holding]). A call back into the one its own task is in,
+         by a block passed there that Infer couldn't see, a block
+         parameter, could never go on *)
+      let name = Printf.sprintf "`%s.%s`" dep.name op in
+      let reentered () =
+        panic_at loc
+          ~notes:
+            [
+              "an operation keeps its instance until it returns, and \
+               this task is in one of its operations";
+            ]
+          ~help:
+            "a block passed to an operation gets its dependencies \
+             only from its parameter's type: call it before the \
+             operation, outside the block"
+          (Printf.sprintf
+             "%s calls back into the instance its own task is in, so \
+              it would wait for itself"
+             name)
+      in
+      (* a wait that would close a cycle: each task in it waits
+         for an instance the next one is in *)
+      let cycle waits =
+        panic_at loc ~notes:waits
+          ~help:
+            "a block passed to an operation gets its dependencies \
+             only from its parameter's type: call it before the \
+             operation, outside the block"
+          (Printf.sprintf
+             "%s would wait for a task that waits for this one, so \
+              neither could go on"
+             name)
+      in
+      let at =
+        if loc.file = Prelude.file then at_call cx else Some (where loc)
+      in
+      let call () =
+        (* under `sim`, where two tasks' calls of a shared,
+           exclusive instance can be seen in either order, a
+           scheduling point *)
+        if Sched.locked inst then Sched.point ?at ();
+        Sched.holding ?at
+          ~what:(Printf.sprintf "waits for `%s`, which another task is in" held)
+          ~reentered ~cycle inst ~dep:held cx.site
+          (fun () -> fst (call_at cx loc f args (VEvidence outer)))
+      in
+      match cx.trace with
+      (* the recorder's own call of what it's over isn't one the
+         program made *)
+      | Some t when not (next && loc.file = Prelude.file) ->
+          ok (traced cx t ~dep:dep.name ~op fty args call)
+      | _ -> ok (call ()))
+  | None -> bug (what ^ " on an implementation without it")
+
 (* [ending] with each of [finallys], the `finally`s of instances made in
    that order, `sync.keyed`'s (compiler.md, "The standard library (step
    8)"): the last made's runs first, given the body's outcome, and each
@@ -1318,7 +1327,7 @@ and call_at cx loc f args ev =
    caller can write back the ones passed `inout`. *)
 and apply ?loc cx f args ev =
   match f with
-  | VBuiltin _ -> builtin ?loc cx f args
+  | VBuiltin _ -> builtin ?loc ~ev cx f args
   | _ ->
       (* the function's parameters are cells, whose final values are
          returned, to be written back to the arguments passed `inout`. The
@@ -1435,13 +1444,22 @@ and start ?loc cx f cells ev =
    its error, or the callee's body as far as the call it ends in. *)
 and enter ~at cx f args ev =
   match f with
-  | VBuiltin _ -> Done (ok (fst (builtin ~loc:at cx f args)))
+  | VBuiltin _ -> Done (ok (fst (builtin ~loc:at ~ev cx f args)))
   | _ -> start ~loc:at cx f (List.map ref args) ev
 
 (* A call of a built-in function, which [apply] returns, from [loc], where
    a NaN it makes is said to be made. *)
-and builtin ?loc cx f args =
+and builtin ?loc ?ev cx f args =
   match f with
+  | VBuiltin (Async_worker, _, _) -> (Ok (VInt (Int64.of_int (Sched.worker ()))), args)
+  | VBuiltin
+      ( (( Family_open | Family_call | Family_make | Family_keys | Family_evict
+         | Family_evictable | Family_counts | Family_close | Call_first_hash
+         | Call_add | Call_max | Call_min | Call_concat | Call_fold
+         | Call_operations ) as x),
+        tys,
+        _ ) ->
+      (family ?loc ?ev cx x tys args, args)
   | VBuiltin (Show, tys, _) -> (
       (* the one built-in that needs its argument's type, which is what its
          type variable stands for *)
@@ -1515,6 +1533,251 @@ and builtin ?loc cx f args =
       | exception Nan.Seen v -> raise (Builtins.Panic (Nan.observed Nan.hashed v))
       | exception Builtins.Fail err -> (Error err, args))
   | _ -> bug "a call of a built-in that isn't one"
+
+(* ---- the keyed instance family (family.ml), and `Call`'s members ----
+
+   The family's intrinsics, which only the members of the prelude's
+   `Instances` call (Core Lint), and `Call`'s, which read the program's
+   types: each of a call at [loc], in the prelude, with what its type
+   variables stand for, [tys], and the evidence it's given, [ev]. *)
+and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
+  let loc =
+    match loc with Some l -> l | None -> Loc.point ~file:Prelude.file 1 1
+  in
+  let at = at_call cx in
+  let fam = function
+    | VSched (Family.Family f) -> f
+    | _ -> bug "a family that isn't one"
+  in
+  let some v = VCon { ty = Path.prelude "Option"; name = "Some"; args = [ v ] }
+  and none = VCon { ty = Path.prelude "Option"; name = "None"; args = [] } in
+  let find p = Hashtbl.find_opt cx.types p in
+  (* the operation of the dependency [d] at [dargs] whose case of
+     `D.Call` is [case], and its type *)
+  let op_of (d : Path.t) dargs case =
+    match Iface.dep_fields find { dpath = d; dargs } with
+    | Some ops -> (
+        match List.find_opt (fun (o : Iface.field) -> Ty.call_case o.fname = case) ops with
+        | Some o -> (o.fname, o.fty)
+        | None -> bug ("a call of no operation of `" ^ d.name ^ "`, `" ^ case ^ "`"))
+    | None -> bug "a call of what isn't a dependency"
+  in
+  (* the type of the call's result, which what a merge folds is: [tys]'s
+     second, what `Call<D, R, ! E>`'s [R] stands for *)
+  let result () = match tys with _ :: r :: _ -> r | _ -> bug "a call of no result" in
+  match (x, args) with
+  | Family_open, [ make; VInt parts; VInt cap; VInt mailbox ] ->
+      let kty, dep, dargs =
+        match tys with
+        | [ k; Impl { deps = [ d ]; _ } ] -> (k, d.dpath, d.dargs)
+        | _ -> bug "a family of what isn't a handler of one dependency"
+      in
+      (* the maker's evidence, where it's written, in the handler that
+         opens the family: what the instances' handler needs, which the
+         `with` set that installs that one has *)
+      let outer =
+        match make with
+        | VClosure { outer; env; _ } -> (
+            match Option.map ( ! ) (Env.find_opt outer env) with
+            | Some (VEvidence is) -> is
+            | _ -> [])
+        | _ -> []
+      in
+      let what = Printf.sprintf "making an instance of `%s`" dep.name in
+      let runner : Family.runner =
+        {
+          make =
+            (fun k ->
+              match fst (call_at cx loc make [ k ] (VEvidence [])) with
+              | Ok (VHandler h) -> (
+                  match installing loc (fun () -> instance cx h outer what) with
+                  | impls, finally, excl -> (
+                      match List.assoc_opt dep impls with
+                      | Some impl ->
+                          let inst = Value.instance () in
+                          (* every task that reaches the family reaches
+                             it, so an exclusive one's operations don't
+                             interleave from the start *)
+                          Sched.share inst ~excl;
+                          ({ Value.dep; args = dargs; impl; outer; inst; excl }, finally)
+                      | None -> bug (what ^ " that doesn't implement it"))
+                  | exception Failed err ->
+                      (* setup's errors aren't the family's yet (step 7):
+                         one that fails to start ends the program *)
+                      raise
+                        (Builtins.Panic
+                           (Printf.sprintf "an instance of `%s` failed to start, with `%s`"
+                              dep.name (Value.show err))))
+              | Ok _ -> bug "a family's maker that doesn't describe a handler"
+              | Error _ -> bug "a family's maker that failed, which can't");
+          finish =
+            (fun fin ->
+              let unit = VCon { ty = Path.prelude "Result"; name = "Ok"; args = [ VUnit ] } in
+              ignore (call_at cx loc fin [ VType Ty.unit; unit ] (VEvidence outer)));
+          show = (fun k -> Shown.shown ~own:(own_show cx) cx.types kty k);
+        }
+      in
+      Ok
+        (VSched
+           (Family.Family
+              (Family.opened ~parts:(Int64.to_int parts) ~cap:(Int64.to_int cap)
+                 ~mailbox:(Int64.to_int mailbox)
+                 ~hash:(fun k -> Walk.fixed_hash (walk cx) kty k)
+                 ~equal:(fun a b -> Walk.equal (walk cx) kty a b)
+                 runner)))
+  | Family_call, [ f; k; VCon { name = case; args = cargs; _ } ] -> (
+      let f = fam f in
+      let i = Family.pin ?at f k in
+      let call () =
+        match i.installed with
+        | Some ({ impl = VRecord ops; _ } as inst) -> (
+            let op, fty = op_of inst.dep inst.args case in
+            let what = Printf.sprintf "a call of `%s.%s`" inst.dep.name op in
+            match
+              dep_op cx ~loc ~dep:inst.dep ~op ~fty ~next:false ~what
+                ~held:(Family.name_of f i) cargs ops inst.outer inst.inst
+            with
+            | v -> Ok v
+            | exception Failed err -> Error err)
+        | _ -> bug "a family's instance that isn't made"
+      in
+      match call () with
+      | r ->
+          Family.unpin f i;
+          r
+      | exception e ->
+          Family.unpin f i;
+          raise e)
+  | Family_make, [ f; k ] ->
+      let f = fam f in
+      Family.unpin f (Family.pin ?at f k);
+      Ok VUnit
+  | Family_keys, [ f ] -> Ok (Value.array_of_list (Family.keys (fam f)))
+  | Family_evictable, [ f ] -> Ok (Value.array_of_list (Family.evictable_keys (fam f)))
+  | Family_evict, [ f; k ] -> Ok (VBool (Family.evict (fam f) k))
+  | Family_counts, [ f ] ->
+      let live, made, evicted, high = Family.counts (fam f) in
+      let n x = VInt (Int64.of_int x) in
+      Ok
+        (VRecord
+           [ ("evicted", n evicted); ("high_water", n high); ("live", n live); ("made", n made) ])
+  | Family_close, [ f ] ->
+      Family.close (fam f);
+      Ok VUnit
+  | Call_first_hash, [ VCon { ty; name = case; args = cargs } ] -> (
+      (* the first argument's hash, through its type, as a key's is *)
+      match (Ty.call_dep ty, cargs) with
+      | _, [] -> Ok none
+      | Some d, a :: _ -> (
+          let dargs = match tys with Impl { deps = [ dd ]; _ } :: _ -> dd.dargs | _ -> [] in
+          match snd (op_of d dargs case) with
+          | Fun (p :: _, _, _, _) -> Ok (some (VInt (Walk.fixed_hash (walk cx) p.ty a)))
+          | _ -> Ok none)
+      | None, _ -> bug "a call that isn't one")
+  | Call_add, [ _; a; b ] -> (
+      match (a, b) with
+      | VUnit, VUnit -> Ok VUnit
+      | VInt x, VInt y -> (
+          match Arith.int_binop Add x y with
+          | v -> Ok v
+          | exception Arith.Overflowed { op; shown; _ } ->
+              raise (Builtins.Panic (Arith.overflow_message ~op ~shown)))
+      | VFloat x, VFloat y -> Ok (VFloat (x +. y))
+      | _ ->
+          raise
+            (Builtins.Panic
+               (Printf.sprintf "`merge: Sum` adds what `%s` gives, which isn't a number"
+                  (shown_ty (result ())))))
+  | (Call_max | Call_min), [ _; a; b ] ->
+      let c = Walk.compare (walk cx) (result ()) a b in
+      Ok (if (x = Call_max && c >= 0) || (x = Call_min && c <= 0) then a else b)
+  | Call_concat, [ _; a; b ] -> (
+      match (a, b) with
+      | VUnit, VUnit -> Ok VUnit
+      | VArray x, VArray y ->
+          Ok (Value.array (Array.append (Value.items x) (Value.items y)))
+      | VStr x, VStr y -> Ok (VStr (x ^ y))
+      | _ ->
+          raise
+            (Builtins.Panic
+               (Printf.sprintf "`merge: Concat` joins what `%s` gives, which isn't an array"
+                  (shown_ty (result ())))))
+  | Call_fold, [ (VCon { name = case; ty; _ } as c); VHandler h; a; b ] -> (
+      (* a merge's `call` clause, `fold op` in its instance (Lower's
+         [clause_ops]), made for the fold, with the evidence here: it has
+         no state (Stateless's rule for a description called as a
+         method), which is checked as it's made *)
+      if Stateless.makes_cell h.body || Stateless.has_finally h.body then
+        raise
+          (Builtins.Panic
+             (Printf.sprintf
+                "`m` may be a description of `%s`, which keeps state, so it \
+                 isn't called as a method"
+                h.site));
+      let outer = match ev with VEvidence is -> is | _ -> [] in
+      let d = match Ty.call_dep ty with Some d -> d | None -> bug "a call that isn't one" in
+      match instance cx h outer "a merge" with
+      | impls, _, _ -> (
+          match List.assoc_opt d impls with
+          | Some (VRecord ops) -> (
+              let op, _ = op_of d [] case in
+              match List.assoc_opt ("fold " ^ op) ops with
+              | Some fold -> fst (call_at cx loc fold [ c; a; b ] (VEvidence outer))
+              | None ->
+                  raise
+                    (Builtins.Panic
+                       (Printf.sprintf
+                          "`merge: Custom(m)` is given a handler of `%s` without a `call` clause that folds"
+                          d.name)))
+          | _ -> bug "a merge that doesn't implement its dependency"))
+  | Call_operations, [ _ ] -> (
+      match tys with
+      | [ Impl { deps = [ d ]; _ } ] ->
+          let ops = Option.value ~default:[] (Iface.dep_fields find d) in
+          let str x = VStr x and bool x = VBool x in
+          Ok
+            (Value.array_of_list
+               (List.map
+                  (fun (o : Iface.field) ->
+                    let params, gives =
+                      match o.fty with
+                      | Fun (ps, r, _, _) -> (List.length ps, r)
+                      | t -> (0, t)
+                    in
+                    let prim = function
+                      | Ty.Con (p, []) -> Some p.name
+                      | _ -> None
+                    in
+                    let adds = match prim gives with Some ("Int" | "Float") -> true | _ -> false in
+                    let orders =
+                      match prim gives with Some ("Int" | "Float" | "Str") -> true | _ -> false
+                    in
+                    let concats =
+                      match gives with
+                      | Con (p, [ _ ]) when p = Path.prelude "Array" -> true
+                      | Con (p, []) when p = Path.prelude "Str" -> true
+                      | _ -> false
+                    in
+                    VRecord
+                      [
+                        ("adds", bool adds);
+                        ("concats", bool concats);
+                        ("gives", str (if gives = Ty.unit then "()" else shown_ty gives));
+                        ("name", str o.fname);
+                        ("orders", bool orders);
+                        ("params", VInt (Int64.of_int params));
+                      ])
+                  ops))
+      | _ -> bug "the operations of what isn't a handler of one dependency")
+  | _ -> bug ("a call of `" ^ Intrinsic.name x ^ "` with the wrong values")
+
+(* [t], as Ren writes it, `Array<Str>`, its types by their names. *)
+and shown_ty (t : Ty.ty) =
+  Ty.show
+    (Ty.printer
+       ~names:(fun (p : Path.t) -> p.name)
+       { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+    t
 
 (* The real `Net`'s intrinsics (net.ml), each a wait of the task, as
    the real `Clock.sleep` is. *)

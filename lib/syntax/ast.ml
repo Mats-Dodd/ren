@@ -514,12 +514,16 @@ and ('v, 'b, 't) stmt =
    [field_default], `Key(n: Int = 16)`, a literal; an operation's
    parameters may too, [op_defaults], `run: fn(cmd: Str, args: Array<Str>,
    kill: Kill = Tree)`, by their place and name, as a function's are
-   (compiler.md, "Services stage", "The grammar"). *)
+   (compiler.md, "Services stage", "The grammar"). An operation's
+   parameters' names, [op_params], `""` for one written without, are what
+   its case of `D.Call` names its fields (compiler.md, "Services stage",
+   "`D.Call`"). *)
 type 't field = {
   field_name : ident;
   field_ty : 't ty;
   field_default : (literal * Loc.t * int) option;
   op_defaults : (int * string * (literal * Loc.t * int)) list;
+  op_params : string list;
 }
 (* A constructor as it's declared: [Free], [Flat(off: Money)] or
    [Flat(Money)], with one field, positional, whose name, if written, only

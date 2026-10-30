@@ -2532,25 +2532,6 @@ fn main() uses Console, Async =
 |});
   [%expect {|
     (until s6)
-    error: `longest` doesn't implement `see` or `all`
-       ┌─ test.ren:10:9
-    10 │ handler longest() for Seen =
-       │         ^^^^^^^
-       = a handler implements every operation, unless it goes `over` another implementation, which then does the rest
-       help: write them, or declare it `over Seen` if another `Seen` should handle them
-
-    error: `Seen` has no operation named `call`
-       ┌─ test.ren:11:3
-    11 │   call(c: Seen.Call, a, b) =>
-       │   ^^^^
-       help: the operations it implements: `Seen.see`, `Seen.all`
-
-    error: `Seen` isn't a sum type, so it has no variants
-       ┌─ test.ren:11:11
-    11 │   call(c: Seen.Call, a, b) =>
-       │           ^^^^
-       help: a variant type is one of a sum's, like `Order.Placed`
-
     error: there's no function named `striped`
        ┌─ test.ren:17:8
     17 │   with striped(seen(), by: Key(n: 1), merge: Concat) in
@@ -2629,25 +2610,6 @@ fn main() uses Console, Async =
 |}));
   [%expect {|
     (until s6)
-    error: `adding` doesn't implement `hit` or `total`
-       ┌─ test.ren:10:9
-    10 │ handler adding() for Hits =
-       │         ^^^^^^
-       = a handler implements every operation, unless it goes `over` another implementation, which then does the rest
-       help: write them, or declare it `over Hits` if another `Hits` should handle them
-
-    error: `Hits` has no operation named `call`
-       ┌─ test.ren:12:3
-    12 │   call(c: Hits.Call, a, b) =>
-       │   ^^^^
-       help: the operations it implements: `Hits.hit`, `Hits.total`
-
-    error: `Hits` isn't a sum type, so it has no variants
-       ┌─ test.ren:12:11
-    12 │   call(c: Hits.Call, a, b) =>
-       │           ^^^^
-       help: a variant type is one of a sum's, like `Order.Placed`
-
     error: there's no function named `striped`
        ┌─ test.ren:19:8
     19 │   with striped(counter(), merge: Custom(adding())) in print(Hits.total())
@@ -3516,43 +3478,11 @@ fn main() uses Console =
 |}));
   [%expect {|
     (until s7)
-    error: there's no constructor named `Instances`
-       ┌─ test.ren:16:13
-    16 │   let fam = Instances.open(count, parts: 1, cap: 2, mailbox: 16)
-       │             ^^^^^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
-
-    error: there's no constructor named `Instances`
-       ┌─ test.ren:17:17
-    17 │   finally(_) => Instances.close(fam)
-       │                 ^^^^^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
-
-    error: `release` lets go of the instance for one call of another dependency's operation, and `it` isn't one
-       ┌─ test.ren:18:26
+    error: `Instances` has no member named `pin`
+       ┌─ test.ren:18:36
     18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
-       │                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       help: write it on the operation's call: `release Next.get(id)`
-
-    error: there's no constructor named `Instances`
-       ┌─ test.ren:18:26
-    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
-       │                          ^^^^^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
-
-    error: a block passed to `Shards.at` can't use `Console`, which its parameter's type doesn't list
-       ┌─ test.ren:25:26
-    25 │     Shards.at(B) fn() => print(Count.total())
-       │                          ^^^^^^^^^^^^^^^^^^^^
-       = a block passed to an operation gets its dependencies only from its parameter's type
-       help: list it in the parameter's type, `fn() uses Console, Count`, or call it before `Shards.at`, outside the block
-
-    error: a block passed to `Shards.at` can't use `Console`, which its parameter's type doesn't list
-       ┌─ test.ren:26:26
-    26 │     Shards.at(A) fn() => print(Count.total())
-       │                          ^^^^^^^^^^^^^^^^^^^^
-       = a block passed to an operation gets its dependencies only from its parameter's type
-       help: list it in the parameter's type, `fn() uses Console, Count`, or call it before `Shards.at`, outside the block
+       │                                    ^^^
+       help: its members: `open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`
     |}]
 
 let%expect_test "[s7 reject] a third library's `at` inside its own `at`: the family's check on `pin`" =
@@ -3569,36 +3499,11 @@ fn main() =
 |}));
   [%expect {|
     (until s7)
-    error: there's no constructor named `Instances`
-       ┌─ test.ren:16:13
-    16 │   let fam = Instances.open(count, parts: 1, cap: 2, mailbox: 16)
-       │             ^^^^^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
-
-    error: there's no constructor named `Instances`
-       ┌─ test.ren:17:17
-    17 │   finally(_) => Instances.close(fam)
-       │                 ^^^^^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
-
-    error: `release` lets go of the instance for one call of another dependency's operation, and `it` isn't one
-       ┌─ test.ren:18:26
+    error: `Instances` has no member named `pin`
+       ┌─ test.ren:18:36
     18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
-       │                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       help: write it on the operation's call: `release Next.get(id)`
-
-    error: there's no constructor named `Instances`
-       ┌─ test.ren:18:26
-    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
-       │                          ^^^^^^^^^
-       help: check the spelling, or declare it in a type, like `type Shape = | Instances`
-
-    error: a block passed to `Shards.at` can't use `Shards`, which it would wait for while `Shards.at` runs it
-       ┌─ test.ren:23:7
-    23 │       Shards.at(B) fn() => Count.add(1)
-       │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-       = a block passed to an operation gets its dependencies only from its parameter's type
-       help: call it before `Shards.at`, outside the block
+       │                                    ^^^
+       help: its members: `open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`
     |}]
 
 let%expect_test "[s7 accept] a journal of a run that evicts and remakes a key names each life, and replays" =
@@ -3711,10 +3616,35 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:14:36
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:12
+    5 │ dep Logs = Actors<Key, Log>
+      │            ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:12:8
+    12 │   with actors(log) as Logs in
+       │        ^^^^^^
+
+    error: `Logs` is a type, not a dependency
+       ┌─ test.ren:12:23
+    12 │   with actors(log) as Logs in
+       │                       ^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:14:10
     14 │     Logs.post(Key(1), Log.Call.Put { s })
-       │                                    ^
+       │          ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `at`
+       ┌─ test.ren:16:10
+    16 │     Logs.at(Key(1)) fn() => print(Log.all())
+       │          ^^
+       help: declare it under `type Logs`
     |}]
 
 let%expect_test "[s7 accept] a post's call is a value: built, kept, posted and shown" =
@@ -3750,10 +3680,41 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:13:36
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:12
+    5 │ dep Logs = Actors<Key, Log>
+      │            ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:12:8
+    12 │   with actors(log) as Logs in
+       │        ^^^^^^
+
+    error: `Logs` is a type, not a dependency
+       ┌─ test.ren:12:23
+    12 │   with actors(log) as Logs in
+       │                       ^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:13:10
     13 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
-       │                                    ^
+       │          ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:15:10
+    15 │     Logs.post(Key(1), c)
+       │          ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `at`
+       ┌─ test.ren:16:10
+    16 │     Logs.at(Key(1)) fn() => print(Log.all())
+       │          ^^
+       help: declare it under `type Logs`
     |}]
 
 let%expect_test "[s7 accept] posts from one task to one actor run in order, each as one operation" =
@@ -3786,10 +3747,53 @@ test "posts arrive in the order posted" =
 |}));
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:15:40
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:16
+    5 │ pub dep Logs = Actors<Key, Log>
+      │                ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:12:8
+    12 │   with actors(log, max: 1) as Logs in
+       │        ^^^^^^
+
+    error: `Logs` is a type, not a dependency
+       ┌─ test.ren:12:31
+    12 │   with actors(log, max: 1) as Logs in
+       │                               ^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:15:14
     15 │         Logs.post(Key(1), Log.Call.Put { s: "a" })
-       │                                        ^
+       │              ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:16:14
+    16 │         Logs.post(Key(1), Log.Call.Put { s: "b" })
+       │              ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:17:14
+    17 │         Logs.post(Key(1), Log.Call.Put { s: "c" })
+       │              ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `at`
+       ┌─ test.ren:18:28
+    18 │       s.spawn fn() => Logs.at(Key(2)) fn() => Log.put("x")
+       │                            ^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `at`
+       ┌─ test.ren:20:10
+    20 │     Logs.at(Key(1)) fn() => assert Log.all() == "abc"
+       │          ^^
+       help: declare it under `type Logs`
     |}]
 
 let%expect_test "[s7 accept] a post makes its actor, so setup's errors are the post's, and nothing is lost" =
@@ -3854,10 +3858,35 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:11:36
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:4:12
+    4 │ dep Logs = Actors<Key, Log>
+      │            ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:10:8
+    10 │   with actors(log) as Logs in
+       │        ^^^^^^
+
+    error: `Logs` is a type, not a dependency
+       ┌─ test.ren:10:23
+    10 │   with actors(log) as Logs in
+       │                       ^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:11:10
     11 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
-       │                                    ^
+       │          ^^^^
+       help: declare it under `type Logs`
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:12:10
+    12 │     Logs.post(Key(1), Log.Call.Put { s: "b" })
+       │          ^^^^
+       help: declare it under `type Logs`
     |}]
 
 let%expect_test "[s7 accept] an actor posts to its own family" =
@@ -3884,15 +3913,41 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-      ┌─ test.ren:7:49
-    7 │   ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
-      │                                                 ^
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:13
+    5 │ dep Peers = Actors<Key, Peer>
+      │             ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
 
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:12:39
+    error: `Peers` is a type, not a dependency
+      ┌─ test.ren:6:36
+    6 │ handler peer(k: Key) for Peer uses Peers, Console =
+      │                                    ^^^^^
+      help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Peers` has no member named `post`
+      ┌─ test.ren:7:23
+    7 │   ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
+      │                       ^^^^
+      help: declare it under `type Peers`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:11:8
+    11 │   with actors(peer) as Peers in
+       │        ^^^^^^
+
+    error: `Peers` is a type, not a dependency
+       ┌─ test.ren:11:24
+    11 │   with actors(peer) as Peers in
+       │                        ^^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Peers` has no member named `post`
+       ┌─ test.ren:12:11
     12 │     Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
-       │                                       ^
+       │           ^^^^
+       help: declare it under `type Peers`
     |}]
 
 let%expect_test "[s7 reject] posting an operation that returns a value" =
@@ -3920,10 +3975,24 @@ fn main() uses Logs =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:11:35
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:12
+    5 │ dep Logs = Actors<Key, Log>
+      │            ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: `Logs` is a type, not a dependency
+       ┌─ test.ren:10:16
+    10 │ fn main() uses Logs =
+       │                ^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Logs` has no member named `post`
+       ┌─ test.ren:11:8
     11 │   Logs.post(Key(1), Log.Call.Line { at: 0 })
-       │                                   ^
+       │        ^^^^
+       help: declare it under `type Logs`
     |}]
 
 let%expect_test "[s7 reject] posting an operation that can fail" =
@@ -3946,11 +4015,6 @@ fn main() ! StoreDown uses Store, Docs =
        ┌─ test.ren:29:31
     29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
        │                               ^
-
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:32:41
-    32 │   try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
-       │                                         ^
     |}]
 
 let%expect_test "[s7 accept] two actors posting to each other past `mailbox:` don't deadlock while an outside poster waits" =
@@ -3981,15 +4045,47 @@ test "siblings never wait; the outside does" =
 |}));
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-      ┌─ test.ren:9:60
-    9 │     if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
-      │                                                            ^
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:17
+    5 │ pub dep Peers = Actors<Key, Peer>
+      │                 ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
 
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:15:57
+    error: `Peers` is a type, not a dependency
+      ┌─ test.ren:6:40
+    6 │ pub handler peer(k: Key) for Peer uses Peers =
+      │                                        ^^^^^
+      help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Peers` has no member named `post`
+      ┌─ test.ren:9:28
+    9 │     if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
+      │                            ^^^^
+      help: declare it under `type Peers`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:13:8
+    13 │   with actors(peer, mailbox: 2) as Peers in
+       │        ^^^^^^
+
+    error: `Peers` is a type, not a dependency
+       ┌─ test.ren:13:36
+    13 │   with actors(peer, mailbox: 2) as Peers in
+       │                                    ^^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Peers` has no member named `post`
+       ┌─ test.ren:15:29
     15 │       s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 3 })
-       │                                                         ^
+       │                             ^^^^
+       help: declare it under `type Peers`
+
+    error: `Peers` has no member named `post`
+       ┌─ test.ren:18:17
+    18 │           Peers.post(Key(2), Peer.Call.Noted)
+       │                 ^^^^
+       help: declare it under `type Peers`
     |}]
 
 let%expect_test "[s7 reject] a chain reaction panics past twice `mailbox:`, with the high-water mark" =
@@ -4018,15 +4114,47 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-      ┌─ test.ren:8:45
-    8 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
-      │                                             ^
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:4:13
+    4 │ dep Peers = Actors<Key, Peer>
+      │             ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
 
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:13:41
+    error: `Peers` is a type, not a dependency
+      ┌─ test.ren:5:36
+    5 │ handler peer(k: Key) for Peer uses Peers =
+      │                                    ^^^^^
+      help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Peers` has no member named `post`
+      ┌─ test.ren:8:11
+    8 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
+      │           ^^^^
+      help: declare it under `type Peers`
+
+    error: `Peers` has no member named `post`
+      ┌─ test.ren:9:11
+    9 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
+      │           ^^^^
+      help: declare it under `type Peers`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:12:8
+    12 │   with actors(peer, mailbox: 2) as Peers in
+       │        ^^^^^^
+
+    error: `Peers` is a type, not a dependency
+       ┌─ test.ren:12:36
+    12 │   with actors(peer, mailbox: 2) as Peers in
+       │                                    ^^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Peers` has no member named `post`
+       ┌─ test.ren:13:11
     13 │     Peers.post(Key(0), Peer.Call.Double { depth: 0 })
-       │                                         ^
+       │           ^^^^
+       help: declare it under `type Peers`
     |}]
 
 let%expect_test "[s7 accept] a post from inside `at` while the mailbox is full and its target isn't live completes" =
@@ -4057,10 +4185,41 @@ fn main() uses Console, Async, Random =
 |});
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-       ┌─ test.ren:11:56
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:4:12
+    4 │ dep Docs = Actors<Key, Doc>
+      │            ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: there's no function named `actors`
+      ┌─ test.ren:9:8
+    9 │   with actors(doc, max: 1, mailbox: 1) as Docs in
+      │        ^^^^^^
+
+    error: `Docs` is a type, not a dependency
+      ┌─ test.ren:9:43
+    9 │   with actors(doc, max: 1, mailbox: 1) as Docs in
+      │                                           ^^^^
+      help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Docs` has no member named `post`
+       ┌─ test.ren:11:28
     11 │       s.spawn fn() => Docs.post(Key(2), Doc.Call.Touch { by: 1 })
-       │                                                        ^
+       │                            ^^^^
+       help: declare it under `type Docs`
+
+    error: `Docs` has no member named `at`
+       ┌─ test.ren:13:14
+    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
+       │              ^^
+       help: declare it under `type Docs`
+
+    error: `Docs` has no member named `post`
+       ┌─ test.ren:13:38
+    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
+       │                                      ^^^^
+       help: declare it under `type Docs`
     |}]
 
 let%expect_test "[s7 accept] a session looping an `at` operation that posts to a sibling is held at the edge" =
@@ -4090,10 +4249,47 @@ test "the session's posts stay within the bound" =
 |}));
   [%expect {|
     (until s7)
-    error: expected `,` or `)`, found `{`
-      ┌─ test.ren:7:48
+    error: there's no dependency named `Actors`
+      ┌─ test.ren:5:16
+    5 │ pub dep Docs = Actors<Key, Doc>
+      │                ^^^^^^
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      help: use one of those, or declare it with `dep`
+
+    error: `Docs` is a type, not a dependency
+      ┌─ test.ren:6:38
+    6 │ pub handler doc(k: Key) for Doc uses Docs =
+      │                                      ^^^^
+      help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Docs` has no member named `post`
+      ┌─ test.ren:7:18
     7 │   edit() => Docs.post(Key(0), Doc.Call.Changed { from: k })
-      │                                                ^
+      │                  ^^^^
+      help: declare it under `type Docs`
+
+    error: there's no function named `actors`
+       ┌─ test.ren:11:8
+    11 │   with actors(doc, mailbox: 4) as Docs in
+       │        ^^^^^^
+
+    error: `Docs` is a type, not a dependency
+       ┌─ test.ren:11:35
+    11 │   with actors(doc, mailbox: 4) as Docs in
+       │                                   ^^^^
+       help: a dependency is declared with `dep`, and lists the operations a function can call on it
+
+    error: `Docs` has no member named `at`
+       ┌─ test.ren:12:10
+    12 │     Docs.at(Key(1)) fn() =>
+       │          ^^
+       help: declare it under `type Docs`
+
+    error: `Docs` has no member named `high_water`
+       ┌─ test.ren:15:17
+    15 │     assert Docs.high_water() <= 5
+       │                 ^^^^^^^^^^
+       help: declare it under `type Docs`
     |}]
 
 (* ---- s8: the milestone, in miniature (bench/services/docs is the whole one) ---- *)

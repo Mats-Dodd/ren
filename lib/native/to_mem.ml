@@ -90,6 +90,20 @@ let tasks_not_native fns loc p =
     (Diag.make loc ~help:"run it with `ren run`, which runs tasks"
        (sprintf "`%s` runs tasks, and tasks aren't native yet" (written_as fns p)))
 
+(* What a native build says of a call [p], at [loc], that reaches the
+   keyed instance family, which keeps instances in the interpreter's
+   runtime (compiler.md, "Services stage", "Native"): the library the
+   program called, `striped`, for a function made of it for a
+   dependency, `striped$main.Hits`. *)
+let family_not_native loc (p : Path.t) =
+  let name = Path.local p in
+  let name =
+    match String.index_opt name '$' with Some i -> String.sub name 0 i | None -> name
+  in
+  Diag.Error
+    (Diag.make loc ~help:"run it with `ren run`"
+       (sprintf "`%s` uses the keyed instance family, which isn't native yet" name))
+
 (* ---- the program ---- *)
 
 (* What compiling the whole program shares: every type declared and
@@ -117,6 +131,9 @@ type ctx = {
   names : (Path.t, string) Hashtbl.t;
   taken : (string, unit) Hashtbl.t;
   mutable todo : (Path.t * Loc.t) list;
+  family : (Path.t, bool) Hashtbl.t;
+      (** whether each function reaches the keyed instance family, by its
+          path, as [reaches_family] finds *)
   mutable lifted : Mem.fn list;  (** most recent first *)
   mutable handler_list : Mem.handler list;
       (** the handlers whose descriptions it makes, most recent first *)
@@ -2844,6 +2861,35 @@ and prim fs env (e : C.expr) (p : C.prim) (args : C.expr list) =
       | _ -> bug "a cell that isn't one")
   | _ -> bug ("`" ^ C.show_prim p ^ "` on the wrong number of operands")
 
+(* Whether [p] is the prelude's or the standard library's, or a function
+   made of one for what a use of it asks for (Lower.request). *)
+and library (p : Path.t) =
+  p.home = Prelude.file || p.home = Path.prelude_home || Std_lib.is_home p.home
+  || String.contains (Path.local p) '$'
+
+(* Whether the function [p] calls the keyed instance family's intrinsics,
+   itself or through what it calls (Prelude.runtime_of). *)
+and reaches_family cx (p : Path.t) =
+  match Hashtbl.find_opt cx.family p with
+  | Some b -> b
+  | None ->
+      (* a recursive call is answered by the rest *)
+      Hashtbl.replace cx.family p false;
+      let rec go (e : C.expr) =
+        (match e.kind with
+        | Intrinsic (x, _, _, _) -> Prelude.runtime_of x <> None
+        | Global (q, _, _, _) -> reaches_family cx q
+        | _ -> false)
+        || List.exists go (C.children e)
+      in
+      let b =
+        match Hashtbl.find_opt cx.fns p with
+        | Some (f : C.fn_def) -> go f.body
+        | None -> false
+      in
+      Hashtbl.replace cx.family p b;
+      b
+
 and call fs env (e : C.expr) (f : C.expr) args ev =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
@@ -2851,6 +2897,10 @@ and call fs env (e : C.expr) (f : C.expr) args ev =
   | Global (p, _, _, _) when starts_tasks cx.fns p ->
       (* said before its blocks are compiled, which hold a `Scope` *)
       raise (tasks_not_native cx.fns (at fs e.loc) p)
+  | Global (p, _, _, _)
+    when e.loc.file <> Prelude.file && library p && reaches_family cx p ->
+      (* said at the program's call of the library that reaches it *)
+      raise (family_not_native e.loc p)
   | Global (p, _, descs, dicts) ->
       let callee =
         match Hashtbl.find_opt cx.fns p with
@@ -4608,6 +4658,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       names = Hashtbl.create 64;
       taken = Hashtbl.create 64;
       todo = [];
+      family = Hashtbl.create 16;
       lifted = [];
       handler_list = [];
       dsite_list = [];

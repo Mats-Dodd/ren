@@ -141,7 +141,9 @@ and store = { mutable items : t array; mutable used : int }
 
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)
-and handler = { ev : int; body : Core.expr; env : t ref Env.t }
+and handler = { ev : int; body : Core.expr; env : t ref Env.t; site : string }
+(* [site] is the label of the code that made it, its handler's name for
+   one made by calling it, `counter`, which a panic about it names *)
 
 (* An implementation of the dependency [dep] at the type arguments
    [args], a generic one's instance, installed: it runs with the evidence

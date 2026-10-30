@@ -139,6 +139,9 @@ type task = {
       (** the state of its own stream of each test `Random` it has drawn
           from, by the instance's number, if it isn't a root (eval.ml,
           [task_random]) *)
+  mutable worker : int option;
+      (** the worker it runs on, `Async.worker()`, once it has asked
+          ([worker]) *)
 }
 
 (* A scope: what `Async.scope` gives its body. [running] are its tasks
@@ -595,6 +598,26 @@ let draw = function
       Int64.(logxor z (shift_right_logical z 31))
   | Single -> bug "a draw from `single`'s tape"
 
+(* The worker the task running runs on, `Async.worker()` (compiler.md,
+   "Services stage", "The keyed instance family"): there's one thread, so
+   under `single`, 0; under `sim`, which stands for two workers, 0 or 1,
+   drawn from the tape the first time the task asks, and the same after.
+   Drawn then rather than when it's spawned, so a program that never asks
+   draws what it drew before, and its seeds find what they found; it's
+   the same tape, so a seed decides it, and replays it. *)
+let worker () =
+  match !running with
+  | None -> 0
+  | Some s -> (
+      let t = s.current in
+      match (t.worker, s.policy) with
+      | Some w, _ -> w
+      | None, Single -> 0
+      | None, (Sim _ as p) ->
+          let w = Int64.to_int (Int64.unsigned_rem (draw p) 2L) in
+          t.worker <- Some w;
+          w)
+
 (* What runs next, if anything can: under `single` the queue's first;
    under `sim` the one the tape picks among all that can, each the same
    odds ("`sim`'s choices"). *)
@@ -660,6 +683,7 @@ let task ?(context = []) ~path ~root scope =
     context;
     pointed = false;
     randoms = Hashtbl.create 1;
+    worker = None;
   }
 
 (* What [t] waits for, [what] if it's about to, for the deadlock panic and

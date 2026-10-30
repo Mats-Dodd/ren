@@ -230,6 +230,8 @@ type t = {
   mutable op_defaults : (int * string * (literal * Loc.t * int)) list ref option;
       (** while an operation's type is parsed, in its dependency's
           declaration, where the defaults of its parameters go ([parse_ty]) *)
+  mutable op_params : string list ref option;
+      (** and where their names go, as [op_defaults] *)
 }
 
 let peek p = fst p.toks.(p.i)
@@ -396,21 +398,35 @@ let at_module_type p =
   | IDENT m, DOT, IDENT t -> (not (is_upper m)) && is_upper t
   | _ -> false
 
+(* [c], a constructor written after its type, `Doc.Call`, and if a third
+   name follows, `Doc.Call.Edit`, that one, a case of the type the first
+   two name, a dependency's `D.Call`, whose name is `Doc.Call`
+   (compiler.md, "Services stage", "`D.Call`"). *)
+let calls_case p (c : ctor_ref) =
+  match (c.qual, peek p, peek2 p) with
+  | Some t, DOT, IDENT n when is_upper n ->
+      advance p;
+      let tid = { name = t.tid.name ^ "." ^ c.name.name; loc = Loc.span t.tid.loc c.name.loc } in
+      { qual = Some { t with tid }; name = upper_ident p "a constructor name" }
+  | _ -> c
+
 (* A constructor: `Red`, or after its type, `Light.Red` or
-   `billing.Plan.Free`. *)
+   `billing.Plan.Free`, or a case of a dependency's calls,
+   `Doc.Call.Edit`. *)
 let parse_ctor_ref p : ctor_ref =
   if at_module_type p then (
     let t = parse_tyname p in
     expect p DOT;
-    { qual = Some t; name = upper_ident p "a constructor name" })
+    calls_case p { qual = Some t; name = upper_ident p "a constructor name" })
   else
     let first = upper_ident p "a constructor name" in
     if peek p = DOT then (
       advance p;
-      {
-        qual = Some { tmod = None; tid = first };
-        name = upper_ident p "a constructor name";
-      })
+      calls_case p
+        {
+          qual = Some { tmod = None; tid = first };
+          name = upper_ident p "a constructor name";
+        })
     else { qual = None; name = first }
 
 (* A default, after its `=`: a literal, a negative number among them;
@@ -495,13 +511,14 @@ let rec parse_ty ?(uses = true) ?(arg = false) p : ty =
       (* an operation's own parameters may have defaults, which its
          dependency's declaration collects; a function type among them
          can't *)
-      let collect = p.op_defaults in
+      let collect = p.op_defaults and names = p.op_params in
       p.op_defaults <- None;
+      p.op_params <- None;
       let index = ref (-1) in
       let params =
         sep_list p ~close:RPAREN (fun p ->
             incr index;
-            parse_fn_ty_param ?collect ~index:!index p)
+            parse_fn_ty_param ?collect ?names ~index:!index p)
       in
       let ret =
         if peek p = ARROW then (
@@ -624,7 +641,7 @@ and impl_rest p ~uses ~arg ~start ~over names =
    `fn(id: UserId) -> User`. The name doesn't affect the type. An
    operation's, the [index]th of its type, may have a default, which goes
    in [collect], by its place and name. *)
-and parse_fn_ty_param ?collect ~index p =
+and parse_fn_ty_param ?collect ?names ~index p =
   let start = loc p in
   (* one the function changes is written as a call passes it, `&Int`
      (compiler.md, "Blocks with `inout` parameters") *)
@@ -638,6 +655,7 @@ and parse_fn_ty_param ?collect ~index p =
         Some name
     | _ -> None
   in
+  Option.iter (fun ns -> ns := !ns @ [ Option.value name ~default:"" ]) names;
   if peek p = INOUT then (
     let at = loc p in
     advance p;
@@ -831,7 +849,13 @@ let parse_param p : param =
 let parse_field_decl p =
   let field_name = ident p in
   expect p COLON;
-  { field_name; field_ty = parse_ty p; field_default = None; op_defaults = [] }
+  {
+    field_name;
+    field_ty = parse_ty p;
+    field_default = None;
+    op_defaults = [];
+    op_params = [];
+  }
 
 (* A constructor's declaration: `Free`; `Flat(off: Money)` or
    `Flat(Money)`, one field, positional, whose name only documents it; or
@@ -880,7 +904,7 @@ let parse_ctor_decl p =
         (label, field_ty, shown, default)
       in
       let plain field_name field_ty =
-        { field_name; field_ty; field_default = None; op_defaults = [] }
+        { field_name; field_ty; field_default = None; op_defaults = []; op_params = [] }
       in
       match sep_list p ~close:RPAREN field with
       | [ (label, field_ty, _, field_default) ] ->
@@ -1967,6 +1991,10 @@ and parse_primary p =
           let c =
             { qual = Some t; name = upper_ident p "a constructor name" }
           in
+          (* `Doc.Call.Edit`: a case of a dependency's `D.Call`, whose
+             type is named `Doc.Call` (compiler.md, "Services stage",
+             "`D.Call`") *)
+          let c = calls_case p c in
           match peek p with
           | LPAREN -> con_args p start c
           | LBRACE ->
@@ -2773,7 +2801,7 @@ let parse_type ~prelude p ~pub =
        send: fn(x: T)
 
      dep Jobs = Chan<Job> *)
-let rec parse_dep p ~pub =
+let rec parse_dep ?(prelude = false) p ~pub =
   expect p DEP;
   let type_name = upper_ident p "a dependency's name" in
   (* a generic one's type parameters, `dep Chan<T> =` *)
@@ -2818,7 +2846,7 @@ let rec parse_dep p ~pub =
       type_body = Dep_alias target;
       type_ops = [];
     })
-  else parse_dep_ops p ~pub ~type_name ~type_params
+  else parse_dep_ops ~prelude p ~pub ~type_name ~type_params
 
 (* Whether what's next is a dependency's name, `Chan` or `store.Users`,
    which an alias names. *)
@@ -2828,8 +2856,11 @@ and at_dep_name p =
   | IDENT m, DOT, IDENT t -> (not (is_upper m)) && is_upper t
   | _ -> false
 
-(* A dependency's operations, indented under it, and its members. *)
-and parse_dep_ops p ~pub ~(type_name : ident) ~type_params =
+(* A dependency's operations, indented under it, and its members. Only
+   the prelude's source writes one with members and no operations, the
+   runtime's `Instances`, which nothing installs (compiler.md, "Services
+   stage", "The keyed instance family"). *)
+and parse_dep_ops ?(prelude = false) p ~pub ~(type_name : ident) ~type_params =
   let tname = type_name.name in
   if peek p <> INDENT then
     Diag.error (loc p)
@@ -2856,14 +2887,26 @@ and parse_dep_ops p ~pub ~(type_name : ident) ~type_params =
            "`%s` is an operation, so its type is a function's, but this is %s"
            field_name.name
            (describe (peek p)));
-    let defaults = ref [] in
+    let defaults = ref [] and names = ref [] in
     p.op_defaults <- Some defaults;
+    p.op_params <- Some names;
     let field_ty =
-      Fun.protect ~finally:(fun () -> p.op_defaults <- None) (fun () -> parse_ty p)
+      Fun.protect
+        ~finally:(fun () ->
+          p.op_defaults <- None;
+          p.op_params <- None)
+        (fun () -> parse_ty p)
     in
-    { field_name; field_ty; field_default = None; op_defaults = !defaults }
+    {
+      field_name;
+      field_ty;
+      field_default = None;
+      op_defaults = !defaults;
+      op_params = !names;
+    }
   in
-  if not (at_op p) then
+  let none = prelude && not (at_op p) in
+  if not (at_op p || none) then
     Diag.error (loc p)
       ~help:
         "list its operations first, like `now: fn() -> Time`, then its members"
@@ -2879,7 +2922,7 @@ and parse_dep_ops p ~pub ~(type_name : ident) ~type_params =
     then ops acc
     else List.rev acc
   in
-  let ops = ops [] in
+  let ops = if none then [] else ops [] in
   (* the loop stopped after the line break before a member, if there is one *)
   let members =
     if peek p = DEDENT then [] else parse_members ~dep:true p ~tname
@@ -3470,7 +3513,7 @@ let parse_item ~prelude p =
   match peek p with
   | FN -> Fn (parse_fn p ~pub)
   | TYPE -> Type (parse_type ~prelude p ~pub)
-  | DEP -> Type (parse_dep p ~pub)
+  | DEP -> Type (parse_dep ~prelude p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)
   | GROUP -> parse_group p ~pub
   | IDENT "wiring" when (match peek2 p with IDENT _ -> true | _ -> false) ->
@@ -3531,7 +3574,7 @@ let skip_to_item p ~start =
     done)
 
 let parse_program ?(prelude = false) sink toks =
-  let p = { toks; i = 0; node = 0; sink; tags = []; op_defaults = None } in
+  let p = { toks; i = 0; node = 0; sink; tags = []; op_defaults = None; op_params = None } in
   let rec loop acc =
     if peek p = EOF then List.rev acc
     else
@@ -3565,7 +3608,7 @@ let parse_program ?(prelude = false) sink toks =
    so the whole session numbers them once; the last one this line used is
    returned with it. *)
 let parse_session_line sink toks ~node =
-  let p = { toks; i = 0; node; sink; tags = []; op_defaults = None } in
+  let p = { toks; i = 0; node; sink; tags = []; op_defaults = None; op_params = None } in
   let s = parse_stmt p in
   if peek p = NEWLINE then advance p;
   if peek p <> EOF then fail_expected p "the end of the line";

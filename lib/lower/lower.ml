@@ -100,7 +100,7 @@ let rec subst_ty s (t : Ty.ty) : Ty.ty =
   match t with
   | Var n -> s.var n
   | Error -> Error
-  | Con (p, args) -> Con (p, List.map (subst_ty s) args)
+  | Con (p, args) -> Ty.known (Con (p, List.map (subst_ty s) args))
   | Variant (p, c, args) -> Variant (p, c, List.map (subst_ty s) args)
   | Errors r -> Errors (subst_row s r)
   | Impl i -> (
@@ -120,7 +120,7 @@ let rec subst_ty s (t : Ty.ty) : Ty.ty =
               (fun (d : Ty.dep) -> { d with dargs = List.map (subst_ty s) d.dargs })
               i.deps
           in
-          Impl { i with deps; needs; fails })
+          Ty.known (Impl { i with deps; needs; fails }))
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst_ty s p.ty }) ps,
@@ -169,6 +169,12 @@ type cx = {
           the arm, whose locals' ids are theirs plus [shift], so each copy's
           are its own *)
   mutable call : call option;  (** in such a copy, its call *)
+  mutable case : (int * string) option;
+      (** in a copy of a `call` clause made for one operation, the binder of
+          its call and the operation's case of `D.Call`: an arm of a `match`
+          on the call for another case is never taken there, and inference
+          refined each to its own case's (compiler.md, "Services stage",
+          "`D.Call`") *)
   mutable cells : (C.var * C.var) list;
       (** in a handler's arm, its state's `var`s and their cells
           ([with_cells]), which `Async.until` writes back and reads again
@@ -198,6 +204,7 @@ type cx = {
   mutable handler_ev : C.var option;
       (** in a handler, its evidence, where it was installed, which `next` finds
           the implementation it's over in *)
+  self : Path.t;  (** the function being lowered, as it's written *)
   mutable handler_deps : Ty.dep list;
       (** in a handler, the dependencies it implements, at its types, which
           `next` finds the one under it of *)
@@ -808,6 +815,20 @@ and expr_of cx (e : expr) : C.expr =
   | Match (subject, arms) when handles cx e.node ->
       handle_match cx ~passed:false (ty ()) e.loc subject arms
   | Match (subject, arms) ->
+      (* in a copy of a `call` clause, a `match` on its call takes only
+         its own case's arms, and those that take any *)
+      let arms =
+        match (cx.case, subject.kind) with
+        | Some (b, case), Var (Local v) when v.id = b ->
+            List.filter
+              (fun (a : arm) ->
+                match a.arm_pat.pkind with
+                | PCon ({ name; _ }, _) | PCon_named ({ name; _ }, _) ->
+                    name.name = case
+                | _ -> true)
+              arms
+        | _ -> arms
+      in
       let subject = expr cx subject in
       here (Match (subject, List.map (arm cx) arms))
   | Array xs -> here (Array (List.map (expr cx) xs))
@@ -1131,9 +1152,9 @@ and handler cx (e : expr) deps state arms =
     | Some (_, needs) -> needs
     | None -> bug "a handler whose type isn't a handler's"
   in
-  let forwards, body_ty, any_vars =
+  let forwards, body_ty, any_vars, call_vars =
     match (node cx e.node).found with
-    | Some (Handler_facts { forwards; body_ty; any_vars }) ->
+    | Some (Handler_facts { forwards; body_ty; any_vars; call_vars }) ->
         (* the variable for the body's type, as what it's made for numbers
            it *)
         let body_ty =
@@ -1141,11 +1162,14 @@ and handler cx (e : expr) deps state arms =
             (fun k -> match cx.subst.var k with Var k -> k | _ -> k)
             body_ty
         in
-        (forwards, body_ty, any_vars)
-    | _ -> ([], None, None)
+        (forwards, body_ty, any_vars, call_vars)
+    | _ -> ([], None, None, None)
   in
   let finallies =
     List.filter_map (function Finally f -> Some f | _ -> None) state
+  in
+  let clause =
+    List.find_opt (fun (a : handler_arm) -> a.arm_op = Call_op "clause") arms
   in
   (* what the `finally` [f] is given, of type `Result<T, ! ..e>`, the
      body's type and errors (Infer_handlers.finally_), shared by each *)
@@ -1262,7 +1286,15 @@ and handler cx (e : expr) deps state arms =
             | _ -> None)
           forwards
       in
-      (p, mk (Record (p, ops @ forwarded)) (Ty.impl [ own ] needs) e.loc)
+      (* what its `call` clause implements *)
+      let clauses =
+        match (call_vars, clause) with
+        | Some vars, Some clause ->
+            clause_ops cx e ~cells ~needs ~vars own ~written:(List.map fst ops)
+              clause
+        | _ -> []
+      in
+      (p, mk (Record (p, ops @ forwarded @ clauses)) (Ty.impl [ own ] needs) e.loc)
     in
     (* its `finally`s, as one lambda, which is given the descriptor of
        the `with`'s body's type first, the variable after the function's
@@ -1314,9 +1346,23 @@ and handler cx (e : expr) deps state arms =
         cells
     in
     let impls =
-      match any_vars with
-      | Some vars -> [ any_impl cx e ~cells ~needs ~vars arms ]
-      | None -> List.map impl deps
+      match (any_vars, call_vars, clause, deps) with
+      | Some vars, _, _, _ -> [ any_impl cx e ~cells ~needs ~vars arms ]
+      | None, Some vars, Some clause, [ { dep = { tref = Param _; _ }; _ } ] ->
+          (* a handler `for D`, made for the dependency it's given: its
+             `call` clause is its every operation *)
+          let d =
+            match cx.handler_deps with
+            | [ d ] -> d
+            | _ -> bug "a handler `for D` not made for one dependency"
+          in
+          [
+            ( d.dpath,
+              mk
+                (Record (d.dpath, clause_ops cx e ~cells ~needs ~vars d ~written:[] clause))
+                (Ty.impl [ d ] needs) e.loc );
+          ]
+      | _ -> List.map impl deps
     in
     let exclusive =
       cells <> [] || opaque_state cx e.loc (Instance { impls; finally; exclusive = false })
@@ -1434,6 +1480,127 @@ and any_impl cx (e : expr) ~cells ~needs ~vars:(ka, kr, ke) arms =
   in
   let ops = List.map copy ops in
   (d.dpath, mk (Record (d.dpath, ops)) (Ty.impl [ d ] needs) e.loc)
+
+(* What the `call` clause [clause] of the handler [e] implements, in its
+   implementation of [d], whose arms implement the operations [written]
+   (compiler.md, "Services stage", "`D.Call`"). `call(c) => body` is
+   copied for each other operation of [d], as an arm `over any` is, with
+   the result and the errors' row of the call, the variables [vars]
+   (Infer.Handler_facts), that operation's: each copy takes the
+   operation's arguments and makes [c] of them, its case of `D.Call`. A
+   merge's, `call(c, a, b) => body`, is copied for every operation, as
+   the fold of two of its results, `fold op` in the record, which
+   `c.fold(m, a, b)` calls (eval.ml); and each operation it doesn't write
+   an arm for panics, since a merge folds results and isn't installed to
+   make them. In each copy, a `match` on [c] takes only that case's arms
+   ([cx.case]). *)
+and clause_ops cx (e : expr) ~cells ~needs ~vars:(kr, ke) (d : Ty.dep) ~written
+    (clause : handler_arm) =
+  let impl = clause.arm_impl in
+  let params, body =
+    match impl.kind with
+    | Lambda (ps, body) -> (ps, body)
+    | _ -> bug "a `call` clause that isn't a lambda"
+  in
+  let c = match params with c :: _ -> c | [] -> bug "a `call` clause of no call" in
+  let ops =
+    match Iface.dep_fields cx.types d with
+    | Some ops -> ops
+    | None -> bug "a `call` clause of what isn't a dependency"
+  in
+  let cp = Ty.call_path d.dpath in
+  let call_ty : Ty.ty = Con (cp, d.dargs) in
+  let fold = List.length params = 3 in
+  let inside = Ids.of_list (Ast.bound_in impl) in
+  let most = Ids.fold max inside 0 in
+  let copy (o : Iface.field) =
+    match o.fty with
+    | Fun (ps, ret, errs, _) ->
+        let around = cx.subst and suffix = cx.suffix and case = cx.case in
+        cx.subst <-
+          {
+            around with
+            var = (fun k -> if k = kr then ret else around.var k);
+            tail = (fun k -> if k = ke then errs else around.tail k);
+          };
+        cx.suffix <- suffix ^ "$" ^ o.fname;
+        cx.shifted <- inside;
+        cx.shift <- cx.next;
+        cx.next <- cx.next + most + 1;
+        cx.case <- Some (c.pname.id, Ty.call_case o.fname);
+        let name, given = block_of cx impl.node in
+        let lowered () =
+          let around = cx.cells in
+          cx.cells <- cells;
+          let l = expr cx body in
+          cx.cells <- around;
+          l
+        in
+        let lam =
+          if fold then
+            let cps =
+              List.map2
+                (fun (p : Resolved.param) t : C.param ->
+                  { mode = Read; var = bind cx p.pname t })
+                params [ call_ty; ret; ret ]
+            in
+            let fty =
+              Ty.Fun (List.map Ty.read [ call_ty; ret; ret ], ret, Ty.closed, needs)
+            in
+            block_value cx ~name ~given cps fty impl.loc lowered
+          else
+            let xs =
+              List.map
+                (fun (p : Ty.param) : C.param ->
+                  { mode = p.mode; var = temp cx "x" p.ty })
+                ps
+            in
+            block_value cx ~name ~given xs (Ty.Fun (ps, ret, errs, needs))
+              impl.loc (fun () ->
+                let v = bind cx c.pname call_ty in
+                let made =
+                  mk
+                    (Con
+                       ( cp,
+                         Ty.call_case o.fname,
+                         List.map (fun (x : C.param) -> local x.var impl.loc) xs
+                       ))
+                    call_ty impl.loc
+                in
+                let l = lowered () in
+                mk (Let (v, made, l)) l.ty impl.loc)
+        in
+        cx.subst <- around;
+        cx.suffix <- suffix;
+        cx.shifted <- Ids.empty;
+        cx.case <- case;
+        ((if fold then "fold " ^ o.fname else o.fname), with_cells cx cells lam)
+    | _ -> bug "an operation whose type isn't a function's"
+  in
+  (* a merge's operations it doesn't write: each panics *)
+  let unmade (o : Iface.field) =
+    match o.fty with
+    | Fun (ps, ret, errs, _) ->
+        let xs =
+          List.map
+            (fun (p : Ty.param) : C.param -> { mode = p.mode; var = temp cx "x" p.ty })
+            ps
+        in
+        let handler = Path.local cx.self in
+        ( o.fname,
+          block_value cx
+            ~name:(Path.full (Path.member d.dpath o.fname) ^ cx.suffix)
+            ~given:[] xs (Ty.Fun (ps, ret, errs, needs)) e.loc (fun () ->
+              panic_with cx e.loc ret
+                (Printf.sprintf
+                   "`%s` folds two results of a call with its `call` clause, \
+                    so it isn't installed to run `%s.%s`"
+                   handler d.dpath.name o.fname)) )
+    | _ -> bug "an operation whose type isn't a function's"
+  in
+  let missing = List.filter (fun (o : Iface.field) -> not (List.mem o.fname written)) ops in
+  if fold then List.map copy ops @ List.map unmade missing
+  else List.map copy missing
 
 (* The body of the `finally` [f], given [given], what it covers ends in,
    as its parameter. *)
@@ -1818,6 +1985,14 @@ and todo cx loc t =
   let msg = mk (Str "reached a `todo`") Ty.str loc in
   mk (Call (f, [ C.Value msg ], cx.ev)) t loc
 
+(* The standard library's panic with [msg], at [loc], where a [t] is
+   wanted, as [todo]'s. *)
+and panic_with cx loc t msg =
+  let a : Ty.args = { tys = [ t ]; rows = [ Ty.closed; Ty.closed ] } in
+  let fty = Ty.apply a (Prelude.scheme Lib_panic).ty in
+  let f = mk (Intrinsic (Lib_panic, a, descs cx a, [])) fty loc in
+  mk (Call (f, [ C.Value (mk (Str msg) Ty.str loc) ], cx.ev)) t loc
+
 (* `show(x)`, of [x]'s type: a hole's (above, [Interp]). *)
 and shown cx (x : C.expr) loc =
   let a : Ty.args = { tys = [ x.ty ]; rows = [ Ty.closed; Ty.closed ] } in
@@ -1908,6 +2083,8 @@ and call cx ?(changed = false) (e : expr) f args =
              args = List.map (fun v -> local v e.loc) c.cargs;
            })
         (ty_of cx e.node) e.loc
+  | Var (Global p) when for_param cx f.node <> None ->
+      for_call cx ~changed e f p (Option.get (for_param cx f.node)) args
   | Var (Global _) when Hashtbl.mem cx.through f.node ->
       plain_call cx ~changed ~through:(Hashtbl.find cx.through f.node) e f args
   | Var (Global p) when List.exists is_named args ->
@@ -1924,6 +2101,39 @@ and call cx ?(changed = false) (e : expr) f args =
           split_at cx e r n body
       | _ -> plain_call cx ~changed e f args)
   | _ -> plain_call cx ~changed e f args
+
+(* Which of the variables of the handler `for D` called at [node] is [D]
+   (Infer.For_param), if it's one. *)
+and for_param cx node =
+  match Infer.Nodes.find_opt (Infer.for_node node) cx.nodes with
+  | Some { found = Some (For_param k); _ } -> Some k
+  | _ -> None
+
+(* A call of [p], a handler `for D`, [D] its variable [kd]: a call of the
+   function made of it for the dependency [D] is an implementation of at
+   this call (compiler.md, "Services stage", "Stripes"), as a handler
+   `over any` is made for what it's installed over. That one's variables
+   are [p]'s but [D], then the dependency's type arguments, and its rows
+   are [p]'s, then what [D] needs and what it fails to start with
+   ([fn_def]). *)
+and for_call cx ~changed (e : expr) (f : expr) p kd args =
+  let a = targs_of cx f.node in
+  let d, needs, fails =
+    match List.nth a.tys kd with
+    | Impl { deps = [ d ]; needs; fails; _ } -> (d, needs, fails)
+    | _ -> bug "a handler `for D` given what isn't a handler of one dependency"
+  in
+  let req = Any_for (p, d.dpath) in
+  cx.requests := req :: !(cx.requests);
+  let made : Ty.args =
+    { tys = List.filteri (fun i _ -> i <> kd) a.tys @ d.dargs; rows = a.rows @ [ needs; fails ] }
+  in
+  (* its type here, what's known once [D] is: an implementation of [d] *)
+  let fty = subst_ty same_subst (ty_of cx f.node) in
+  let callee =
+    mk (Global (made_path req, made, descs cx made, dicts_of cx f.node)) fty f.loc
+  in
+  plain_call cx ~changed ~callee e f args
 
 (* A call of [p], a function with parameters of `Tags`, each given its
    tags by name, `on: DbDown`, or passed on, `on: on`: a call of the
@@ -3050,9 +3260,57 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
   let next = max_binder f + 1 in
   (* what its types become, and its parameters of `Tags` *)
   let subst, scheme, tags, suffix =
-    match made with
-    | None -> (same_subst, scheme, [], "")
-    | Some (Any_for (_, d)) ->
+    match (made, f.body.kind) with
+    | None, _ -> (same_subst, scheme, [], "")
+    | ( Some (Any_for (_, d)),
+        Handler { deps = [ { dep = { tref = Param _; _ }; _ } ]; _ } ) ->
+        (* a handler `for D`: [D], its variable [kd], is an implementation
+           of [d], at type arguments that are the function's last
+           variables, needing and failing to start with what its last two
+           rows stand for; its other variables after [kd] move down one *)
+        let kd =
+          match scheme.ty with
+          | Fun (_, Impl { deps = [ { dpath; dargs = [ Var k ] } ]; _ }, _, _)
+            when dpath = Ty.param_path ->
+              k
+          | _ -> bug "a handler `for D` whose type doesn't list `D`"
+        in
+        let own = Ty.own_args scheme.ty in
+        let n = List.length own.tys and r = List.length own.rows in
+        let m =
+          match types d with
+          | Some (decl : Iface.type_decl) -> List.length decl.params
+          | None -> bug "a handler `for D` made for what isn't a type"
+        in
+        let impl : Ty.ty =
+          Impl
+            {
+              deps = [ { dpath = d; dargs = List.init m (fun i -> Ty.Var (n - 1 + i)) } ];
+              over = false;
+              needs = { labels = []; tail = Some r };
+              fails = { labels = []; tail = Some (r + 1) };
+            }
+        in
+        let moved k = if k > kd then k - 1 else k in
+        let subst =
+          {
+            same_subst with
+            var = (fun k -> if k = kd then impl else Var (moved k));
+          }
+        in
+        let vars xs =
+          List.filter_map (fun (k, x) -> if k = kd then None else Some (moved k, x)) xs
+        in
+        ( subst,
+          {
+            scheme with
+            ty = subst_ty subst scheme.ty;
+            names = vars scheme.names;
+            reqs = vars scheme.reqs;
+          },
+          [],
+          "$" ^ Path.full d )
+    | Some (Any_for (_, d)), _ ->
         (* the dependency's type parameters are the function's, after
            its own *)
         let n = List.length (Ty.own_args scheme.ty).tys in
@@ -3073,7 +3331,7 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
           { scheme with ty = subst_ty subst scheme.ty },
           [],
           "$" ^ Path.full d )
-    | Some (Tags_for (_, sets)) ->
+    | Some (Tags_for (_, sets)), _ ->
         let ps =
           match scheme.ty with Fun (ps, _, _, _) -> ps | _ -> []
         in
@@ -3107,6 +3365,7 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
       shift = 0;
       shifted = Ids.empty;
       call = None;
+      case = None;
       cells = [];
       tags;
       suffix;
@@ -3120,6 +3379,7 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
       ev = C.evidence next;
       handler_ev = None;
       handler_deps = [];
+      self = path;
       tys = C.type_params scheme;
       dicts = List.combine scheme.reqs (C.dict_params scheme);
     }
@@ -3158,7 +3418,11 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
    written: a handler `over any`, or a function with a parameter of
    `Tags`. *)
 let made_for_requests (inferred : Infer.t) path (f : fn_def) =
-  (match f.body.kind with Handler { any = true; _ } -> true | _ -> false)
+  (match f.body.kind with
+  | Handler { any = true; _ } -> true
+  (* a handler `for D`, made for each dependency it's given *)
+  | Handler { deps = [ { dep = { tref = Param _; _ }; _ } ]; _ } -> true
+  | _ -> false)
   ||
   match Path.Map.find_opt path inferred.schemes with
   | Some { ty = Fun (ps, _, _, _); _ } ->

@@ -2827,11 +2827,12 @@ fn main() uses Console =
   with sync.keyed(4, 16) in print(1)
 |};
   [%expect {|
-    error: `keyed` takes a handler's description, and `16` is an `Int`
-      ┌─ test.ren:4:22
+    error: `with` installs an implementation, but this is an `Int`
+      ┌─ test.ren:4:8
     4 │   with sync.keyed(4, 16) in print(1)
-      │                      ^^
-      help: describe the handler whose instances it keeps: `keyed(16, accounts())`
+      │        ^^^^^^^^^^^^^^^^^
+      = `with` installs an implementation of a dependency, a handler, around its body
+      help: give it an implementation, like `Clock.frozen(t)`
     |}]
 
 let%expect_test "[s8 accept] `keyed`'s instances: two keys overlap, one key takes turns" =

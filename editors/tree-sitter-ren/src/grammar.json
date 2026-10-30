@@ -6288,8 +6288,17 @@
           "type": "FIELD",
           "name": "type",
           "content": {
-            "type": "SYMBOL",
-            "name": "type_name"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "type_name"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "calls_type"
+              }
+            ]
           }
         },
         {
@@ -6319,8 +6328,17 @@
                   "type": "FIELD",
                   "name": "type",
                   "content": {
-                    "type": "SYMBOL",
-                    "name": "type_name"
+                    "type": "CHOICE",
+                    "members": [
+                      {
+                        "type": "SYMBOL",
+                        "name": "type_name"
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "calls_type"
+                      }
+                    ]
                   }
                 },
                 {
@@ -6333,6 +6351,31 @@
               "type": "BLANK"
             }
           ]
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "type_identifier"
+          }
+        }
+      ]
+    },
+    "calls_type": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "dependency",
+          "content": {
+            "type": "SYMBOL",
+            "name": "type_name"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "."
         },
         {
           "type": "FIELD",
@@ -7907,6 +7950,10 @@
     ],
     [
       "constrained_type_parameter"
+    ],
+    [
+      "constructor_ref",
+      "calls_type"
     ]
   ],
   "precedences": [],

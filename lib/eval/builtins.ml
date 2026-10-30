@@ -556,7 +556,13 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Background_spawn | Task_produce | Task_map_pull | Outbox_send | Inbox_take
   | Async_yield | Async_tick
   | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-  | Sim_advance | Sim_alarm | Task_random | Task_drain
+  | Sim_advance | Sim_alarm | Task_random | Task_drain | Async_worker
+  (* and the keyed instance family's, which keep instances and run their
+     operations, and `Call`'s, which read the program's types (eval.ml,
+     [family]) *)
+  | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
+  | Family_counts | Family_close | Call_first_hash | Call_add | Call_max
+  | Call_min | Call_concat | Call_fold | Call_operations
   (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,
      [run_program]) *)
   | Net_listen | Net_accept | Net_accept_until | Net_read | Net_write

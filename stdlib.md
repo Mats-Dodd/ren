@@ -345,7 +345,7 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 | MySQL, Redis clients | std.x | useful, not universal |
 | Kafka, NATS, cloud SDKs | out | vendor churn; they implement the infrastructure types instead |
 
-**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it.
+**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it. Many stateful things are kept by the runtime's keyed instance family, which a library reaches through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`), routing by key or by `Async.worker()`, and each dependency's calls as data, `Doc.Call` (compiler.md, "Services stage").
 
 **Observability:** `trace`, `log`, `metrics`, the flight recorder and the OTLP exporter, all std. Logging is the trace stream, so there's no Go-style split between `log` and `slog`. A Prometheus exporter goes in `std.x`.
 

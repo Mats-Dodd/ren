@@ -223,12 +223,32 @@ let dep ?(args = []) name =
 (* The label of the dependency [d]. *)
 let dep_of d = dep ~args:d.dargs (Ty.dep_label d.dpath)
 
+(* The type parameters refined where they're checked: in an arm of a
+   `match` on a `call` clause's call, the result of the call is known to
+   be the result of the arm's case's operation (compiler.md, "Services
+   stage", "`D.Call`"), so the skolem that stands for it is that type
+   there, by its id. It holds something only while such an arm is
+   checked (Infer_expr.infer_match), and [repr] reads it. That's sound:
+   inside the arm the call is that case, so its result has that type;
+   and outside it the skolem is itself again, so what was found inside
+   about something of the clause's, a variable's type, is only ever
+   [repr]'d into the refined type, never linked to it ([repr] keeps the
+   link to the skolem). *)
+let refined : (int, ty) Hashtbl.t = Hashtbl.create 1
+
 (* Follow links to the type a variable currently stands for, shortening the
    chain as it goes so later lookups are quick. *)
 let rec repr t =
+  match chase t with
+  | TSkol (id, _) as t when Hashtbl.length refined > 0 -> (
+      match Hashtbl.find_opt refined id with Some r -> repr r | None -> t)
+  | t -> t
+
+(* The same, without refining: what a link is shortened to. *)
+and chase t =
   match t with
   | TVar ({ contents = Link t' } as r) ->
-      let t'' = repr t' in
+      let t'' = chase t' in
       r := Link t'';
       t''
   | t -> t

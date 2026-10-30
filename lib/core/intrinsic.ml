@@ -103,6 +103,22 @@ type t =
   | Sim_advance
   | Sim_alarm
   | Sync_keyed
+  | Async_worker
+  | Family_open
+  | Family_call
+  | Family_make
+  | Family_keys
+  | Family_evict
+  | Family_evictable
+  | Family_counts
+  | Family_close
+  | Call_first_hash
+  | Call_add
+  | Call_max
+  | Call_min
+  | Call_concat
+  | Call_fold
+  | Call_operations
   | Task_random
   | Task_drain
   | Map_empty
@@ -249,6 +265,22 @@ let path x =
   | Sim_advance -> fn "sim_advance"
   | Sim_alarm -> fn "sim_alarm"
   | Sync_keyed -> fn "sync_keyed"
+  | Async_worker -> fn "async_worker"
+  | Family_open -> fn "family_open"
+  | Family_call -> fn "family_call"
+  | Family_make -> fn "family_make"
+  | Family_keys -> fn "family_keys"
+  | Family_evict -> fn "family_evict"
+  | Family_evictable -> fn "family_evictable"
+  | Family_counts -> fn "family_counts"
+  | Family_close -> fn "family_close"
+  | Call_first_hash -> fn "call_first_hash"
+  | Call_add -> fn "call_add"
+  | Call_max -> fn "call_max"
+  | Call_min -> fn "call_min"
+  | Call_concat -> fn "call_concat"
+  | Call_fold -> fn "call_fold"
+  | Call_operations -> fn "call_operations"
   | Task_random -> fn "task_random"
   | Task_drain -> fn "task_drain"
   | Map_empty -> fn "map_empty"
@@ -341,6 +373,7 @@ let waits = function
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
   | Task_produce | Task_map_pull | Outbox_send | Inbox_take
-  | Async_yield | Async_tick | Sim_sleep ->
+  | Async_yield | Async_tick | Sim_sleep | Family_call | Family_make | Family_evict
+  | Family_close ->
       true
   | _ -> false

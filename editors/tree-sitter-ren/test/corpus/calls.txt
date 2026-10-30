@@ -1,0 +1,114 @@
+================================================================================
+calls: a case of a dependency's `D.Call`, built and matched
+================================================================================
+
+fn main() =
+  let c = Doc.Call.Edit { op: "a" }
+  match c
+    Doc.Call.Edit { op } => op
+    Doc.Call.Join => "join"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (constructor_expression
+          (constructor_ref
+            (calls_type
+              (type_name
+                (type_identifier))
+              (type_identifier))
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (string))))
+      (match_expression
+        (identifier)
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (calls_type
+                (type_name
+                  (type_identifier))
+                (type_identifier))
+              (type_identifier))
+            (field_pattern
+              (identifier)))
+          (identifier))
+        (match_arm
+          (constructor_pattern
+            (constructor_ref
+              (calls_type
+                (type_name
+                  (type_identifier))
+                (type_identifier))
+              (type_identifier)))
+          (string))))))
+
+================================================================================
+calls: a `call` clause, a merge's, and a handler `for D`
+================================================================================
+
+handler longest() for Seen =
+  call(c: Seen.Call, a, b) => a
+
+handler one<D>(h: D) for D uses Async =
+  call(c) => try Instances.call(fam, 0, c)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (identifier)
+    (parameters)
+    (dependency
+      (type_identifier))
+    (handler_arm
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (variant_type
+            (type_name
+              (type_identifier))
+            (type_identifier)))
+        (parameter
+          (identifier))
+        (parameter
+          (identifier)))
+      (identifier)))
+  (handler_definition
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (dependency
+      (type_identifier))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (handler_arm
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)))
+      (try_expression
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (identifier)
+            (number)
+            (identifier)))))))

@@ -80,6 +80,22 @@ type t =
   | Sim_advance
   | Sim_alarm
   | Sync_keyed
+  | Async_worker
+  | Family_open
+  | Family_call
+  | Family_make
+  | Family_keys
+  | Family_evict
+  | Family_evictable
+  | Family_counts
+  | Family_close
+  | Call_first_hash
+  | Call_add
+  | Call_max
+  | Call_min
+  | Call_concat
+  | Call_fold
+  | Call_operations
   | Task_random
   | Task_drain
   | Map_empty

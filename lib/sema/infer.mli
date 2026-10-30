@@ -52,6 +52,7 @@ type 'l found_ =
       forwards : (Path.t * string * Ty.ty) list;
       body_ty : int option;
       any_vars : (int * int * int) option;
+      call_vars : (int * int) option;
     }
       (** at a handler: the operations it leaves out, which go to the
           implementation under it, each with its dependency's declared type
@@ -61,7 +62,10 @@ type 'l found_ =
           One `over any` has [any_vars]: the variables of its function's that
           stand for its arm's call's arguments' type and result, and the row
           variable for its errors, which lowering puts each operation's in
-          the place of (compiler.md, "`over any` and `retry`") *)
+          the place of (compiler.md, "`over any` and `retry`"). One with a
+          `call` clause has [call_vars]: the variable for the result of the
+          call it runs for, and the row variable for its errors, the same way
+          (compiler.md, "Services stage", "`D.Call`") *)
   | Handles  (** a `match` that handles errors: one with `fail` arms *)
   | Fail_arm
       (** a `fail` arm's pattern, which matches an error rather than a value *)
@@ -99,6 +103,11 @@ type 'l found_ =
       (** at a pull argument's own node ([pulled_node]): what's passed to a
           block parameter `fn() -> Option<T>` as `for` takes it, and the name
           of the block Lower makes that pulls it (streams.md, rule 3) *)
+  | For_param of int
+      (** at a call of a handler `for D`'s own node ([for_node]): which of its
+          scheme's variables is [D], whose type argument there is the
+          implementation it's made for (compiler.md, "Services stage",
+          "Stripes") *)
 
 (* A collection, pulled by a snapshot of its elements; or a cursor, by
    calling [next], its method (Infer_env.pulled). *)
@@ -109,6 +118,7 @@ and pulled = Snapshot | Cursor of Path.t
    is called through. *)
 val pulled_node : int -> int
 val next_node : int -> int
+val for_node : int -> int
 
 (* What lowering reads: the labels are dependencies with their type
    arguments, in canonical form, numbered as the function's scheme. *)

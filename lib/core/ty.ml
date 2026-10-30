@@ -192,6 +192,38 @@ let is_tuple (p : Path.t) =
    `retry`"). No program can write it. *)
 let any_path = Path.prelude "any"
 let is_any (d : dep) = d.dpath = any_path
+
+(* The dependency a handler declared `for D` implements, [D] one of its
+   type parameters, as its type lists it: its one type argument is what
+   [D] stands for, the implementation of one dependency a call of it is
+   given, which is then the one it implements (compiler.md, "Services
+   stage", "Stripes"). No program can write it. *)
+let param_path = Path.prelude "for"
+let is_param (d : dep) = d.dpath = param_path
+
+(* `D.Call`, the sum of the calls of the dependency at [d], one case per
+   operation (compiler.md, "Services stage", "`D.Call`"): a type of [d]'s
+   module named `D.Call`, which no program can declare, since a name
+   has no dot. [call_dep] is the dependency a type's path is the calls
+   of, if it's one. *)
+let call_path (d : Path.t) = { d with name = d.name ^ ".Call"; member = None }
+
+let call_dep (p : Path.t) =
+  let n = String.length p.name in
+  if p.member = None && n > 5 && String.ends_with ~suffix:".Call" p.name then
+    Some { p with name = String.sub p.name 0 (n - 5) }
+  else None
+
+(* An operation's case in `D.Call`: its name in upper camel case,
+   `evict_idle`'s `EvictIdle`. *)
+let call_case op =
+  String.concat ""
+    (List.map String.capitalize_ascii (String.split_on_char '_' op))
+
+(* Generic code's `D.Call<R ! E>`, the prelude's `Call<D, R, ! E>`: a call
+   of the dependency an implementation of which [D] is, giving [R] and
+   failing with [E]. Made for a dependency, it's that one's `D.Call`. *)
+let generic_call = Path.prelude "Call"
 let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
@@ -299,11 +331,40 @@ let own_args t =
    the n-th of [a.rows]'s labels added to the row's, ending in its tail.
    A canonical row has each label once, so where both have a label of one
    name, the row's own is kept. *)
+(* [t], a type just made from another by putting types in for its
+   variables, with what's known once a dependency is: generic code's
+   `Call<D, R, ! E>`, [D] an implementation of one dependency, is that
+   one's `D.Call`; and an implementation of what a handler `for D` lists,
+   [D] one of one dependency, is one of that dependency, needing what
+   both need and failing to start as either can (compiler.md, "Services
+   stage", "Stripes"). *)
+let known (t : ty) : ty =
+  let one (d : dep) = not (d.dpath = any_path || d.dpath = param_path) in
+  let union (a : row) (b : row) =
+    let has (l : label) = List.exists (same_label l) a.labels in
+    {
+      labels = sort_labels (a.labels @ List.filter (fun l -> not (has l)) b.labels);
+      tail = (match b.tail with Some _ -> b.tail | None -> a.tail);
+    }
+  in
+  match t with
+  | Con (p, [ Impl { deps = [ d ]; _ }; _; _ ]) when p = generic_call && one d ->
+      Con (call_path d.dpath, d.dargs)
+  | Impl
+      ({
+         deps =
+           [ { dpath; dargs = [ Impl { deps = [ d ]; needs; fails; over = false } ] } ];
+         _;
+       } as i)
+    when dpath = param_path && one d ->
+      Impl { deps = [ d ]; over = false; needs = union i.needs needs; fails = union i.fails fails }
+  | t -> t
+
 let rec apply (a : args) (s : ty) : ty =
   match s with
   | Var n -> List.nth a.tys n
   | Error -> Error
-  | Con (p, args) -> Con (p, List.map (apply a) args)
+  | Con (p, args) -> known (Con (p, List.map (apply a) args))
   | Variant (p, c, args) -> Variant (p, c, List.map (apply a) args)
   | Errors e -> Errors (apply_row a e)
   | Impl i ->
@@ -312,7 +373,7 @@ let rec apply (a : args) (s : ty) : ty =
       in
       let needs = apply_row a i.needs in
       let fails = apply_row a i.fails in
-      Impl { i with deps; needs; fails }
+      known (Impl { i with deps; needs; fails })
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : param) -> { p with ty = apply a p.ty }) ps,
@@ -523,6 +584,7 @@ and show_label pr l =
 and show_dep pr d =
   match d.dargs with
   | _ when d.dpath = any_path -> "any"
+  | [ t ] when d.dpath = param_path -> show pr t
   | [] -> pr.type_name d.dpath
   | args -> pr.type_name d.dpath ^ "<" ^ show_list pr args ^ ">"
 

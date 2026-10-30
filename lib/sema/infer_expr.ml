@@ -2796,7 +2796,7 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
                   | _ -> ())
                 ps args);
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
-        if keyed_described env cx ?callee args then made env ret else TError)
+        given_for env cx ~fnode:f.node ~at:e.loc ~ename ps args (made env ret))
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          block, whose errors are the call's. Its type isn't written, so it
@@ -2944,23 +2944,72 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
       (List.rev !given_tags);
     made env ret
 
-(* Whether a call of [callee] with [args] is all right as far as
-   `sync.keyed` goes: it's generic in what it keeps instances of, which
-   has to be a handler's description, since it's built in (compiler.md,
-   "The standard library (step 8)"). One that isn't is said, and the call
-   is then of no type, so its `with` says nothing more. *)
-and keyed_described env cx ?callee args =
-  match (callee, args) with
-  | Some c, [ _; (h : expr) ] when c = Path.make "sync" "keyed" -> (
-      match Option.map repr (Hashtbl.find_opt cx.nodes h.node) with
-      | Some (TImpl _ | TVar _ | TError) | None -> true
-      | Some t ->
+(* [t], what a call gives, once its arguments [args] are checked, for
+   the parameters [ps]: if it's a handler `for D`'s (Ty.param_path;
+   compiler.md, "Services stage", "Stripes"), an implementation of the
+   one dependency the description [D] stands for is one of, which the
+   handler implements then, needing what it needs and what [D] does, since
+   it makes [D]'s instances where it's installed, and failing to start as
+   either can. Its tail is [D]'s, which a function made for the dependency
+   is given (Lower). A [D] that isn't a handler's description of one
+   dependency whose operations are data is said, and the call is then of
+   no type, so its `with` says nothing more. *)
+and given_for env cx ~fnode ~at ~ename ps args t =
+  match repr t with
+  | TImpl ({ deps = [ { dpath; dargs = [ d ] } ]; _ } as i)
+    when dpath = Ty.param_path -> (
+      let arg =
+        List.find_map
+          (fun ((p : Types.param), (a : expr)) ->
+            if same_ty p.ty d then Some a else None)
+          (List.combine ps args)
+      in
+      let loc = match arg with Some a -> a.loc | None -> at in
+      match reveal env.st d with
+      | TImpl { deps = [ dd ]; needs; fails; over = false }
+        when not (Ty.is_param { Ty.dpath = dd.dpath; dargs = [] }) ->
+          if Hashtbl.mem env.types (Ty.call_path dd.dpath) then (
+            (* which of the callee's variables [D] is, for lowering, which
+               calls the function made of it for [dd] *)
+            (match Hashtbl.find_opt cx.targs fnode with
+            | Some { tpicked = Fresh s; _ } -> (
+                (* by its place among them, as canonical form numbers
+                   them (Infer_top's [type_args]) *)
+                match
+                  List.find_index (fun (_, t) -> same_ty t d) s.tys
+                with
+                | Some k ->
+                    Hashtbl.replace cx.nodes (for_node fnode) t;
+                    Hashtbl.replace cx.found (for_node fnode) (For_param k)
+                | None -> ())
+            | _ -> ());
+            let union a b =
+              let ls = fst (row_parts a) in
+              extend
+                (ls @ without_labels ls (fst (row_parts b)))
+                (row_end b)
+            in
+            TImpl
+              {
+                deps = [ dd ];
+                over = false;
+                needs = union i.needs needs;
+                fails = union i.fails fails;
+              })
+          else (
+            report env (clause_not_data loc ~dep:(shown_deps env [ dd ]));
+            TError)
+      | TError -> TError
+      | dt ->
           report env
-            (keyed_not_described h.loc
-               ~arg:(Option.value (env.source h) ~default:"this")
-               (show (printer env) t));
-          false)
-  | _ -> true
+            (not_described loc ~fn:ename
+               ~arg:
+                 (match arg with
+                 | Some a -> Option.value (env.source a) ~default:"this"
+                 | None -> "this")
+               (show (printer env) dt));
+          TError)
+  | _ -> t
 
 (* Whether [t] is the prelude's `Tags`. *)
 and is_tags t =
@@ -3721,6 +3770,18 @@ and infer_match env cx ?passed node subject arms ~want =
             let msg = if i = 0 then None else Some arm_after in
             explain ?msg ~labels:(fun _ x -> [ (first, first_arm x) ]) () )
   in
+  (* in a `call` clause, an arm of a `match` on its call is a call of its
+     case's operation, whose result the clause's stands for there
+     (Infer_env.clause) *)
+  let refines (a : arm) =
+    match (env.clause, subject.kind, a.arm_pat.pkind) with
+    | ( Some cl,
+        Var (Local b),
+        (PCon ({ name; _ }, _) | PCon_named ({ name; _ }, _)) )
+      when b.id = cl.cbinder ->
+        Option.map (fun r -> (cl.rid, r)) (List.assoc_opt name.name cl.cases)
+    | _ -> None
+  in
   List.iteri
     (fun i a ->
       (match errs with
@@ -3728,9 +3789,15 @@ and infer_match env cx ?passed node subject arms ~want =
           Hashtbl.replace cx.found a.arm_pat.pnode Fail_arm;
           bind_fail env cx errs a.arm_pat
       | _ -> bind_pattern env cx ts a.arm_pat);
-      Option.iter (fun g -> want_bool env Guard g (infer env cx g)) a.arm_guard;
-      let written = Option.bind want (fun (_, _, w) -> w) in
-      check env cx ~why:(arm_why i) ?written a.arm_body result)
+      let refined = refines a in
+      Option.iter (fun (rid, r) -> Hashtbl.replace Types.refined rid r) refined;
+      Fun.protect
+        ~finally:(fun () ->
+          Option.iter (fun (rid, _) -> Hashtbl.remove Types.refined rid) refined)
+        (fun () ->
+          Option.iter (fun g -> want_bool env Guard g (infer env cx g)) a.arm_guard;
+          let written = Option.bind want (fun (_, _, w) -> w) in
+          check env cx ~why:(arm_why i) ?written a.arm_body result))
     arms;
   result
 
