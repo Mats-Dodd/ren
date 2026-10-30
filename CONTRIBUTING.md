@@ -18,7 +18,8 @@ ren-check
 
 The bootstrap script installs the locked devenv CLI into `.devenv-cli`,
 without changing your global Nix profile. The first shell builds/downloads
-the pinned tools; later shells reuse the Nix store. No personal opam switch
+the pinned tools; later shells reuse the Nix store. CI also caches the
+store separately for each architecture and toolchain revision. No personal opam switch
 or Homebrew compiler is needed. Run from a fresh checkout when switching
 from an existing opam build, or run `dune clean` inside the new environment.
 

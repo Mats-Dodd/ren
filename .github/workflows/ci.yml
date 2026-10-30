@@ -27,6 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: cachix/install-nix-action@v31.11.3
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ matrix.system }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'nix/*.nix') }}
+          restore-prefixes-first-match: nix-${{ matrix.system }}-
+          gc-max-store-size: 5G
       - uses: cachix/cachix-action@v17
         with:
           name: devenv
