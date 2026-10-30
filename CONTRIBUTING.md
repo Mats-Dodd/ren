@@ -61,7 +61,11 @@ explicitly targets ABI 14 for editor compatibility.
 `cc` is the Nix Clang wrapper, with the platform's SDK/libc and sanitizer
 libraries. `REN_TCC` points to the packaged TinyCC. TinyCC's old stable
 release predates arm64 macOS support, so `nix/tinycc.nix` pins the upstream
-mob commit also used by `tools/tcc.sh`.
+mob commit also used by `tools/tcc.sh`. On macOS, TinyCC uses the OS's
+built-in `/usr/bin/codesign` for ad-hoc signing: the portable replacement
+rejects its debug Mach-O layout. This does not require Xcode or a signing
+identity. Its runtime archives are preserved without Darwin's stripping
+step, which otherwise breaks TinyCC's archive symbol lookup.
 
 Do not set `REN_CC` in your default shell: it overrides TinyCC for debug
 builds as well as release builds. To deliberately test Clang debug builds:

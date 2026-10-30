@@ -1,4 +1,4 @@
-{ tinycc, fetchFromGitHub, lib, stdenv, makeWrapper, darwin }:
+{ tinycc, fetchFromGitHub, lib, stdenv }:
 # Last upstream stable (0.9.27) predates native arm64 macOS support.
 # This is the same mob revision as tools/tcc.sh, pinned by content hash.
 tinycc.overrideAttrs (old: {
@@ -14,14 +14,14 @@ tinycc.overrideAttrs (old: {
   # Ren needs a native compiler; omit the unrelated cross-toolchains.
   configureFlags = builtins.filter (flag: flag != "--enable-cross") old.configureFlags;
   preBuild = "";
-  nativeBuildInputs = old.nativeBuildInputs ++ [ makeWrapper ];
   dontStrip = stdenv.hostPlatform.isDarwin;
+  postPatch = (old.postPatch or "") + lib.optionalString stdenv.hostPlatform.isDarwin ''
+    # sigtool/codesign_allocate rejects TCC's full debug Mach-O layout.
+    # Apple's signer ships with macOS itself, independently of Xcode.
+    substituteInPlace tccmacho.c \
+      --replace-fail '"codesign -f -s - %s"' '"/usr/bin/codesign -f -s - %s"'
+  '';
   postFixup = (old.postFixup or "")
-    + lib.optionalString stdenv.hostPlatform.isDarwin ''
-      # TCC invokes codesign after linking Mach-O. Supply it even in --clean
-      # shells, without relying on Apple's command-line tools on the host.
-      wrapProgram $out/bin/tcc --prefix PATH : ${lib.makeBinPath [ darwin.sigtool ]}
-    ''
     + lib.optionalString
     (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
       cat > builtin-smoke.c <<'C'
