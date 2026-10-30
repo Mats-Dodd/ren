@@ -21,10 +21,17 @@ in {
   # --clean deliberately drops personal shell state, including HOME.
   env.npm_config_cache = "${config.devenv.state}/npm";
   env.XDG_CACHE_HOME = "${config.devenv.state}/cache";
-  env.XDG_CONFIG_HOME = "${config.devenv.state}/config";
   env.LC_ALL = if pkgs.stdenv.hostPlatform.isDarwin then "en_US.UTF-8" else "C.UTF-8";
   env.REN_TCC = "${lib.getBin tinycc}/bin/tcc";
   env.TREE_SITTER = "${tree-sitter}/bin/tree-sitter";
+
+  # Isolate configuration for --clean checks without hiding a developer's
+  # normal XDG editor/Git settings in the interactive shell.
+  enterShell = ''
+    if [ -z "''${HOME:-}" ]; then
+      export XDG_CONFIG_HOME="${config.devenv.state}/config"
+    fi
+  '';
 
   scripts.ren-check.exec = ''
     exec bash "${config.devenv.root}/tools/check.sh" "$@"
