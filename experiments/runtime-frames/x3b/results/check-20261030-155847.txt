@@ -1,0 +1,143 @@
+== OPS=1, DISJOINT=1 REQS=3000:
+ref 1x128 strategy=unfair chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+8x16      strategy=park chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+8x16      strategy=handoff chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+8x16      strategy=p2 chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+8x16      strategy=ship chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+8x16      strategy=move chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+8x16      strategy=spin chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok 
+ref 1x112 strategy=unfair chk=1b83801ce1b5b83d table=f56fbdea35a84a51 check=ok 
+8 (7x16)  strategy=shipded chk=1b83801ce1b5b83d table=f56fbdea35a84a51 check=ok 
+8 (7x16)  strategy=moveded chk=1b83801ce1b5b83d table=f56fbdea35a84a51 check=ok 
+== OPS=4, DISJOINT=1 REQS=3000:
+ref 1x128 strategy=unfair chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=park chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=handoff chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=p2 chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=ship chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=move chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=spin chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+ref 1x112 strategy=unfair chk=e32692222 table=97c562d07f09982a check=ok 
+8 (7x16)  strategy=shipded chk=e32692222 table=97c562d07f09982a check=ok 
+8 (7x16)  strategy=moveded chk=e32692222 table=97c562d07f09982a check=ok 
+== SHARE_PCT=10, DISJOINT=1 REQS=3000:
+ref 1x128 strategy=unfair chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=park chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=handoff chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=p2 chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=ship chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=move chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=spin chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+ref 1x112 strategy=unfair chk=cbe484a004fd020a table=7141d11bda1ece7b check=ok 
+8 (7x16)  strategy=shipded chk=cbe484a004fd020a table=7141d11bda1ece7b check=ok 
+8 (7x16)  strategy=moveded chk=cbe484a004fd020a table=7141d11bda1ece7b check=ok 
+== OPS=4 FAST=1, DISJOINT=1 REQS=3000:
+ref 1x128 strategy=unfair chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=park chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=handoff chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=p2 chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=ship chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=move chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+8x16      strategy=spin chk=14234dfe46 table=4f6ea782c17cf078 check=ok 
+ref 1x112 strategy=unfair chk=e32692222 table=97c562d07f09982a check=ok 
+8 (7x16)  strategy=shipded chk=e32692222 table=97c562d07f09982a check=ok 
+8 (7x16)  strategy=moveded chk=e32692222 table=97c562d07f09982a check=ok 
+== SHARE_PCT=10 FAST=1, DISJOINT=1 REQS=3000:
+ref 1x128 strategy=unfair chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=park chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=handoff chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=p2 chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=ship chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=move chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+8x16      strategy=spin chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok 
+ref 1x112 strategy=unfair chk=cbe484a004fd020a table=7141d11bda1ece7b check=ok 
+8 (7x16)  strategy=shipded chk=cbe484a004fd020a table=7141d11bda1ece7b check=ok 
+8 (7x16)  strategy=moveded chk=cbe484a004fd020a table=7141d11bda1ece7b check=ok 
+asan park 8 16 0 0 OPS=1: parks=19262 handoffs=0 reqs=64000 check=ok 
+asan park 8 16 0 0 OPS=4 SHARE_PCT=50: parks=33865 handoffs=0 reqs=64000 check=ok 
+asan park 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=34337 handoffs=0 reqs=64000 check=ok 
+asan park 8 8 20 1 OPS=1: parks=29906 handoffs=0 reqs=32000 check=ok 
+asan park 8 8 20 1 OPS=4 SHARE_PCT=50: parks=61114 handoffs=0 reqs=32000 check=ok 
+asan park 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=61865 handoffs=0 reqs=32000 check=ok 
+asan handoff 8 16 0 0 OPS=1: parks=35309 handoffs=767 reqs=64000 check=ok 
+asan handoff 8 16 0 0 OPS=4 SHARE_PCT=50: parks=68422 handoffs=1272 reqs=64000 check=ok 
+asan handoff 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=89435 handoffs=1569 reqs=64000 check=ok 
+asan handoff 8 8 20 1 OPS=1: parks=31951 handoffs=25769 reqs=32000 check=ok 
+asan handoff 8 8 20 1 OPS=4 SHARE_PCT=50: parks=64004 handoffs=53514 reqs=32000 check=ok 
+asan handoff 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=63875 handoffs=53279 reqs=32000 check=ok 
+asan p2 8 16 0 0 OPS=1: parks=39170 handoffs=1172 reqs=64000 check=ok 
+asan p2 8 16 0 0 OPS=4 SHARE_PCT=50: parks=12848 handoffs=461 reqs=64000 check=ok 
+asan p2 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=48519 handoffs=1700 reqs=64000 check=ok 
+asan p2 8 8 20 1 OPS=1: parks=31982 handoffs=29618 reqs=32000 check=ok 
+asan p2 8 8 20 1 OPS=4 SHARE_PCT=50: parks=64009 handoffs=56450 reqs=32000 check=ok 
+asan p2 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=64008 handoffs=56706 reqs=32000 check=ok 
+asan ship 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=64000 check=ok 
+asan ship 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=64000 check=ok 
+asan ship 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=64000 check=ok 
+asan ship 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=32000 check=ok 
+asan ship 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=32000 check=ok 
+asan ship 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=32000 check=ok 
+asan shipded 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=56000 check=ok 
+asan shipded 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=56000 check=ok 
+asan shipded 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=56000 check=ok 
+asan shipded 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=28000 check=ok 
+asan shipded 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=28000 check=ok 
+asan shipded 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=28000 check=ok 
+asan move 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=64000 check=ok 
+asan move 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=64000 check=ok 
+asan move 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=64000 check=ok 
+asan move 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=32000 check=ok 
+asan move 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=32000 check=ok 
+asan move 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=32000 check=ok 
+asan moveded 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=56000 check=ok 
+asan moveded 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=56000 check=ok 
+asan moveded 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=56000 check=ok 
+asan moveded 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=28000 check=ok 
+asan moveded 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=28000 check=ok 
+asan moveded 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=28000 check=ok 
+asan unfair: parks=0 handoffs=0 reqs=64000 check=ok 
+asan spin: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan park 8 16 0 0 OPS=1: parks=19323 handoffs=0 reqs=64000 check=ok 
+tsan park 8 16 0 0 OPS=4 SHARE_PCT=50: parks=42408 handoffs=0 reqs=64000 check=ok 
+tsan park 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=79468 handoffs=0 reqs=64000 check=ok 
+tsan park 8 8 20 1 OPS=1: parks=29947 handoffs=0 reqs=32000 check=ok 
+tsan park 8 8 20 1 OPS=4 SHARE_PCT=50: parks=60656 handoffs=0 reqs=32000 check=ok 
+tsan park 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=61873 handoffs=0 reqs=32000 check=ok 
+tsan handoff 8 16 0 0 OPS=1: parks=61374 handoffs=42786 reqs=64000 check=ok 
+tsan handoff 8 16 0 0 OPS=4 SHARE_PCT=50: parks=125995 handoffs=111852 reqs=64000 check=ok 
+tsan handoff 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=124289 handoffs=94309 reqs=64000 check=ok 
+tsan handoff 8 8 20 1 OPS=1: parks=31997 handoffs=31447 reqs=32000 check=ok 
+tsan handoff 8 8 20 1 OPS=4 SHARE_PCT=50: parks=63957 handoffs=62214 reqs=32000 check=ok 
+tsan handoff 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=63959 handoffs=62434 reqs=32000 check=ok 
+tsan p2 8 16 0 0 OPS=1: parks=44412 handoffs=39898 reqs=64000 check=ok 
+tsan p2 8 16 0 0 OPS=4 SHARE_PCT=50: parks=109610 handoffs=102845 reqs=64000 check=ok 
+tsan p2 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=95343 handoffs=89427 reqs=64000 check=ok 
+tsan p2 8 8 20 1 OPS=1: parks=31998 handoffs=31825 reqs=32000 check=ok 
+tsan p2 8 8 20 1 OPS=4 SHARE_PCT=50: parks=63999 handoffs=62507 reqs=32000 check=ok 
+tsan p2 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=63813 handoffs=62066 reqs=32000 check=ok 
+tsan ship 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan ship 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan ship 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan ship 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=32000 check=ok 
+tsan ship 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=32000 check=ok 
+tsan ship 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=32000 check=ok 
+tsan shipded 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=56000 check=ok 
+tsan shipded 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=56000 check=ok 
+tsan shipded 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=56000 check=ok 
+tsan shipded 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=28000 check=ok 
+tsan shipded 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=28000 check=ok 
+tsan shipded 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=28000 check=ok 
+tsan move 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan move 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan move 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan move 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=32000 check=ok 
+tsan move 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=32000 check=ok 
+tsan move 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=32000 check=ok 
+tsan moveded 8 16 0 0 OPS=1: parks=0 handoffs=0 reqs=56000 check=ok 
+tsan moveded 8 16 0 0 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=56000 check=ok 
+tsan moveded 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=56000 check=ok 
+tsan moveded 8 8 20 1 OPS=1: parks=0 handoffs=0 reqs=28000 check=ok 
+tsan moveded 8 8 20 1 OPS=4 SHARE_PCT=50: parks=0 handoffs=0 reqs=28000 check=ok 
+tsan moveded 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1: parks=0 handoffs=0 reqs=28000 check=ok 
+tsan unfair: parks=0 handoffs=0 reqs=64000 check=ok 
+tsan spin: parks=0 handoffs=0 reqs=64000 check=ok 

@@ -1,7 +1,9 @@
-# Runtime-frames experiments X1, X3 and X5: results
+# Runtime-frames experiments X1, X3, X3b and X5: results
 
-These are the first three experiments from
+X1, X3 and X5 are the first three experiments from
 [research/runtime-frames/SYNTHESIS.md](../../research/runtime-frames/SYNTHESIS.md) §7.
+X3b follows up X3 under `per_core`, against runtime.md and concurrency.md
+("Many cores").
 
 **Machine.** All runs were on the owner's Apple M4 Max: 16 cores (12P + 4E),
 macOS 15.1, Apple clang 16.0.0, and tcc 0.9.28rc (mob e23dabe). The machine is
@@ -12,6 +14,7 @@ shared with other agents. The 1-minute load average before each round was:
 | X1 | 1.9 to 3.8 |
 | X5 | 3.3 to 5.7 |
 | X3 | 5.5 to 8.1 |
+| X3b | 7.2 to 20.9 |
 
 Each variant ran interleaved with the others, in 5 to 7 rounds. Figures are
 the median over rounds, with [min..max] across rounds after them. Raw lines
@@ -24,6 +27,7 @@ README.
 |---|---|---|---|
 | **X1** register convention | nested round trip from about 31 ns to within 20% of the inlined `pingpong` | 32.5 → **19.2 ns** [19.1..19.6]. That is 1.21× the inlined 15.9 ns. With the bounds check dropped: 18.9 ns (1.19×). With put and get kept out of line: 21.0 ns (1.32×). | **Borderline.** It hits only with release's bounds-check elimination. The nested cost fell 41%. |
 | **X3** shared takes as suspending | under 3% throughput and under 10% code growth uncontended. With a 100 µs hold, parking keeps wasted CPU under 10% where spinning burns it, and without a hand-off a waiter starves for ms. | Throughput: **+0.3%** ns a request against `os_unfair_lock`. Code: the path's text grew **3.6×** (424 → 1,524 B), and the model's whole text grew 17.6%. Long hold: wasted CPU **1.7%** parked against **87.5%** spinning. A waiter's p50 is **35 ms** without a hand-off and **6.5 ms** with one. | **Throughput, wasted CPU and starvation: hit. Code size: miss.** Not predicted: with short holds at 8 workers, parking runs at **4.4× below** `os_unfair_lock`. |
+| **X3b** a contended shared instance under `per_core` | home-core shipping beats parking by over 2× on C, within 1.5× of `os_unfair_lock`, with near-zero waste, background work flowing under long holds, and the mixed scenario within 10% of the best. Adaptive parking recovers half the gap with under 20% waste. | Shipping: **2.7×** `os_unfair_lock` and **5.9×** parking on C. Background work flows under a 100 µs hold. Mixed: **−6%**, but a shared operation waits **130 µs** (10.5 µs with FAST) against 0.2 µs. P2: **0.7 to 1.5×** parking, with 46 to 75% wasted. `at`: moving the task runs **0.16×** shipping at 1 operation a block, 0.51× at 4 and **1.70×** at 16. | **(H): hit, the C ones exceeded. The home-core cap is real (about 30M ops/s) but wasn't what bound C.** Its costs are latency when lightly contended, and preemption of the home. **(P2): miss.** |
 | **X5** static frame-stack sizing | about 4,200 B against about 290 B a parked task | **4,208 B** against **240 B** (malloc accounting), or 4,230 against 252 B (footprint). The chunk boundary goes from 22.3 ns to **4.2 ns** with a spare, against 1.2 ns in the segment. | **Bytes: hit**, and smaller than predicted. **Spare within 1 ns: miss** (+1.4 to +3.1 ns), though the 4× cliff is gone. |
 
 What this means for SYNTHESIS §6:
@@ -204,6 +208,336 @@ What the long hold shows:
 - **`os_unfair_lock` is far worse than r5 measured:** p50 0.25 s and a max
   of 1.6 s here, against r5's 16 to 75 ms, and it stalls 87% of all
   worker time.
+
+## X3b: a contended shared instance under `per_core`
+
+### Verdict
+
+- **For a contended shared instance under `per_core`, Ren should ship each
+  operation to the instance's home core (H), not park on a take.**
+  - On X3's contended short-hold server, shipping ran **2.7×**
+    `os_unfair_lock`'s throughput, with per-round ratios of 2.2 to 3.6 at
+    load 10 to 14. At load 8 or below it ran 5.4 to 5.7×.
+  - That is **5.9×** plain parking, and 24× at load 8 or below.
+  - It needs no take spin and no starvation rule, since the rings are FIFO.
+  - Uncontended, it costs nothing measurable.
+  - One thing is required with it: **a worker spins about 5 µs before
+    sleeping.** Without that spin, shipping is 3 to 5× slower. Workers fall
+    asleep, replies must wake them, and the home spends 94% of its time in
+    its drain loop, mostly in those wakes.
+- **Adaptive parking (P2) doesn't fix parking.**
+  - It ran 0.7 to 1.5× plain parking, depending on load.
+  - It wasted 46 to 75% of the CPU spinning.
+  - It stayed below `os_unfair_lock` in every round.
+  - Under `per_core`, parking is only worth keeping where a core can't
+    reach the instance's home.
+- **For `at` under `per_core`, ship each operation by default. Move the
+  task only for long blocks, from about 8 operations up.**
+  - With a dedicated home, so the comparison is fair, moving the task ran
+    0.16× shipping's throughput at 1 operation a block, 0.51× at 4 and
+    **1.70× at 16**.
+  - A move costs the home about 0.5 µs a block: two hops, a run-queue turn,
+    and the task's frame lines changing cores. A shipped operation costs it
+    about 35 to 45 ns.
+  - Moving needs a fairness rule at the home. When hopped tasks ran next,
+    they starved the home's own tasks for 0.2 to 1.8 s.
+  - When the home also serves requests, its own connections win its run
+    queue. The other workers' moved requests then ran at 0.16 to 0.86× of
+    shipping.
+  - The compiler can choose per block: count the block's operations, ship
+    up to about 8, and move a block that loops.
+- **Where shipping loses:**
+  1. **Latency on a lightly contended instance (M).** Throughput matched the
+     best lock within 6%. But a shipped operation waits about 130 µs at p50,
+     against 0.2 µs under any lock.
+     - It waits for the home's next scheduling point, and then for its own
+       worker's next scheduling point.
+     - Draining the rings at every scheduling point and running resumed
+       tasks next (`FAST`) cut that to 10.5 µs at p50, with a p99 of
+       309 µs.
+     - That is still 50× a lock's latency for an operation nobody contends.
+  2. **The home is a single point of preemption.**
+     - If the OS deschedules the home thread, every worker that needs the
+       instance stalls, not just the holders of one short critical section.
+     - On this machine, at load 13 or more, ship at 12 workers fell below
+       ship at 8 (9.9M against 13.4M).
+     - In M, remote workers sat 16 to 29% idle.
+  3. **Long holds starve the home's other work.** With a 100 µs hold, the
+     home was 91 to 98% busy running other cores' puts. Its own background
+     task got almost nothing. The other seven workers kept theirs flowing.
+  4. **One home caps the instance at about 30M short operations a second**,
+     about 33 ns each, measured with a dedicated home at 78 to 84% busy.
+     Past that, stripe.
+- **A hybrid is the obvious next experiment, and it's untested here:**
+  - an uncontended operation takes a CAS from any core and runs in place,
+    keeping M's 0.2 µs;
+  - a contended one ships to the holder or the home, a delegation lock or
+    flat combining.
+  - That might keep M's latency and C's throughput.
+  - If it's adopted, runtime.md's "A shared take" paragraph becomes:
+    "under `per_core`, an operation off its home core is a D.Call".
+
+| prediction | measured | verdict |
+|---|---|---|
+| (H) beats plain parking on C by over 2× | **5.9×** [3.7..11.9] per round (focus session); 24× at load ≤ 8 | **hit** |
+| (H) within 1.5× of `os_unfair_lock` on C | **2.7× faster** [2.2..3.6]; 5.4 to 5.7× at load ≤ 8 | **hit, exceeded** |
+| (H) near-zero wasted CPU | take spin 0%. Spin before sleeping 4.8 to 8.2%, and it's required: without it, 3 to 5× lower throughput | **hit for take spin.** The idle spin is a cost the design needs |
+| (H) capped by the home core | the dedicated home ran 78 to 84% busy at 20 to 25M ops/s, so about 30M ops/s at most. At 8 workers, round-trip latency × calls in flight bound it first (home 45 to 71% busy). Past 8 workers, home preemption did. | **partly**: the cap exists but isn't what bound C |
+| (H) 100 µs hold: background work flows like parking | background ops/s 2.14M (2.94M with FAST) against parking's 2.74M and `os_unfair_lock`'s 150. The loss is the home's own task. | **hit** |
+| (H) mixed: within 10% of the best | throughput 0.99× parking, 1.00× `os_unfair_lock` per round; median 3.74M against the best 3.99M (−6%) | **hit on throughput.** Shared-op latency: 130 µs against 0.2 µs |
+| (P2) recovers ≥ half of the parking → `os_unfair_lock` gap on C, under 20% wasted | 0.87× parking [0.53..2.41] (focus), 0.70× (session 2), 1.51× (session 1, load ≤ 8: 2.15M, 15% of the gap); wasted 46 to 75% | **miss on both** |
+
+### What was built
+
+`x3b/` reuses X3's server model: 8 workers, 16 connection tasks each,
+FIFO run queues, every 8th recv suspending, and one unstriped memtable,
+50% puts. It adds:
+
+- **(H) `ship` and `shipded`.**
+  - The memtable lives on worker 0.
+  - Off the home, `mt_put` and `mt_get` push a 32 B D.Call record (op,
+    key, value, task) onto that worker's SPSC ring to the home, and the
+    task suspends in the register convention.
+  - On the home, they're direct calls, with no lock.
+  - The home drains up to 16 records a ring between its own task steps,
+    runs them, and pushes replies on the reverse rings. It publishes each
+    ring's tail once a pass.
+  - `shipded` gives the home no connections, so 7 workers serve.
+- **Why SPSC rings, one a source, rather than one MPSC queue.**
+  - A push is a slot write and a release store, with no read-modify-write.
+  - Seven producers never share a tail line, and a shared tail line would
+    be the contended word this design exists to remove.
+  - The home polls 7 tails, and a tail's line moves only when its source
+    pushed. That's Seastar's choice.
+  - Each ring holds 64. A full ring fails the push, and the caller waits
+    for room. It never filled: at most 16 calls are in flight a source.
+- **`move` and `moveded`.**
+  - `handle` hops the task to the home for its `at` block of `OPS`
+    operations, runs them as direct calls, and hops back.
+  - The worker does the hop after `step` returns. The first version pushed
+    the task from inside `handle` and hung, because the callers above
+    still write their frames on the way out. That is Go's
+    gopark-with-unlock problem: a task can be published to another core
+    only once it has fully suspended.
+- **(P2) `p2`.**
+  - X3's take, but it spins while the holder's worker is on the CPU, up to
+    4 µs, then parks.
+  - The 1 ms hand-off is on.
+  - A worker with nothing to run spins 5 µs before sleeping.
+  - In this model a holder never waits inside an operation, so "holder
+    running" is false only if the holder's worker is asleep. Effectively,
+    P2 is a bounded spin plus the idle spin.
+  - `probe_p2.sh` swept SPIN_US 1, 2, 4, 8 against IDLE_SPIN_US 0, 5, 20,
+    50 on C. Every setting landed between 1.0M and 2.2M at the median, with
+    11 to 54% wasted. I kept 4 µs and 5 µs.
+- **`FAST=1`.**
+  - The rings are drained at every recv, which is a scheduling point.
+  - A task resumed by a reply or a hop goes to the front of its run queue,
+    as Go's `runnext`.
+- **The references,** unchanged from X3: `park`, `handoff`, `unfair`
+  (`os_unfair_lock`) and `spin` (TTAS).
+
+Latency is now a whole request's, from `next_request` to `respond`,
+sampled into a 1M-entry reservoir a worker. X3 timed only the take's wait.
+
+**Correctness** (`x3b/results/check-*.txt`).
+
+- With `DISJOINT=1`, each connection owns its keys, so the response
+  checksum and the final table depend only on contract 1 (one task's calls
+  to one key run in order), not on interleaving.
+- Every strategy at 8 workers gave the same checksum and table as
+  `os_unfair_lock` at 1 worker with the same 128 connections (112 for the
+  dedicated homes). That held for plain requests, `at` blocks of 4, and the
+  mixed scenario, with and without `FAST`.
+- ASan+UBSan and TSan builds of every strategy, contended, with and without
+  a hold, with `at` blocks and with `FAST`, finished every request and left
+  the lock and every ring clean: 138 runs. Neither sanitizer reported
+  anything.
+
+**Sessions.** The machine was busy throughout, at load 7 to 21. Each
+session interleaves every variant within a round, and the ratios are taken
+within a round, which held steadier than ratios of medians.
+
+| session | file | load | used for |
+|---|---|---|---|
+| 1 | `raw-20261030-150854` | 7.8 → 17.9 | low-load corroboration (rounds 1 to 3, load ≤ 8.1); its U is void, from before a fix to `handle` |
+| 2 | `raw-20261030-152306` | 7.8 → 16.5 | U, L, W, FAST and idle0 variants |
+| focus | `focus-20261030-154449` | 9.9 → 13.6 | C, M, A (7 rounds) |
+| at | `at-20261030-155106` | 7.2 → 15.2 | ship against move, home serving and dedicated (7 rounds) |
+
+### C: 8 workers × 16 connections, short holds (focus session)
+
+| | req/s | latency p50 / p99 (µs) | wasted % (take spin + idle spin) | idle % | messages / req | wakes / req |
+|---|---|---|---|---|---|---|
+| park | 2.41M [1.47..3.60] | 0.3 / 539 | 17.1 (17.1 + 0) | 23.3 | 0.27 | 0.044 |
+| p2 | 2.08M [1.27..4.05] | 0.3 / 1,012 | 46.4 (43.3 + 3.1) | 24.9 | 0.27 | 0.032 |
+| **ship** | **14.8M** [13.2..20.0] | 4.0 / 8.3 | **8.2** (0 + 8.2) | 42.1 | 1.64 | 0.000 |
+| ship, FAST | 15.0M [13.3..19.1] | 2.5 / 10.3 | 4.8 | 44.4 | 1.83 | 0.000 |
+| shipded | 14.8M [10.1..19.2] | 3.6 / 46.8 | 7.6 | 40.5 | 2.00 | 0.009 |
+| spin (b) | 2.96M [2.84..3.83] | 0.5 / 18.6 | 78.0 | 0 | 0 | 0 |
+| `os_unfair_lock` (b) | 5.62M [5.40..5.97] | 0.1 / 17.4 | 0 | 0 | 0 | 0 |
+
+At load ≤ 8 (session 1, rounds 1 to 3):
+
+| park | p2 | ship | shipded | ship, no idle spin | move | spin | `os_unfair_lock` |
+|---|---|---|---|---|---|---|---|
+| 1.42M | 2.15M (75% wasted) | **35.3M** | 23.4M | 6.6M | 7.6M | 4.05M | 6.34M |
+
+How to read C:
+
+- **Why shipping wins.** Every lock-based variant moves the lock's line and
+  the table's lines between cores on every operation. Under shipping, the
+  table's lines stay on the home. A ring line carries four 32 B records, and
+  the home answers them in batches.
+- **Messages a request.** Shipping sends 1.64 to 2.0 messages a request: a
+  call and a reply for each of the 7/8 of requests that come from off the
+  home.
+  - Parking sends 0.27 cross-worker requeues a request, plus 0.03 to 0.24
+    condition-variable wakes.
+  - Neither count includes the lock line's own traffic.
+- **What bounds shipping at 8 workers isn't the home.**
+  - The home was 38 to 71% busy, and the other workers sat 32 to 45% idle,
+    their 16 tasks all waiting on replies.
+  - By Little's law, 112 calls in flight at a 3 to 4 µs round trip gives
+    the measured rate. More connections a worker would raise it.
+- **The idle spin is load-bearing.** Without it (`ship+idle0`), throughput
+  is 4.9M (session 2) or 6.6M (session 1).
+  - A worker that runs out of work falls asleep, so a reply must wake it.
+  - The home's drain loop, where it sends those wakes, then takes 94% of
+    its time: 0.04 to 0.065 `pthread_cond_signal`s a request at a few µs
+    each.
+  - This is X3's cross-thread wake again.
+- **The dedicated home saturates.**
+  - At load ≤ 8, `shipded` ran 20 to 25M ops/s at 78 to 84% busy, so the
+    ceiling is about 30M short operations a second, about 33 ns each
+    including the reply.
+  - With the home also serving requests, `ship` is higher. Its own requests
+    are direct calls, and its batches are larger.
+- **The worker sweep** (session 2) is ship 9.2M, 10.6M, 13.4M and 9.9M at
+  2, 4, 8 and 12 workers, against `os_unfair_lock`'s 7.4M, 5.9M, 5.2M and
+  6.8M.
+  - In session 1 ship reached 13.3M, 17.9M, 33.9M and 11.0M.
+  - The drop at 12 workers is the home thread losing its core on an
+    oversubscribed machine. When the home is off the CPU, everyone who
+    needs the instance waits.
+
+### U: one worker (session 2)
+
+ns a request: park 93.8, p2 93.5, ship 87.7, move 81.8, `os_unfair_lock`
+87.7, spin 88.9.
+
+- Every spread is wide, from 71 to 400 ns, because of the load. The
+  medians are within noise of each other.
+- On one worker, shipping is a direct call behind a TLS compare and a ring
+  poll over zero sources.
+- These are about 15 ns above X3's 69 ns, because X3b timestamps every
+  request.
+- Session 1 showed (a) 23 ns slower than (b). That was this model's fault:
+  `handle` kept its block loop's state in the frame. Moving it to C locals,
+  spilled only at a suspension as X1's convention says, removed the gap.
+
+### L: 100 µs hold in put, plus one background task a worker (session 2)
+
+| | req/s | latency p50 / p99 / max | wasted % | stalled % | background ops/s | home busy % |
+|---|---|---|---|---|---|---|
+| park | 16,399 | 0.1 / 71.7 / 94 ms | 0.3 | 19.1 | 2.74M | |
+| handoff | 13,002 | 6.7 / 131 / 227 ms | 0.2 | 21.4 | 2.71M | |
+| p2 | 14,841 | 6.9 / 122 / 171 ms | 0.8 | 14.0 | 2.93M | |
+| **ship** | 12,816 | 6.1 / 47.7 / 66 ms | **0** | 36.6 | **2.14M** | 91 |
+| ship, FAST | 17,858 | 5.7 / 21.5 / 67 ms | 0 | 10.0 | **2.94M** | 98 |
+| shipded | 13,692 | 5.5 / 35.7 / 59 ms | 0 | 31.3 | 2.29M | 98 |
+| move | 11,431 | 0.1 / 50.8 / 103 ms | 0 | 44.8 | 1.81M | |
+| spin (b) | 18,457 | 0.1 / 4.5 / 56 ms | 87.4 | 8.1 | 143 | |
+| `os_unfair_lock` (b) | 19,180 | 0.1 / 0.1 / **1.26 s** | 0 | **87.4** | 150 | |
+
+How to read L:
+
+- **Throughput is the hold's**, about 20k a second under every strategy.
+  The load spread it from 2.5k to 19.8k across rounds.
+- **Shipping keeps the other workers' background work flowing**, as
+  parking does. It's at 2.1 to 2.9M ops/s, against 150 under either thread
+  lock.
+  - What it loses is the home's own background task: the home is 91 to 98%
+    busy running other cores' 100 µs puts.
+  - Seven workers' worth is 3.0M, which matches.
+- **A shipped put's latency is the queue,** as the hand-off's is: about
+  6 ms at p50, or 64 puts × 100 µs.
+  - The rings are FIFO, so no starvation rule is needed. The max was 66 ms,
+    against the hand-off's 227 ms in the same session.
+  - The p50 of 0.1 ms under park, move and the locks is a get or a put that
+    didn't wait.
+  - `stalled` is 8 to 45% for every strategy except `os_unfair_lock`. That
+    is the load (16 to 21 at the time): the workers were runnable and off
+    the CPU, with spreads from 0 to 71%. Only `os_unfair_lock`'s 87% is
+    the lock.
+
+### M: 10% of requests touch the table, the rest do 2 µs of local work (focus session)
+
+| | req/s | per round, against park | shared requests: latency p50 / p99 / max (µs) | idle % | messages / req |
+|---|---|---|---|---|---|
+| park | 3.79M [2.57..4.28] | 1 | 0.2 / 0.5 / 21,805 | 0 | 0 |
+| p2 | 3.89M [3.52..4.28] | 1.01 | 0.2 / 0.6 / 11,970 | 0 | 0 |
+| ship | 3.74M [3.15..4.25] | 0.99 [0.79..1.65] | **129.7 / 246** / 25,833 | 8.3 | 0.17 |
+| ship, FAST | 3.80M [3.49..4.22] | 0.97 [0.91..1.64] | **10.5 / 309** / 9,969 | 6.7 | 0.18 |
+| `os_unfair_lock` (b) | **3.99M** [3.32..4.28] | | 0.2 / 0.9 / 13,560 | 0 | 0 |
+
+How to read M:
+
+- **Throughput: a hit,** within 6% of the best. 90% of the time is local
+  work, which every strategy runs the same.
+- **The shared operation's latency is the cost.** Without FAST, a call off
+  the home waits two turns:
+  - one for the home's next pass, which comes between task steps, and a
+    step is about 8 requests, or 16 µs;
+  - one for a turn on its own worker, behind 15 tasks' steps, since a
+    resumed task joins the tail.
+  - FAST, which drains at every scheduling point and runs resumed tasks
+    next, removes most of that.
+- **Remote workers sit 7 to 8% idle,** with all their tasks waiting on
+  replies. It's worse when the home thread loses its core: at load 21
+  (session 2, one run), remote workers sat 16 to 29% idle with FAST and 29
+  to 57% without it, against 0.2 to 1.2% under parking.
+
+### `at` blocks under `per_core`: ship each operation, or move the task (at session)
+
+Requests are `at` blocks of 1, 4 or 16 operations. Ratios are taken within
+a round. "Remote" counts only requests that completed on the 7 non-home
+workers.
+
+| ops a block | moveded / shipded | move / ship (remote req/s, home serving) | shipded / `os_unfair_lock` | moveded / `os_unfair_lock` |
+|---|---|---|---|---|
+| 1 | **0.16** [0.10..0.22] | 0.16 [0.10..0.25] | 2.89 | 0.34 |
+| 4 | **0.51** [0.48..0.61] | 0.46 [0.08..0.95] | 1.69 | 0.91 |
+| 16 | **1.70** [1.10..2.13] | 0.86 [0.36..1.66] | 0.80 | 1.47 |
+
+Absolute medians: `shipded` 15.5M, 6.08M and 1.37M req/s. `moveded` 1.99M,
+3.18M and 2.47M. `os_unfair_lock` 5.77M, 3.52M and 1.69M.
+
+- **The crossover is about 8 to 9 operations a block**, by interpolating
+  the dedicated ratios.
+- That matches the per-op costs at the home:
+  - a moved block costs about 0.5 µs of home time: 1 / 2.0M blocks at 1
+    operation;
+  - a shipped operation costs about 35 to 45 ns: 15.5M ops/s at 71% busy;
+    24M at 74% for blocks of 4;
+  - 0.5 µs / 45 ns ≈ 11 operations.
+- **Moving funnels every moved task through the home's run queue.**
+  - A moved block waits 25 to 42 µs at p50 even at 1 operation, because
+    112 tasks share one queue.
+  - Its workers sleep and wake as all their tasks leave, at 0.6 to 0.8
+    wakes a request.
+- **With the home also serving, moving is worse.** The home's own 16
+  connections take most of its run queue, so remote requests fall to 0.16
+  to 0.86× of shipping's.
+- **Running hopped tasks next (FAST, session 2) starved the home's own
+  tasks:** max latency 0.2 to 1.8 s, and lower throughput.
+  - Moving needs a fairness rule at the home, for example a budget of
+    hopped tasks a pass.
+  - Shipping needs none: a shipped call is a record, not a task, and the
+    home answers it between its own tasks.
+- **Both beat a thread lock once blocks are long.** At 16 operations,
+  moving ran 1.47× `os_unfair_lock`, which takes the lock once an
+  operation.
 
 ## X5: static frame-stack sizing, and the spare chunk
 
