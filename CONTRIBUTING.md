@@ -11,7 +11,7 @@ repository, then run:
 
 ```sh
 bash tools/bootstrap-devenv.sh
-./.devenv-cli/bin/devenv shell --clean
+./.devenv-cli/bin/devenv shell
 ren-toolchain
 ren-check
 ```
@@ -24,7 +24,12 @@ and Go caches live under the ignored `.devenv` directory. No personal opam switc
 or Homebrew compiler is needed. Run from a fresh checkout when switching
 from an existing opam build, or run `dune clean` inside the new environment.
 
-For a single command, including from an agent or CI:
+The interactive shell retains personal settings, including Git identity and
+editor configuration. Use `--clean` for verification: it removes inherited
+shell state (including `HOME`), so tests cannot depend on an opam switch or
+other personal toolchain settings. Project caches still live in `.devenv`.
+
+For a clean check, including from an agent or CI:
 
 ```sh
 ./.devenv-cli/bin/devenv --no-tui shell --clean -- ren-check
@@ -88,7 +93,7 @@ That skip is not a claim that cross-emulation was tested.
 Rust 1.99.1 and Go 1.27.3 are optional tools:
 
 ```sh
-./.devenv-cli/bin/devenv --profile benchmarks shell --clean
+./.devenv-cli/bin/devenv --profile benchmarks shell
 ren-check-bench
 sh bench/native/build.sh
 ```
