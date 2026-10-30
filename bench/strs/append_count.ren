@@ -1,0 +1,15 @@
+// 20,000 appends to a string nothing else holds (compiler.md, "Bytes
+// stage, part two", step 3): in place, its buffer doubling, so a build
+// makes a few dozen objects here, not one an append. bench/strs.t counts
+// them; `ren run` copies, and prints the same.
+
+fn main() uses Console =
+  var s = ""
+  for i in 0..20_000
+    s += "x"
+  var b = Bytes.zeros(0)
+  let one = Bytes.of([1])
+  for i in 0..20_000
+    b += one
+  print(s.byte_len())
+  print(b.len())

@@ -8869,6 +8869,569 @@ sections above are silent:
   `match` into per-arm dispatch (threaded code) is a code-generation
   question past this stage.
 
+## Bytes stage, part two
+
+The second half of foundations.md's Staging item 7a, "Strings and bytes
+at Rust's speed": what strings.md's "Representation" and
+research/strings/synthesis.md section 3 say to build next. A `Str` or
+`Bytes` held as a 16-byte value in release builds (decision 17's
+representation B) instead of a heap object, with the uncounted view of
+a borrowed parameter's slice; appending in place; a block UTF-8
+validator; and the parts of strings.md's API that are code, in the
+interpreter and natively, agreeing. `Path` as `opaque Bytes` and `Os`'s
+`ArgNotUtf8` are item 7b's; the `unicode` module, short strings inline,
+a capacity-keeping `clear()`, proved copy-on-store, the retention
+report, `b"…"` literals and x86 SIMD are later. The brief is
+briefs/stage-bytes-2.md. Seven steps, each green on its own:
+
+0. **This specification,** the baseline, and the tests.
+1. **The boundary:** the validator, `InvalidUtf8(at, incomplete)`,
+   `from_utf8_lossy`.
+2. **The API:** scope 5 of the brief, interpolation and `'a'` among it.
+3. **Appending in place,** on representation A, with the debug report.
+4. **Representation B,** release builds, fix by fix, measured.
+5. **The rest of the API:** strings.md's table and `count()`.
+6. **A review:** soundness, the spec, the docs and tooling.
+
+**Done when** (Staging item 7a's): the slices kernels' json and pages
+run within 1.2× of their `_r` forms and logs within 1.1×, each within
+2× of Rust; tok and sort at 0.80× or less of step 3's time, map 0.95×,
+group no slower; `out`'s `+=` within 1.1× of Rust's `push_str`;
+`Str.from_utf8` at 70 GB/s or more on ASCII; and strings.md's API in
+both builds, agreeing. Each step's own "Done when" is below.
+
+This stage runs beside the services stage, which owns the parser's and
+checker's new forms for wirings and `|>`, the lexer's line
+continuation, the scheduler and std_lib's `sync`, `sim`, `striped` and
+`actors`. This one owns strings' runtime and native layout, the
+validator, `VStr` and `VBytes`'s operations, and the lexer's string and
+character literals; in the shared files (parser.ml, lower.ml,
+prelude.ml, builtins.ml, infer_expr.ml) it adds cases and entries and
+moves nothing.
+
+**Measured here.** Numbers in this stage come from an x86_64 cloud
+container (4 cores, shared), for before-and-after comparisons and
+ratios against twins built and run beside them; the owner re-measures
+the headline numbers on the M4 Max. There's no NEON here: the validator's
+NEON path is compiled with aarch64-linux-gnu-gcc and checked under
+qemu-aarch64, which can't time it, so step 1's GB/s targets are the
+owner's to confirm on the M4 Max.
+
+### The tests
+
+**bench/strs.t** runs the programs in bench/strs/ as bench/bytes.t runs
+bytes/: each `.expected` holds what `ren run` prints, `exit N`, and the
+first line of stderr; `spec` says whether `ren run` is as specified, and
+`native` builds each debug (Perceus and naive) and release under
+AddressSanitizer and UBSan, and debug with tcc, and checks each prints,
+writes to stderr and exits as `ren run` does with no object alive at
+the end, and that `ren run --release` agrees. A program that doesn't
+build natively yet prints `not native yet` and `ren build`'s first
+line. Below them, `objects` counts what a build allocates (`--stats`),
+and the last block runs the `+=` report. The harness sets
+`REN_NOTES=0`, but for the report's own block. **bench/strs_big.t**
+runs escape.ren, which needs about 8 GiB, only with `REN_BIG_TESTS=1`
+(bench/dune's `enabled_if`): `ren run`, a debug build and a release
+one, without the sanitizers, to keep to the memory it needs.
+This container has 15 GB, so the step that lands it runs it here.
+
+| program | what | lands in |
+|---|---|---|
+| `invalid_utf8` | every class of invalid sequence (overlong in 2, 3 and 4 bytes, surrogates, above U+10FFFF, stray continuations, lead bytes F5–FF, C0 and C1, truncated) at every offset 0 to 79, after ASCII and after characters of every width, followed by nothing, 3 bytes or 67: `at`, `incomplete` only when the end cuts a character, lossy's one U+FFFD per maximal subpart (OCaml's decoder's count); the edges of each width valid | 1 |
+| `api` | `byte_len`, `is_empty`, `ascii_lower` on both types, `char_floor` and `char_ceil` at every offset of characters of 1 to 4 bytes, `chars` and `code` over them, `of_code` at the edges of each width, `'a'` literals and a `UInt8` of one, `+`, `join`, `cursor(from: 100)` | 2 |
+| `api_cut_panic`, `api_cut_start_panic`, `api_code_panic`, `api_code_empty_panic`, `api_of_code_panic`, `api_floor_panic` | each panic, its first line (test_strs.ml has its help) | 2 |
+| `interp` | holes of every kind (scalars, records, sums, arrays, tuples, options, maps, calls, an `if`), a string with holes in a hole, braces in a hole, `\"` in a hole's string, `\\{` and plain braces as text | 2 |
+| `append` | `+=` in a loop; on a shared string; on slices, of a shared and of an unshared root, and of a slice; on a literal; on itself and on a slice of itself; `a + b`; through `inout`; 10,000 appends and 1 MB; `Bytes` the same | 2 (meaning), 3 (in place) |
+| `append_count` | 20,000 appends to a `Str` and to `Bytes`, which `objects` counts | 2; 3 counts |
+| `append_report` | a loop's `+=` on a string an array also holds, which the report names; one that copies only a literal, which it doesn't | 2; 3 reports |
+| `slices_kept` | slices kept in a small record, an array, a map's keys and values, a set, a generic record, a type variable's value, a wide record (an object), a block's capture, `Bytes`, and returned from a function lent the string; the root dropped before they're read | 2; 4 under B |
+| `slices_count` | 10,000 slices kept in an array of small records, which `objects` counts | 2; 4 counts |
+| `rest` | step 5's names on `Str` and on `Bytes`, `line_col`, `count()` on every receiver | 5 |
+| `escape` (strs_big.t) | `Bytes` of 2^32 + 1 bytes, slices on both sides of the 32-bit edge, read, compared, hashed and appended to | 4 |
+
+**test/test_strs.ml** holds what a program's output can't say, each
+behind `until "s1"`, `"s2"` or `"s5"` (test/helpers.ml), as
+test_bytes.ml's did: every compile error with its help, every panic
+with its help line, `InvalidUtf8`'s payload in a handler, lossy's
+output, a hole through a type's own `show` and `+=` through `inout`.
+`Bytes` keeping `len` is written plainly, a guard. Steps 3 and 4 change
+nothing the interpreter shows, and no expect test builds natively, so
+their tests (`objects` and the report) are bench/strs.t's. A step
+leaves no `until` of its own number behind.
+
+The kernels (bench/native/strs/, `out`, `utf8`, the slices kernels and
+the `Map` claim's twins) are the baseline's and step 4's, in
+bench/native/RESULTS.md.
+
+### Representation B in Mem IR
+
+**A `Str` or `Bytes` is a small struct of two slots in a release build:**
+slot 0 the root, an object (`Boxed`), counted; slot 1 the range, a
+scalar (`Int`), `off | len << 32`. It's `Struct (k, true)` whose
+`sfields` are `[Boxed; Int]` and whose `skind` is `Product`, registered
+by its type as any small value is (to_mem.ml's `struct_id`, so
+`struct_ty` gives back `Str` or `Bytes`), so the data stage's code sees
+an ordinary small record: flattening puts its two slots into a small
+parent (a `{ name: Str, price: Int }` is three slots, a `(Str, Str)`
+four), an array of it or of a struct holding it is inline with the
+root's bit in the element's mask (stride 2, mask `0b01`, for an
+`Array<Str>`), Perceus dups and drops slot 0, and Mem Lint checks it as
+it checks any counted struct. A niche (the data stage's third fix) uses
+the root's slot, which never holds a scalar, so `Option<Str>` is two
+slots and no tag. In the C it's a two-slot `ren_struct_N`, laid out
+as ren_rt.h's `ren_sv`, `{ ren_obj *root; uint64_t range; }`, which the
+runtime's string functions take. The budget counts a string as its two
+slots: a record of two strings and an `Int` is five, an object.
+
+**Debug builds keep representation A throughout,** as the data stage
+keeps every type boxed there: a string is a pointer to a `ren_str`, an
+owner or a 32-byte slice object. A is also B's box and the 4 GiB escape,
+so the one runtime serves both builds.
+
+**Where a release build boxes.** Never by demoting the type: `Str` and
+`Bytes` are never in to_mem.ml's `boxed`, since that would undo B
+everywhere. Where the data stage would demote a struct's type because a
+value of it must be one word, a string value is boxed there, and
+unboxed where it comes back:
+
+- **A type variable's value** (`Word`): `To_word` of a B value is its box,
+  `Of_word` into B unboxes. That's generic code a release build keeps
+  generic (past the specialization budget, or a descriptor's template),
+  and an object's field whose declared type is a type variable,
+  `Pair<T>`'s `left`, whatever `T` is.
+- **Generic code reading or writing an array, map or set of `T` at
+  `Str`** boxes what it reads and unboxes what it writes, by the
+  container's own layout (an array's stride and mask, a map's entry
+  widths), as `ren_array_get_w` already reads a sized element for a
+  word.
+
+Everywhere else a release build keeps the two words, and there's no box:
+
+- **An object's field whose declared type is `Str` or `Bytes`** (a record
+  too wide to be small, a boxed sum's constructor, an error's payload)
+  takes two consecutive words, the root's bit in the object's mask. Its
+  declaration's places (Mem's `dplaces`, ren_rt.h's `ren_ctor_info`)
+  say so, so `show`, `==`, hashing and ordering find it, as they find a
+  packed field. The field's type is known in generic code too, so a
+  generic type's layout doesn't change with its arguments.
+- **A handler's captures,** in its description's words: two words, as a
+  field.
+- **A block's arguments and result:** two entries of its arguments
+  array, and two words where its result is written.
+- **A block's environment** holds a captured local's address (a cell),
+  which is a struct's address as well as a word's: no change.
+- **A `Map` or `Set` entry** holds a key or value of `Str` or `Bytes`
+  unboxed, the map's header saying each side's width and mask (part one
+  kept every key a word).
+- **The runtime's walks** (`show`, `==`, ordering, hashing,
+  `ren_array_sort`, the NaN walk, a `key`'s wrapper) take a value by the
+  address of its words and its descriptor, and a release build's
+  `D_str` and `D_bytes` are two words. `as_word` of a B value passes its
+  address; nothing is boxed for a walk.
+
+**A box, and unboxing it.** Boxing a B value `{ root, off, len }` gives
+the root itself when the value covers all of it (`off == 0` and `len`
+the owner's `len`, a literal included) or is the escape; otherwise a new
+32-byte slice object `{ len, data = root's bytes + off, root }`, which
+takes the value's count on the root. Unboxing an A object `o`: an owner
+gives `{ o, 0, o.len }`; a slice gives `{ o.root, o.data - o.root's
+bytes, o.len }`, counting the root and dropping `o` (moving the root out
+and freeing `o` when it's unique); either gives the escape `{ o,
+UINT32_MAX }` when the offset or length doesn't fit. Both take what
+they're given, so Mem Lint's rule for `To_word` and `Of_word` (the
+result is the operand's bundle) holds; Lint allows a struct there only
+for `Str`'s and `Bytes`'.
+
+### The owner's header
+
+**Kept at 32 bytes, today's `ren_str`, with the capacity where an owner's
+`root` is:**
+
+```c
+typedef struct {
+  ren_obj h;          /* nfields bit 0, REN_STR_SLICE: an A slice */
+  int64_t len;        /* an owner's: the bytes used */
+  const char *data;   /* an owner's: its own [bytes] */
+  union { int64_t cap; ren_obj *root; }; /* an owner's room; a slice's root */
+  char bytes[];       /* an owner's */
+} ren_str;
+```
+
+An owner is told from a slice by bit 0 of `nfields`, which strings
+don't use (`REN_STR_SLICE`); every test of `root != NULL` in ren_rt.c
+moves to it. Static literals keep emit_c.ml's layout, their `bytes` at
+offset 32 and `cap` their length, the bit clear and the count 0. An
+owner's bytes are no longer followed by a 0; nothing may read past
+`len` (step 3 finds and moves anything that does).
+
+Why 32 and not the research's 16 (`{ count, cap }` and the bytes):
+an owner is then its own A box, so boxing a whole string, the common
+case at a word boundary (a generic value, a debug build), allocates
+nothing; debug builds' A and release builds' B share one owner, one set
+of string functions and the statics as they're emitted; and the
+escape's root is an ordinary A object. It costs 16 bytes an owner,
+which shows where a program keeps many small owners, a map of copied
+keys. **Step 4 measures map's peak memory and time with this header and
+with a 16-byte owner built as an experiment** (it needn't be kept), and
+records both in RESULTS.md; if the 16-byte one saves 5% or more of
+either, the review reopens this choice.
+
+**Data from a root.** A B value's bytes are at `(char *)root + 32 +
+off`, `offsetof(ren_str, bytes)`, with no load, for heap owners and
+statics alike. The escape is the one exception: its bytes are its A
+object's `data`. An empty value's root is a static (the literal `""`),
+never NULL, so a dup or a drop never tests for one, and a niche's
+scalars stay free.
+
+### The 4 GiB escape
+
+A value whose offset is 2^32 or more, or whose length is 2^32 - 1 or
+more, is the escape: its root is an A object (an owner, or a slice
+object that counts the owner) holding the real `data` and `len`, and its
+range's length field is `UINT32_MAX` (`range >> 32 == UINT32_MAX`, its
+offset 0). `ren_sv_len` and `ren_sv_data` test that once: the length
+field if it isn't `UINT32_MAX`, else the object's. A slice of a large
+owner whose offset and length fit is an ordinary B value, so only a
+value that starts past the first 4 GiB of its buffer, or is 4 GiB
+long, pays. Loops read a value's
+length and data once before they start (part one's fix 1b, hoist.ml), so
+the test is once a loop, not once a byte; step 4 measures what it costs
+code that never meets one (2% or less on each kernel, or say why). An
+escape is written or appended to in place as A is, when its object is
+a unique owner, and copied otherwise.
+
+### Uniqueness under B (rule U)
+
+A write or an append in place needs the root's count to be 1
+(`ren_is_unique`) and the root to be an owner (the escape's object
+follows A's rule, below).
+**A release build writes and appends in place through a slice of a
+unique root,** whatever its range. It's sound because a root whose count
+is 1 is seen by one value: every other value of it, counted, counts it,
+and a part of it (the uncounted view, below) is counted before what
+it's a part of is consumed (rule B), and a write or an append consumes
+it. So the bytes outside the value's range are no one's. An append in
+place first sets the owner's `len` to `off + len` (the bytes after the
+range are dropped) and writes after it; one that must grow copies only
+the value's range into the new owner, which drops the bytes before it
+too. A debug build keeps today's rule for A: in place only on a unique
+owner, a slice's range copied into an owner of its own first.
+
+`Bytes`' writes at an offset (`ren_bytes_writable`) follow the same
+rule.
+
+### The uncounted view
+
+**A slice of a borrowed parameter's string is a part of it,** as a field
+read is (decision 17, "what doesn't escape costs nothing"): its root
+slot is the parameter's root, not counted, and borrow.ml marks it a
+part of the parameter, so Perceus and Mem Lint follow it as a
+`Struct_get` of the parameter. It's counted, one `Dup` of its root, where
+Perceus would count a part: when it's stored (in a record, an array, a
+map, a set, a handler's description), returned, passed to a callee that takes it, or when what it's part of is
+consumed. A block's capture is its local's address, so a slice a block
+reads stays uncounted. Release builds only: in A every slice is an
+object that counts its root.
+
+### Appending in place
+
+**`s += t` is `s = s + t`,** and `+` on `Str` and `Bytes` is
+`ren_str_concat`, which copies both into a new owner. Where the left
+side dies at the `+` (a `+=` always; `a + b` with `a` dead after),
+rc.ml gives `ren_str_concat_taking`, as it gives `push` its `_taking`
+form: if the root is unique and an owner it appends in place when it has
+room, and otherwise grows it to at least twice its capacity (realloc,
+in place when the allocator can) and appends; if not, it copies into a
+new owner with that same doubled room, so a loop that copies a literal
+on its first pass appends in place from then on. Plain `a + b` copies
+into an owner of exactly its size. When `t` shares `s`'s root (`s +=
+s`, `s += s[1..3]`, or `t` a borrowed view of it), `_taking` reads
+`t`'s offset in the root before it grows and its bytes from the grown
+owner after. The same for `Bytes`. A capacity of 32 bytes at the least.
+The interpreter's `+=` stays quadratic: it's the dev loop, and meaning is
+what has to agree.
+
+**The report.** A debug binary counts, for each `+=` and `+` site, how
+many times its left side was copied because its owner wasn't unique (a
+literal, a value something else holds, or a left side still used after),
+and when `main` returns (not on a panic) prints one note on stderr for
+each site that copied on more than one pass, in the order of the
+program's sites:
+
+```
+note: this `+=` copied its string on 100 passes, since something else held it
+  ┌─ append_report.ren:13:5
+13 │     out += "x"
+   │     ^^^^^^^^^^
+  help: build the string once: join, or keep it unique
+```
+
+(`+`'s says "this `+` copied its left side".) It's a report, not a
+warning, rendered from the site's pieces as a panic is. `REN_NOTES=0`
+silences it; the harnesses that compare a native build's stderr with
+`ren run`'s (bench/build.t, bytes.t, strs.t, and any other the step
+finds) set it from step 3, but for the report's own test. The
+retention report, when it's built, uses the same channel. Release
+builds and `ren run` report nothing; stdlib.md says so, and that the
+capacity is native only.
+
+### The validator
+
+**Keiser and Lemire's block validator** ("Validating UTF-8 in less than
+one instruction per byte", 2021; research/strings/track-b/c/b5.c): three
+16-byte tables looked up by the previous byte's high and low nibbles and
+the current byte's high nibble (`vqtbl1q_u8`), `vextq_u8` for the
+previous bytes, the 3- and 4-byte continuation check, and an all-ASCII
+fast path, 64 bytes a block, its error vector tested once a block so
+the failing block is known. It replaces `ren_utf8_valid`'s byte loop
+with `int64_t ren_utf8_check(const char *p, int64_t n, bool
+*incomplete)`, -1 or `at`. Built where `__ARM_NEON` is defined and
+`__TINYC__` isn't; elsewhere (tcc, x86_64, this container) a scalar path:
+eight bytes at a time while they're ASCII, then the byte decoder.
+
+**Exact.** It accepts what OCaml's `String.is_valid_utf_8` accepts and
+nothing else: no overlong forms, no surrogates, nothing above U+10FFFF,
+no bytes C0, C1 or F5 to FF. So `ren run` and native builds can't
+disagree.
+
+**On failure,** the scalar decoder rescans from the character boundary at
+or before the failing block's start: from it, back over at most 3
+continuation bytes (`10xxxxxx`), since the blocks before it were valid
+and an error found in block k can begin up to 3 bytes into block k - 1.
+It gives `at`, the first byte that isn't part of a valid character, and
+`incomplete`, true when the bytes from `at` to the end are a proper
+prefix of a valid encoding (the end cut a character); `C3` at the end
+is incomplete, `E0 80` and `F5` at the end aren't. The interpreter
+computes both with OCaml's decoder (`String.get_utf_8_uchar`).
+`from_utf8_lossy` writes U+FFFD for each maximal invalid subpart, the
+decoder's invalid decodes (Unicode's and WHATWG's rule), and keeps a
+byte order mark.
+
+**The differential test** (step 1): test/utf8/, an OCaml generator of
+VERIFY.md's inputs (2M random ones, as b5.c's agreement test makes
+them, and the boundary cases of verify/c/b5big.c) with OCaml's verdict,
+`at` and `incomplete` for each, and a C program that checks the block
+validator and the scalar one against them; dune builds and runs both in
+`dune test`, and the NEON path under qemu-aarch64 in an alias of its
+own, where qemu is installed (here; the M4 runs it natively).
+
+### The API
+
+In the interpreter and natively, every program, test and doc moved in
+the step that changes a name, with the compiler's errors as the list:
+
+- **Step 1:** `InvalidUtf8(at: Int, incomplete: Bool)` in the prelude,
+  builtins.ml and intrinsic.ml, and every use at once (`Fs.read_str`,
+  examples/just, test_deps, test_eval, test_journal, deps.md, and what
+  the checker finds); `Str.from_utf8_lossy(b) -> Str`.
+- **Step 2:** `s.ascii_lower()` and `Bytes.ascii_lower()`; `byte_len()`
+  and `is_empty()` on `Str`, `Bytes` keeping `len`; `+` and `+=` on
+  `Str` and `Bytes`, which `concat`'s removal needs; `xs.join(sep)` on
+  `Array<Str>`; `s.char_floor(i)` and `s.char_ceil(i)`, intrinsics;
+  `s.chars()`, a value cursor in the prelude (streams.md, "Data: cursors
+  you keep") yielding one-code-point slices; `c.code()` and
+  `Str.of_code(n)`, intrinsics; `b.cursor(from: Int = 0)`, a default
+  given by name (Stage 11a, "Parameters with defaults"), its `at()` and
+  every `at` it reports counting from `from`. **Character literals**,
+  `'a'`, an `Int` literal of its code point, with the escapes `\n`, `\t`,
+  `\\` and `\'`, checked where stored as any literal is (decision 15),
+  a non-ASCII one refused in a `UInt8`. **Interpolation,** `"…\{e}…"`:
+  the lexer reads a hole's expression to its matching `}`, counting
+  braces and skipping nested strings, on one line; the AST's string is a
+  list of literal pieces and holes; Lower makes it `show` of each hole
+  joined by `+` left to right, so the first piece copies and the rest
+  append in place. `\\{` is a backslash and a brace. Tree-sitter's
+  grammar has interpolation and character literals as nodes, not a
+  regex, with its corpus, and Zed's highlights mark a hole's `\{` and
+  `}` and a character literal.
+- **Step 5:** `includes`, `ends_with`, `strip_prefix` and `strip_suffix`
+  (an `Option` of the rest), `split_once` (an `Option` of the two
+  sides), `lines` (an `Array`, split at `\n`, a `\r` before it dropped,
+  no last empty line, Rust's `lines`), `fields` (an `Array` of the runs
+  between ASCII whitespace), `replace` (every match, left to right, not
+  overlapping), `ascii_upper`, on `Str` and `Bytes` alike; `s.line_col(at)`,
+  1-based, columns in code points; `count()` with no predicate on arrays,
+  maps, sets and cursors (operators.md). Mostly prelude Ren over
+  `index` and slices. ASCII whitespace is `trim`'s: space, `\t`, `\n`,
+  `\r` and form feed. Every name goes in stdlib.md's table.
+
+### Errors and panics
+
+Each is a test in test_strs.ml; strings.md words the first four
+exactly. A help names the receiver as written (`name`, `line`, or `s`
+where it isn't a name), and a panic's numbers are the values it met.
+
+Step 2, at compile time:
+
+```
+error: `Str` has no `len`: bytes, or characters?                        (Infer)
+  help: bytes: `name.byte_len()`; code points: `name.chars().count()`;
+        what a reader sees as characters: `unicode.graphemes(name).count()`
+  help: `name.is_empty()` asks whether it has any
+
+error: a `Str` can't be indexed: `s[i]` would be a byte                  (Infer)
+  help: a byte: `s.bytes().u8(i)`; a slice: `s[i..j]`; characters: `s.chars()`
+
+error: `s.lower()` is now `s.ascii_lower()`                              (Infer)
+  help: for every script's case, `unicode.lower(s)`
+
+error: `'é'` isn't a byte: it's 2 bytes in UTF-8                         (Infer)
+  help: compare text as text: `c == "é"`
+
+error: `concat` is gone: strings are joined with `+`                     (Infer)
+  help: `a + b`; in a loop, `out += s`; many at once, `xs.join(sep)`
+
+error: `'ab'` holds 2 code points; a character literal holds one         (lexer)
+  help: text is written in double quotes: `"ab"`
+
+error: an empty character literal                                        (lexer)
+  help: a character literal holds one code point, `'a'`
+
+error: an empty hole: `\{}` holds an expression                          (lexer)
+  help: a brace is written `{`, and a backslash and a brace `\\{`
+
+error: this hole has no `}`                                              (lexer)
+```
+
+`concat`'s error is for `a.concat(b)` and `Str.concat(a, b)` alike, and
+today's "`Str` has no `+`" error goes. A hole whose type has no `show`
+(a block) gets `show(x)`'s error at the hole.
+
+Step 2, panics, in every build at the same point:
+
+```
+error: panic: slice 0 to 1024 ends inside a character
+  help: to cut at most 1024 bytes, end at `line.char_floor(1024)`
+
+error: panic: slice 2 to 6 starts inside a character
+  help: to start where a character does, use `line.char_floor(2)` or `line.char_ceil(2)`
+
+error: panic: `code()` takes one code point, and this string has 2
+  help: for each code point: `for c in w.chars()`, and `c.code()`
+
+error: panic: `code()` takes one code point, and this string is empty
+
+error: panic: `Str.of_code(55296)` isn't a Unicode scalar value
+  help: a scalar value is 0 to 0x10FFFF, but not 0xD800 to 0xDFFF, the surrogates
+
+error: panic: `char_floor` 4 is out of bounds for a string of length 3
+```
+
+"at most N bytes" is the slice's length, `j - i`, and the floor is at
+`j`. `split_at` inside a character panics as its first half's slice
+does, with the same help. `char_ceil`'s bounds panic is `char_floor`'s
+with its name.
+
+Step 5, panics:
+
+```
+error: panic: `line_col` 30 is out of bounds for a string of length 23
+
+error: panic: `line_col` 8 is inside a character
+  help: the character it's in starts at `text.char_floor(8)`
+
+error: panic: `replace` needs a string to replace that isn't empty
+```
+
+No panic is added for the escape: a slice past 4 GiB is the escape, and
+`ren run`'s strings have no limit but memory.
+
+### Steps
+
+0. **This section, the baseline and the tests.** The baseline, on the
+   owner's M4 Max as part one measured it: the research's workloads in
+   Ren in bench/native/strs/ (tok, sort, map, group, logs from
+   track-b/c/b1.c and gen.c, the same inputs), `out` (b3's 1M JSON
+   records and 1M log lines by `+=` and by `a + b`, at 5,000 and 50,000
+   to show the quadratic), `utf8` (1 MiB ASCII, CJK and mixed, GB/s),
+   each with Rust and Go twins; the slices kernels against their `_r`
+   forms; and the `Map` claim (maps' Rust twin with FxHash, and the
+   research's `Map<Str, Int>`). **Done when** this section, the tests
+   above (each marked for its step), and the baseline in RESULTS.md
+   are on main.
+1. **The boundary.** **Done when** `utf8` runs at 70 GB/s or more on
+   ASCII, about 9 on CJK and 13.5 on mixed on the M4 Max (the research's
+   NEON numbers, 73.1, 9.01 and 13.5), the differential test finds no
+   disagreement on either path, and `invalid_utf8` and s1 are on.
+2. **The API.** **Done when** test_strs.ml's s2 is on, strs.t's step 2
+   programs are as specified and the same natively, and every
+   example's tests pass.
+3. **Appending in place,** on A. **Done when** `out`'s `+=` runs within
+   1.1× of Rust's `push_str` (the research: 157.5 ms in place against a
+   builder's 158.8 on JSON, 93.5 against 92.2 on logs), 50,000 records
+   take about 10× what 5,000 do, `a + b` in a loop stays quadratic and
+   is reported in a debug build, `objects` says fewer than 200 for
+   append_count in both builds, and the report's block prints the note.
+4. **Representation B,** release builds, with the uncounted view, the
+   escape and unboxed map entries, fix by fix, each measured before and
+   after. Expect to touch to_mem.ml, emit_c.ml, rc.ml, borrow.ml,
+   hoist.ml, Mem Lint, the runtime's string functions (each takes a
+   value, or a root and a range) and the map runtime. Check each
+   kernel's release assembly for the clang loop-strength-reduction
+   fault (VERIFY.md, problem 1): emit the range unpacked into two locals
+   before a loop, and an empty `asm` on the index only if that fails,
+   measured, with a comment saying why. Build the kernels once with
+   `-DREN_RC_SHARED` and record the uncontended cost. **Done when**,
+   against step 3's numbers: tok and sort at 0.80× or less (the
+   research: 0.75× and 0.76×), map 0.95× or less (0.91×), group no
+   slower, logs 0.90× or less (0.84×) or a tie explained by the clang
+   fault; the slices kernels' json and pages within 1.2× of their `_r`
+   forms and logs within 1.1×; every slices and `_r` kernel within 2× of
+   Rust; the escape 2% or less on each; nothing else in bench/native
+   slower by more than noise; `objects` says fewer than 200 for
+   slices_count in release; and strs_big.t is as specified. A target
+   that can't be met is said, with numbers.
+5. **The rest of the API.** **Done when** s5 is on, `rest` is as
+   specified and the same natively, `count()` and `count(f)` work on
+   arrays, maps, sets and cursors, and every new name is in stdlib.md's
+   table.
+6. **The review,** the brief's three lenses: soundness (an append or
+   write through a slice of a shared root, a slice of a slice, a
+   borrowed string's slice stored, returned or captured, the escape at
+   its edges, the rescan at block edges, Mem Lint and the sanitizers
+   over all of it), the spec against strings.md and decision 17, and the
+   docs and tooling (README's status and roadmap row, stdlib.md,
+   strings.md's "Already built" line, the grammar). **Done when** what
+   blocks is fixed and the rest is listed with its severity.
+
+### Where this stage may differ
+
+Choices where strings.md, decision 17 and the brief are silent:
+
+- `+` and `+=` on `Str` and `Bytes` land in step 2, since `concat`'s
+  removal needs them; in place is step 3's.
+- An object's field of declared type `Str` or `Bytes` takes two words in
+  release builds, and a block's arguments, results and a handler's
+  captures do too; only a type variable's value, and generic code over
+  a container of one, is boxed. The walks take a value by address.
+- A release build appends and writes in place through a slice of a
+  unique root (above); a debug build, on A, only through an owner.
+  Growing a slice copies only its range.
+- Copies made by `+=` and `_taking` get doubled room; plain `a + b` an
+  owner of its exact size. An owner's bytes have no 0 after them.
+- The report counts `+` sites too, and a copy of a literal or of a left
+  side still used after, and prints when `main` returns.
+- The wording of the errors and panics strings.md doesn't word:
+  `concat`'s, a character literal's, a hole's, a slice that starts
+  inside a character, `code()`, `of_code`, the bounds of `char_floor`,
+  `char_ceil` and `line_col`, and `replace`'s.
+- `incomplete` is "the bytes from `at` to the end are a proper prefix of
+  a valid character"; a character literal's escapes are `\n`, `\t`, `\\`
+  and `\'` (there's no `\r` in either kind of literal).
+- `strip_prefix`, `strip_suffix` and `split_once` give an `Option`;
+  `lines` and `fields` an `Array`, with Rust's `lines` and
+  `split_ascii_whitespace`'s meaning, whitespace `trim`'s set.
+- A value is the escape when its offset is 2^32 or more or its length
+  2^32 - 1 or more; an escape changes in place by A's rule.
+- The escape's test is in strs_big.t, run only with `REN_BIG_TESTS=1`;
+  steps 3 and 4's tests are bench/strs.t's, since no expect test builds
+  natively.
+
+### Progress log
+
+| step | commit | what's done | what's left |
+|---|---|---|---|
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

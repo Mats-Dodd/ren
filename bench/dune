@@ -87,3 +87,26 @@
   (env_var REN_TCC)
   (glob_files bytes/*.ren)
   (glob_files bytes/*.expected)))
+
+; strs.t runs the bytes stage part two's programs, in strs/, as bytes.t
+; runs bytes/ (compiler.md, "Bytes stage, part two", "The tests"); it
+; needs cc and tcc, as build.t does. strs_big.t runs the 4 GiB escape,
+; which needs 8 GiB, only with REN_BIG_TESTS=1.
+
+(cram
+ (applies_to strs)
+ (deps
+  %{bin:ren}
+  (env_var REN_TCC)
+  (glob_files strs/*.ren)
+  (glob_files strs/*.expected)))
+
+(cram
+ (applies_to strs_big)
+ (enabled_if
+  (= %{env:REN_BIG_TESTS=0} 1))
+ (deps
+  %{bin:ren}
+  (env_var REN_TCC)
+  (glob_files strs/*.ren)
+  (glob_files strs/*.expected)))

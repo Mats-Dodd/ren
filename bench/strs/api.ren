@@ -1,0 +1,103 @@
+// strings.md's API, the parts that are code (compiler.md, "Bytes stage,
+// part two"): sizes in bytes, `ascii_lower` on `Str` and `Bytes`, the
+// character boundaries at every offset of characters of each width,
+// `chars` and `code` over them, `Str.of_code` at the edges of each
+// width, `'a'` as an `Int`, `+` and `join`, and a cursor that counts its
+// offsets from `from`. Each panic is a program of its own (api_*_panic).
+
+fn u8(inout c: ByteCursor) -> Int ! FormatError = try &c.u8()
+fn u32le(inout c: ByteCursor) -> Int ! FormatError = try &c.u32_le()
+
+fn main() uses Console =
+  let s = "naïve 日本 😀!"
+  print(s.byte_len())
+  print(s.is_empty())
+  print("".is_empty())
+  print(s.bytes().len())
+
+  // ASCII only: `À` stays as it is
+  print("HeLLo, ÀB!".ascii_lower())
+  print("AbC".bytes().ascii_lower())
+
+  // a character of each width, and every offset in it
+  let w = "aé日😀"
+  var floors: Array<Int> = []
+  var ceils: Array<Int> = []
+  for i in 0..w.byte_len() + 1
+    &floors.push(w.char_floor(i))
+    &ceils.push(w.char_ceil(i))
+  print(floors)
+  print(ceils)
+  print(w[0..w.char_floor(5)])
+  print(w[w.char_ceil(4)..w.byte_len()])
+  // `char_floor(i) == i` asks whether `i` is a boundary
+  print(w.char_floor(3) == 3)
+  print(w.char_floor(4) == 4)
+
+  // characters: one-code-point slices, which compare with literals
+  var parts: Array<Str> = []
+  var codes: Array<Int> = []
+  var widths: Array<Int> = []
+  var n = 0
+  for c in w.chars()
+    &parts.push(c)
+    &codes.push(c.code())
+    &widths.push(c.byte_len())
+    n += 1
+  print(parts)
+  print(codes)
+  print(widths)
+  print(n)
+  var accents = 0
+  for c in "é, è and é".chars()
+    if c == "é" then accents += 1
+  print(accents)
+  var none = 0
+  for _ in "".chars()
+    none += 1
+  print(none)
+
+  // back from code points, at the edges of each width
+  var lens: Array<Int> = []
+  var round = true
+  for k in [0x41, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFFFF, 0x10000, 0x10FFFF]
+    let c = Str.of_code(k)
+    &lens.push(c.byte_len())
+    if c.code() != k then round = false
+  print(lens)
+  print(round)
+  print(Str.of_code(233) + Str.of_code(0x1F600))
+
+  // `'a'` is an `Int`, its code point
+  print('a')
+  print('é')
+  print('日')
+  print('😀')
+  print('\n')
+  print('\'')
+  let tag: UInt8 = 'Q'
+  print(tag)
+  print("Q".bytes().u8(0) == 'Q')
+  print('é' == "é".code())
+
+  // building: `+` and `join`
+  let a = "con"
+  print(a + "cat" + "")
+  print(["a", "b", "c"].join(", "))
+  print(["only"].join(", "))
+  let empty: Array<Str> = []
+  print(empty.join(", ").is_empty())
+  print(["x", "", "y"].join("--"))
+  print(("é" + "日").byte_len())
+  print("ab".bytes() + "cd".bytes())
+
+  // a cursor whose bytes start at 100 in their stream
+  var cur = Bytes.of([7, 8]).cursor(from: 100)
+  print(cur.at())
+  print(attempt u8(&cur))
+  print(cur.at())
+  print(attempt u32le(&cur))
+  print(cur.at())
+  print(cur.left())
+  var plain = Bytes.of([7]).cursor()
+  print(plain.at())

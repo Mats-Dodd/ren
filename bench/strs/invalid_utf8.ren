@@ -1,0 +1,129 @@
+// Every class of invalid UTF-8 (compiler.md, "Bytes stage, part two"):
+// each bad sequence at every offset from 0 to 79, so at every offset mod
+// 16 and mod 64, after ASCII and after characters of every width, with
+// nothing after it, 3 bytes of ASCII, or 67. `Str.from_utf8` fails with
+// `at` where the bad sequence starts and `incomplete` only for a
+// character the end cuts off; `Str.from_utf8_lossy` writes one U+FFFD for
+// each maximal invalid subpart (OCaml's decoder's count). Each class says
+// how many inputs it tried, and the first that came out wrong, if any.
+
+type Case = { bad: Array<Int>, cut: Bool, subparts: Int }
+
+// `n` bytes of valid UTF-8: all ASCII, or, if `wide`, characters of one,
+// two, three and four bytes in turn, with ASCII where the next one
+// doesn't fit
+fn filler(n: Int, wide: Bool) -> Array<Int> =
+  var out: Array<Int> = []
+  var w = 1
+  while out.len() < n
+    let room = n - out.len()
+    let k = if wide && w <= room then w else 1
+    if k == 1 then &out.push(0x61)
+    if k == 2 then
+      &out.push(0xC3)
+      &out.push(0xA9)
+    if k == 3 then
+      &out.push(0xE6)
+      &out.push(0x97)
+      &out.push(0xA5)
+    if k == 4 then
+      &out.push(0xF0)
+      &out.push(0x9F)
+      &out.push(0x98)
+      &out.push(0x80)
+    w = w % 4 + 1
+  out
+
+fn ascii(n: Int) -> Array<Int> =
+  var out: Array<Int> = []
+  for _ in 0..n
+    &out.push(0x7A)
+  out
+
+fn joined(a: Array<Int>, b: Array<Int>, c: Array<Int>) -> Array<Int> =
+  var out: Array<Int> = []
+  for x in a
+    &out.push(x)
+  for x in b
+    &out.push(x)
+  for x in c
+    &out.push(x)
+  out
+
+fn text(xs: Array<Int>) -> Str =
+  match attempt Str.from_utf8(Bytes.of(xs))
+    Ok(s) => s
+    Err(_) => "(not UTF-8)"
+
+fn fffd(n: Int) -> Str =
+  var out = ""
+  for _ in 0..n
+    out += Str.of_code(0xFFFD)
+  out
+
+fn bytes_of(xs: Array<Int>) -> Str =
+  var out = ""
+  for i, x in xs
+    if i > 0 then out += " "
+    out += show(x)
+  out
+
+// tries each of `cases` at each offset, and says how many it tried
+fn class(name: Str, cases: Array<Case>) uses Console =
+  var tried = 0
+  var wrong = ""
+  for c in cases
+    for k in 0..80
+      for wide in [false, true]
+        for t in [0, 3, 67]
+          let before = filler(k, wide)
+          let after = ascii(t)
+          let b = Bytes.of(joined(before, c.bad, after))
+          let incomplete = c.cut && t == 0
+          let said = match attempt Str.from_utf8(b)
+            Ok(_) => "valid"
+            Err(InvalidUtf8(at, inc)) => "at \{at}, incomplete \{inc}"
+          let want = "at \{k}, incomplete \{incomplete}"
+          let lossy = Str.from_utf8_lossy(b)
+          let fixed = text(before) + fffd(c.subparts) + text(after)
+          tried += 1
+          if wrong.is_empty() && (said != want || lossy != fixed) then
+            wrong = "[\{bytes_of(c.bad)}] at \{k}, wide \{wide}, \{t} after: \{said}, lossy \{lossy == fixed}"
+  if wrong.is_empty() then
+    print("\{name}: \{tried} inputs, each as specified")
+  else
+    print("\{name}: \{tried} inputs; the first wrong: \{wrong}")
+
+fn bad(xs: Array<Int>, subparts: Int) -> Case = Case { bad: xs, cut: false, subparts: subparts }
+fn cut(xs: Array<Int>) -> Case = Case { bad: xs, cut: true, subparts: 1 }
+
+fn main() uses Console =
+  // valid: the edges of each width, which no class may refuse
+  var valid = 0
+  var refused = 0
+  for k in 0..80
+    for wide in [false, true]
+      for edge in [[0x7F], [0xC2, 0x80], [0xDF, 0xBF], [0xE0, 0xA0, 0x80], [0xED, 0x9F, 0xBF], [0xEE, 0x80, 0x80], [0xEF, 0xBF, 0xBF], [0xF0, 0x90, 0x80, 0x80], [0xF4, 0x8F, 0xBF, 0xBF]]
+        let b = Bytes.of(joined(filler(k, wide), edge, ascii(3)))
+        valid += 1
+        match attempt Str.from_utf8(b)
+          Ok(s) => if s != Str.from_utf8_lossy(b) || s.byte_len() != b.len() then refused += 1
+          Err(_) => refused += 1
+  print("valid: \{valid} inputs, \{refused} refused")
+  class("overlong, 2 bytes", [bad([0xC0, 0x80], 2), bad([0xC1, 0xBF], 2)])
+  class("overlong, 3 bytes", [bad([0xE0, 0x80, 0xAF], 3), bad([0xE0, 0x9F, 0xBF], 3)])
+  class("overlong, 4 bytes", [bad([0xF0, 0x80, 0x80, 0xAF], 4), bad([0xF0, 0x8F, 0xBF, 0xBF], 4)])
+  class("surrogates", [bad([0xED, 0xA0, 0x80], 3), bad([0xED, 0xBF, 0xBF], 3)])
+  class("above U+10FFFF", [bad([0xF4, 0x90, 0x80, 0x80], 4), bad([0xF5, 0x80, 0x80, 0x80], 4)])
+  class("stray continuation", [bad([0x80], 1), bad([0xBF], 1), bad([0x80, 0x80], 2)])
+  class("bad lead byte", [bad([0xF5], 1), bad([0xF8], 1), bad([0xFC], 1), bad([0xFE], 1), bad([0xFF], 1), bad([0xC0], 1), bad([0xC1], 1)])
+  class("truncated", [cut([0xC3]), cut([0xE2]), cut([0xE2, 0x82]), cut([0xF0]), cut([0xF0, 0x9F]), cut([0xF0, 0x9F, 0x98]), cut([0xF4, 0x8F])])
+
+  // a few, whole, to see: the payload, and lossy's output
+  print(attempt Str.from_utf8(Bytes.of([0x68, 0x69, 0xE2, 0x82])))
+  print(attempt Str.from_utf8(Bytes.of([0x68, 0x69, 0xE2, 0x82, 0x21])))
+  print(attempt Str.from_utf8(Bytes.of([0xFF])))
+  print(attempt Str.from_utf8(Bytes.of([0x61, 0xED, 0xA0, 0x80])))
+  print(Str.from_utf8_lossy(Bytes.of([0x61, 0xF0, 0x80, 0x80, 0x62, 0xE2, 0x82, 0x63, 0xF0, 0x9F, 0x98])))
+  print(Str.from_utf8_lossy(Bytes.of([0xEF, 0xBB, 0xBF, 0x6F, 0x6B])).byte_len())
+  print(attempt Str.from_utf8(Bytes.of([])))

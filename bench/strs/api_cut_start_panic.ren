@@ -1,0 +1,7 @@
+// A `Str` slice that starts inside a character panics, as one that ends
+// inside one does (compiler.md, "Bytes stage, part two").
+
+fn main() uses Console =
+  let line = "aé日"
+  print(line[line.char_ceil(2)..line.byte_len()])
+  print(line[2..6])

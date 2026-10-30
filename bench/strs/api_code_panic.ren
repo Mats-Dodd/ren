@@ -1,0 +1,6 @@
+// `c.code()` is a one-code-point string's code point, and panics on any
+// other string (compiler.md, "Bytes stage, part two").
+
+fn main() uses Console =
+  print("é".code())
+  print("ab".code())

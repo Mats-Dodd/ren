@@ -1,0 +1,6 @@
+// `char_floor` and `char_ceil` of an offset outside the string panic, as
+// `split_at` does (compiler.md, "Bytes stage, part two").
+
+fn main() uses Console =
+  print("aé".char_floor(3))
+  print("aé".char_floor(4))

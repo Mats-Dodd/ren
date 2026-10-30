@@ -1,0 +1,8 @@
+// A `Str` slice that ends inside a character panics, in every build at
+// the same point (compiler.md, "Bytes stage, part two"); test_strs.ml has
+// the whole message, whose help names `char_floor`.
+
+fn main() uses Console =
+  let line = "aé日"
+  print(line[0..line.char_floor(2)])
+  print(line[0..2])

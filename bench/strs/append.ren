@@ -1,0 +1,115 @@
+// Appending (compiler.md, "Bytes stage, part two"; strings.md, "Building
+// strings"): `s += t` in a loop, in place when `s` is unique; on a string
+// something else holds, which keeps what it had; on a slice, whose root
+// keeps its bytes; on a slice of a root nothing else holds; on a literal;
+// on itself and on a slice of itself; through `inout`; `a + b`; and the
+// same for `Bytes`. What a program sees is the same however each is
+// done.
+
+fn add(inout s: Str, t: Str) =
+  s += t
+
+fn add_bytes(inout b: Bytes, t: Bytes) =
+  b += t
+
+fn fresh(s: Str) -> Str = s + ""
+
+fn main() uses Console =
+  // in a loop, nothing else holding it
+  var out = "["
+  for i in 0..5
+    if i > 0 then out += ","
+    out += show(i)
+  out += "]"
+  print(out)
+
+  // something else holds it
+  var a = "ab"
+  let kept = a
+  a += "cd"
+  print(a)
+  print(kept)
+  var log = "x"
+  var olds: Array<Str> = []
+  for i in 0..3
+    &olds.push(log)
+    log += show(i)
+  print(log)
+  print(olds)
+
+  // on slices: the root keeps its bytes
+  let base = fresh("hello world")
+  var h = base[0..5]
+  h += "!"
+  var w = base[6..11]
+  w += "s"
+  print(h)
+  print(w)
+  print(base)
+  // a slice of a root nothing else holds, and a slice of a slice
+  var mid = fresh("abcdef")[1..4]
+  mid += "Z"
+  print(mid)
+  var inner = mid[1..3]
+  inner += "Y"
+  print(inner)
+  print(mid)
+
+  // on a literal, which stays as it was
+  var lit = "lit"
+  lit += "eral"
+  print(lit)
+  print("lit")
+
+  // on itself, and on a slice of itself
+  var twice = fresh("ab")
+  twice += twice
+  print(twice)
+  twice += twice[1..3]
+  print(twice)
+
+  // `a + b`, and `a = a + b` in a loop
+  let x = "p"
+  let y = x + "q"
+  print(x + y)
+  var acc = ""
+  for i in 0..4
+    acc = acc + show(i)
+  print(acc)
+
+  // through `inout`
+  var io = "in"
+  add(&io, "out")
+  add(&io, "!")
+  print(io)
+
+  // 10,000 appends, and 1 MB
+  var big = ""
+  for i in 0..10_000
+    big += show(i % 10)
+  print(big.byte_len())
+  print(big[9_990..10_000])
+  var mb = ""
+  for _ in 0..16_384
+    mb += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  print(mb.byte_len())
+  var e = ""
+  e += ""
+  print(e.is_empty())
+
+  // `Bytes`
+  var b = Bytes.of([1, 2])
+  let bk = b
+  b += Bytes.of([3])
+  add_bytes(&b, "AB".bytes())
+  print(b)
+  print(bk)
+  var grown = Bytes.zeros(0)
+  for i in 0..300
+    grown += Bytes.of([i % 256])
+  print(grown.len())
+  print(grown.u8(299))
+  var bs = grown[296..300]
+  bs += Bytes.of([9])
+  print(bs)
+  print(grown.len())

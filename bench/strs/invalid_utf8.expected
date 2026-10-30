@@ -1,0 +1,17 @@
+valid: 1440 inputs, 0 refused
+overlong, 2 bytes: 960 inputs, each as specified
+overlong, 3 bytes: 960 inputs, each as specified
+overlong, 4 bytes: 960 inputs, each as specified
+surrogates: 960 inputs, each as specified
+above U+10FFFF: 960 inputs, each as specified
+stray continuation: 1440 inputs, each as specified
+bad lead byte: 3360 inputs, each as specified
+truncated: 3360 inputs, each as specified
+Err(InvalidUtf8(2, true))
+Err(InvalidUtf8(2, false))
+Err(InvalidUtf8(0, false))
+Err(InvalidUtf8(1, false))
+a���b�c�
+5
+Ok("")
+exit 0

@@ -1,0 +1,6 @@
+// `code()` of the empty string panics too (compiler.md, "Bytes stage,
+// part two").
+
+fn main() uses Console =
+  print("😀".code())
+  print("".code())

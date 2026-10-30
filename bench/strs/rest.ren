@@ -1,0 +1,55 @@
+// The rest of strings.md's API table (compiler.md, "Bytes stage, part
+// two", step 5): search, split and trim by the same names on `Str` and
+// `Bytes`, whitespace ASCII on both, `replace`, `ascii_upper`,
+// `line_col` with columns in code points, and `count()` with no
+// predicate on every receiver.
+
+fn main() uses Console =
+  // a carriage return, which has no escape
+  let cr = Str.of_code(13)
+  let crlf = cr + "\n"
+  let s = "key: välue: more"
+  print(s.includes("välue"))
+  print(s.includes("value"))
+  print(s.ends_with("more"))
+  print(s.ends_with(""))
+  print(s.strip_prefix("key: "))
+  print(s.strip_prefix("nope"))
+  print(s.strip_suffix(": more"))
+  print(s.split_once(": "))
+  print("no colon".split_once(": "))
+  print("a\nb\{cr}\n\nc\n".lines())
+  print("last".lines())
+  print("".lines())
+  print("  one\ttwo \n three\{cr}\n".fields())
+  print("   ".fields())
+  print("a-b-c".replace("-", "+"))
+  print("aaa".replace("aa", "b"))
+  print("élan".replace("é", "e"))
+  print("mIxEd é".ascii_upper())
+  let text = "first\nsé😀cond\nthird"
+  print(text.line_col(0))
+  print(text.line_col(5))
+  print(text.line_col(6))
+  print(text.line_col(13))
+  print(text.line_col(text.byte_len()))
+
+  // `Bytes`, the same names
+  let b = "GET /a HTTP/1.1\{crlf}Host: x\{crlf}\{crlf}".bytes()
+  print(b.includes((crlf + crlf).bytes()))
+  print(b.ends_with(crlf.bytes()))
+  print(b.strip_prefix("GET ".bytes()))
+  print(b.split_once(" ".bytes()))
+  print(b.lines().len())
+  print("  x  y ".bytes().fields())
+  print("aBc".bytes().ascii_upper())
+  print("a b".bytes().replace(" ".bytes(), "_".bytes()))
+  print(" pad ".bytes().trim())
+
+  // `count()` on every receiver
+  print("héllo".chars().count())
+  print([1, 2, 3].count())
+  print([1, 2, 3].count(fn(x) => x > 1))
+  print(Map.of([(1, "a"), (2, "b")]).count())
+  print(Set.of([1, 2, 2]).count())
+  print("".chars().count())

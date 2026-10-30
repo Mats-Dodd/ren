@@ -1,0 +1,39 @@
+true
+false
+true
+true
+Some("välue: more")
+None
+Some("key: välue")
+Some(("key", "välue: more"))
+None
+["a", "b", "", "c"]
+["last"]
+[]
+["one", "two", "three"]
+[]
+a+b+c
+ba
+elan
+MIXED é
+(1, 1)
+(1, 6)
+(2, 1)
+(2, 4)
+(3, 6)
+true
+true
+Some(<bytes 2f 61 20 48 54 54 50 2f 31 2e 31 0d 0a 48 6f 73 74 3a 20 78 0d 0a 0d 0a>)
+Some((<bytes 47 45 54>, <bytes 2f 61 20 48 54 54 50 2f 31 2e 31 0d 0a 48 6f 73 74 3a 20 78 0d 0a 0d 0a>))
+3
+[<bytes 78>, <bytes 79>]
+<bytes 41 42 43>
+<bytes 61 5f 62>
+<bytes 70 61 64>
+5
+3
+2
+2
+2
+0
+exit 0

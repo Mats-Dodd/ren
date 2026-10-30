@@ -1,0 +1,38 @@
+// The 4 GiB escape (compiler.md, "Bytes stage, part two"): `Bytes` of
+// 4 GiB and one byte, whose length doesn't fit in 32 bits; slices of it
+// that fit (`low`, `edge`), one whose offset doesn't (`high`), and the
+// whole of it, read, compared, hashed and appended to. It needs about
+// 4 GiB natively and 8 GiB in `ren run`, whose write copies the bytes, so
+// bench/strs_big.t runs it only with REN_BIG_TESTS=1.
+
+fn main() uses Console =
+  let n = 4_294_967_297
+  var b = Bytes.zeros(n)
+  &b.set_u8(4_294_967_296, 7)
+  print(b.len())
+  print(b.u8(4_294_967_296))
+  print(b[n - 3..n])
+  let low = b[0..4]
+  let edge = b[4_294_967_290..n]
+  let high = b[4_294_967_296..n]
+  print(low)
+  print(edge)
+  print(edge.len())
+  print(high)
+  print(high.u8(0))
+  print(high == Bytes.of([7]))
+  print(high.hash() == Bytes.of([7]).hash())
+  print(edge[5..7] == Bytes.of([0, 7]))
+  var t = high
+  t += Bytes.of([1, 2])
+  print(t)
+  var u = edge
+  u += Bytes.of([3])
+  print(u.len())
+  print(u.u8(7))
+  var v = low
+  v += high
+  print(v)
+  let whole = b
+  print(whole.len() - b.len())
+  print(whole[4_294_967_295..n])

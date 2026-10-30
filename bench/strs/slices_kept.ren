@@ -1,0 +1,80 @@
+// Slices kept past the string they were cut from (compiler.md, "Bytes
+// stage, part two"): in a small record, an array, a map's keys and values,
+// a generic record, a type variable's value, a record too wide to be
+// small, a block's capture, `Bytes`, and returned by a function that was
+// lent the string. `collect`'s string dies when it returns, and what it
+// kept is read after; no object is alive at the end.
+
+type Tok = { text: Str, at: Int }
+type Wide = { a: Str, b: Str, c: Int, d: Int }
+type Pair<T> = { left: T, right: T }
+
+type Kept = {
+  toks: Array<Tok>,
+  index: Map<Str, Str>,
+  pair: Pair<Str>,
+  twice: Array<Str>,
+  wide: Wide,
+  tail: Str,
+  raw: Bytes,
+  said: Str,
+  words: Set<Str>,
+}
+
+// a slice of a string this function was lent
+fn tail(s: Str) -> Str = s[s.byte_len() - 5..s.byte_len()]
+
+fn twice<T>(x: T) -> Array<T> = [x, x]
+
+fn collect(n: Int) -> Kept =
+  var text = "alpha beta"
+  for i in 0..n
+    text += " w\{i}"
+  text += " gamma delta"
+  let words = text.split(" ")
+  var toks: Array<Tok> = []
+  for i, w in words
+    if i % 2 == 0 then &toks.push(Tok { text: w, at: i })
+  var index: Map<Str, Str> = Map.empty
+  for w in words
+    &index.set(w[0..2], w)
+  var set: Set<Str> = Set.empty
+  for w in words
+    &set.add(w[1..w.byte_len()])
+  let second = words[1]
+  let say = fn() => second
+  Kept {
+    toks: toks,
+    index: index,
+    pair: Pair { left: words[0], right: words[1] },
+    twice: twice(words[2]),
+    wide: Wide { a: words[0], b: words[words.len() - 1], c: 1, d: 2 },
+    tail: tail(text),
+    raw: text.bytes()[0..5],
+    said: say(),
+    words: set,
+  }
+
+fn main() uses Console =
+  let k = collect(3)
+  print(k.toks)
+  print(k.index)
+  print(k.index.get("ga"))
+  print(k.pair)
+  print(k.twice)
+  print(k.wide.a)
+  print(k.wide.b)
+  print(k.wide.c + k.wide.d)
+  print(k.tail)
+  print(k.raw)
+  print(k.said)
+  print(k.words.len())
+  print(k.words.includes("elta"))
+  // slices of what was kept, compared and hashed after the root is gone
+  print(k.wide.a[1..3])
+  print(k.pair.left == "alpha")
+  print(k.toks[1].text.hash() == "w0".hash())
+  var many: Array<Str> = []
+  for t in k.toks
+    &many.push(t.text[0..1])
+  print(many)

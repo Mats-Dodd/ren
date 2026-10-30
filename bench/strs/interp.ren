@@ -1,0 +1,39 @@
+// Interpolation (compiler.md, "Bytes stage, part two"; strings.md,
+// "Building strings"): a hole `\{e}` holds any expression, which goes
+// through its type's `show`, a hole may hold a string with holes of its
+// own and braces of its own, and `\\{` is a backslash and a brace, not a
+// hole. Braces without a backslash are text.
+
+type User = { name: Str, age: Int }
+type Shape = | Circle(r: Int) | Rect { w: Int, h: Int }
+
+fn twice(n: Int) -> Int = n * 2
+
+fn main() uses Console =
+  let job = "build"
+  let n = 21
+  let u = User { name: "Ada", age: 36 }
+  let none: Option<Int> = None
+  print("jobs/\{job}")
+  print("\{n * 2} is \{n} doubled")
+  print("\{u.name}: \{u.age}")
+  print("\{u}")
+  print("\{[1, 2, 3]} and \{(1, "one")}")
+  print("\{1.5} \{-0.25} \{true} \{()}")
+  print("\{Some(4)} \{none}")
+  print("\{Circle(2)}, \{Rect { w: 2, h: 3 }}")
+  print("\{twice(n)} \{u.name.ascii_lower()} \{"é".byte_len()}")
+  print("\{if n > 20 then "big" else "small"}")
+  print("a \{"b \{"c"} d"} e")
+  print("\{User { name: "Bo", age: 1 }.name}")
+  print("\{Map.of([("k", 1)])}")
+  print("\{'a'}")
+  print("\{job}\{job}")
+  let empty = ""
+  print("[\{empty}]")
+  print("\{"quoted \"inside\" a hole"}")
+  print("\\{job} is not a hole")
+  print("{job} is text, and so is \\d{3}")
+  let msg = "line \{n}\n\tnext"
+  print(msg)
+  print("\{msg.byte_len()}")

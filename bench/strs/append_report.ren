@@ -1,0 +1,19 @@
+// A `+=` in a loop on a string something else holds copies it on every
+// pass, the one way appending goes quadratic again (strings.md,
+// "Building strings"). A debug build says so once, at exit, on stderr
+// (compiler.md, "Bytes stage, part two"); a loop that copies only a
+// literal, on its first pass, isn't reported, and `ren run` reports
+// nothing.
+
+fn main() uses Console =
+  var out = "["
+  var seen: Array<Str> = []
+  for _ in 0..100
+    &seen.push(out)
+    out += "x"
+  print(out.byte_len())
+  print(seen.len())
+  var once = "["
+  for _ in 0..100
+    once += "y"
+  print(once.byte_len())

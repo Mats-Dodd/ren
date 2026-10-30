@@ -1,0 +1,18 @@
+[Tok { text: "alpha", at: 0 }, Tok { text: "w0", at: 2 }, Tok { text: "w2", at: 4 }, Tok { text: "delta", at: 6 }]
+Map.of([("al", "alpha"), ("be", "beta"), ("w0", "w0"), ("w1", "w1"), ("w2", "w2"), ("ga", "gamma"), ("de", "delta")])
+Some("gamma")
+Pair { left: "alpha", right: "beta" }
+["w0", "w0"]
+alpha
+delta
+3
+delta
+<bytes 61 6c 70 68 61>
+beta
+7
+true
+lp
+true
+true
+["a", "w", "w", "d"]
+exit 0

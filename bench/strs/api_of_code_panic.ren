@@ -1,0 +1,6 @@
+// `Str.of_code(n)` panics where `n` isn't a Unicode scalar value: a
+// surrogate here (compiler.md, "Bytes stage, part two").
+
+fn main() uses Console =
+  print(Str.of_code(0xD7FF).byte_len())
+  print(Str.of_code(0xD800))
