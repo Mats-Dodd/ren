@@ -1,20 +1,30 @@
-# Formats: types as bytes
+# Formats: how a type looks outside
 
-How a Ren program reads and writes bytes whose layout is fixed by
-something outside it: a page on disk, a log record, a network frame, a
-file header. It closes the open question in
+How a Ren program reads and writes data whose form something outside
+it fixes. A format is how a type looks somewhere, and there are two
+kinds. A **layout** is bytes: a page on disk, a log record, a network
+frame, a file header. A **look** is names, tags and conversions: a json
+body, a flag, a route, a version of a message, read by any library
+through the type's shape. It closes the open question in
 [foundations.md](foundations.md#open-questions), "explicit layout, for
 formats on disk and on the wire", and is the third piece of
 [language.md](language.md)'s data-oriented side after `Table` and
-`Pool`. The short version is [language.md §12](language.md#12-bytes-types-and-their-formats);
-how it runs is [foundations.md decision 19](foundations.md#19-formats-are-views).
+`Pool`. The short version of layouts is [language.md §12](language.md#12-bytes-types-and-their-formats);
+how they run is [foundations.md decision 19](foundations.md#19-formats-are-views).
+How a library walks a type through its looks is
+[shapes.md, "The walk"](shapes.md#the-walk).
 
-**Status.** Decided on 2026-10-29, from two research passes into prior
-art (views over buffers, declared layouts and versioning; binary
-parsing ergonomics). Staged with strings, bytes, slices and sized
-integers, in "the `just`, natively" ([foundations.md](foundations.md#staging)).
-Items marked **later** are noted so they aren't lost. Nothing here is
-implemented.
+**Status.** Layouts decided on 2026-10-29, from two research passes
+into prior art (views over buffers, declared layouts and versioning;
+binary parsing ergonomics). Looks decided on 2026-10-29, from the looks
+research (research/looks/: Effect v4 studied, flottning's API written
+both ways, a review and a check against the compiler), signed off with
+the owner's rulings and placed by
+[decision 20](foundations.md#20-what-the-language-owns-and-what-std-owns).
+Layouts are staged with strings, bytes, slices and sized integers, in
+"the `just`, natively" ([foundations.md](foundations.md#staging)); looks
+in stage 12 (research/looks/feasibility.md). Items marked **later** are
+noted so they aren't lost. Nothing here is implemented.
 
 ## Contents
 
@@ -22,22 +32,39 @@ implemented.
 - [The problems](#the-problems)
 - [Three layers: a default, then sharper tools](#three-layers-a-default-then-sharper-tools)
 - [A type, and its formats](#a-type-and-its-formats)
-- [Placing fields](#placing-fields)
-- [Byte order](#byte-order)
-- [What a field can be](#what-a-field-can-be)
-- [Variable-length and tagged formats](#variable-length-and-tagged-formats)
-- [Reading: `view`](#reading-view)
-- [Writing](#writing)
-- [Errors carry offsets](#errors-carry-offsets)
-- [Versions](#versions)
-- [Arrays of records in a page](#arrays-of-records-in-a-page)
-- [Checked when building](#checked-when-building)
-- [Layer 1: the derived encoding](#layer-1-the-derived-encoding)
-- [Layer 3: raw bytes](#layer-3-raw-bytes)
-- [Where formats stop](#where-formats-stop)
-- [Compiler errors](#compiler-errors)
+- Looks
+  - [Looks of a scalar: `via`](#looks-of-a-scalar-via)
+  - [Looks of a record: lines](#looks-of-a-record-lines)
+  - [Looks of a sum: tags](#looks-of-a-sum-tags)
+  - [Looks of an opaque type: always a function](#looks-of-an-opaque-type-always-a-function)
+  - [What a look can expose](#what-a-look-can-expose)
+  - [Errors carry paths](#errors-carry-paths)
+  - [Versions are looks](#versions-are-looks)
+  - [Dependencies as data](#dependencies-as-data)
+  - [Looks checked when building](#looks-checked-when-building)
+  - [Look errors](#look-errors)
+- Layouts
+  - [Layouts: a type as bytes](#layouts-a-type-as-bytes)
+  - [Placing fields](#placing-fields)
+  - [Byte order](#byte-order)
+  - [What a field can be](#what-a-field-can-be)
+  - [Variable-length and tagged formats](#variable-length-and-tagged-formats)
+  - [Reading: `view`](#reading-view)
+  - [Writing](#writing)
+  - [Errors carry offsets](#errors-carry-offsets)
+  - [Versions](#versions)
+  - [Arrays of records in a page](#arrays-of-records-in-a-page)
+  - [Checked when building](#checked-when-building)
+  - [Layer 1: the derived encoding](#layer-1-the-derived-encoding)
+  - [Layer 3: raw bytes](#layer-3-raw-bytes)
+  - [Where formats stop](#where-formats-stop)
+  - [Compiler errors](#compiler-errors)
+- [How looks compile](#how-looks-compile)
+- [Tools over looks](#tools-over-looks)
+- [std's policy for looks](#stds-policy-for-looks)
 - [Left out](#left-out)
 - [Later](#later)
+- [Open](#open)
 - [Evidence](#evidence)
 
 ## What it has to do
@@ -71,19 +98,19 @@ Grounded in the programs Ren is for ([vision.md](vision.md#what-ren-is-for)):
 | Program | The bytes |
 |---|---|
 | A storage engine | page headers; slotted pages, a table of offsets and variable-length records; log records, length-prefixed and checksummed; SSTable blocks; B-tree nodes in pages; a superblock. Read without copying, one field written in place. |
-| A server | protocol framing: Postgres's wire protocol, HTTP/2 frames, DNS. Length prefixes, flags in bits, big-endian. |
-| A command-line tool | file headers: zip, PNG, ELF. |
+| A server | protocol framing: Postgres's wire protocol, HTTP/2 frames, DNS. Length prefixes, flags in bits, big-endian. A json API whose names, tags and versions aren't the type's. |
+| A command-line tool | file headers: zip, PNG, ELF. Flags and environment variables named for users, not for the code. |
 | Interop | a C struct across a foreign call, in `trust` only. |
 
 ## Three layers: a default, then sharper tools
 
 | Layer | What you write | For | Promises |
 |---|---|---|---|
-| **1. Derived** | `bin.encode(order)`, `try bin.decode(bytes)` | messages between your own processes, caches | nothing about layout, and nothing across versions of a type |
-| **2. Declared formats** | `format disk for PageHeader = ...` | disk and wire formats you own or must match | layout, byte order, validation, versions |
+| **1. Derived** | `bin.encode(order)`, `try json.decode<Order>(text)` | the type's default look, walked by a library: messages between your own processes, caches, an API that follows the type | nothing about layout, and nothing across versions of a type |
+| **2. Declared formats** | `format disk for PageHeader = ...`, `format v1 for Order = ...` | layouts for bytes you own or must match; looks for values a library writes another way | a layout: byte order, validation, versions. A look: names, tags, conversions, versions |
 | **3. Raw bytes** | `b.u32_le(at)`, bit operations, slices | what layer 2 deliberately doesn't do | what you write |
 
-Layer 2 compiles to layer 3's calls, and `ren explain` shows them, so
+A layout compiles to layer 3's calls, and `ren explain` shows them, so
 it's one mechanism with a declaration over it, not two.
 
 **The two families in prior art,** and why Ren takes one:
@@ -101,8 +128,486 @@ it's one mechanism with a declaration over it, not two.
 
 ## A type, and its formats
 
-**A type says what a thing is. A format says how it looks as bytes.**
-Every format is *for* a type, and a type can have several:
+**A type says what a thing is. A format says how it looks somewhere.**
+A format is declared apart from its type and named through it:
+`PageHeader.disk`, `Time.unix`, `Order.v1`. A type can have several.
+
+There are two kinds, written with one declaration:
+
+| Kind | What it has | Who reads it | Example |
+|---|---|---|---|
+| **Layout** | byte order, widths, offsets | the format itself: `view`, `edit`, `write`, `encode` | `format disk for PageHeader, le, size 32 =` |
+| **Look** | names, tags, conversions; no byte order, no widths | any library, through a shape | `format v1 for Order =` |
+
+- **The kind is read off the lines.** A line with a field kind from
+  "What a field can be" (`UInt16`, `Bytes[16]`, `CStr`, `le`) makes a
+  layout. A line with only names, looks and constants makes a look. A
+  format that mixes them is a build error that names one line of each.
+- **Looks and layouts are values.** `Time.unix` is a value of type
+  `Look`; `PageHeader.disk` is a value of type `Layout`. They can be
+  stored in a settings record, put in an array, compared with `==`,
+  and passed between functions. A library's settings take
+  `Array<Look>`, so passing a layout there is an ordinary type error.
+  How a `Look` is represented is the compiler's
+  ([How looks compile](#how-looks-compile)); no program sees it, and no
+  closure is stored (README, "No stored closures").
+- **A look can be declared in any module, for any type it can name.**
+  It's an item of the module that declares it, private unless marked
+  `pub format`, and it's reached through the type wherever it was
+  declared: `Time.unix`. A `pub` look may name only `pub` functions.
+  Naming a private look from outside is "`Money.raw` is private to
+  `money`". Otherwise a look declared next to a type could hand any
+  program a private constructor.
+- **Two looks of one name for one type in scope is an error at the
+  import,** whose help says to rename one
+  ([Look errors](#look-errors)).
+- **A format's name shares its type's namespace.** `Time.unix` can't be
+  both a look and a method. Same rule as `Users.x` in the README: one
+  name, one meaning.
+- **There are no standalone formats.** A format with no type would be
+  an ad hoc struct or an ad hoc record, a second kind of record.
+- **A type with no look still has one: its default.** That's its
+  `parse` and `repr` if it has them, else its structure
+  ([shapes.md, "The walk"](shapes.md#the-walk)). So most types never
+  declare a look. A look is for "this type looks different here".
+
+Effect v4 found the same split by accident: `Schema.toCodecJson` walks
+a schema, and its binary codec (`SchemaBinary`) walks the same schema's
+encoded side. Ren separates them on purpose: a layout promises bytes,
+a look promises names.
+
+**Who owns what.** Every rule here sits under one owner, by decision
+20's five rules:
+
+| Owner | What it holds | Where |
+|---|---|---|
+| **Language** | the `format` declaration: layouts, and a look's names, subsets, constants, `via` conversions, tags as typed distinct constants, `reads` and `writes`; `Look` and `Layout` as values; `T.shape`, the walk and its doors; build-time checks; `D.Call`, `D.Reply`, `D.Error` and errors on a dep's header | from here through [Compiler errors](#compiler-errors); [shapes.md](shapes.md#the-walk) |
+| **Compiler** | how a look is represented, perfect hashes for constant matches, specialization. None of it changes meaning | [How looks compile](#how-looks-compile) |
+| **Toolchain** | `ren explain`, freezing, generated round-trip tests. They read the language, never a library | [Tools over looks](#tools-over-looks) |
+| **std** | json's sums, casing, `null` and numbers; strictness; first error or all; text media's names; http's routes, statuses, headers and bodies; `Secret`; `Unavailable` and `Why`; the envelope and transports | [std's policy for looks](#stds-policy-for-looks) |
+
+The language owns reshaping; libraries own spelling. No language rule
+below names a medium. Where an example uses json or http, it's the
+library reading a look, and the rule it shows is std's.
+
+## Looks of a scalar: `via`
+
+```ren
+format unix for Time = Int via (Time.from_unix, fn(t) => t.unix_seconds())
+format cents for Money = Int via (Money.from_cents, fn(m) => m.cents())
+format base64 for Bytes = Str via (base64.decode, base64.encode)
+```
+
+- **`X via (read, write)`** says "seen as an `X`". `read` is
+  `X -> T ! E`. `write` is `T -> X`, or `T -> X ! E` when some values
+  have no `X` (a v1 that can't carry v2's `ttl` fails `NotInVersion`).
+  Either error reaches the caller as `Invalid(at, why)`, with the
+  error's tag as `why`.
+- **A look can go one way.** `reads` takes `via (read)` and can't
+  encode; `writes` takes `via (write)` and can't decode. Using one in
+  the wrong direction is a build error at the use. This is a layout's
+  `reads`, plus its mirror. `format text for Bytes = Str via
+  (Str.bytes), reads` is a complete look; it needs no write function.
+- **`X` is what gets read,** the encoded side, written once. It's
+  walked by the same rules as any type, so it can be a record, a sum,
+  or a type with its own look. There's no second type parameter, and
+  no `Type` and `Encoded` spelled out as Effect has them. A record or
+  sum look's encoded side is its lines.
+- **Both functions are pure.** A `via` with a `uses` row is a build
+  error. A look runs inside decoders, at build time in checks, and in
+  generated tests; reaching the world there would be invisible.
+- **Looks chain.** If the call also chooses a look for `Int`, the `Int`
+  side of `Time.unix` goes through it. A chain that comes back to its
+  start is a build error.
+- **A look may keep less than its type.** `Time` holds nanoseconds and
+  `unix` keeps seconds. Nothing marks it: the generated test checks
+  that the wire form is stable, which such a look passes
+  ([Tools over looks](#a-round-trip-test-per-look)).
+
+## Looks of a record: lines
+
+A record look uses a layout's line form. Each line says where one name
+in the look comes from:
+
+```ren
+type Order = {
+  id: OrderId,
+  customer: CustomerId,
+  lines: Array<Line>,
+  total: Money,
+  placed: Time,
+  note: Option<Str>,
+  source: Source = Web,
+  audit: Audit = Audit.none,
+}
+
+format v1 for Order =
+  kind = "order"                  // a constant: written, and checked on read
+  id                              // the field as itself
+  customerId = customer           // renamed
+  total: Money.cents              // through a look
+  placedAt = placed: Time.unix    // renamed, through a look
+  ..                              // the rest as themselves: lines, note, source, audit
+```
+
+| Line | Means |
+|---|---|
+| `id` | the field `id`, by its own name, walked by the call's choices |
+| `customerId = customer` | the field `customer`, under the name `customerId` |
+| `total: Money.cents` | the field `total`, through the look `Money.cents` |
+| `placedAt = placed: Time.unix` | both |
+| `kind = "order"` | a constant: written going out; coming in, missing is `Missing`, different is `Invalid` |
+| `"@type" = "Order"` | a name that isn't an identifier is a string |
+| `..` | every field not named above, as itself |
+
+- **`=` has one meaning: the look's name is on the left.** The token on
+  the right says what it is, with no lookup: a lowercase identifier is
+  a field of the type; a literal or an uppercase constructor is a
+  constant. A lowercase identifier that names no field is a build
+  error. There's no `field = value` form in looks; a `reads` layout
+  keeps it ([Versions](#versions)).
+- **Without `..`, the look lists exactly what it carries.** A field it
+  leaves out must have a default or be an `Option`, else it's a build
+  error. Coming in, a left-out field gets its default or `None`. Going
+  out, it isn't there. A value an old version lacks that has no
+  default is a `via` to a wire type.
+- **There are no defaults in a look.** Coming in, a field gets the
+  default its constructor uses, filled at the door, and nothing else.
+- **A `writes` look is a subset.** It can leave out any field, because
+  nothing is read back: `format public for User, writes = id, name`
+  hides `email` and `password_hash` wherever it's used. Using it to
+  read is a build error.
+- **A name written in a look is marked exact** in the shape. What a
+  library does with that mark (json's casing leaves exact names alone)
+  is the library's.
+- **Every name is written once.** Two lines giving one name, or a
+  rename that lands on a name `..` also produces, is a build error.
+- **No flattening, no nesting by path, no computed fields.** A field is
+  carried, renamed, looked, or left out; a constant is a literal. A
+  look that needs more is a `via` to a record written for the wire.
+  That's a layout's rule too: a format is what a spec's tables say.
+
+## Looks of a sum: tags
+
+```ren
+type Event =
+  | Placed { order: Order, by: UserId }
+  | Cancelled { id: OrderId, reason: Str }
+  | Refunded { id: OrderId, amount: Money }
+
+format v1 for Event.Placed =
+  orderId = order: Order.v1
+  ..
+
+format v1 for Event =
+  | Placed as "order.placed": Event.Placed.v1
+  | Cancelled as "order.cancelled"
+      orderId = id                // lines under a case reshape it in place
+      reason
+  | ..
+```
+
+- **`| Case as tag`** gives a case its tag. Without `as`, the tag is
+  the case name as written, a `Str`.
+- **A case is reshaped in one of two ways.** `: Look` names a look of
+  the variant type, `Event.Placed` (language.md §2, "Variant types").
+  Lines indented under the case reshape it in place, in a record look's
+  line form with all its rules: renames, constants, looks on fields,
+  `..`, and listing exactly what it carries without `..`. A case has
+  one or the other, or neither, and then carries its fields as
+  themselves. Lines suit a one-off; a named look suits a case reshaped
+  the same way in several looks.
+- **`| ..`** is the rest of the cases, as themselves. Without it, every
+  case must be listed: a value of an unlisted case would have nowhere
+  to go.
+- **A tag is a typed constant.** All tags in one look have one type,
+  which the look's tags decide: `"order.placed"` is a `Str`, `404` an
+  `Int`, `GET"/v1/keys/\{key}"` an `http.Route`. The language checks
+  the type. Which tag types a library reads is that library's check
+  ([Looks checked when building](#looks-checked-when-building)).
+- **Tags are distinct in a look that reads.** A reader picks a case by
+  its tag, so two cases with one tag are a build error. A `writes` look
+  may repeat a tag, because nothing reads a case back by it. That's
+  the whole rule; a library that wants repeats (http's statuses) uses a
+  `writes` look.
+- **A tag may have holes that name the case's fields.** In a tag
+  written with a value prefix, `\{key}` is the case's field `key`, as a
+  bare name in a look always is a field. The language checks each hole
+  names a field and gives the library the tag's parts. What the parts
+  mean is the library's: http reads them as a route, and a sql or topic
+  library could read them its own way.
+- **The look says which tag a case has, not where the tag goes.** A tag
+  field's name, an adjacent payload, or no tag at all are a library's
+  spelling. The shape carries each case's tag and fields; nothing more.
+
+**`as` in three places.** In a pattern, `as` binds a name. In a layout,
+`lsn: UInt64 as Lsn` reads the integer through `Lsn`'s constructor. In
+a sum look, `| Placed as "order.placed"` gives a case its tag. Each
+reads "seen as", and the position says which.
+
+## Looks of an opaque type: always a function
+
+**An opaque type is only ever read through a function.** Its looks are
+all `via` looks, inside its module or out:
+
+```ren
+pub type Money = opaque Int with numeric
+  pub fn parse(s: Str) -> Money ! BadAmount = ...     // "12.50": the default look
+  pub fn repr(self) -> Str = ...
+  pub fn from_cents(c: Int) -> Money ! BadAmount = ...
+  pub fn cents(self) -> Int = self
+
+format cents for Money = Int via (Money.from_cents, fn(m) => m.cents())
+```
+
+- **Outside its module,** a look of an opaque type can use only what
+  any code there can: its `pub` functions. So a look never exposes more
+  than the public API. `..`, field lines and naming a private function
+  are build errors: "`Money` is opaque here; read it through a
+  function".
+- **Inside its module,** a `via` may call private functions, and then
+  the look is private too ([above](#a-type-and-its-formats)). So
+  `format raw for Money = Int via (Money.unchecked, ...)` exists only
+  inside `money`. It still can't be a record look over the
+  representation: reading must go through a constructor that keeps the
+  type's rules, or input from outside could build a value the module
+  never allows.
+- **An opaque record looks like a record through a wire type:**
+
+  ```ren
+  type OrderWire = { id: OrderId, lines: Array<Line>, total: Money }
+  format v1 for Order = OrderWire via (Order.from_wire, fn(o) => o.to_wire())
+  ```
+
+  This costs a declaration. It's the same cost a layout's `as` pays for
+  `lsn: UInt64 as Lsn`: a conversion that can fail is visible.
+
+## What a look can expose
+
+- **A type without `repr` can be read but not written** by the walk.
+  Writing one where no look writes it fails at the door, with the path
+  ([shapes.md, "The doors"](shapes.md#the-doors-build-and-view)).
+- **A look exposes exactly what the public API exposes, no more.** If a
+  `pub` function gives a value out, a look over that function can
+  write it. Making that a named look in a settings record is how a
+  library makes an exposure visible ([`Secret`](#secret)).
+
+## Errors carry paths
+
+The doors that read through a look fail with one shared set, in the
+`shape` module the language provides beside `T.shape`:
+
+```ren
+pub type Problem = ! Missing(at: Str, field: Str)
+                   | Unknown(at: Str)
+                   | Mismatch(at: Str, expected: Str, found: Str)
+                   | Invalid(at: Str, why: Str)
+                   | NoCase(at: Str, tag: Str)
+                   | TooDeep(at: Str, limit: Int)
+```
+
+- **`at` uses the look's names,** the ones in the input:
+  `"orders[2].customerId"`. That's what the sender can fix.
+- **`field` names the type's field,** `"Order.customer"`, for the
+  programmer. `show` prints both:
+  `orders[2].customerId (Order.customer): missing`.
+- **The input isn't kept.** A `Mismatch` says `found: "a string"`, not
+  the string, because it may be a secret. There's no switch.
+- **The doors can stop at the first problem or collect all.** It's a
+  parameter of `build<T>`. Which one a library uses by default is its
+  policy.
+- **`Unknown` and `TooDeep` are raised by libraries,** which share the
+  tags so every library spells them one way. When a library raises
+  them is its policy.
+- **A library adds its own tags around `Problem`** (a syntax error with
+  a byte offset, a limit). Layouts keep `FormatError`, with offsets;
+  its `path` uses the same spelling.
+- **A named error set has a shape, as the `Err` side of a `Result`.** A
+  look may be `for` a named error set (`Keys.Error`, `Problem`).
+  Writing one takes the `Err` of a `Result`; reading one yields
+  `Err(tag)` inside a `Result`, never a free tag. This keeps
+  [errors.md](errors.md#tags-are-structural)'s rule: an error is a
+  value only inside a `Result`, and an error set is never a sum type.
+
+## Versions are looks
+
+```ren
+format v1 for Order, reads =
+  id
+  total: Money.cents
+  ..
+
+format v2 for Order =
+  id
+  total                 // through Money's own parse/repr now
+  ..
+```
+
+- **A version is another look of the same type,** as a layout has
+  another format. No second type, no conversion functions.
+- **`reads` forbids writing.** Unlike layouts, several looks of one
+  type may be writable, so a program can answer each reader in its
+  version. Mark `reads` when a version must never be produced again.
+- **A field an old look lacks** gets its field default or `None`, the
+  same rule as any left-out field. A field with neither is a `via` to a
+  wire type.
+- **A write a version can't express fails; it's never trimmed.** The
+  version's `via` writes `T -> X ! E`, so a v1 with no place for v2's
+  `ttl` fails `NotInVersion` rather than dropping it. How a protocol
+  reports that is std's ([Remote failure](#remote-failure-unavailable-and-why)).
+- **Choosing a version is code you can see:** a value holding the
+  version's looks, picked by a `match`.
+- **What gets frozen** is in [Tools over looks](#tools-over-looks).
+
+## Dependencies as data
+
+For each dependency `D` the compiler writes three declarations, so a
+dependency's operations are data any library can read (decision 20,
+rule 3: the program's declarations as data).
+
+```ren
+use std.remote.Unavailable
+
+pub dep Keys ! Unavailable =
+  get: fn(key: Key) -> Bytes ! NotFound
+  put: fn(key: Key, value: Bytes, expect: Option<Version>) -> Version ! Conflict
+  list: fn(prefix: Str = "", limit: Int = 100) -> Array<Key>
+```
+
+- **`D.Call`** is a sum with one case per operation, its parameters as
+  fields, their defaults as field defaults.
+- **`D.Reply`** is a sum with one case per operation, holding its
+  result; fieldless for `()`.
+- **`D.Error`** is a named error set: the union of every operation's
+  errors and the header's.
+- **They're ordinary data.** They have shapes, default looks, `==`,
+  `show` and generators, and looks may be declared for them like any
+  sum. [language.md §6](language.md#6-stored-descriptions-an-enum-the-compiler-writes)
+  says so: they're data enums the compiler writes, not opaque
+  descriptions.
+- **`D.Call` exists only if every operation is data:** no block, no
+  `&`/`inout` argument, no view, a data result. That's decision 18's
+  rule for `post`, stated once. Naming `D.Call` for any other dep is a
+  build error naming the operation.
+- **Errors on the header.** `pub dep Keys ! Unavailable =` says every
+  operation can also fail with `Unavailable`. It's the form
+  `Actors<DocId, Doc> ! StoreDown` already has. `ren types Keys` shows
+  it on each operation, and a handler for `Keys` must fit it as it fits
+  any declared error. The language gives "errors on the header";
+  what `Unavailable` is, is std's.
+- **A handler `over D` for an all-data `D` may write `call(c: D.Call)`**,
+  and `next.call(c)` is `D.call(c)` against the next handler. This sits
+  beside `over any`'s `call =>`, which stays as built: it covers every
+  dependency, data or not, and it carries the journal
+  ([shapes.md](shapes.md#handlers-that-work-for-any-dependency)).
+
+## Looks checked when building
+
+**One mechanism.** Every build-time check runs through top-level `let`
+and `assert`, or a signature `let`: a `let` between a function's
+signature and its `=`, run while building once per call site
+([strings.md, Templates](strings.md#templates)). The language writes no
+check for one library. Two groups:
+
+**Checked on the declaration, by the language.** Each is a build error
+with a fix-it:
+
+- a format that mixes layout lines and look lines;
+- a look named like a method of its type; two looks of one name for
+  one type in scope;
+- a field left out of a look with no default and not an `Option`
+  (except in a `writes` look);
+- two lines giving one name; a lowercase right side that names no
+  field;
+- a `via` whose functions don't have the types `X -> T ! E` and
+  `T -> X` (or `T -> X ! E`), or that has a `uses` row;
+- a chain of `via` looks that comes back to its start;
+- a sum look missing a case, without `| ..`; a case with both lines and
+  a `: Look`;
+- tags of more than one type in one look; two cases with one tag in a
+  look that reads; a hole that names no field;
+- a look of an opaque type that isn't a `via`;
+- a private look named outside its module; a `pub` look that names a
+  private function;
+- a `reads` look used to write, a `writes` look used to read;
+- naming `D.Call` for a dep with an operation that isn't data.
+
+**Checked where a type meets its looks, once per call site.**
+`shape.through<T>(looks)` fails, with a `LookError`, on two looks for
+one type in the list, an opaque type the walk can't read, and a type
+with no `repr` that the list doesn't write. A library calls it in a
+signature `let`, so `json.decode<Order>(text, API)` checks `Order`
+against `API` while building, at that call. A library's own checks
+(tag types it reads, its casing collisions, its route overlaps) are
+code in that library, run the same way.
+
+- **So a settings record must be known while building:** a literal, or
+  a top-level value. Settings known only at run time are a build error
+  at the call, whose help says to bind them with a top-level `let`.
+- **A top-level `let` checks too.** `let KEYS_V1 =
+  http.mount<Keys>(...)` fails the build if http's check fails, like
+  any top-level failure.
+
+## Look errors
+
+```
+error: `customer` is left out of `public`, has no default, and isn't an `Option`
+  format public for Order =
+    id
+    total
+  = a look lists what it carries; reading it back must build an `Order`
+  help: carry `customer`, add `..`, give it a default in `Order`,
+        or mark the look `writes`
+```
+
+```
+error: `Money` is opaque here; a look of it reads it through a function
+  format v1 for Money =
+    cents
+  help: `format v1 for Money = Int via (Money.from_cents, fn(m) => m.cents())`
+```
+
+```
+error: `PageHeader.disk` is a `Layout`; this field is an `Array<Look>`
+  let J = json.settings(formats: [PageHeader.disk])
+  help: a layout is read with `PageHeader.disk.view(bytes)`
+```
+
+```
+error: `v1` of `Event` has no tag for `Refunded`
+  help: add `| Refunded as "..."`, or `| ..` for the rest as themselves
+```
+
+```
+error: `Time.from_unix` uses `Clock`; a look's functions are pure
+```
+
+```
+error: `Get`'s tag has a hole `\{id}`, but `Keys.Call.Get` has no field `id`
+  | Get as GET"/v1/keys/\{id}"
+  help: did you mean `\{key}`?
+```
+
+```
+error: two looks named `unix` for `Time` are in scope
+  use wire
+  = `wire` declares `format unix for Time`, and so does `time`
+  help: rename one of them, e.g. `format unix_seconds for Time` in `wire`
+```
+
+```
+error: json checks `Order` against its settings while building, and these are known only at run time
+  json.decode<Order>(text, settings_for(cfg))
+  help: bind the settings with a top-level `let`: `let API = json.settings(...)`
+```
+
+Errors a library raises read the same way, but are written by the
+library: `customerId` written twice after json's casing,
+`Keys.Error.rest` missing a status ([std's policy](#stds-policy-for-looks)).
+
+## Layouts: a type as bytes
+
+**A layout says how a type looks as bytes:**
 
 ```ren
 type PageHeader = { lsn: Lsn, count: Int, kind: PageKind }
@@ -129,8 +634,6 @@ format disk for PageHeader, le, size 32 =
 - **The cost is two declarations to keep in step.** Every field placed
   is checked against the type, so a mismatch is a build error, not a
   drift.
-- **There are no standalone formats.** A format with no type would be
-  an ad hoc struct, a second kind of record.
 
 Prior art: Ada's record representation clauses sit apart from the type,
 and Ada RM 13.6 converts between two representations of one type for
@@ -384,7 +887,7 @@ format v2 for Superblock, le, size 128 =
   owner: UInt64 as Owner
 ```
 
-- **At most one format of a type is writable.** Older ones are marked
+- **At most one layout of a type is writable.** Older ones are marked
   `reads`. A field of the type that a `reads` format lacks gets `=
   value`, what it reads as. That's SBE's `sinceVersion` turned into
   migration, and it rules out writes that lose data: you can't write a
@@ -392,6 +895,11 @@ format v2 for Superblock, le, size 128 =
 - **A writable format places every field of its type.** One that
   doesn't is an error whose help places it, or marks the format
   `reads` with a value.
+- **Looks differ here.** Several looks of one type may be writable at
+  once ([Versions are looks](#versions-are-looks)). What this rule
+  guards, a write that loses data, comes there from a `via` that fails
+  on write and a fingerprint that covers `via` functions. A look has no
+  `field = value` line; in a look, `=` always puts a name on the left.
 - **Choosing a version is code you can see:** a `match` on a version
   field, read through a small format of its own or with layer 3.
 - **Released formats are frozen.** `formats.lock`, committed beside the
@@ -453,7 +961,11 @@ memory, and a format is a promised layout for bytes.
 
 `bin.encode(v)` and `bin.decode<T>(bytes)` are a library over `T.shape`,
 written in Ren like `json` ([shapes.md](shapes.md#libraries-that-work-for-any-type)):
-compact, specialized in release builds, nothing to declare.
+compact, specialized in release builds, nothing to declare. It walks
+the type through `parse` and `repr`, so opaque types keep their rules,
+and it takes no looks: it has no names to rename. `json` and `cli` walk
+the same default look, and take looks where a medium wants other names
+or tags ([A type, and its formats](#a-type-and-its-formats)).
 
 **It's not for disk.** Its bytes follow the type, so changing the type
 changes the encoding, and nothing records what an old version looked
@@ -571,6 +1083,240 @@ note: `wire`'s `case` has no `_`, so an unknown tag fails with `UnknownTag`
 And through shapes.md, `assert PageHeader.disk.size == 32` failing
 names the format and its size.
 
+## How looks compile
+
+The compiler's part. None of it changes what a program means; a debug
+build means the same, slower.
+
+- **A `Look` is represented as the compiler likes.** In a closed world
+  the compiler knows every `format` in the program, so it can number
+  them: an enum it writes, one tag per format. A `via` runs inside its
+  tag's arm and is never stored. Debug builds `match` on the tag (or
+  point at a static record, as `Handler_tag` does); release builds use
+  a number. No program sees which.
+- **A look declared outside its type's module** is keyed by the type
+  and the module that declares it. Members of a type from another
+  module don't exist in the compiler today (research/looks/feasibility.md).
+- **A `match` over constant tags compiles to a perfect hash.** That
+  covers a reader picking a case by its tag and a library matching
+  route strings. A reader never tries each case (Effect v4's
+  `SchemaAST.ts` union candidates do the same lookup).
+- **Specialization over known looks.** Settings are known while
+  building, so release builds copy a library's walk per (type, looks)
+  into straight-line code. That's two steps: a constant argument in
+  specialize.ml's key, then unfolding the library's `match` over a
+  constant shape (stage 12's risk 2). See
+  [shapes.md, "How the walk compiles"](shapes.md#how-the-walk-compiles).
+
+## Tools over looks
+
+The toolchain reads the language, never a library, so each tool serves
+every library alike.
+
+- **`ren explain`** prints, per field, the look's name, the encoded
+  type and the walk step that chose it
+  ([shapes.md, "Seeing the walk"](shapes.md#seeing-the-walk)).
+- **Freezing** fingerprints what a top-level value sends
+  ([shapes.md, "Freezing what is sent"](shapes.md#freezing-what-is-sent)).
+- **A round-trip test per look,** below.
+
+### A round-trip test per look
+
+`ren test` runs one generated property per look, with no test written:
+
+```
+look Order.v1: 1000 values, wire form stable
+look Time.unix: 1000 values, wire form stable
+```
+
+- **The values come from the type's generator** ([testing.md](testing.md),
+  "Every type generates itself"), so only values the module allows.
+- **It checks that the wire form is stable:** write a value, read it
+  back, write it again, and the second write equals the first,
+  `encode(decode(encode(x))) == encode(x)`. It goes through the doors,
+  `view<T>` and `build<T>`, not through a library, so it tests the look
+  itself: renames, constants, tags and both `via` functions. Libraries
+  test their own syntax.
+- **It holds for every look,** one that keeps less than its type
+  included. `Time.unix` drops sub-seconds and passes: the seconds it
+  writes read back as a `Time` that writes the same seconds. A `via`
+  whose two functions disagree (`from_unix` reading milliseconds)
+  fails, with the shrunk value.
+- **Exact equality is your own property.** Where a look must keep
+  everything, `decode(encode(x)) == x` is a one-line test you write.
+- **A one-way look gets a one-way test.** A `reads` look is fed what
+  the type's default look writes, through the look's own encoded shape;
+  a `writes` look is checked to never fail on a generated value unless
+  its `via` declares an error.
+- **A failure prints the value, the look and the field:**
+  `Order.v1: placed: 1970-01-01T00:00:01Z wrote 1, read back as
+  1970-01-01T00:00:00.001Z, which writes 0; Time.from_unix and
+  Time.unix_seconds disagree`.
+
+Effect v4 derives an `Arbitrary` from a schema but leaves the round
+trip to you. Here it's free because looks are declared, not built.
+
+## std's policy for looks
+
+Each rule here is one library's default, in its settings or its docs
+(decision 20, rule 5). Consistency across std is a written convention.
+Where a library needs the compiler's help, it uses a primitive above
+that any third-party library could use. Settings records, casing,
+strictness and how each library reads a shape are in
+[shapes.md, "std's policy for the walk"](shapes.md#stds-policy-for-the-walk).
+
+### json
+
+- **Where the tag goes.** By default an internal tag named `"type"`:
+  `{"type": "order.placed", ...}`. `type` is a Ren keyword, so no
+  field collides with it. `tag: Adjacent("type", "data")` in json's
+  settings puts the payload under `"data"`. There's no untagged form.
+  A field named like the tag field is json's build-time error.
+- **Where the payload goes:** named fields beside the tag; one record
+  payload merged; any other payload under `"value"`; no payload, just
+  the tag ([shapes.md, "Sums in json"](shapes.md#sums-in-json)).
+- **A fieldless sum is still an object,** `{"type": "Admin"}`. A json
+  API that wants `"Admin"` gives the type `parse`/`repr`, or names a
+  `Str via` look.
+- **Tags must be `Str`.** A look whose tags are another type fails
+  json's check.
+- **Casing re-cases only names not marked exact.** Two names that meet
+  after casing are json's build-time error:
+
+  ```
+  error: `customerId` is written twice in what json sends for `Order`
+    = `customerId = customer` in `Order.v1`
+    = `customer_id`, a field, re-cased by `keys: camel_case` in `API`
+    help: rename one of them in the look
+  ```
+
+- **Strict by default, first error.** An unknown key is `Unknown(at)`;
+  `unknown: Ignore` relaxes a whole call. json stops at the first
+  problem.
+- **`null` and absent both decode to `None`;** encoding leaves `None`
+  out, and `none: Null` writes `null` instead.
+- **Numbers are exact number text,** read with a range check, never
+  switched by size. std ships a JavaScript-safe look for `Int`, a
+  string of digits.
+- **`Bytes` is padded base64;** std ships `Bytes.base64url` and
+  `Bytes.hex` as looks.
+- **A map's keys go through their type's text form,** else json's check
+  fails with help to use `Array<(K, V)>`
+  ([shapes.md](shapes.md#absence-numbers-and-keys-in-json)).
+
+### Text media: cli, env, query strings, sql text
+
+- **A fieldless sum reads and writes as its case name:** `--role
+  admin`, `?mode=merge`, `FLOTT_SYNC=Group`. That's their syntax, not
+  a rule of the walk.
+- **cli uses the same looks for flag names;** short flags and
+  positionals stay in `cli.spec`. One look serves every medium:
+  `listen = addr` is `"listen"`, `FLOTT_LISTEN` and `--listen`.
+- **config collects all problems,** because it merges sources and a
+  user fixes a file once.
+
+### http
+
+A REST look of `D.Call` is the route table: a sum look whose tags are
+`http.Route` values. Statuses are a `writes` look of `D.Error` whose
+tags are `Int`s. Both are ordinary looks; what their tags mean is
+http's.
+
+```ren
+pub format rest for Keys.Call =
+  | Get as GET"/v1/keys/\{key}"
+  | Put as PUT"/v1/keys/\{key}"
+  | List as GET"/v1/keys"
+
+pub format rest for Keys.Error, writes =
+  | NotFound as 404
+  | Conflict as 409
+  | Unavailable as 503
+```
+
+- **`GET"/v1/keys/\{key}"` is a value prefix:** `GET.template(t)`, an
+  `http.Route`. Its holes are the case's fields. http checks the
+  template while building, through `http.mount<Keys>(...)` in a
+  top-level `let`.
+- **A path hole is read through its type's `parse(Str)`.** `Key.parse`
+  reads the segment.
+- **Fields not in the path** go in the query for `GET` and `DELETE`, and
+  in the body otherwise, through the call's json settings. There's no
+  per-route override in 1.0.
+- **Headers and raw bodies come with the http stage.** flottning wants
+  `If-Match` from `expect` and a raw value body on day one. They're
+  http's own: its route templates grow a header line and a raw-body
+  line whose holes name fields, e.g. `If-Match: \{expect}` and
+  `body: \{value}`. The language sees only holes naming fields; http
+  says what a header is.
+- **A status look may repeat a status.** It's a `writes` look, so the
+  language allows it. A dep with a `Busy` error can give it 503 beside
+  `Unavailable`, because the body carries the error's own tag and the
+  client reads that, not the status.
+- **Every error needs a status.** The look lists every case; a new
+  error without a status fails the build.
+
+  ```
+  error: `Keys.Error.rest` has no status for `Throttled`
+    help: add `| Throttled as 429`
+  ```
+
+- **Success is 200, and 204 for `()`.** A `writes` look of `Keys.Reply`
+  can say otherwise (`| Put as 201`).
+- **A reply body drops the case tag,** because the route says which
+  case it is.
+- **A bad path segment or body is a `Problem`,** not one of `D.Error`'s
+  tags. http answers it 400 with the `Problem` in the body.
+- **Two routes that can match one request** fail http's build-time
+  check. Matching compiles to a perfect hash plus segment checks, by
+  the compiler's general rule.
+- **Serving several deps on one port** uses mounts: `http.mount<Keys>
+  (KEYS_V1)` is a stateless handler of a std dep, so it's a
+  description (language.md §6), and a list of mounts is an array of a
+  compiler-written enum. No `D.call` is stored as a value.
+
+### `Secret`
+
+`Secret<T>` has `parse` and no `repr`. So:
+
+- **It reads** wherever `T` does: json, env, flags.
+- **It doesn't write** by the walk. `json.encode(cfg)` where `cfg`
+  holds a `Secret` fails at the door, with the path:
+
+  ```
+  error: `Cfg.admin_token` is a `Secret<Str>`, which has no `repr`
+    json.encode(cfg)
+    = a type without `repr` can be read but not written
+    help: leave it out with a `writes` look of `Cfg`, `format public for Cfg, writes = addr, dir`
+  ```
+
+- **Writing one goes only through a named look over the public
+  `reveal`:** `format plain for Secret<Str> = Str via (Secret.parse,
+  fn(s) => s.reveal())`. It sits in a settings record, where grep and
+  review find it.
+- **The journal's rule is on the type, not the look.** A `Secret` is
+  hashed on export whatever look read it.
+
+### Remote failure: `Unavailable` and `Why`
+
+- **std declares the tag once,** in `std.remote`:
+  `Unavailable(why: Why)`, with `Why = Refused | Timeout |
+  Decode(Problem) | Protocol | Version | Denied | Server`. Structural
+  tags need one spelling, and std is where it lives.
+- **A dep says it with the header,** `pub dep Keys ! Unavailable =`.
+  std's client handler (`http.client<D>`) fails with it, so it can only
+  be given for a `D` whose header has it: the ordinary rule that a
+  handler fits the dep's errors.
+- **A write a version can't express is refused, never trimmed.** std's
+  envelope writes through the version's looks, so a v2 caller writing a
+  `ttl` to a v1 server fails `NotInVersion`, and the client reports
+  `Unavailable(Version)`. That's std's rule for its protocols, not the
+  language's.
+- **Mapping.** A handler panic on the server is a 500 and
+  `Unavailable(Server)` at the client.
+- **The envelope and transports** are in
+  [shapes.md, "Dependencies over the wire"](shapes.md#dependencies-over-the-wire).
+
 ## Left out
 
 - **Casts of bytes to records,** outside `trust`.
@@ -581,6 +1327,20 @@ names the format and its size.
 - **Byte patterns in `match`,** Erlang-style.
 - **A default byte order.**
 - **Everything in [Where formats stop](#where-formats-stop).**
+- **Attributes on fields.** A look is apart from the type, always.
+- **Medium words in a format.** No tag field names, casings, statuses
+  or headers in the declaration; libraries read them from tags and
+  their own settings.
+- **Untagged sums.** Slow, ambiguous, no error path.
+- **Flattening, paths and computed fields in looks.** Use a `via` to a
+  wire record.
+- **Splicing a sum case into its parent.** `flot kv get a` stays, or
+  the cli's command type is written flat.
+- **Record looks over an opaque type's representation.** Always a `via`.
+- **Marking a look that loses information.** The generated test checks
+  that every look's wire form is stable, so no look needs to say it.
+- **A switch to keep rejected input in errors.**
+- **A per-route body or query override in http,** for 1.0.
 
 ## Later
 
@@ -588,13 +1348,35 @@ names the format and its size.
   `bin` bytes from another version of a type fail to decode instead of
   decoding wrong.
 - **Formats derived from a C header,** for interop in `trust`.
-- **`ren explain` for a format:** the layer 3 calls it compiles to, and
+- **`ren explain` for a layout:** the layer 3 calls it compiles to, and
   its offsets as a table.
+- **json's external tag,** `{"Placed": {...}}`, for serde-default APIs.
+- **json's tag field per look,** `tags: [(Event.v1, Internal("kind"))]`
+  in its settings, since looks are values. Until then an API with one
+  type tagged `"kind"` needs a second settings record or a `via`.
+- **JSON Schema** as a library over shapes. **OpenAPI ships with the
+  http stage:** it's a walk over `shape.through` of `D.Call` and the
+  REST looks, so it's small, and Effect v4 serves docs from the same
+  value on day one.
+
+## Open
+
+- **Limits read at run time.** A settings record is known while
+  building, but a `max_bytes` that comes from config isn't. Where such
+  a limit goes, a separate argument or a run-time part of the settings,
+  is open.
+- **The spelling of http's header and raw-body lines,** for the http
+  stage.
+- **The envelope's spec:** call id, reply, defect, cancel, a reserved
+  `Chunk`, the shape-hash handshake.
 
 ## Evidence
 
-Two research passes on 2026-10-29, using the clones in `/tmp/ren-refs`
-and published sources.
+Two research passes on 2026-10-29 for layouts, using the clones in
+`/tmp/ren-refs` and published sources, and the looks research
+(research/looks/: synthesis.md, effect-study.md on Effect v4's
+`Schema`, `SchemaAST`, `SchemaBinary` and `RpcSerialization`,
+programs.md, judge.md, feasibility.md).
 
 **Views, declared layouts and versions**
 

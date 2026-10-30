@@ -1271,8 +1271,10 @@ the compiler can keep, with accessors it inlines (rules 3 and 4). So
 `format ... for T`, with its byte orders, widths and tags, is the
 language's, and json, toml and http are libraries over shapes. Saying
 how a type looks to a library that isn't bytes, a field renamed for
-json or a tag spelled as a route, is a proposal for stage 12, called
-looks; nothing in the language does it today. A dependency whose operations can fail remotely
+json or a tag spelled as a route, is a look, the other kind of format
+([formats.md](formats.md)): the language owns its reshaping, names,
+fields left out, constants, conversions and tags as typed constants, and
+json or http owns how each is spelled. A dependency whose operations can fail remotely
 says so with the header's error set, `pub dep Keys ! Unavailable`, the
 form `Actors<DocId, Doc> ! StoreDown` already has, rather than a
 keyword: the language gives "errors on the header", std gives

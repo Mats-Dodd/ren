@@ -86,7 +86,10 @@ sum type: to say why something didn't happen as part of a value, use a
 sum type, as before. An error held as a value is always inside a
 `Result`: the one kept by `attempt` (below), or one written with its tag,
 `Err(Short(a, Money.dollars(1)))`, which is what a test compares a kept
-one with.
+one with. A named error set has a shape as the `Err` side of a
+`Result`, so a look may be declared for it and a library can write or
+read one, and reading one gives `Err(tag)`, never a free tag
+([formats.md](formats.md#errors-carry-paths)).
 
 ## Marking
 
@@ -168,6 +171,21 @@ let user = try match load_full(id)
 - An arm can fail with something else, which is how one error becomes
   another: `fail Short(_, _) | fail Frozen(_) => fail LateRent`.
 - A call in an arm that can fail is marked like any other.
+- **A handler can end with `fail` arms for all its operations.** When
+  every operation turns the same error into another, it's written once,
+  after the operations:
+
+```ren
+handler disk_keys(dir: Path) for Keys uses Fs =
+  get(key) => try read(dir, key)
+  put(key, val) => try write(dir, key, val)
+  fail Disk(path) => fail Unavailable(Server)
+```
+
+  Each operation's body is handled as if by `try match` with those arms,
+  and an operation that can't fail with a tag skips its arm. It binds
+  no whole error, and it's the handler's own text, so nothing is
+  hidden: Effect's `catchTag` on a whole service, written once.
 
 There is no `catch`: handling an error is pattern matching, so it's a
 `match`.

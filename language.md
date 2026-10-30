@@ -800,6 +800,17 @@ Decisions:
   the kind: a `striped` merge the built-in folds don't cover is a
   stateless handler over the dependency, folding in a `call(c: D.Call)`
   clause (§11).
+- **`D.Call`, `D.Reply` and `D.Error` are data enums the compiler
+  writes.** For a dependency whose operations are all data, the
+  compiler writes a sum with a case per operation, a sum of replies,
+  and a named error set ([formats.md](formats.md#dependencies-as-data)).
+  They're the exception to the table above: the compiler writes them,
+  but they're data, with `==`, `show`, shapes and looks, not opaque
+  descriptions.
+- **Looks are values too.** `Time.unix` is a `Look`, which a library's
+  settings hold in an array and compare with `==`. The compiler
+  represents looks as an enum it writes, one tag per format, and that
+  enum is invisible: no program sees it.
 
 ## 7. Methods are vocabulary, workflows are functions
 
@@ -1481,7 +1492,7 @@ The decisions:
   so the borrow ends with it; `write` and `encode` take the whole value.
 - **Errors carry offsets** in the whole buffer: `Short(at, need)`,
   `Malformed(at, path, why)`, `UnknownTag(at, tag)`.
-- **One writable format per type; older ones `reads`, with values for
+- **One writable layout per type; older ones `reads`, with values for
   what they lack. Released formats are frozen** by fingerprints in
   `formats.lock`.
 - **No byte patterns in `match`.** Formats are the patterns, and
