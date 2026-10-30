@@ -11,7 +11,7 @@ out, runs = sys.argv[1], int(sys.argv[2])
 log = open(sys.argv[3], "a") if len(sys.argv) > 3 else None
 R = int(os.environ.get("R", "200"))
 N = 65536
-sets = os.environ.get("SETS", "renkw,jsreserved,methods,headers,json24").split(",")
+sets = os.environ.get("SETS", "renkw,jsreserved,methods,headers,json24,one").split(",")
 
 
 def run(cmd):

@@ -16,7 +16,7 @@ out=$(cd "$out" && pwd)
 R=${R:-200}
 forms=chain
 grep -q '_match(s: Str)' "$here/bench.ren" && forms="chain match"
-for set in $(echo "${SETS:-renkw,jsreserved,methods,headers,json24}" | tr , ' '); do
+for set in $(echo "${SETS:-renkw,jsreserved,methods,headers,json24,one}" | tr , ' '); do
   for form in $forms; do
     hashed=false
     [ "$form" = match ] && hashed=true

@@ -304,6 +304,14 @@ func json24(s string) int64 {
 	return -1
 }
 
+func one(s string) int64 {
+	switch s {
+	case "v1":
+		return 0
+	}
+	return -1
+}
+
 func keys(set string) []string {
 	switch set {
 	case "renkw":
@@ -316,6 +324,8 @@ func keys(set string) []string {
 		return []string{"Accept", "Accept-Encoding", "Authorization", "Cache-Control", "Connection", "Content-Length", "Content-Type", "Cookie", "Date", "Host", "If-None-Match", "Location", "Origin", "Referer", "Server", "Set-Cookie", "User-Agent", "Vary", "Via", "X-Forwarded-For"}
 	case "json24":
 		return []string{"id", "name", "email", "created_at", "updated_at", "deleted_at", "status", "owner_id", "org_id", "tags", "title", "description", "priority", "due_date", "assignee_id", "labels", "version", "etag", "parent_id", "metadata", "visibility", "archived", "last_modified_by", "notification_settings"}
+	case "one":
+		return []string{"v1"}
 	}
 	return nil
 }
@@ -367,6 +377,8 @@ func main() {
 		t = rounds(headers, qs, r)
 	case "json24":
 		t = rounds(json24, qs, r)
+	case "one":
+		t = rounds(one, qs, r)
 	}
 	fmt.Println(t)
 }

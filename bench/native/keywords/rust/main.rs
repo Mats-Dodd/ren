@@ -170,6 +170,14 @@ fn json24(s: &str) -> i64 {
     }
 }
 
+#[inline]
+fn one(s: &str) -> i64 {
+    match s {
+        "v1" => 0,
+        _ => -1,
+    }
+}
+
 fn keys(set: &str) -> Vec<&'static str> {
     match set {
         "renkw" => vec!["fn", "pub", "let", "var", "inout", "for", "while", "break", "todo", "in", "if", "then", "else", "true", "false", "type", "dep", "match", "import", "as", "uses", "opaque", "self", "not", "fail", "try", "attempt", "orelse", "with", "handler", "over", "finally", "test", "group", "assert"],
@@ -177,6 +185,7 @@ fn keys(set: &str) -> Vec<&'static str> {
         "methods" => vec!["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"],
         "headers" => vec!["Accept", "Accept-Encoding", "Authorization", "Cache-Control", "Connection", "Content-Length", "Content-Type", "Cookie", "Date", "Host", "If-None-Match", "Location", "Origin", "Referer", "Server", "Set-Cookie", "User-Agent", "Vary", "Via", "X-Forwarded-For"],
         "json24" => vec!["id", "name", "email", "created_at", "updated_at", "deleted_at", "status", "owner_id", "org_id", "tags", "title", "description", "priority", "due_date", "assignee_id", "labels", "version", "etag", "parent_id", "metadata", "visibility", "archived", "last_modified_by", "notification_settings"],
+        "one" => vec!["v1"],
         _ => vec![],
     }
 }
@@ -225,6 +234,7 @@ fn main() {
         "methods" => rounds(methods, &qs, r),
         "headers" => rounds(headers, &qs, r),
         "json24" => rounds(json24, &qs, r),
+        "one" => rounds(one, &qs, r),
         _ => 0,
     };
     println!("{}", t);

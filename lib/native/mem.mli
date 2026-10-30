@@ -242,6 +242,10 @@ type rt =
   | Str_affix of string * string
       (** whether a `Str` starts with the first and ends with the second, at
           least as long as the two: a prefix or suffix pattern's test *)
+  | Str_lookup of string list
+      (** the number of the key, of these, a `Str` is, or -1, an [Int]: a
+          string `match`'s literals looked up at once, through a perfect
+          hash (phash.ml) *)
   | Slice of sliced * part
       (** a slice of an array, a `Str` or `Bytes` (foundations.md, decision
           17), sharing its root's buffer and counting the root: [Range] of

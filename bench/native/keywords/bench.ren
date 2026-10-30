@@ -1,7 +1,7 @@
 // The patterns stage's keyword kernel (compiler.md, "Patterns stage";
 // bench/native/RESULTS.md): identifiers classified against a key set,
 // Ren's 35 keywords, JS's 45 reserved words, the 9 HTTP methods, 20
-// header names and 24 JSON field names (research/perfect-hash/code/keys),
+// header names, 24 JSON field names and one key (research/perfect-hash/code/keys),
 // 65,536 queries a round, 90% keys and 10% near misses. Each set's
 // classifier is written as the `==` chain Ren had before string
 // patterns, and as a `match` over literal arms, which compiles to a
@@ -308,6 +308,15 @@ fn json24_match(s: Str) -> Int =
     "notification_settings" => 23
     _ => -1
 
+fn one_chain(s: Str) -> Int =
+  if s == "v1" then 0
+  else -1
+
+fn one_match(s: Str) -> Int =
+  match s
+    "v1" => 0
+    _ => -1
+
 // the next number of the LCG every twin shares
 fn next(x: Int) -> Int = (x * 1103515245 + 12345) % 2147483648
 
@@ -330,6 +339,7 @@ fn keys(set: Str) -> Array<Str> =
   else if set == "methods" then ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]
   else if set == "headers" then ["Accept", "Accept-Encoding", "Authorization", "Cache-Control", "Connection", "Content-Length", "Content-Type", "Cookie", "Date", "Host", "If-None-Match", "Location", "Origin", "Referer", "Server", "Set-Cookie", "User-Agent", "Vary", "Via", "X-Forwarded-For"]
   else if set == "json24" then ["id", "name", "email", "created_at", "updated_at", "deleted_at", "status", "owner_id", "org_id", "tags", "title", "description", "priority", "due_date", "assignee_id", "labels", "version", "etag", "parent_id", "metadata", "visibility", "archived", "last_modified_by", "notification_settings"]
+  else if set == "one" then ["v1"]
   else []
 
 fn classify(set: Str, hashed: Bool, s: Str) -> Int =
@@ -338,6 +348,7 @@ fn classify(set: Str, hashed: Bool, s: Str) -> Int =
   else if set == "methods" then (if hashed then methods_match(s) else methods_chain(s))
   else if set == "headers" then (if hashed then headers_match(s) else headers_chain(s))
   else if set == "json24" then (if hashed then json24_match(s) else json24_chain(s))
+  else if set == "one" then (if hashed then one_match(s) else one_chain(s))
   else -1
 
 fn rounds_renkw_chain(qs: Array<Str>, rounds: Int) -> Int =
@@ -410,6 +421,20 @@ fn rounds_json24_match(qs: Array<Str>, rounds: Int) -> Int =
       t += json24_match(q) + 1
   t
 
+fn rounds_one_chain(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += one_chain(q) + 1
+  t
+
+fn rounds_one_match(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += one_match(q) + 1
+  t
+
 // [rounds] rounds of [n] queries of [set], by the chain or the match:
 // the sum of each answer plus one, which the twins print too
 pub fn run(set: Str, hashed: Bool, n: Int, rounds: Int) uses Console =
@@ -420,11 +445,12 @@ pub fn run(set: Str, hashed: Bool, n: Int, rounds: Int) uses Console =
   else if set == "methods" then t = if hashed then rounds_methods_match(qs, rounds) else rounds_methods_chain(qs, rounds)
   else if set == "headers" then t = if hashed then rounds_headers_match(qs, rounds) else rounds_headers_chain(qs, rounds)
   else if set == "json24" then t = if hashed then rounds_json24_match(qs, rounds) else rounds_json24_chain(qs, rounds)
+  else if set == "one" then t = if hashed then rounds_one_match(qs, rounds) else rounds_one_chain(qs, rounds)
   print(t)
 
 // every set, both forms, which must agree with each other
 pub fn check(n: Int) uses Console =
-  for set in ["renkw", "jsreserved", "methods", "headers", "json24"]
+  for set in ["renkw", "jsreserved", "methods", "headers", "json24", "one"]
     let qs = queries(keys(set), n)
     var a = 0
     var b = 0

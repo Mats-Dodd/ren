@@ -12,7 +12,7 @@ import os
 
 here = os.path.dirname(os.path.abspath(__file__))
 keys_dir = os.path.join(here, "..", "..", "..", "research", "perfect-hash", "code", "keys")
-SETS = ["renkw", "jsreserved", "methods", "headers", "json24"]
+SETS = ["renkw", "jsreserved", "methods", "headers", "json24", "one"]
 
 
 def keys(name):
@@ -28,7 +28,7 @@ def ren(with_match=True):
     out = ["""// The patterns stage's keyword kernel (compiler.md, "Patterns stage";
 // bench/native/RESULTS.md): identifiers classified against a key set,
 // Ren's 35 keywords, JS's 45 reserved words, the 9 HTTP methods, 20
-// header names and 24 JSON field names (research/perfect-hash/code/keys),
+// header names, 24 JSON field names and one key (research/perfect-hash/code/keys),
 // 65,536 queries a round, 90% keys and 10% near misses. Each set's
 // classifier is written as the `==` chain Ren had before string
 // patterns, and as a `match` over literal arms, which compiles to a

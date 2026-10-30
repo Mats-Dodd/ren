@@ -11730,7 +11730,8 @@ Chosen in step 2, as built:
 | 0 | 7a624b2 | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
 | 1 | 5f9409d | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
 | 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
-| 2 | this commit | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
+| 2 | 81579bf | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
+| 3 | this commit | the perfect hash: lib/native/phash.ml (gen_fixed.ml's generator with the six fixes, the 64-bit mix, the length switch, the C of a lookup); Mem's `Str_lookup`; emit_c.ml's lookups, numbered by their keys and written before the functions, and a static copy in each debug unit that uses one; to_mem.ml's switch on a string subject's literals, each branch knowing its literal (`keyed`, `can_be`); ren_rt.h's compares per build and the page check; test/test_phash.ml, the fuzz in OCaml and in C four ways, no disagreement, and the same tables twice; the keyword kernel's `one` set; RESULTS.md's numbers: the `match` 1.4× to 2.7× faster than Rust's on every set of two keys or more, 3.8× to 9.8× the chain (9× to 25× less the loop), a one-literal arm 5.5 ns against the chain's 7.1 | steps 4 and 5; NEON measured on arm64; a hashed column of a tuple's |
 
 ## Patterns stage
 
@@ -12100,6 +12101,55 @@ countings and the sanitizers (bench/patterns.t).
 **The literal is in the call.** `Str_is` and `Str_affix` carry their
 literals, which emit_c.ml writes as C string literals; nothing is
 allocated for them.
+
+### Step 3, as built: the perfect hash
+
+- **lib/native/phash.ml** is gen_fixed.ml's generator, with the six
+  fixes (the spec's list) and the two fallbacks. `Phash.plan` gives a
+  `Hash` (positions, tables, slots), a `Mix` (a constant and slots) or
+  `Lengths`; `Phash.c` writes its lookup's C; `Phash.lookup` answers as
+  the C does, for the fuzz.
+- **Mem's `Str_lookup of string list`** gives the number of the key a
+  `Str` is, or -1. emit_c.ml numbers each distinct key list as it meets
+  it, `ren_ph<N>`, and writes each lookup's C before the functions; in a
+  debug build's units each lookup is a static definition that a unit
+  using it includes, as it declares what else it uses.
+- **The switch** (to_mem.ml's `dispatch`): a `match` of one `Str`
+  subject with two literals or more looks the subject up once, then
+  `switch`es on the number. The branch of the literal `w` holds, in
+  order, the arms whose pattern can match `w`, decided at build time
+  (`can_be`), and knows the subject is `w` (`keyed`), so its literal and
+  prefix tests aren't made, only a rest's slice is cut. The default
+  branch holds the arms that can match a string none of the literals
+  is. One literal stays a chain: a length test and a compare (the
+  research's 0.36 ns against the hash's 0.53).
+- **The compare** is in ren_rt.h's "string patterns", per build, as the
+  spec says: `memcmp` under the sanitizers (`__SANITIZE_ADDRESS__`, or
+  clang's `__has_feature`) or with `-DREN_PH_MEMCMP`, and on a big-endian
+  target; NEON on arm64 with clang; two masked words otherwise, tcc's
+  debug builds and x86 release among them. The two over-reading forms
+  load 16 bytes only where they stay in the string's page.
+- **The fuzz,** test/test_phash.ml: the research's adversarial sets and
+  120 random ones (2 to 200 keys, 0 to 40 bytes, over 2 letters to any
+  byte), each looked up with every key, four near misses of each and 200
+  random strings: in OCaml through `Phash.lookup`, and in C through the
+  lookups phash.ml writes, compiled four ways (two words with cc and
+  with tcc, `memcmp` with `-DREN_PH_MEMCMP` and under AddressSanitizer),
+  each query copied to the end of an `mmap`ed page whose next page no
+  one may read, and `""` at the start of that page. No disagreement;
+  129 sets hash, 2 take the mix, 1 the length switch. Two runs give the
+  same C.
+- **`--emit-c`** shows each lookup's keys, numbered, in a comment over
+  its function, the numbers the `switch` has a `case` for.
+- **NEON, not measured, but run:** on x86 the release build takes the
+  two-word compare. test_phash.ml's harness, built with clang 18
+  `--target=aarch64-linux-gnu` (which picks NEON: `tbl` in its
+  assembly) and run under qemu-aarch64 on the same 44,783 queries, each
+  against its guard page, answers as the two-word form does on every
+  one. That needs a cross toolchain dune doesn't have, so it was run by
+  hand (`apt install gcc-aarch64-linux-gnu qemu-user-static`).
+- **The numbers** are bench/native/RESULTS.md's "Step 3: the perfect
+  hash".
 
 ### Where this stage may differ
 

@@ -4208,6 +4208,17 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
      fall through to the next arm, and on the way to an arm, after its
      names are counted: [temps] holds those of the path being tested. *)
   let temps = ref [] in
+  (* The literal a string subject is, where a lookup's switch says so,
+     in that branch: its literal and prefix tests are then known here,
+     and not made (see [dispatch]) *)
+  let keyed = ref None in
+  (* whether the string [w] has [prefix] and [suffix], at least as long
+     as the two: what [ren_pat_affix] says of it *)
+  let affix w prefix suffix =
+    String.length w >= String.length prefix + String.length suffix
+    && String.starts_with ~prefix w
+    && String.ends_with ~suffix w
+  in
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
   let no_arm = new_site cx e.loc in
   (* the arm [a] has matched, its pattern's names bound to [vars]: count
@@ -4339,17 +4350,25 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
           v
         in
         let site () = new_site cx p.ploc in
+        let key = match !keyed with Some (y, w) when y = x -> Some w | _ -> None in
         match p.pkind with
+        | PStr s when key <> None -> if key = Some s then rest_then ()
         | PStr s -> check (Runtime (Str_is s, [ x ], None))
+        | PStr_rest { prefix; suffix; _ }
+          when Option.fold ~none:false ~some:(fun w -> not (affix w prefix suffix)) key ->
+            ()
         | PStr_rest { prefix; rest = None; suffix } ->
-            check (Runtime (Str_affix (prefix, suffix), [ x ], None))
+            if key <> None then rest_then ()
+            else check (Runtime (Str_affix (prefix, suffix), [ x ], None))
         | PStr_rest { prefix; rest = Some v; suffix } ->
             (* the middle, cut where the pieces end: on character
                boundaries, since the pieces are valid UTF-8, so it's cut
                as `Bytes` are, unchecked (ren_rt.h, [ren_str_slice]) *)
             let c =
-              borrowed fs "$test" Bool
-                (Runtime (Str_affix (prefix, suffix), [ x ], None))
+              if key <> None then Bool true
+              else
+                borrowed fs "$test" Bool
+                  (Runtime (Str_affix (prefix, suffix), [ x ], None))
             in
             emit fs
               (If
@@ -4531,9 +4550,52 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
     | PAs (q, _) -> can_match tag q
     | _ -> true
   in
+  (* the literals of a string `match`'s arms, each once, in order *)
+  let rec literals (p : C.pattern) =
+    match p.pkind with
+    | PStr s -> [ s ]
+    | POr ps -> List.concat_map literals ps
+    | PAs (q, _) -> literals q
+    | _ -> []
+  in
+  let keys =
+    List.fold_left
+      (fun acc ((a : C.arm), _, _) ->
+        acc @ List.filter (fun w -> not (List.mem w acc)) (literals a.pat))
+      [] arms
+  in
+  (* whether a pattern can match the literal [w], and one that's none of
+     the literals ([None]): decided here, as the interpreter would *)
+  let rec can_be key (p : C.pattern) =
+    match (p.pkind, key) with
+    | PStr s, Some w -> s = w
+    | PStr _, None -> false
+    | PStr_rest { prefix; suffix; _ }, Some w -> affix w prefix suffix
+    | POr ps, _ -> List.exists (can_be key) ps
+    | PAs (q, _), _ -> can_be key q
+    | _ -> true
+  in
   let dispatch =
     block fs (fun () ->
         match (parts, subjects, ctors cx s.ty) with
+        | None, [ x ], _ when s.ty = Ty.str && List.length keys >= 2 ->
+            (* a string `match` with two literals or more: each looked up
+               at once, through a perfect hash, then a switch on which it
+               is (compiler.md, "Patterns stage", "The DAG"). The branch
+               of a literal holds, in order, the arms that can match it,
+               decided here, so first match is kept, guards that fail
+               falling through to the next arm that can match; the
+               default holds those that can match a string no literal is *)
+            let i = borrowed fs "$key" Int (Runtime (Str_lookup keys, [ x ], None)) in
+            let branch key =
+              block fs (fun () ->
+                  keyed := Option.map (fun w -> (x, w)) key;
+                  try_arms ~known:None
+                    (List.filter (fun ((a : C.arm), _, _) -> can_be key a.pat) arms);
+                  keyed := None)
+            in
+            emit fs
+              (Switch (i, List.mapi (fun n w -> (n, branch (Some w))) keys, branch None))
         | None, [ x ], Some cs
           when List.exists
                  (fun ((a : C.arm), _, _) ->

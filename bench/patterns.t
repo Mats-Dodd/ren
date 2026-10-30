@@ -132,16 +132,16 @@ length switch. Each lookup is a function `ren_ph<N>` in the C:
   >    done; rm -f out.c)
   > }
   $ for f in strs guards lexer sizes hard; do hashed patterns/$f.ren; done
-  patterns/strs.ren, debug: not hashed yet
-  patterns/strs.ren, release: not hashed yet
-  patterns/guards.ren, debug: not hashed yet
-  patterns/guards.ren, release: not hashed yet
-  patterns/lexer.ren, debug: not hashed yet
-  patterns/lexer.ren, release: not hashed yet
-  patterns/sizes.ren, debug: not hashed yet
-  patterns/sizes.ren, release: not hashed yet
-  patterns/hard.ren, debug: not hashed yet
-  patterns/hard.ren, release: not hashed yet
+  patterns/strs.ren, debug: hashed, 1 lookups
+  patterns/strs.ren, release: hashed, 1 lookups
+  patterns/guards.ren, debug: hashed, 1 lookups
+  patterns/guards.ren, release: hashed, 1 lookups
+  patterns/lexer.ren, debug: hashed, 1 lookups
+  patterns/lexer.ren, release: hashed, 1 lookups
+  patterns/sizes.ren, debug: hashed, 3 lookups
+  patterns/sizes.ren, release: hashed, 3 lookups
+  patterns/hard.ren, debug: hashed, 6 lookups
+  patterns/hard.ren, release: hashed, 6 lookups
 
 Step 4: `keys.index(s)` on an array literal of string literals is the
 same lookup in a release build; a debug build calls the method:
