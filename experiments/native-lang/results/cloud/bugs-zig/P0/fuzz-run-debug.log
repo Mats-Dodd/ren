@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:12:04Z, plant P0, stage fuzz-run-debug
+# $ timeout 300 /home/user/ren/experiments/native-lang/bin/zig-debug/fuzz_run --random 5000 7
+fuzz_run: 5000 random inputs ok
+# exit 0 after 1.334982807 s

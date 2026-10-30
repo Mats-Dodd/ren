@@ -1,0 +1,124 @@
+   Compiling rustversion v1.0.23
+   Compiling once_cell v1.21.4
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.15
+   Compiling cc v1.10.0
+   Compiling log v0.4.34
+   Compiling tracing-core v0.1.36
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.5
+   Compiling libc v0.2.191
+   Compiling pin-project-lite v0.2.17
+   Compiling lazy_static v1.5.1
+   Compiling sharded-slab v0.1.7
+   Compiling generator v0.8.11
+   Compiling regex-automata v0.4.18
+   Compiling tracing v0.1.44
+   Compiling thread_local v1.1.10
+   Compiling tracing-log v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling smallvec v1.16.4
+   Compiling scoped-tls v1.0.1
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling loom v0.7.2
+warning: unused import: `AtomicI64`
+ --> core/src/deque.rs:5:26
+  |
+5 | use crate::sync::{fence, AtomicI64, AtomicPtr, AtomicU64, Ordering::*};
+  |                          ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ren_core` (lib) generated 1 warning (run `cargo fix --lib -p ren_core` to apply 1 suggestion)
+    Finished `release` profile [optimized + debuginfo] target(s) in 20.72s
+     Running tests/loom_deque.rs (rust/target/loom-P2/release/deps/loom_deque-63bc14689b955c35)
+
+running 3 tests
+test take_vs_steal_last ... FAILED
+test two_thieves ... ok
+test steal_during_grow ... ok
+
+failures:
+
+---- take_vs_steal_last stdout ----
+
+thread 'take_vs_steal_last' (7958) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/path.rs:175:9:
+Model exceeded maximum number of branches. This is often caused by an algorithm requiring the processor to make progress, e.g. spin locks.
+stack backtrace:
+   0: std::panicking::begin_panic::<&str>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panicking.rs:761:5
+   1: push_load
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/path.rs:111:9
+   2: {closure#0}<usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/atomic.rs:240:32
+   3: {closure#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/mod.rs:144:9
+   4: {closure#0}<loom::rt::synchronize::{closure_env#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/scheduler.rs:43:34
+   5: {closure#0}<loom::rt::scheduler::{impl#0}::with_execution::{closure_env#0}<loom::rt::synchronize::{closure_env#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>, usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/scheduler.rs:131:28
+   6: with<core::cell::RefCell<loom::rt::scheduler::State>, loom::rt::scheduler::{impl#0}::with_state::{closure_env#0}<loom::rt::scheduler::{impl#0}::with_execution::{closure_env#0}<loom::rt::synchronize::{closure_env#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>, usize>, usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/scoped-tls-1.0.1/src/lib.rs:171:13
+   7: with_state<loom::rt::scheduler::{impl#0}::with_execution::{closure_env#0}<loom::rt::synchronize::{closure_env#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>, usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/scheduler.rs:131:15
+   8: with_execution<loom::rt::synchronize::{closure_env#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/scheduler.rs:43:9
+   9: execution<loom::rt::synchronize::{closure_env#0}<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/mod.rs:174:5
+  10: synchronize<loom::rt::atomic::{impl#0}::load::{closure_env#0}<usize>, usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/mod.rs:141:5
+  11: load<usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/atomic.rs:231:9
+  12: load<usize>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/sync/atomic/atomic.rs:28:20
+  13: load
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/sync/atomic/int.rs:54:24
+  14: grow
+             at ./src/deque.rs:98:38
+  15: push
+             at ./src/deque.rs:84:22
+  16: {closure#0}
+             at ./tests/loom_deque.rs:33:11
+  17: {closure#0}<loom_deque::take_vs_steal_last::{closure_env#0}>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/model.rs:194:17
+  18: call_once<loom::model::{impl#0}::check::{closure_env#0}<loom_deque::take_vs_steal_last::{closure_env#0}>, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ops/function.rs:250:5
+  19: call_once<(), dyn core::ops::function::FnOnce<(), Output=()>, alloc::alloc::Global>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/boxed.rs:2275:9
+  20: {closure#0}
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/scheduler.rs:142:17
+  21: call_once<loom::rt::scheduler::spawn_thread::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ops/function.rs:250:5
+  22: {closure#0}<core::option::Option<alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output=()>, alloc::alloc::Global>>, (), loom::rt::scheduler::spawn_thread::{closure_env#0}>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/gen_impl.rs:357:21
+  23: call_once<generator::gen_impl::{impl#9}::init_code::{closure_env#0}<core::option::Option<alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output=()>, alloc::alloc::Global>>, (), loom::rt::scheduler::spawn_thread::{closure_env#0}>>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/stack/mod.rs:137:13
+  24: call_once
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/stack/mod.rs:119:9
+  25: {closure#0}
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/gen.rs:35:14
+  26: call_once<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ops/function.rs:250:5
+  27: do_call<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panicking.rs:581:40
+  28: catch_unwind<(), generator::detail::gen::gen_init_impl::{closure_env#0}>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panicking.rs:544:19
+  29: catch_unwind<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panic.rs:359:14
+  30: catch_unwind_filter<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/gen.rs:23:5
+  31: gen_init_impl
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/gen.rs:50:25
+  32: generator::detail::asm::gen_init
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/x86_64_unix.rs:8:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    take_vs_steal_last
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `-p ren_core --test loom_deque`

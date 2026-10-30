@@ -1,0 +1,2 @@
+c/bugs.sh: line 22: 10422 Segmentation fault      "$@" >> "$log" 2>&1
+done P4: warn build tests valgrind fuzz

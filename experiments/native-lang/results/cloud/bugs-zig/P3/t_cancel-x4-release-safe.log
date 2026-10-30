@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:22:36Z, plant P3, stage t_cancel-x4-release-safe
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-safe-P3/harness t_cancel --driver epoll --workers 4
+result: t_cancel a=2 b=2 c=2
+metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.011092
+# exit 0 after .021363798 s

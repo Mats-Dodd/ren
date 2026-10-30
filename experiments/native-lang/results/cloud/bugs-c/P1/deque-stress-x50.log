@@ -1,0 +1,7 @@
+# machine cloud, 2026-10-30T14:16:42Z, plant P1, stage deque-stress-x50
+# $ bash -c for i in $(seq 50); do timeout 60 '/home/user/ren/experiments/native-lang/bin/c-release-P1/deque_stress' stress 10 200000 || { echo "iteration $i failed"; exit 1; }; done; echo 50 ok
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=1441632 duplicated=144138 lost=144138
+deque_stress stress: FAIL
+iteration 1 failed
+# exit 1 after 1.081141321 s

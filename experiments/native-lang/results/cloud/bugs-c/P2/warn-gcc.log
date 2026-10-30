@@ -1,0 +1,60 @@
+# machine cloud, 2026-10-30T14:34:30Z, plant P2, stage warn-gcc
+# $ bash -c cd '/home/user/ren/experiments/native-lang/c' && for f in dq.c journal.c sched.c core.c layout.c drv_common.c drv_epoll.c drv_replay.c drv_uring.c; do gcc -std=c11 -O2 -Wall -Wextra -Wconversion -Wno-unused-parameter -DREN_PLANT=2 -D_GNU_SOURCE -I'/home/user/ren/experiments/native-lang/harness' -I'/home/user/ren/experiments/native-lang/c' -fsyntax-only $f; done
+In file included from atom.h:39,
+                 from dq.h:5,
+                 from dq.c:2:
+dq.c: In function 'grow':
+dq.c:32:19: warning: conversion to 'long unsigned int' from 'int64_t' {aka 'long int'} may change the sign of the result [-Wsign-conversion]
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |                   ^
+dq.c:32:5: note: in expansion of macro 'ST'
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |     ^~
+dq.c:32:50: warning: conversion to 'long unsigned int' from 'int64_t' {aka 'long int'} may change the sign of the result [-Wsign-conversion]
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |                                                  ^
+dq.c:32:5: note: in expansion of macro 'ST'
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |     ^~
+dq.c:32:36: note: in expansion of macro 'LD'
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |                                    ^~
+dq.c: In function 'dq_push':
+dq.c:47:13: warning: comparison of integer expressions of different signedness: 'dq_i' {aka 'long unsigned int'} and 'int64_t' {aka 'long int'} [-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |             ^
+dq.c:48:17: warning: conversion to 'long unsigned int' from 'int64_t' {aka 'long int'} may change the sign of the result [-Wsign-conversion]
+   48 |   ST(&a->slot[b & (a->cap - 1)], x, RLX);
+      |                 ^
+dq.c:48:3: note: in expansion of macro 'ST'
+   48 |   ST(&a->slot[b & (a->cap - 1)], x, RLX);
+      |   ^~
+dq.c: In function 'dq_take':
+dq.c:68:33: warning: conversion to 'long unsigned int' from 'int64_t' {aka 'long int'} may change the sign of the result [-Wsign-conversion]
+   68 |     uintptr_t x = LD(&a->slot[b & (a->cap - 1)], RLX);
+      |                                 ^
+dq.c:68:19: note: in expansion of macro 'LD'
+   68 |     uintptr_t x = LD(&a->slot[b & (a->cap - 1)], RLX);
+      |                   ^~
+dq.c: In function 'dq_steal':
+dq.c:89:33: warning: conversion to 'long unsigned int' from 'int64_t' {aka 'long int'} may change the sign of the result [-Wsign-conversion]
+   89 |     uintptr_t x = LD(&a->slot[t & (a->cap - 1)], RLX);
+      |                                 ^
+dq.c:89:19: note: in expansion of macro 'LD'
+   89 |     uintptr_t x = LD(&a->slot[t & (a->cap - 1)], RLX);
+      |                   ^~
+journal.c:44:1: warning: 'integer' attribute directive ignored [-Wattributes]
+   44 | NO_SAN_INT uint64_t ren_c_fnv1a(const uint8_t *p, uint64_t n) {
+      | ^~~~~~~~~~
+sched.c:148:1: warning: 'integer' attribute directive ignored [-Wattributes]
+  148 | NO_SAN_INT static uint64_t xorshift64(uint64_t *s) {
+      | ^~~~~~~~~~
+core.c: In function 'ren_start':
+core.c:110:36: warning: conversion to 'long long unsigned int' from 'long unsigned int' may change the sign of the result [-Wsign-conversion]
+  110 |     W->rng = 0x9E3779B97F4A7C15ull ^ (uint64_t)(w + 1);
+      |                                    ^
+core.c:110:14: warning: conversion to 'uint64_t' {aka 'long unsigned int'} from 'long long unsigned int' may change the sign of the result [-Wsign-conversion]
+  110 |     W->rng = 0x9E3779B97F4A7C15ull ^ (uint64_t)(w + 1);
+      |              ^~~~~~~~~~~~~~~~~~~~~
+# exit 0 after .230113958 s
+warnings: 10

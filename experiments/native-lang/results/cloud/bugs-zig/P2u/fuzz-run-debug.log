@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T17:02:31Z, plant P2u, stage fuzz-run-debug
+# $ timeout 300 /home/user/ren/experiments/native-lang/bin/zig-debug-P2u/fuzz_run --random 5000 7
+ren zig panic: integer overflow
+# exit 134 after .017665221 s

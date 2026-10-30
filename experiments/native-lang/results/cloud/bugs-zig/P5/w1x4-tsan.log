@@ -1,0 +1,129 @@
+# machine cloud, 2026-10-30T16:34:04Z, plant P5, stage w1x4-tsan
+# $ bash -c for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P5/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done
+==================
+WARNING: ThreadSanitizer: data race (pid=4797)
+  Read of size 8 at 0x727800000210 by thread T1:
+    #0 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 (harness+0xf4de8) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Previous write of size 8 at 0x727800000210 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Location is heap block of size 3072 at 0x727800000000 allocated by main thread:
+    #0 posix_memalign <null> (harness+0x63db9) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:239:37 (harness+0x103aa2) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26 (harness+0x103aa2)
+    #3 mem.Allocator.allocBytesAligned__func_26 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35 (harness+0x103aa2)
+    #4 mem.Allocator.allocWithSizeAndAlignment__func_404 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34 (harness+0x103aa2)
+    #5 mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89 (harness+0x103aa2)
+    #6 mem.Allocator.alloc__func_403 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41 (harness+0x103aa2)
+    #7 alloc.allocSlice__func_395 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23 (harness+0x103aa2)
+    #8 core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:518:26 (harness+0x103aa2)
+    #9 ren_start /home/user/ren/experiments/native-lang/zig/src/root.zig:37:22 (harness+0x1037b0) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #10 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xe2e10) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Thread T1 (tid=4799, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Thread T4 (tid=4802, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 in core.run
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=4797)
+  Write of size 8 at 0x727800000210 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Previous write of size 8 at 0x727800000210 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Location is heap block of size 3072 at 0x727800000000 allocated by main thread:
+    #0 posix_memalign <null> (harness+0x63db9) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:239:37 (harness+0x103aa2) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26 (harness+0x103aa2)
+    #3 mem.Allocator.allocBytesAligned__func_26 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35 (harness+0x103aa2)
+    #4 mem.Allocator.allocWithSizeAndAlignment__func_404 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34 (harness+0x103aa2)
+    #5 mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89 (harness+0x103aa2)
+    #6 mem.Allocator.alloc__func_403 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41 (harness+0x103aa2)
+    #7 alloc.allocSlice__func_395 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23 (harness+0x103aa2)
+    #8 core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:518:26 (harness+0x103aa2)
+    #9 ren_start /home/user/ren/experiments/native-lang/zig/src/root.zig:37:22 (harness+0x1037b0) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #10 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xe2e10) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Thread T4 (tid=4802, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Thread T2 (tid=4800, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 in core.stealAny
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=4797)
+  Read of size 8 at 0x727800000510 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Previous write of size 8 at 0x727800000510 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Location is heap block of size 3072 at 0x727800000000 allocated by main thread:
+    #0 posix_memalign <null> (harness+0x63db9) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:239:37 (harness+0x103aa2) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26 (harness+0x103aa2)
+    #3 mem.Allocator.allocBytesAligned__func_26 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35 (harness+0x103aa2)
+    #4 mem.Allocator.allocWithSizeAndAlignment__func_404 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34 (harness+0x103aa2)
+    #5 mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89 (harness+0x103aa2)
+    #6 mem.Allocator.alloc__func_403 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41 (harness+0x103aa2)
+    #7 alloc.allocSlice__func_395 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23 (harness+0x103aa2)
+    #8 core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:518:26 (harness+0x103aa2)
+    #9 ren_start /home/user/ren/experiments/native-lang/zig/src/root.zig:37:22 (harness+0x1037b0) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #10 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xe2e10) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Thread T3 (tid=4801, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+  Thread T4 (tid=4802, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 in core.stealAny
+==================
+ThreadSanitizer: reported 3 warnings
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=515672 inner_s=0.387843 wall_s=0.391706
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.391706
+# exit 66 after .416271178 s

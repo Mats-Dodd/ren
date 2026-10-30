@@ -1,0 +1,17 @@
+# machine cloud, 2026-10-30T14:15:06Z, plant P1, stage warn-gcc
+# $ bash -c cd '/home/user/ren/experiments/native-lang/c' && for f in dq.c journal.c sched.c core.c layout.c drv_common.c drv_epoll.c drv_replay.c drv_uring.c; do gcc -std=c11 -O2 -Wall -Wextra -Wconversion -Wno-unused-parameter -DREN_PLANT=1 -D_GNU_SOURCE -I'/home/user/ren/experiments/native-lang/harness' -I'/home/user/ren/experiments/native-lang/c' -fsyntax-only $f; done
+journal.c:44:1: warning: 'integer' attribute directive ignored [-Wattributes]
+   44 | NO_SAN_INT uint64_t ren_c_fnv1a(const uint8_t *p, uint64_t n) {
+      | ^~~~~~~~~~
+sched.c:148:1: warning: 'integer' attribute directive ignored [-Wattributes]
+  148 | NO_SAN_INT static uint64_t xorshift64(uint64_t *s) {
+      | ^~~~~~~~~~
+core.c: In function 'ren_start':
+core.c:110:36: warning: conversion to 'long long unsigned int' from 'long unsigned int' may change the sign of the result [-Wsign-conversion]
+  110 |     W->rng = 0x9E3779B97F4A7C15ull ^ (uint64_t)(w + 1);
+      |                                    ^
+core.c:110:14: warning: conversion to 'uint64_t' {aka 'long unsigned int'} from 'long long unsigned int' may change the sign of the result [-Wsign-conversion]
+  110 |     W->rng = 0x9E3779B97F4A7C15ull ^ (uint64_t)(w + 1);
+      |              ^~~~~~~~~~~~~~~~~~~~~
+# exit 0 after .228017660 s
+warnings: 4

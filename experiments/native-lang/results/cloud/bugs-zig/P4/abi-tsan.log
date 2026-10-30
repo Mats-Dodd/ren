@@ -1,0 +1,94 @@
+# machine cloud, 2026-10-30T16:28:12Z, plant P4, stage abi-tsan
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-tsan-P4/abi_test
+ok   basic
+ok   stale
+==================
+WARNING: ThreadSanitizer: heap-use-after-free (pid=32075)
+  Read of size 4 at 0x722400000078 by main thread:
+    #0 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 (abi_test+0xf4081) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #1 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (abi_test+0xf4081)
+    #2 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (abi_test+0xf279c) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #3 ren_run /home/user/ren/experiments/native-lang/zig/src/root.zig:43:20 (abi_test+0x101012) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #4 race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:281:3 (abi_test+0xe618e) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #5 t_cancel_race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:285:35 (abi_test+0xe3949) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #6 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe2ac5) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+
+  Previous write of size 8 at 0x722400000078 by main thread:
+    #0 free <null> (abi_test+0x630b3) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #1 heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44 (abi_test+0xf4074) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #2 mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25 (abi_test+0xf4074)
+    #3 mem.Allocator.destroy__func_96 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17 (abi_test+0xf4074)
+    #4 alloc.destroy__func_95 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18 (abi_test+0xf4074)
+    #5 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:450:39 (abi_test+0xf4074)
+    #6 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (abi_test+0xf4074)
+    #7 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (abi_test+0xf279c) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #8 ren_run /home/user/ren/experiments/native-lang/zig/src/root.zig:43:20 (abi_test+0x101012) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #9 race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:281:3 (abi_test+0xe618e) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #10 t_cancel_race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:285:35 (abi_test+0xe3949) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #11 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe2ac5) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+
+SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 in core.deliver
+==================
+ok   cancel_race
+  FAIL tests/abi_test.c:269: ren_poll_call(c, 0, &k1) && k1.op == REN_OP_READ
+FAIL cancel_sent
+==================
+WARNING: ThreadSanitizer: heap-use-after-free (pid=32075)
+  Read of size 4 at 0x722400000108 by main thread:
+    #0 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 (abi_test+0xf4081) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #1 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (abi_test+0xf4081)
+    #2 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (abi_test+0xf279c) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #3 ren_run /home/user/ren/experiments/native-lang/zig/src/root.zig:43:20 (abi_test+0x101012) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #4 t_retract /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:296:3 (abi_test+0xe3aa8) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #5 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe2ac5) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+
+  Previous write of size 8 at 0x722400000108 by main thread:
+    #0 free <null> (abi_test+0x630b3) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #1 heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44 (abi_test+0xf4074) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #2 mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25 (abi_test+0xf4074)
+    #3 mem.Allocator.destroy__func_96 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17 (abi_test+0xf4074)
+    #4 alloc.destroy__func_95 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18 (abi_test+0xf4074)
+    #5 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:450:39 (abi_test+0xf4074)
+    #6 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (abi_test+0xf4074)
+    #7 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (abi_test+0xf279c) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #8 ren_run /home/user/ren/experiments/native-lang/zig/src/root.zig:43:20 (abi_test+0x101012) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #9 t_retract /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:296:3 (abi_test+0xe3aa8) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #10 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe2ac5) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+
+SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 in core.deliver
+==================
+ok   retract
+ok   answer_now
+  FAIL tests/abi_test.c:325: ren_poll_call(c, 0, &got[i]) && got[i].kind == REN_CALL
+FAIL stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+==================
+WARNING: ThreadSanitizer: heap-use-after-free (pid=32075)
+  Read of size 4 at 0x722400000228 by main thread:
+    #0 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 (abi_test+0xf4081) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #1 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (abi_test+0xf4081)
+    #2 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (abi_test+0xf279c) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #3 ren_run /home/user/ren/experiments/native-lang/zig/src/root.zig:43:20 (abi_test+0x101012) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #4 t_determinism /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:483:5 (abi_test+0xe5633) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #5 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe2ac5) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+
+  Previous write of size 8 at 0x722400000228 by main thread:
+    #0 free <null> (abi_test+0x630b3) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #1 heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44 (abi_test+0xf4074) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #2 mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25 (abi_test+0xf4074)
+    #3 mem.Allocator.destroy__func_96 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17 (abi_test+0xf4074)
+    #4 alloc.destroy__func_95 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18 (abi_test+0xf4074)
+    #5 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:450:39 (abi_test+0xf4074)
+    #6 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (abi_test+0xf4074)
+    #7 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (abi_test+0xf279c) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #8 ren_run /home/user/ren/experiments/native-lang/zig/src/root.zig:43:20 (abi_test+0x101012) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #9 t_determinism /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:483:5 (abi_test+0xe5633) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+    #10 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe2ac5) (BuildId: 6a2a1508da0897ab367a584ad8d0ad40e3a4bbfc)
+
+SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 in core.deliver
+==================
+ren zig panic: ren zig: retract found a slot in an impossible state
+# exit 134 after .129821680 s

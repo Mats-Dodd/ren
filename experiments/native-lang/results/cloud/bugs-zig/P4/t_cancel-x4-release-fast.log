@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:28:01Z, plant P4, stage t_cancel-x4-release-fast
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-fast-P4/harness t_cancel --driver epoll --workers 4
+free(): double free detected in tcache 2
+# exit 134 after .008129237 s

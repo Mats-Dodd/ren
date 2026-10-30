@@ -1,0 +1,71 @@
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x55a6e4d91710, 0x55a6e4d92637), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x55a6e4d92638,0x55a6e4da18a8), 
+INFO: A corpus is not provided, starting from an empty corpus
+#2	INITED cov: 99 ft: 100 corp: 1/1b exec/s: 0 rss: 33Mb
+=================================================================
+==4573==ERROR: AddressSanitizer: attempting double-free on 0x50d000042cb0 in thread T0:
+    #0 0x55a6e4be5a8a in free (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x13ea8a) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #1 0x55a6e4c54483 in dealloc_nonnull /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:128:14
+    #2 0x55a6e4c54483 in deallocate_impl_runtime /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:229:22
+    #3 0x55a6e4c54483 in deallocate_impl /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:344:9
+    #4 0x55a6e4c54483 in deallocate /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:462:23
+    #5 0x55a6e4c54483 in drop<ren_core::sched::Op, alloc::alloc::Global> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/boxed.rs:1956:24
+    #6 0x55a6e4c54483 in drop_glue<alloc::boxed::Box<ren_core::sched::Op, alloc::alloc::Global>> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ptr/mod.rs:825:1
+    #7 0x55a6e4c54483 in drop<alloc::boxed::Box<ren_core::sched::Op, alloc::alloc::Global>> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/mem/mod.rs:1004:1
+    #8 0x55a6e4c54483 in deliver /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:465:9
+    #9 0x55a6e4c54483 in <ren_core::sched::Core>::drain_inbox /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:478:18
+    #10 0x55a6e4c54688 in <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14
+    #11 0x55a6e4c58ec5 in ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13
+    #12 0x55a6e4c58ec5 in <ren_core::drv::replay::Fuzz>::run_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:340:17
+    #13 0x55a6e4c592d2 in <ren_core::drv::replay::Fuzz>::run /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:425:25
+    #14 0x55a6e4c61de4 in ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:275:40
+    #15 0x55a6e4c246a5 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #16 0x55a6e4c242c7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #17 0x55a6e4b31bf4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x8abf4) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #18 0x55a6e4b312e9 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool, bool*) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x8a2e9) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #19 0x55a6e4b32ad5 in fuzzer::Fuzzer::MutateAndTestOne() (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x8bad5) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #20 0x55a6e4b33635 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x8c635) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #21 0x55a6e4b2090f in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x7990f) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #22 0x55a6e4b4af96 in main (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0xa3f96) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #23 0x7f416642a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #24 0x7f416642a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #25 0x55a6e4b158f4 in _start (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x6e8f4) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+
+0x50d000042cb0 is located 0 bytes inside of 136-byte region [0x50d000042cb0,0x50d000042d38)
+freed by thread T0 here:
+    #0 0x55a6e4be5a8a in free (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x13ea8a) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #1 0x55a6e4c543e1 in dealloc_nonnull /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:128:14
+    #2 0x55a6e4c543e1 in deallocate_impl_runtime /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:229:22
+    #3 0x55a6e4c543e1 in deallocate_impl /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:344:9
+    #4 0x55a6e4c543e1 in deallocate /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:462:23
+    #5 0x55a6e4c543e1 in drop<ren_core::sched::Op, alloc::alloc::Global> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/boxed.rs:1956:24
+    #6 0x55a6e4c543e1 in drop_glue<alloc::boxed::Box<ren_core::sched::Op, alloc::alloc::Global>> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ptr/mod.rs:825:1
+    #7 0x55a6e4c543e1 in drop<alloc::boxed::Box<ren_core::sched::Op, alloc::alloc::Global>> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/mem/mod.rs:1004:1
+    #8 0x55a6e4c543e1 in on_cancel_done /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:472:9
+    #9 0x55a6e4c543e1 in deliver /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:456:18
+    #10 0x55a6e4c543e1 in <ren_core::sched::Core>::drain_inbox /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:478:18
+
+previously allocated by thread T0 here:
+    #0 0x55a6e4be5d23 in malloc (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x13ed23) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8)
+    #1 0x55a6e4c56408 in alloc /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:101:9
+    #2 0x55a6e4c56408 in alloc_impl_runtime /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:210:73
+    #3 0x55a6e4c56408 in alloc_impl /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:332:9
+    #4 0x55a6e4c56408 in allocate /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/alloc.rs:449:14
+    #5 0x55a6e4c56408 in box_new_uninit /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/boxed.rs:248:18
+    #6 0x55a6e4c56408 in new<ren_core::sched::Op> /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/boxed.rs:286:19
+    #7 0x55a6e4c56408 in <ren_core::sched::Core>::world /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:898:31
+
+SUMMARY: AddressSanitizer: double-free (/home/user/ren/experiments/native-lang/bin/rust-asanh-P4/fuzz+0x13ea8a) (BuildId: 94101251b7a5c85ce70406c8a0370ad24e01c8c8) in free
+==4573==ABORTING
+MS: 4 ChangeBinInt-ChangeBit-CopyPart-InsertByte-; base unit: adc83b19e793491b1c6ea0fd8b46cd9f32e592fc
+0x21,0xed,0xed,
+!\355\355
+artifact_prefix='/home/user/ren/experiments/native-lang/results/cloud/bugs-rust/P4/'; Test unit written to /home/user/ren/experiments/native-lang/results/cloud/bugs-rust/P4/crash-38df24fec077f39add4a6feac01f4091f78c964b
+Base64: Ie3t
+stat::number_of_executed_units: 201
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              36

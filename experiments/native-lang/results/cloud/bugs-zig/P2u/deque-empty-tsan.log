@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:54:17Z, plant P2u, stage deque-empty-tsan
+# $ timeout 20 /home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/deque_stress empty
+ren zig panic: integer overflow
+# exit 134 after .020739287 s

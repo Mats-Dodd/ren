@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:06:20Z, plant P2u, stage build-debug
+# $ /home/user/ren/experiments/native-lang/build.sh zig debug P2u
+== zig-debug-P2u: /home/user/ren/experiments/native-lang/zig/build.sh debug /home/user/ren/experiments/native-lang/build/zig-debug-P2u
+built zig-debug-P2u: language 0.88s, harness link 1.77s
+# exit 0 after 2.679623512 s

@@ -1,0 +1,321 @@
+# machine cloud, 2026-10-30T14:39:09Z, plant P4, stage tests-tsan
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=20 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/c-tsan-P4
+== layout (c-tsan-P4)
+PASS layout_check
+== abi (c-tsan-P4)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  4073 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL abi_test (exit 134)
+     |     #2 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (abi_test+0xe3e28) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     |     #3 t_determinism /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:483:5 (abi_test+0xe1893) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     |     #4 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xded25) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     | 
+     |   Previous write of size 8 at 0x7224000001b8 by main thread:
+     |     #0 free <null> (abi_test+0x5f313) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     |     #1 deliver /home/user/ren/experiments/native-lang/c/core.c:146:47 (abi_test+0xe5ba4) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (abi_test+0xe5ba4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (abi_test+0xe3e28) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     |     #4 t_determinism /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:483:5 (abi_test+0xe1893) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     |     #5 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xded25) (BuildId: 24dddd67d3684d702681ff04b531ec1a594c4795)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ren c: retract found slot word 0000000100000002
+== deque (c-tsan-P4)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (c-tsan-P4)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (c-tsan-P4)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+FAIL t_cancel epoll x1 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed607) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed153) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T1 (tid=6049, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=1 wall_s=0.091410
+FAIL t_block stop epoll x1 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed607) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed153) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T2 (tid=6091, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=1 wall_s=0.151343
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+FAIL t_cancel epoll x4 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed607) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed153) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T1 (tid=6167, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.151311
+FAIL t_block stop epoll x4 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed607) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed153) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T2 (tid=6190, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=4 wall_s=0.166612
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+FAIL t_cancel epoll x8 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed607) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed153) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T1 (tid=6259, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=8 wall_s=0.096890
+FAIL t_block stop epoll x8 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed607) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed153) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T2 (tid=6274, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=8 wall_s=0.154335
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+FAIL t_cancel uring x1 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf28ee) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed19b) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T1 (tid=6327, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=1 wall_s=0.086780
+FAIL t_block stop uring x1 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf28ee) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed19b) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T2 (tid=6338, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=1 wall_s=0.150170
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+FAIL t_cancel uring x4 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf28ee) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed19b) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T1 (tid=6390, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=4 wall_s=0.120139
+FAIL t_block stop uring x4 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf28ee) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed19b) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T2 (tid=6401, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=4 wall_s=0.151587
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+FAIL t_cancel uring x8 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf28ee) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed19b) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T1 (tid=6462, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=8 wall_s=0.096253
+FAIL t_block stop uring x8 (exit 66)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (harness+0xe82b4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (harness+0xe6538) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #4 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf28ee) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #5 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed19b) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     |   Thread T2 (tid=6487, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: c1f6d7c9bf53f806c62f3306a32c4ca9059b5c2e)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=8 wall_s=0.276076
+PASS t_block kill uring x8
+== replay (c-tsan-P4)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+FAIL W4 replay t_cancel epoll record (exit 0)
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=1 wall_s=0.079451
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+FAIL W4 replay t_cancel uring record (exit 0)
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=1 wall_s=0.081558
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (c-tsan-P4)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  6637 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL fuzz_run random 300 (exit 134)
+     | 
+     |   Previous write of size 8 at 0x7224000003f8 by main thread:
+     |     #0 free <null> (fuzz_run+0x5f3d3) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #1 deliver /home/user/ren/experiments/native-lang/c/core.c:146:47 (fuzz_run+0xe77f4) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #2 drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5 (fuzz_run+0xe77f4)
+     |     #3 ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3 (fuzz_run+0xe5a78) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #4 fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15 (fuzz_run+0xf141f) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #5 drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:239:7 (fuzz_run+0xf09ec) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #6 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:298:12 (fuzz_run+0xec713) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #7 fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15 (fuzz_run+0xdf0c1) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     |     #8 main /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_run.c:21:7 (fuzz_run+0xdeefd) (BuildId: ddf77ee62de4b71cad920f2bcd9ed843030bb33c)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==================
+     | ren c: retract found slot word 0000000100000002
+== summary c-tsan-P4: 56 passed, 16 failed
+   failed: abi_test
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_cancel epoll x8
+   failed: t_block stop epoll x8
+   failed: t_cancel uring x1
+   failed: t_block stop uring x1
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_cancel uring record
+   failed: fuzz_run random 300
+# exit 1 after 22.470330035 s

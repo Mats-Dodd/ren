@@ -1,0 +1,8 @@
+# machine: cloud -- VERIFY re-run log (analyze-core-P4.log), 2026-10-30
+core.c:150:16: warning: Use of memory after it is freed [unix.Malloc]
+  150 |   ST(&c->slots[o->slot].word, mkword(next_gen(o->gen), S_FREE), REL);
+      |                ^~~~~~~
+./atom.h:49:49: note: expanded from macro 'ST'
+   49 | #define ST(p, v, mo)     atomic_store_explicit((p), (v), (mo))
+      |                                                 ^
+1 warning generated.

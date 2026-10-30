@@ -1,0 +1,6 @@
+# machine: cloud -- VERIFY re-run log (build-c-release-P2.log), 2026-10-30
+== c-release-P2: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/build.sh release /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/c-release-P2
+/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/dq.c:47:13: error: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Werror,-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+1 error generated.

@@ -1,0 +1,15 @@
+# machine cloud, 2026-10-30T16:10:08Z, plant P0, stage abi-tsan
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-tsan/abi_test
+ok   basic
+ok   stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+# exit 0 after .025099526 s

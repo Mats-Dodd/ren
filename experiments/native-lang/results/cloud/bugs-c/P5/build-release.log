@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T14:40:22Z, plant P5, stage build-release
+# $ /home/user/ren/experiments/native-lang/build.sh c release P5
+== c-release-P5: /home/user/ren/experiments/native-lang/c/build.sh release /home/user/ren/experiments/native-lang/build/c-release-P5
+built c-release-P5: language 1.78s, harness link 2.95s
+# exit 0 after 4.765498301 s

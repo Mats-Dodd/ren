@@ -1,0 +1,7 @@
+== rust-release-P3: /home/user/ren/experiments/native-lang/rust/build.sh release /home/user/ren/experiments/native-lang/build/rust-release-P3
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4.47s
+   Compiling ren_hot v0.1.0 (/home/user/ren/experiments/native-lang/rust/hot)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.44s
+built rust-release-P3: language 5.05s, harness link 3.12s

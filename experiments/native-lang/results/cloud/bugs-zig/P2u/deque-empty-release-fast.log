@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:50:54Z, plant P2u, stage deque-empty-release-fast
+# $ timeout 20 /home/user/ren/experiments/native-lang/bin/zig-release-fast-P2u/deque_stress empty
+FAIL tests/deque_stress.c:20: ren_dq_steal(q) == REN_DQ_EMPTY
+# exit 124 after 20.009427974 s

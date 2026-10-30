@@ -1,0 +1,9 @@
+# machine cloud, 2026-10-30T14:34:54Z, plant P2, stage build-tsan
+# $ /home/user/ren/experiments/native-lang/build.sh c tsan P2
+== c-tsan-P2: /home/user/ren/experiments/native-lang/c/build.sh tsan /home/user/ren/experiments/native-lang/build/c-tsan-P2
+/home/user/ren/experiments/native-lang/c/dq.c:47:13: error: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Werror,-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+1 error generated.
+# exit 1 after .070175167 s
+# -Werror build failed; retrying with REN_C_WERROR=0

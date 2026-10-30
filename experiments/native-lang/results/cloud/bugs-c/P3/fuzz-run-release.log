@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T14:38:12Z, plant P3, stage fuzz-run-release
+# $ timeout 600 /home/user/ren/experiments/native-lang/bin/c-release-P3/fuzz_run --random 20000 7
+fuzz: oracle failure (worker 0, finish 1): fuzz oracle: a stale reply was ACCEPTED (id 0000000800000001, ren_reply = 0, input offset 35)
+# exit 134 after .008074385 s

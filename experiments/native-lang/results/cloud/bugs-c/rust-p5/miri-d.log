@@ -1,0 +1,20 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo-miri runner target/miri/x86_64-unknown-linux-gnu/debug/p5d`
+error: Undefined Behavior: Data race detected between (1) non-atomic write on thread `unnamed-1` and (2) non-atomic read on thread `unnamed-2` at alloc180
+  --> src/main.rs:10:18
+   |
+10 |         unsafe { *w[0 * i].stolen_from.get() += 1; }
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
+   |
+help: and (1) occurred earlier here
+  --> src/main.rs:10:18
+   |
+10 |         unsafe { *w[0 * i].stolen_from.get() += 1; }
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+   = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+   = note: this is on thread `unnamed-2`
+note: the current function got called indirectly due to this code
+  --> src/main.rs:9:58
+   |
+ 9 |       let hs: Vec<_> = (0..3).map(|i| { let w = w.clone(); thread::spawn(move || {

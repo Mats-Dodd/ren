@@ -1,0 +1,20 @@
+# machine cloud, 2026-10-30T14:40:08Z, plant P4, stage fuzz-run-ubsan
+# $ timeout 600 /home/user/ren/experiments/native-lang/bin/c-ubsan-int-P4/fuzz_run --random 5000 7
+UndefinedBehaviorSanitizer:DEADLYSIGNAL
+==10434==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x557760066dc0 (pc 0x55734962b63b bp 0x55735137e600 sp 0x7ffe675a3920 T10434)
+==10434==The signal is caused by a WRITE memory access.
+    #0 0x55734962b63b in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+    #1 0x55734962b63b in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+    #2 0x557349629adc in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+    #3 0x5573496349e4 in fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15
+    #4 0x55734963425a in drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:239:7
+    #5 0x5573496151a2 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #6 0x557349614e17 in main /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_run.c:21:7
+    #7 0x7fe1a342a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #8 0x7fe1a342a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #9 0x5573495ea724 in _start (/home/user/ren/experiments/native-lang/bin/c-ubsan-int-P4/fuzz_run+0x23724) (BuildId: b0fa3814a5196abfc169180a60f61eb74c8e4890)
+
+UndefinedBehaviorSanitizer can not provide additional info.
+SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+==10434==ABORTING
+# exit 1 after .101353876 s

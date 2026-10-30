@@ -1,0 +1,107 @@
+# machine: cloud
+hung on run 283 (pid 889)
+[New LWP 899]
+[New LWP 898]
+[New LWP 897]
+[New LWP 896]
+[New LWP 895]
+[New LWP 894]
+[New LWP 893]
+[New LWP 892]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00007f1246a98e51 in __futex_abstimed_wait_common64 (private=128, cancel=true, abstime=0x0, op=265, expected=892, futex_word=0x7f12469ff990) at ./nptl/futex-internal.c:57
+
+warning: 57	./nptl/futex-internal.c: No such file or directory
+  Id   Target Id                                 Frame 
+* 1    Thread 0x7f1246dd1c00 (LWP 889) "harness" 0x00007f1246a98e51 in __futex_abstimed_wait_common64 (private=128, cancel=true, abstime=0x0, op=265, expected=892, futex_word=0x7f12469ff990) at ./nptl/futex-internal.c:57
+  2    Thread 0x7f123bfff6c0 (LWP 899) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=23, events=0x7f123bffea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  3    Thread 0x7f12439ff6c0 (LWP 898) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=14, events=0x7f12439fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  4    Thread 0x7f12441ff6c0 (LWP 897) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=22, events=0x7f12441fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  5    Thread 0x7f12449ff6c0 (LWP 896) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=13, events=0x7f12449fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  6    Thread 0x7f12451ff6c0 (LWP 895) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=21, events=0x7f12451fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  7    Thread 0x7f12459ff6c0 (LWP 894) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=12, events=0x7f12459fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  8    Thread 0x7f12461ff6c0 (LWP 893) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=18, events=0x7f12461fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+  9    Thread 0x7f12469ff6c0 (LWP 892) "harness" 0x00007f1246b2a2d2 in epoll_wait (epfd=15, events=0x7f12469fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+
+Thread 9 (Thread 0x7f12469ff6c0 (LWP 892) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=15, events=0x7f12469fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb247310) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 8 (Thread 0x7f12461ff6c0 (LWP 893) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=18, events=0x7f12461fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb247338) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 7 (Thread 0x7f12459ff6c0 (LWP 894) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=12, events=0x7f12459fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb247360) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7f12451ff6c0 (LWP 895) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=21, events=0x7f12451fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb247388) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7f12449ff6c0 (LWP 896) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=13, events=0x7f12449fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb2473b0) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7f12441ff6c0 (LWP 897) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=22, events=0x7f12441fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb2473d8) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7f12439ff6c0 (LWP 898) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=14, events=0x7f12439fea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb247400) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7f123bfff6c0 (LWP 899) "harness"):
+#0  0x00007f1246b2a2d2 in epoll_wait (epfd=23, events=0x7f123bffea20, maxevents=64, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x000055e8e2c6d39a in wait () at core/src/drv/epoll.rs:336
+#2  0x000055e8e2c7062f in drive<ren_core::drv::epoll::EpW> () at core/src/drv/linux.rs:55
+#3  ren_drv_worker () at core/src/drv/mod.rs:272
+#4  0x000055e8e2c53e78 in worker_main (p=0x55e8fb247428) at host_main.c:41
+#5  0x00007f1246a9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x00007f1246b29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7f1246dd1c00 (LWP 889) "harness"):
+#0  0x00007f1246a98e51 in __futex_abstimed_wait_common64 (private=128, cancel=true, abstime=0x0, op=265, expected=892, futex_word=0x7f12469ff990) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=128, abstime=0x0, clockid=0, expected=892, futex_word=0x7f12469ff990) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7f12469ff990, expected=892, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=128) at ./nptl/futex-internal.c:139
+#3  0x00007f1246a9e883 in __pthread_clockjoin_ex (threadid=139716471027392, thread_return=thread_return@entry=0x0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, block=block@entry=true) at ./nptl/pthread_join_common.c:102
+#4  0x00007f1246a9e723 in ___pthread_join (threadid=<optimized out>, thread_return=thread_return@entry=0x0) at ./nptl/pthread_join.c:24
+#5  0x000055e8e2c5393f in main (argc=<optimized out>, argv=<optimized out>) at host_main.c:168
+[Inferior 1 (process 889) detached]
+bash: line 1: kill: (889) - No such process

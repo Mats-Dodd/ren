@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:54:15Z, plant P2u, stage abi-release-safe
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/abi_test
+ren zig panic: integer overflow
+# exit 134 after .010677974 s

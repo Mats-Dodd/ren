@@ -1,0 +1,9 @@
+# machine cloud, 2026-10-30T16:10:12Z, plant P0, stage w1x4-tsan
+# $ bash -c for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=568004 inner_s=0.352110 wall_s=0.355510
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.355510
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=516620 inner_s=0.387132 wall_s=0.390449
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.390449
+# exit 0 after .792574726 s

@@ -1,0 +1,25 @@
+# machine cloud, 2026-10-30T16:15:54Z, plant P1, stage rate-deque-release-fast
+# $ bash -c f=0; for i in $(seq 20); do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-release-fast-P1/deque_stress' stress 10 200000 > /tmp/ren-zig-bugs-P1-$$.out 2>&1 || { f=$((f+1)); tail -3 /tmp/ren-zig-bugs-P1-$$.out; }; done; rm -f /tmp/ren-zig-bugs-P1-$$.out; echo "failed $f/20"; [ $f = 0 ]
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=902294 duplicated=14659 lost=14659
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=593951 duplicated=5472 lost=5472
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=784412 duplicated=9117 lost=9117
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=334614 duplicated=1891 lost=1891
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=451235 duplicated=351 lost=351
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=635766 duplicated=6295 lost=6295
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=843858 duplicated=5864 lost=5864
+deque_stress stress: FAIL
+failed 7/20
+# exit 1 after 4.651741930 s

@@ -1,0 +1,9 @@
+# machine cloud, 2026-10-30T14:34:35Z, plant P2, stage build-debug-nowerror
+# $ env REN_C_WERROR=0 /home/user/ren/experiments/native-lang/build.sh c debug P2
+== c-debug-P2: /home/user/ren/experiments/native-lang/c/build.sh debug /home/user/ren/experiments/native-lang/build/c-debug-P2
+/home/user/ren/experiments/native-lang/c/dq.c:47:13: warning: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+1 warning generated.
+built c-debug-P2: language 0.75s, harness link 1.75s
+# exit 0 after 2.534324665 s

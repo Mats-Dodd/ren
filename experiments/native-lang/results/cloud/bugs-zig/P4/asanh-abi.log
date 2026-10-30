@@ -1,0 +1,51 @@
+# machine cloud, 2026-10-30T16:31:32Z, plant P4, stage asanh-abi
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-asanh-P4/abi_test
+ok   basic
+ok   stale
+=================================================================
+==2050==ERROR: AddressSanitizer: attempting double-free on 0x50d0000002b0 in thread T0:
+    #0 0x55d6ea9d0f4a in free (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/abi_test+0xcef4a) (BuildId: 4f217a27412d008097aa74c79fe80d0e334ef84c)
+    #1 0x55d6eaa26049 in heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44
+    #2 0x55d6eaa26049 in mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25
+    #3 0x55d6eaa26049 in mem.Allocator.destroy__func_81 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17
+    #4 0x55d6eaa26049 in alloc.destroy__func_80 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18
+    #5 0x55d6eaa26049 in core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:455:14
+    #6 0x55d6eaa26049 in core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16
+    #7 0x55d6eaa2558a in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19
+    #8 0x55d6eaa18f00 in race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:281:3
+    #9 0x55d6eaa0f9a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+    #10 0x7f4167a2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #11 0x7f4167a2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #12 0x55d6ea936394 in _start (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/abi_test+0x34394) (BuildId: 4f217a27412d008097aa74c79fe80d0e334ef84c)
+
+0x50d0000002b0 is located 0 bytes inside of 136-byte region [0x50d0000002b0,0x50d000000338)
+freed by thread T0 here:
+    #0 0x55d6ea9d0f4a in free (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/abi_test+0xcef4a) (BuildId: 4f217a27412d008097aa74c79fe80d0e334ef84c)
+    #1 0x55d6eaa25ff4 in heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44
+    #2 0x55d6eaa25ff4 in mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25
+    #3 0x55d6eaa25ff4 in mem.Allocator.destroy__func_81 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17
+    #4 0x55d6eaa25ff4 in alloc.destroy__func_80 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18
+    #5 0x55d6eaa25ff4 in core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:450:39
+    #6 0x55d6eaa25ff4 in core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16
+    #7 0x55d6eaa2558a in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19
+    #8 0x55d6eaa18f00 in race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:281:3
+    #9 0x55d6eaa0f9a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+previously allocated by thread T0 here:
+    #0 0x55d6ea9d11e3 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/abi_test+0xcf1e3) (BuildId: 4f217a27412d008097aa74c79fe80d0e334ef84c)
+    #1 0x55d6eaa2c90f in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x55d6eaa2c90f in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x55d6eaa2c90f in mem.Allocator.allocBytesAligned__func_17 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x55d6eaa2c90f in mem.Allocator.createAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:195:79
+    #5 0x55d6eaa2c90f in mem.Allocator.create__func_360 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:171:39
+    #6 0x55d6eaa2c90f in alloc.create__func_359 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:26:24
+    #7 0x55d6eaa2c90f in core.world /home/user/ren/experiments/native-lang/zig/src/core.zig:772:23
+    #8 0x55d6eaa1a56a in race_root_resume /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:245:9
+    #9 0x55d6eaa257bb in core.runTask /home/user/ren/experiments/native-lang/zig/src/core.zig:373:28
+    #10 0x55d6eaa257bb in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:580:20
+    #11 0x55d6eaa18b99 in race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:267:3
+    #12 0x55d6eaa0f9a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+SUMMARY: AddressSanitizer: double-free (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/abi_test+0xcef4a) (BuildId: 4f217a27412d008097aa74c79fe80d0e334ef84c) in free
+==2050==ABORTING
+# exit 1 after .101576225 s

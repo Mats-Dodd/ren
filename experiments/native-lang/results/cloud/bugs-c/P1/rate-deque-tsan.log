@@ -1,0 +1,2 @@
+# machine cloud, 2026-10-30T15:54:51Z, plant P1, c-tsan-P1: ./deque_stress stress 10 200000 x30
+result: deque-tsan c-tsan-P1 failed 0/30 first_fail_run=none total_s=110.699966562

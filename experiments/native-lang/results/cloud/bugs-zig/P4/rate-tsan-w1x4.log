@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:31:20Z, plant P4, stage rate-tsan-w1x4
+# $ bash -c f=0; for i in $(seq 10); do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P4/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P4-$$.out 2>&1 || { f=$((f+1)); grep -m3 -A6 'WARNING: ThreadSanitizer' /tmp/ren-zig-bugs-P4-$$.out | head -12; }; done; done; rm -f /tmp/ren-zig-bugs-P4-$$.out; echo "failed $f/20"; [ $f = 0 ]
+failed 0/20
+# exit 0 after 6.521071398 s

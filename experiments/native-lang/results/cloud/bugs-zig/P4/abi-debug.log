@@ -1,0 +1,6 @@
+# machine cloud, 2026-10-30T16:28:08Z, plant P4, stage abi-debug
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-debug-P4/abi_test
+ok   basic
+ok   stale
+ren zig panic: index out of bounds: index 1431655765, len 4096
+# exit 134 after .018688073 s

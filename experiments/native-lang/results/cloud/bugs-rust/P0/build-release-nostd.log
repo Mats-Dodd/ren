@@ -1,0 +1,5 @@
+== rust-release-nostd: /home/user/ren/experiments/native-lang/rust/build.sh release-nostd /home/user/ren/experiments/native-lang/build/rust-release-nostd
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3.13s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.01s
+built rust-release-nostd: language 3.32s, harness link 3.08s

@@ -1,0 +1,40 @@
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x5594b3ce8710, 0x5594b3ce9637), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x5594b3ce9638,0x5594b3cf88a8), 
+ALARM: working on the last Unit for 5 seconds
+       and the timeout value is 5 (use -timeout=N to change)
+MS: 0 ; base unit: 0000000000000000000000000000000000000000
+
+
+artifact_prefix='results/cloud/bugs-rust/P2/'; Test unit written to results/cloud/bugs-rust/P2/timeout-da39a3ee5e6b4b0d3255bfef95601890afd80709
+Base64: 
+==23233== ERROR: libFuzzer: timeout after 5 seconds
+    #0 0x5594b3b47a85 in __sanitizer_print_stack_trace (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x149a85) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #1 0x5594b3aa159c in fuzzer::PrintStackTrace() (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0xa359c) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #2 0x5594b3a8759b in fuzzer::Fuzzer::AlarmCallback() (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x8959b) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #3 0x7fa8ec64532f  (/lib/x86_64-linux-gnu/libc.so.6+0x4532f) (BuildId: a4a7992a8e66555c8141ab2a08a8465ff6e0ea65)
+    #4 0x5594b3baac8b in at /home/user/ren/experiments/native-lang/rust/core/src/deque.rs:47:10
+    #5 0x5594b3baac8b in grow /home/user/ren/experiments/native-lang/rust/core/src/deque.rs:98:32
+    #6 0x5594b3baac8b in <ren_core::deque::Deque>::push /home/user/ren/experiments/native-lang/rust/core/src/deque.rs:84:22
+    #7 0x5594b3bb971a in spawn /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:876:27
+    #8 0x5594b3bb971a in ren_spawn /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:67:14
+    #9 0x5594b3b9e242 in fz_root_resume /home/user/ren/experiments/native-lang/harness/workloads/w_fuzz.c:77:7
+    #10 0x5594b3babb27 in run_task /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:387:17
+    #11 0x5594b3babb27 in <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:695:18
+    #12 0x5594b3bafeb5 in ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13
+    #13 0x5594b3bafeb5 in <ren_core::drv::replay::Fuzz>::run_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:340:17
+    #14 0x5594b3bb02c2 in <ren_core::drv::replay::Fuzz>::run /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:425:25
+    #15 0x5594b3bb8dd4 in ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:275:40
+    #16 0x5594b3b7b6a5 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #17 0x5594b3b7b2c7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #18 0x5594b3a88bf4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x8abf4) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #19 0x5594b3a89e21 in fuzzer::Fuzzer::ReadAndExecuteSeedCorpora(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x8be21) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #20 0x5594b3a8a417 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x8c417) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #21 0x5594b3a7790f in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x7990f) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #22 0x5594b3aa1f96 in main (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0xa3f96) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+    #23 0x7fa8ec62a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #24 0x7fa8ec62a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #25 0x5594b3a6c8f4 in _start (/home/user/ren/experiments/native-lang/bin/rust-asanh-P2/fuzz+0x6e8f4) (BuildId: 00b7d62138e7a2f179ff1859275bf8daf63c0824)
+
+SUMMARY: libFuzzer: timeout

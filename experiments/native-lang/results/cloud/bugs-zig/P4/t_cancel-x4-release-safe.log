@@ -1,0 +1,11 @@
+# machine cloud, 2026-10-30T16:28:05Z, plant P4, stage t_cancel-x4-release-safe
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/harness t_cancel --driver epoll --workers 4
+ren zig panic: double free of [addr: 56258f6f3c20, len: 136 (0x88) align: 8]
+alloc: 
+(empty stack trace)
+
+first free: 
+(empty stack trace)
+
+second free:
+# exit 134 after .008867248 s

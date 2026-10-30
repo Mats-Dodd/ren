@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:20:35Z, plant P1, stage asanh-t_cancel
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-asanh-P1/harness t_cancel --driver epoll --workers 4
+result: t_cancel a=2 b=2 c=2
+metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.015661
+# exit 0 after .031689890 s

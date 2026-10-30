@@ -1,0 +1,22 @@
+# machine: cloud -- VERIFY follow-ups (vbugs2.sh, loom, ASan P3), 2026-10-30
+ONE c P0 fuzz_run --random 300 1 rc=0 fuzz_run: 300 random inputs ok
+ONE c P1 fuzz_run --random 300 1 rc=0 fuzz_run: 300 random inputs ok
+ONE c P3 fuzz_run --random 300 1 rc=134 fuzz oracle: a stale reply was ACCEPTED (id 0000000c00000001, ren_reply = 0, input offset 75)
+ONE c P5 fuzz_run --random 300 1 rc=0 fuzz_run: 300 random inputs ok
+ONE rust P0 fuzz_run --random 300 1 rc=0
+ONE rust P1 fuzz_run --random 300 1 rc=0
+ONE rust P3 fuzz_run --random 300 1 rc=134 fuzz oracle failed at input byte 75: a stale reply was not RELEASEd
+ONE rust P5 fuzz_run --random 300 1 rc=0
+ONE zig P0 fuzz_run --random 300 1 rc=0
+ONE zig P1 fuzz_run --random 300 1 rc=0
+ONE zig P3 fuzz_run --random 300 1 rc=134 fuzz oracle: a stale reply was ACCEPTED (id 0000000c00000001, ren_reply = 0, input offset 75)
+ONE zig P5 fuzz_run --random 300 1 rc=0
+loom P0: test result: ok. 3 passed (0.19s)
+loom P1: two_thieves panicked at core/tests/loom_deque.rs:24:5: an item was lost or taken twice; 2 passed 1 failed
+c-asan-P3 abi_test: rc=1, abi_test.c:218 assertion; only Sanitizer output is LeakSanitizer (85698 bytes in 8 allocations, after the abort path), no ASan memory error
+rust P5 variant a (bare u64): error[E0594] cannot assign to data in a `&` reference, sched.rs:433:21
+rust P5 variant b (Cell<u64>, Core keeps unsafe impl Sync): cargo exit 0
+rust P5 variant c (Cell<u64>, unsafe impl Sync for Core removed): cargo exit 0
+standalone Arc<W{Cell<u64>}> across thread::spawn: error[E0277] `Cell<u64>` cannot be shared between threads safely
+C P2 dq.c clang -Wconversion: 6 warnings (P0: 0); gcc -Wconversion: dq.c 6 new; whole C core 10 with P2 vs 4 with P0 (claim "gcc 10" is the total, 6 caused by the plant); -Werror build: dq.c:47:13 -Wsign-compare
+C P4 clang --analyze core.c: 1 warning core.c:150:16 Use of memory after it is freed [unix.Malloc] (P0 core.c: 0)

@@ -1,0 +1,19 @@
+# machine cloud, 2026-10-30T17:02:37Z, plant P2u, stage asanh-abi
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-asanh-P2u/abi_test
+AddressSanitizer:DEADLYSIGNAL
+=================================================================
+==14226==ERROR: AddressSanitizer: SEGV on unknown address (pc 0x55b08ec647c5 bp 0x7ffc0c7d1b10 sp 0x7ffc0c7d18b0 T0)
+==14226==The signal is caused by a READ memory access.
+==14226==Hint: this fault was caused by a dereference of a high value address (see register values below).  Disassemble the provided pc to learn which register was used.
+    #0 0x55b08ec647c5 in core.runTask /home/user/ren/experiments/native-lang/zig/src/core.zig:365:41
+    #1 0x55b08ec647c5 in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:580:20
+    #2 0x55b08ec4ede2 in t_basic /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:178:3
+    #3 0x55b08ec4e9a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+    #4 0x7f5b0f42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #5 0x7f5b0f42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #6 0x55b08eb75394 in _start (/home/user/ren/experiments/native-lang/bin/zig-asanh-P2u/abi_test+0x34394) (BuildId: ea94c746d68db7ce3f2b4de74db167951f1a8a46)
+
+AddressSanitizer can not provide additional info.
+SUMMARY: AddressSanitizer: SEGV /home/user/ren/experiments/native-lang/zig/src/core.zig:365:41 in core.runTask
+==14226==ABORTING
+# exit 1 after .112960318 s

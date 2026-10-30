@@ -1,0 +1,38 @@
+# machine cloud, 2026-10-30T14:02:35Z, plant P0, stage vg-memcheck
+# $ bash -c 
+    set -e
+    valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/abi_test'
+    valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/deque_stress' empty
+    valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/deque_stress' lifo
+    valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/deque_stress' stress 4 20000
+    for d in epoll uring; do
+      valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/harness' w1 --driver $d --workers 4 --n 20000
+      valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/harness' t_cancel --driver $d --workers 4
+      valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/harness' w3 --driver $d --workers 1 --n 2000
+    done
+    valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug/fuzz_run' --random 100 1
+ok   basic
+ok   stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+deque_stress empty: ok
+deque_stress lifo: ok
+stress: rounds=4 n=20000 steals=5475 duplicated=0 lost=0
+deque_stress stress: ok
+result: w1 n=20000 sum=199990000 left=0
+metric: w1 tasks_per_s=160684 inner_s=0.124468 wall_s=0.158874
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.158874
+result: t_cancel a=2 b=2 c=2
+metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.077684
+result: w3 n=2000 done=2000 csum=2d058ec95559bd65
+metric: w3 p50_ns=32773 p99_ns=68935 p999_ns=1901448 min_ns=30939 wall_s=0.190446 rtt_per_s=10502
+metric: harness workload=w3 driver=epoll workers=1 wall_s=0.190446
+# killed by hand at 14:12:54: harness w1 --driver uring under valgrind sat at 0% CPU for >9 min (clean build)

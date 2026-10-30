@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T14:00:13Z, plant P0, stage build-ubsan-int
+# $ /home/user/ren/experiments/native-lang/build.sh c ubsan-int
+== c-ubsan-int: /home/user/ren/experiments/native-lang/c/build.sh ubsan-int /home/user/ren/experiments/native-lang/build/c-ubsan-int
+built c-ubsan-int: language 2.28s, harness link 4.33s
+# exit 0 after 6.637521244 s

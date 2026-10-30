@@ -1,0 +1,117 @@
+# machine cloud, 2026-10-30T14:40:08Z, plant P4, stage libfuzzer-asan
+# $ bash -c cd '/home/user/ren/experiments/native-lang/build/bugs-c-fuzz/P4' && '/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz' -max_total_time=300 -seed=1 -max_len=4096 -print_final_stats=1 corpus
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x56123d1f7d88, 0x56123d1f8caf), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x56123d1f8cb0,0x56123d207f20), 
+INFO:        0 files found in corpus
+INFO: A corpus is not provided, starting from an empty corpus
+#2	INITED cov: 99 ft: 100 corp: 1/1b exec/s: 0 rss: 33Mb
+=================================================================
+==10462==ERROR: AddressSanitizer: heap-use-after-free on address 0x50d000042cb8 at pc 0x56123d17bb93 bp 0x7ffc74dbcd50 sp 0x7ffc74dbcd48
+READ of size 4 at 0x50d000042cb8 thread T0
+    #0 0x56123d17bb92 in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+    #1 0x56123d17bb92 in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+    #2 0x56123d1786e7 in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+    #3 0x56123d18cbb0 in fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15
+    #4 0x56123d18c528 in drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:289:42
+    #5 0x56123d152885 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #6 0x56123d1524a7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #7 0x56123d05fdd4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x82dd4) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #8 0x56123d05f4c9 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool, bool*) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x824c9) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #9 0x56123d060cb5 in fuzzer::Fuzzer::MutateAndTestOne() (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x83cb5) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #10 0x56123d061815 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x84815) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #11 0x56123d04eaef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x71aef) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #12 0x56123d079176 in main (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x9c176) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #13 0x7f24e022a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #14 0x7f24e022a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #15 0x56123d043ad4 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x66ad4) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+
+0x50d000042cb8 is located 8 bytes inside of 144-byte region [0x50d000042cb0,0x50d000042d40)
+freed by thread T0 here:
+    #0 0x56123d113c6a in free (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x136c6a) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #1 0x56123d17b6b7 in deliver /home/user/ren/experiments/native-lang/c/core.c:146:47
+    #2 0x56123d17b6b7 in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+    #3 0x56123d1786e7 in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+    #4 0x56123d18cbb0 in fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15
+    #5 0x56123d18c528 in drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:289:42
+    #6 0x56123d152885 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #7 0x56123d1524a7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #8 0x56123d05fdd4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x82dd4) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #9 0x56123d05f4c9 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool, bool*) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x824c9) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #10 0x56123d060cb5 in fuzzer::Fuzzer::MutateAndTestOne() (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x83cb5) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #11 0x56123d061815 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x84815) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #12 0x56123d04eaef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x71aef) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #13 0x56123d079176 in main (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x9c176) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #14 0x7f24e022a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #15 0x7f24e022a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #16 0x56123d043ad4 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x66ad4) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+
+previously allocated by thread T0 here:
+    #0 0x56123d113f03 in malloc (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x136f03) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #1 0x56123d17d8e6 in xmalloc /home/user/ren/experiments/native-lang/c/core.c:10:13
+    #2 0x56123d17d8e6 in ren_world /home/user/ren/experiments/native-lang/c/core.c:304:11
+    #3 0x56123d175e9c in em_issue /home/user/ren/experiments/native-lang/harness/workloads/emit.h:15:15
+    #4 0x56123d175e9c in fz_task_resume /home/user/ren/experiments/native-lang/harness/workloads/w_fuzz.c:47:7
+    #5 0x56123d178c5b in run_task /home/user/ren/experiments/native-lang/c/sched.c:120:15
+    #6 0x56123d178c5b in ren_run /home/user/ren/experiments/native-lang/c/sched.c:216:5
+    #7 0x56123d18cbb0 in fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15
+    #8 0x56123d18bef8 in drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:239:7
+    #9 0x56123d152885 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #10 0x56123d1524a7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #11 0x56123d05fdd4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x82dd4) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #12 0x56123d05f4c9 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool, bool*) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x824c9) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #13 0x56123d060cb5 in fuzzer::Fuzzer::MutateAndTestOne() (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x83cb5) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #14 0x56123d061815 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x84815) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #15 0x56123d04eaef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x71aef) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #16 0x56123d079176 in main (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x9c176) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+    #17 0x7f24e022a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #18 0x7f24e022a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #19 0x56123d043ad4 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P4/fuzz+0x66ad4) (BuildId: 67738a530a940e37ed7ed9047e5371709b36604f)
+
+SUMMARY: AddressSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+Shadow bytes around the buggy address:
+  0x50d000042a00: fa fa fa fa fa fa fa fa 00 00 00 00 00 00 00 00
+  0x50d000042a80: 00 00 00 00 00 00 00 00 00 fa fa fa fa fa fa fa
+  0x50d000042b00: fa fa 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x50d000042b80: 00 00 00 fa fa fa fa fa fa fa fa fa 00 00 00 00
+  0x50d000042c00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 fa fa
+=>0x50d000042c80: fa fa fa fa fa fa fd[fd]fd fd fd fd fd fd fd fd
+  0x50d000042d00: fd fd fd fd fd fd fd fd fa fa fa fa fa fa fa fa
+  0x50d000042d80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x50d000042e00: 00 00 fa fa fa fa fa fa fa fa 00 00 00 00 00 00
+  0x50d000042e80: 00 00 00 00 00 00 00 00 00 00 00 00 fa fa fa fa
+  0x50d000042f00: fa fa fa fa 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==10462==ABORTING
+MS: 4 ChangeBinInt-ChangeBit-CopyPart-InsertByte-; base unit: adc83b19e793491b1c6ea0fd8b46cd9f32e592fc
+0x21,0xed,0xed,
+!\355\355
+artifact_prefix='./'; Test unit written to ./crash-38df24fec077f39add4a6feac01f4091f78c964b
+Base64: Ie3t
+stat::number_of_executed_units: 201
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              37
+# exit 1 after .128564462 s
+corpus
+crash-38df24fec077f39add4a6feac01f4091f78c964b

@@ -1,0 +1,4 @@
+# layout probe, machine cloud, 2026-10-30T19:40:19Z, language zig (SPEC §0.3)
+edit a: BUILDS AND PASSES (the change propagated, or went unnoticed: read the logs)   (logs: build/probe-a/)
+edit b: BUILDS AND PASSES (the change propagated, or went unnoticed: read the logs)   (logs: build/probe-b/)
+edit c: BUILDS AND PASSES (the change propagated, or went unnoticed: read the logs)   (logs: build/probe-c/)

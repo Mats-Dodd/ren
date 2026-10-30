@@ -1,0 +1,307 @@
+# machine cloud, 2026-10-30T14:39:04Z, plant P4, stage tests-ubsan-int
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=20 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/c-ubsan-int-P4
+== layout (c-ubsan-int-P4)
+PASS layout_check
+== abi (c-ubsan-int-P4)
+FAIL abi_test (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3275==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x557d5dec9760 (pc 0x557af974ee1b bp 0x557b0791f380 sp 0x7ffeaa510790 T3275)
+     | ==3275==The signal is caused by a WRITE memory access.
+     |     #0 0x557af974ee1b in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x557af974ee1b in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x557af974d2bc in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x557af9749575 in race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:281:3
+     |     #4 0x557af9743a49 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+     |     #5 0x7fe6c562a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |     #6 0x7fe6c562a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+     |     #7 0x557af97194b4 in _start (/home/user/ren/experiments/native-lang/bin/c-ubsan-int-P4/abi_test+0x104b4) (BuildId: 32e09db7176346834ae505561f8b4c11d3abc402)
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3275==ABORTING
+== deque (c-ubsan-int-P4)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (c-ubsan-int-P4)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (c-ubsan-int-P4)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+FAIL t_cancel epoll x1 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3576==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x5631cd53a810 (pc 0x562aeb8481fb bp 0x562b1f65f700 sp 0x7f91881fe840 T3577)
+     | ==3576==The signal is caused by a WRITE memory access.
+     |     #0 0x562aeb8481fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x562aeb8481fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x562aeb84669c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x562aeb84cae0 in drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17
+     |     #4 0x562aeb831d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f918829cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f9188329ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3576==ABORTING
+FAIL t_block stop epoll x1 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3584==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x55cc846c2a30 (pc 0x55c12b87d1fb bp 0x55c135d5c700 sp 0x7fd5c77fe840 T3586)
+     | ==3584==The signal is caused by a WRITE memory access.
+     |     #0 0x55c12b87d1fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x55c12b87d1fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x55c12b87b69c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x55c12b881ae0 in drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17
+     |     #4 0x55c12b866d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7fd5c829cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7fd5c8329ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3584==ABORTING
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+FAIL t_cancel epoll x4 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3614==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7f863d841420 (pc 0x561b9c9091fb bp 0x561ba6322800 sp 0x7f822f9fe840 T3615)
+     | ==3614==The signal is caused by a WRITE memory access.
+     |     #0 0x561b9c9091fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x561b9c9091fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x561b9c90769c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x561b9c90dae0 in drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17
+     |     #4 0x561b9c8f2d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f822fc9cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f822fd29ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3614==ABORTING
+FAIL t_block stop epoll x4 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3651==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7feb3d74a240 (pc 0x556af4bcd1fb bp 0x556af59f9800 sp 0x7fdcde1fe840 T3653)
+     | ==3651==The signal is caused by a WRITE memory access.
+     |     #0 0x556af4bcd1fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x556af4bcd1fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x556af4bcb69c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x556af4bd1ae0 in drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17
+     |     #4 0x556af4bb6d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7fdcdec9cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7fdcded29ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3651==ABORTING
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+FAIL t_cancel epoll x8 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3700==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7f05e4cbd160 (pc 0x5643d64141fb bp 0x5643ee6bea40 sp 0x7f02355fe840 T3701)
+     | ==3700==The signal is caused by a WRITE memory access.
+     |     #0 0x5643d64141fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x5643d64141fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x5643d641269c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x5643d6418ae0 in drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17
+     |     #4 0x5643d63fdd7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f023589cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f0235929ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3700==ABORTING
+FAIL t_block stop epoll x8 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3715==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7fa6ea5fdef0 (pc 0x55b99b7db1fb bp 0x55b9b270fa40 sp 0x7fa5c33fe840 T3718)
+     | ==3715==The signal is caused by a WRITE memory access.
+     |     #0 0x55b99b7db1fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x55b99b7db1fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x55b99b7d969c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x55b99b7dfae0 in drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17
+     |     #4 0x55b99b7c4d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7fa5c469cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7fa5c4729ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3715==ABORTING
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+FAIL t_cancel uring x1 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3752==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x5568a58dee80 (pc 0x5564748301fb bp 0x5564995df7c0 sp 0x7f7c505fdc60 T3753)
+     | ==3752==The signal is caused by a WRITE memory access.
+     |     #0 0x5564748301fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x5564748301fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x55647482e69c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x55647483a1a6 in drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17
+     |     #4 0x556474819d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f7c5069cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f7c50729ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3752==ABORTING
+FAIL t_block stop uring x1 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3761==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x56115f257480 (pc 0x56068d34b1fb bp 0x5606bf9f27c0 sp 0x7f7923ffdc60 T3763)
+     | ==3761==The signal is caused by a WRITE memory access.
+     |     #0 0x56068d34b1fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x56068d34b1fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x56068d34969c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x56068d3551a6 in drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17
+     |     #4 0x56068d334d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f7924a9cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f7924b29ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3761==ABORTING
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+FAIL t_cancel uring x4 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3797==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7f5037dbaca0 (pc 0x560aa72201fb bp 0x560abbb3cb00 sp 0x7f4c729fdc60 T3798)
+     | ==3797==The signal is caused by a WRITE memory access.
+     |     #0 0x560aa72201fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x560aa72201fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x560aa721e69c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x560aa722a1a6 in drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17
+     |     #4 0x560aa7209d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f4c72a9cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f4c72b29ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3797==ABORTING
+FAIL t_block stop uring x4 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3808==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7f51bb249ed0 (pc 0x559abc03e1fb bp 0x559ac704ab00 sp 0x7f4aef5fdc60 T3814)
+     | ==3808==The signal is caused by a WRITE memory access.
+     |     #0 0x559abc03e1fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x559abc03e1fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x559abc03c69c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x559abc0481a6 in drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17
+     |     #4 0x559abc027d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f4af009cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f4af0129ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3808==ABORTING
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+FAIL t_cancel uring x8 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3881==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7fabac8e75f0 (pc 0x5642186ec1fb bp 0x56423126b040 sp 0x7f9bcd1fdc60 T3887)
+     | ==3881==The signal is caused by a WRITE memory access.
+     |     #0 0x5642186ec1fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x5642186ec1fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x5642186ea69c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x5642186f61a6 in drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17
+     |     #4 0x5642186d5d7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f9bcfa9cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f9bcfb29ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3881==ABORTING
+FAIL t_block stop uring x8 (exit 1)
+     | UndefinedBehaviorSanitizer:DEADLYSIGNAL
+     | ==3894==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address 0x7f9266fae6e0 (pc 0x55fd851361fb bp 0x55fdb3c40040 sp 0x7f84295fdc60 T3896)
+     | ==3894==The signal is caused by a WRITE memory access.
+     |     #0 0x55fd851361fb in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x55fd851361fb in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x55fd8513469c in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x55fd851401a6 in drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17
+     |     #4 0x55fd8511fd7d in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+     |     #5 0x7f842a09cb83 in start_thread nptl/pthread_create.c:447:8
+     |     #6 0x7f842a129ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3894==ABORTING
+PASS t_block kill uring x8
+== replay (c-ubsan-int-P4)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+FAIL W4 replay t_cancel epoll record (exit 0)
+     |     #6 0x7f878a529ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==3942==ABORTING
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+FAIL W4 replay t_cancel uring record (exit 0)
+     |     #6 0x7faa97129ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==4019==ABORTING
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (c-ubsan-int-P4)
+FAIL fuzz_run random 300 (exit 1)
+     | ==4045==The signal is caused by a WRITE memory access.
+     |     #0 0x55fb28b7663b in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+     |     #1 0x55fb28b7663b in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+     |     #2 0x55fb28b74adc in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+     |     #3 0x55fb28b7f9e4 in fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15
+     |     #4 0x55fb28b7f25a in drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:239:7
+     |     #5 0x55fb28b601a2 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+     |     #6 0x55fb28b5fe17 in main /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_run.c:21:7
+     |     #7 0x7f4131a2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |     #8 0x7f4131a2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+     |     #9 0x55fb28b35724 in _start (/home/user/ren/experiments/native-lang/bin/c-ubsan-int-P4/fuzz_run+0x23724) (BuildId: b0fa3814a5196abfc169180a60f61eb74c8e4890)
+     | 
+     | UndefinedBehaviorSanitizer can not provide additional info.
+     | SUMMARY: UndefinedBehaviorSanitizer: SEGV /home/user/ren/experiments/native-lang/c/core.c:150:3 in deliver
+     | ==4045==ABORTING
+== summary c-ubsan-int-P4: 56 passed, 16 failed
+   failed: abi_test
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_cancel epoll x8
+   failed: t_block stop epoll x8
+   failed: t_cancel uring x1
+   failed: t_block stop uring x1
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_cancel uring record
+   failed: fuzz_run random 300
+# exit 1 after 4.843444489 s

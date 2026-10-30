@@ -1,0 +1,17 @@
+# machine cloud (experiments/MACHINE-cloud.md), Measure step, 2026-10-30. tcc 0.9.27 linking the harness against the Rust and Zig archives (x86_64)
+== layout (tcclink-rust-release-nostd)
+== abi (tcclink-rust-release-nostd)
+== deque (tcclink-rust-release-nostd)
+== smoke (tcclink-rust-release-nostd)
+== io (tcclink-rust-release-nostd)
+== replay (tcclink-rust-release-nostd)
+== fuzz (tcclink-rust-release-nostd)
+== summary tcclink-rust-release-nostd: 72 passed, 0 failed
+== layout (tcclink-zig-release-fast)
+== abi (tcclink-zig-release-fast)
+== deque (tcclink-zig-release-fast)
+== smoke (tcclink-zig-release-fast)
+== io (tcclink-zig-release-fast)
+== replay (tcclink-zig-release-fast)
+== fuzz (tcclink-zig-release-fast)
+== summary tcclink-zig-release-fast: 72 passed, 0 failed

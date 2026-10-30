@@ -1,0 +1,10 @@
+== rust-tsan-P4: /home/user/ren/experiments/native-lang/rust/build.sh tsan /home/user/ren/experiments/native-lang/build/rust-tsan-P4
+   Compiling compiler_builtins v0.1.160 (/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+   Compiling alloc v0.0.0 (/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+    Finished `release` profile [optimized + debuginfo] target(s) in 31.75s
+   Compiling ren_hot v0.1.0 (/home/user/ren/experiments/native-lang/rust/hot)
+    Finished `release` profile [optimized + debuginfo] target(s) in 1.42s
+built rust-tsan-P4: language 33.24s, harness link 3.27s

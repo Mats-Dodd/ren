@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T14:34:54Z, plant P3, stage build-tsan
+# $ /home/user/ren/experiments/native-lang/build.sh c tsan P3
+== c-tsan-P3: /home/user/ren/experiments/native-lang/c/build.sh tsan /home/user/ren/experiments/native-lang/build/c-tsan-P3
+built c-tsan-P3: language 1.67s, harness link 3.07s
+# exit 0 after 4.758939224 s

@@ -1,0 +1,43 @@
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.61s
+     Running unittests src/lib.rs (rust/target/miri-P1/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/efe158a45c2e3b36/out/ren_core-efe158a45c2e3b36)
+
+running 2 tests
+test deque::tests::empty_and_lifo ... ok
+test deque::tests::threads ... FAILED
+
+failures:
+
+---- deque::tests::threads stdout ----
+
+thread 'deque::tests::threads' (13158) panicked at core/src/deque.rs:234:13:
+assertion `left == right` failed: item 24
+  left: 2
+ right: 1
+stack backtrace:
+   0: std::panicking::panic_handler
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:676:5
+   1: core::panicking::panic_fmt
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:80:14
+   2: core::panicking::assert_failed_inner
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:447:23
+   3: core::panicking::assert_failed::<u64, u64>
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:407:5
+   4: deque::tests::threads
+             at core/src/deque.rs:234:13
+   5: deque::tests::threads::{closure#0}
+             at core/src/deque.rs:186:17
+   6: <{closure@core/src/deque.rs:186:5: 236:6} as std::ops::FnOnce<()>>::call_once - shim
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+   7: <fn() -> std::result::Result<(), std::string::String> as std::ops::FnOnce<()>>::call_once - shim(fn() -> std::result::Result<(), std::string::String>)
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    deque::tests::threads
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.43s
+
+error: test failed, to rerun pass `-p ren_core --lib`

@@ -1,0 +1,1903 @@
+# machine cloud, 2026-10-30T14:17:36Z, plant P1, stage vg-helgrind
+# $ bash -c 
+    timeout 300 valgrind -q --error-exitcode=99 --tool=helgrind '/home/user/ren/experiments/native-lang/bin/c-debug-P1/deque_stress' stress 4 20000; a=$?
+    timeout 300 valgrind -q --error-exitcode=99 --tool=helgrind '/home/user/ren/experiments/native-lang/bin/c-debug-P1/harness' w1 --driver epoll --workers 4 --n 20000; b=$?
+    echo "deque=$a w1=$b"; [ $a = 0 ] && [ $b = 0 ]
+==2385== ---Thread-Announcement------------------------------------------
+==2385== 
+==2385== Thread #1 is the program's root thread
+==2385== 
+==2385== ---Thread-Announcement------------------------------------------
+==2385== 
+==2385== Thread #4 was created
+==2385==    at 0x4A89CB3: clone (clone.S:76)
+==2385==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2385==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2385==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2385==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2385==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x109974: t_stress (tests/deque_stress.c:63)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B750C0 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A728: dq_push (dq.c:53)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #4
+==2385== Locks held: none
+==2385==    at 0x10AA4F: dq_steal (dq.c:86)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b750c0 is 64 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B750C0 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A728: dq_push (dq.c:53)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x109A92: t_stress (tests/deque_stress.c:73)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #4
+==2385== Locks held: none
+==2385==    at 0x10AA4F: dq_steal (dq.c:86)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b750c0 is 64 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B750C0 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A927: dq_take (dq.c:60)
+==2385==    by 0x10ABF4: ren_dq_take (dq.c:111)
+==2385==    by 0x109AD8: t_stress (tests/deque_stress.c:74)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #4
+==2385== Locks held: none
+==2385==    at 0x10AA4F: dq_steal (dq.c:86)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b750c0 is 64 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B750C0 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A927: dq_take (dq.c:60)
+==2385==    by 0x10ABF4: ren_dq_take (dq.c:111)
+==2385==    by 0x109B1F: t_stress (tests/deque_stress.c:76)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #4
+==2385== Locks held: none
+==2385==    at 0x10AA4F: dq_steal (dq.c:86)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b750c0 is 64 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x1FFEFFE2C0 by thread #1
+==2385== Locks held: none
+==2385==    at 0x109E0C: ren_st64 (slice.h:108)
+==2385==    by 0x109B56: t_stress (tests/deque_stress.c:77)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #4
+==2385== Locks held: none
+==2385==    at 0x109E7E: ren_ld64 (slice.h:107)
+==2385==    by 0x109D18: thief (tests/deque_stress.c:49)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x1ffeffe2c0 is on thread #1's stack
+==2385==  in frame #1, created by t_stress (tests/deque_stress.c:55)
+==2385== 
+==2385== ---Thread-Announcement------------------------------------------
+==2385== 
+==2385== Thread #3 was created
+==2385==    at 0x4A89CB3: clone (clone.S:76)
+==2385==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2385==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2385==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2385==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2385==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x109974: t_stress (tests/deque_stress.c:63)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during read of size 8 at 0x1FFEFFE2C0 by thread #3
+==2385== Locks held: none
+==2385==    at 0x109E7E: ren_ld64 (slice.h:107)
+==2385==    by 0x109D18: thief (tests/deque_stress.c:49)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385== 
+==2385== This conflicts with a previous write of size 8 by thread #1
+==2385== Locks held: none
+==2385==    at 0x109E0C: ren_st64 (slice.h:108)
+==2385==    by 0x109B56: t_stress (tests/deque_stress.c:77)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Address 0x1ffeffe2c0 is on thread #1's stack
+==2385==  in frame #3, created by t_stress (tests/deque_stress.c:55)
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during read of size 8 at 0x4B750C0 by thread #4
+==2385== Locks held: none
+==2385==    at 0x10AA4F: dq_steal (dq.c:86)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385== 
+==2385== This conflicts with a previous write of size 8 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A728: dq_push (dq.c:53)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Address 0x4b750c0 is 64 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ---Thread-Announcement------------------------------------------
+==2385== 
+==2385== Thread #7 was created
+==2385==    at 0x4A89CB3: clone (clone.S:76)
+==2385==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2385==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2385==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2385==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2385==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x109974: t_stress (tests/deque_stress.c:63)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during read of size 8 at 0x4B75100 by thread #7
+==2385== Locks held: none
+==2385==    at 0x10AA71: dq_steal (dq.c:88)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385== 
+==2385== This conflicts with a previous write of size 8 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A8C5: grow (dq.c:39)
+==2385==    by 0x10A6EE: dq_push (dq.c:47)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Address 0x4b75100 is 128 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during read of size 8 at 0x4B99370 by thread #7
+==2385== Locks held: none
+==2385==    at 0x10AA8C: dq_steal (dq.c:89)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b99370 is 0 bytes inside a block of size 65,544 alloc'd
+==2385==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10A53C: ring_new (dq.c:8)
+==2385==    by 0x10A766: grow (dq.c:30)
+==2385==    by 0x10A6EE: dq_push (dq.c:47)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during read of size 8 at 0x4B99380 by thread #7
+==2385== Locks held: none
+==2385==    at 0x10AA95: dq_steal (dq.c:89)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b99380 is 16 bytes inside a block of size 65,544 alloc'd
+==2385==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10A53C: ring_new (dq.c:8)
+==2385==    by 0x10A766: grow (dq.c:30)
+==2385==    by 0x10A6EE: dq_push (dq.c:47)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B99380 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A710: dq_push (dq.c:48)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x109A92: t_stress (tests/deque_stress.c:73)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #7
+==2385== Locks held: none
+==2385==    at 0x10AA95: dq_steal (dq.c:89)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b99380 is 16 bytes inside a block of size 65,544 alloc'd
+==2385==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10A53C: ring_new (dq.c:8)
+==2385==    by 0x10A766: grow (dq.c:30)
+==2385==    by 0x10A6EE: dq_push (dq.c:47)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ---Thread-Announcement------------------------------------------
+==2385== 
+==2385== Thread #11 was created
+==2385==    at 0x4A89CB3: clone (clone.S:76)
+==2385==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2385==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2385==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2385==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2385==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x109974: t_stress (tests/deque_stress.c:63)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B91330 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A710: dq_push (dq.c:48)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #11
+==2385== Locks held: none
+==2385==    at 0x10AA95: dq_steal (dq.c:89)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b91330 is 16 bytes inside a block of size 32,776 alloc'd
+==2385==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10A53C: ring_new (dq.c:8)
+==2385==    by 0x10A766: grow (dq.c:30)
+==2385==    by 0x10A6EE: dq_push (dq.c:47)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+==2385== ----------------------------------------------------------------
+==2385== 
+==2385== Possible data race during write of size 8 at 0x4B75100 by thread #1
+==2385== Locks held: none
+==2385==    at 0x10A8C5: grow (dq.c:39)
+==2385==    by 0x10A6EE: dq_push (dq.c:47)
+==2385==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==2385==    by 0x109A92: t_stress (tests/deque_stress.c:73)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385== 
+==2385== This conflicts with a previous read of size 8 by thread #11
+==2385== Locks held: none
+==2385==    at 0x10AA71: dq_steal (dq.c:88)
+==2385==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==2385==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==2385==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2385==    by 0x4A89CC3: clone (clone.S:100)
+==2385==  Address 0x4b75100 is 128 bytes inside a block of size 192 alloc'd
+==2385==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2385==    by 0x10AB79: ren_dq_new (dq.c:105)
+==2385==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==2385==    by 0x109374: main (tests/deque_stress.c:93)
+==2385==  Block was alloc'd by thread #1
+==2385== 
+stress: rounds=4 n=20000 steals=15036 duplicated=0 lost=0
+deque_stress stress: ok
+==2882== ---Thread-Announcement------------------------------------------
+==2882== 
+==2882== Thread #3 was created
+==2882==    at 0x4A89CB3: clone (clone.S:76)
+==2882==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2882==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2882==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2882==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2882==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10AFF1: main (host_main.c:164)
+==2882== 
+==2882== ---Thread-Announcement------------------------------------------
+==2882== 
+==2882== Thread #2 was created
+==2882==    at 0x4A89CB3: clone (clone.S:76)
+==2882==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2882==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2882==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2882==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2882==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10AFF1: main (host_main.c:164)
+==2882== 
+==2882== ---Thread-Announcement------------------------------------------
+==2882== 
+==2882== Thread #1 is the program's root thread
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75730 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111678: inj_lock (sched.c:10)
+==2882==    by 0x111724: inj_pop (sched.c:29)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75738 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111729: inj_pop (sched.c:30)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75738 is 120 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8348 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111740: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8348 is 40 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75738 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75738 is 120 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75740 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11175F: inj_pop (sched.c:33)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11175F: inj_pop (sched.c:33)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75740 is 128 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4BC8348 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8348 is 40 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75730 by thread #3
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 4 at 0x4BC8328 by thread #3
+==2882== Locks held: none
+==2882==    at 0x10BEA8: root_resume (workloads/w1_spawn.c:21)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 4 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10BF22: root_resume (workloads/w1_spawn.c:26)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc8328 is 8 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8368 by thread #3
+==2882== Locks held: none
+==2882==    at 0x10BF32: root_resume (workloads/w1_spawn.c:29)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10BF16: root_resume (workloads/w1_spawn.c:25)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc8368 is 72 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4BC8368 by thread #3
+==2882== Locks held: none
+==2882==    at 0x10BFAA: root_resume (workloads/w1_spawn.c:34)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10BF16: root_resume (workloads/w1_spawn.c:25)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc8368 is 72 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8368 by thread #3
+==2882== Locks held: none
+==2882==    at 0x10BF7C: root_resume (workloads/w1_spawn.c:31)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10BF16: root_resume (workloads/w1_spawn.c:25)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc8368 is 72 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4BC8348 by thread #3
+==2882== Locks held: none
+==2882==    at 0x1115E9: inj_push (sched.c:18)
+==2882==    by 0x112460: run_task (sched.c:139)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8348 is 40 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75048 by thread #3
+==2882== Locks held: none
+==2882==    at 0x10C261: ren_xadd64 (slice.h:109)
+==2882==    by 0x10C11B: child_resume (workloads/w1_spawn.c:14)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10C09C: ren_st64 (slice.h:108)
+==2882==    by 0x10BF11: root_resume (workloads/w1_spawn.c:24)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==  Address 0x4b75048 is 8 bytes inside a block of size 56 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BC4A: w1_init (workloads/w1_spawn.c:48)
+==2882==    by 0x10ABDE: main (host_main.c:124)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75730 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111678: inj_lock (sched.c:10)
+==2882==    by 0x1115E4: inj_push (sched.c:17)
+==2882==    by 0x112460: run_task (sched.c:139)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75740 by thread #3
+==2882== Locks held: none
+==2882==    at 0x1115F5: inj_push (sched.c:19)
+==2882==    by 0x112460: run_task (sched.c:139)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11175F: inj_pop (sched.c:33)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75740 is 128 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75738 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11161D: inj_push (sched.c:20)
+==2882==    by 0x112460: run_task (sched.c:139)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75738 is 120 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75740 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111629: inj_push (sched.c:21)
+==2882==    by 0x112460: run_task (sched.c:139)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11175F: inj_pop (sched.c:33)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75740 is 128 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75730 by thread #3
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x11164F: inj_push (sched.c:23)
+==2882==    by 0x112460: run_task (sched.c:139)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75730 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111678: inj_lock (sched.c:10)
+==2882==    by 0x111724: inj_pop (sched.c:29)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75738 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111729: inj_pop (sched.c:30)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75738 is 120 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75738 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x111748: inj_pop (sched.c:32)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75738 is 120 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75740 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11175F: inj_pop (sched.c:33)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11175F: inj_pop (sched.c:33)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75740 is 128 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75730 by thread #3
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x1116D8: inj_unlock (sched.c:13)
+==2882==    by 0x111795: inj_pop (sched.c:37)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8368 by thread #3
+==2882== Locks held: none
+==2882==    at 0x10BFA2: root_resume (workloads/w1_spawn.c:34)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10BF16: root_resume (workloads/w1_spawn.c:25)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc8368 is 72 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8348 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111740: inj_pop (sched.c:32)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8348 is 40 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4BC8348 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E57: ren_run (sched.c:206)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11176B: inj_pop (sched.c:34)
+==2882==    by 0x111E87: ren_run (sched.c:209)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8348 is 40 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ---Thread-Announcement------------------------------------------
+==2882== 
+==2882== Thread #4 was created
+==2882==    at 0x4A89CB3: clone (clone.S:76)
+==2882==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2882==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2882==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2882==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2882==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10AFF1: main (host_main.c:164)
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75900 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C72F: dq_steal (dq.c:86)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11C607: dq_take (dq.c:60)
+==2882==    by 0x111E6F: ren_run (sched.c:208)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b75900 is 64 bytes inside a block of size 1,920 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112992: ren_start (core.c:92)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B75940 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C751: dq_steal (dq.c:88)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11C5A5: grow (dq.c:39)
+==2882==    by 0x11C3CE: dq_push (dq.c:47)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==  Address 0x4b75940 is 128 bytes inside a block of size 1,920 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112992: ren_start (core.c:92)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4C2FE80 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C76C: dq_steal (dq.c:89)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4c2fe80 is 0 bytes inside a block of size 32,776 alloc'd
+==2882==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x11C21C: ring_new (dq.c:8)
+==2882==    by 0x11C446: grow (dq.c:30)
+==2882==    by 0x11C3CE: dq_push (dq.c:47)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4C2FE88 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C775: dq_steal (dq.c:89)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4c2fe88 is 8 bytes inside a block of size 32,776 alloc'd
+==2882==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x11C21C: ring_new (dq.c:8)
+==2882==    by 0x11C446: grow (dq.c:30)
+==2882==    by 0x11C3CE: dq_push (dq.c:47)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8600 by thread #4
+==2882== Locks held: none
+==2882==    at 0x1122A8: run_task (sched.c:116)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8600 is 32 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC85F0 by thread #4
+==2882== Locks held: none
+==2882==    at 0x1122D8: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc85f0 is 16 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8620 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10C0EC: child_resume (workloads/w1_spawn.c:13)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8620 is 64 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8630 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10C0F4: child_resume (workloads/w1_spawn.c:13)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc8630 is 80 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 4 at 0x4BC85E0 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10B9B0: ren_drop (slice.h:194)
+==2882==    by 0x10B994: ren_rc_drop (rt.c:47)
+==2882==    by 0x1126FB: task_done (sched.c:110)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bc85e0 is 0 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 2 at 0x4BC85E4 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10B660: ren_obj_free (rt.c:10)
+==2882==    by 0x10B89A: ren_drop_shared (rt.c:42)
+==2882==    by 0x10BA0C: ren_drop (slice.h:197)
+==2882==    by 0x10B994: ren_rc_drop (rt.c:47)
+==2882==    by 0x1126FB: task_done (sched.c:110)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc85e4 is 4 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC85F8 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10B692: ren_obj_free (rt.c:13)
+==2882==    by 0x10B89A: ren_drop_shared (rt.c:42)
+==2882==    by 0x10BA0C: ren_drop (slice.h:197)
+==2882==    by 0x10B994: ren_rc_drop (rt.c:47)
+==2882==    by 0x1126FB: task_done (sched.c:110)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc85f8 is 24 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BC8628 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10C150: child_fin (workloads/w1_spawn.c:9)
+==2882==    by 0x10B6AA: ren_obj_free (rt.c:13)
+==2882==    by 0x10B89A: ren_drop_shared (rt.c:42)
+==2882==    by 0x10BA0C: ren_drop (slice.h:197)
+==2882==    by 0x10B994: ren_rc_drop (rt.c:47)
+==2882==    by 0x1126FB: task_done (sched.c:110)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==  Address 0x4bc8628 is 72 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BCB6E0 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10C103: child_resume (workloads/w1_spawn.c:14)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bcb6e0 is 64 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4BCB6C0 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11236C: run_task (sched.c:125)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4bcb6c0 is 32 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 4 at 0x4BCB6A0 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10B821: ren_xadd32 (slice.h:116)
+==2882==    by 0x10B87E: ren_drop_shared (rt.c:36)
+==2882==    by 0x10BA0C: ren_drop (slice.h:197)
+==2882==    by 0x10B994: ren_rc_drop (rt.c:47)
+==2882==    by 0x1126FB: task_done (sched.c:110)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bcb6a0 is 0 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #2
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75AD8 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11C408: dq_push (dq.c:53)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous read of size 8 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C72F: dq_steal (dq.c:86)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75ad8 is 536 bytes inside a block of size 1,920 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112992: ren_start (core.c:92)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4C5E148 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11C3F0: dq_push (dq.c:48)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous read of size 8 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C775: dq_steal (dq.c:89)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4c5e148 is 8 bytes inside a block of size 16,392 alloc'd
+==2882==    at 0x48488A8: malloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x11C21C: ring_new (dq.c:8)
+==2882==    by 0x11C446: grow (dq.c:30)
+==2882==    by 0x11C3CE: dq_push (dq.c:47)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==  Block was alloc'd by thread #3
+==2882== 
+==2882== ---Thread-Announcement------------------------------------------
+==2882== 
+==2882== Thread #5 was created
+==2882==    at 0x4A89CB3: clone (clone.S:76)
+==2882==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==2882==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==2882==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==2882==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==2882==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10AFF1: main (host_main.c:164)
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75E88 by thread #5
+==2882== Locks held: none
+==2882==    at 0x11C607: dq_take (dq.c:60)
+==2882==    by 0x111E6F: ren_run (sched.c:208)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous read of size 8 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C72F: dq_steal (dq.c:86)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75e88 is 1,480 bytes inside a block of size 1,920 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112992: ren_start (core.c:92)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B75B18 by thread #3
+==2882== Locks held: none
+==2882==    at 0x11C5A5: grow (dq.c:39)
+==2882==    by 0x11C3CE: dq_push (dq.c:47)
+==2882==    by 0x112549: ren_spawn (sched.c:227)
+==2882==    by 0x10BF9D: root_resume (workloads/w1_spawn.c:33)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous read of size 8 by thread #4
+==2882== Locks held: none
+==2882==    at 0x11C751: dq_steal (dq.c:88)
+==2882==    by 0x111FFE: steal_any (sched.c:162)
+==2882==    by 0x111EA2: ren_run (sched.c:210)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4b75b18 is 600 bytes inside a block of size 1,920 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112992: ren_start (core.c:92)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 4 at 0x4BC8328 by thread #4
+==2882== Locks held: none
+==2882==    at 0x10BFD9: root_resume (workloads/w1_spawn.c:37)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous read of size 4 by thread #5
+==2882== Locks held: none
+==2882==    at 0x10BEA8: root_resume (workloads/w1_spawn.c:21)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==  Address 0x4bc8328 is 8 bytes inside a block of size 80 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BCC0: w1_main (workloads/w1_spawn.c:53)
+==2882==    by 0x112C9E: ren_start (core.c:119)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4D0FB28 by thread #2
+==2882== Locks held: none
+==2882==    at 0x10C12E: child_resume (workloads/w1_spawn.c:14)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4d0fb28 is 72 bytes inside a block of size 88 alloc'd
+==2882==    at 0x484F9D3: calloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x10BA54: ren_task_new (rt.c:51)
+==2882==    by 0x10BF5B: root_resume (workloads/w1_spawn.c:30)
+==2882==    by 0x1122E1: run_task (sched.c:120)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Block was alloc'd by thread #3
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during write of size 8 at 0x4B757A8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11276D: finish (sched.c:105)
+==2882==    by 0x11272F: task_done (sched.c:111)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous read of size 8 by thread #5
+==2882== Locks held: none
+==2882==    at 0x111D39: ren_run (sched.c:195)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882==  Address 0x4b757a8 is 232 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+==2882== ----------------------------------------------------------------
+==2882== 
+==2882== Possible data race during read of size 8 at 0x4B757A8 by thread #3
+==2882== Locks held: none
+==2882==    at 0x111D39: ren_run (sched.c:195)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==2882==    by 0x4A89CC3: clone (clone.S:100)
+==2882== 
+==2882== This conflicts with a previous write of size 8 by thread #2
+==2882== Locks held: none
+==2882==    at 0x11276D: finish (sched.c:105)
+==2882==    by 0x11272F: task_done (sched.c:111)
+==2882==    by 0x112382: run_task (sched.c:126)
+==2882==    by 0x111F2C: ren_run (sched.c:216)
+==2882==    by 0x1166E3: drv_epoll_worker (drv_epoll.c:335)
+==2882==    by 0x116358: ren_drv_worker (drv_common.c:289)
+==2882==    by 0x10B62F: worker_main (host_main.c:41)
+==2882==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==  Address 0x4b757a8 is 232 bytes inside a block of size 320 alloc'd
+==2882==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==2882==    by 0x112D51: xalloc64 (core.c:15)
+==2882==    by 0x112817: ren_start (core.c:81)
+==2882==    by 0x10ACEC: main (host_main.c:140)
+==2882==  Block was alloc'd by thread #1
+==2882== 
+result: w1 n=20000 sum=199990000 left=0
+metric: w1 tasks_per_s=104681 inner_s=0.191056 wall_s=0.239480
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.239480
+deque=99 w1=99
+# exit 1 after 56.154464791 s

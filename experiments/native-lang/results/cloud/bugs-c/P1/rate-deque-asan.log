@@ -1,0 +1,6 @@
+# machine cloud, 2026-10-30T15:54:29Z, plant P1, c-asan-P1: ./deque_stress stress 10 200000 x30
+## first failing run 2
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=1010689 duplicated=1 lost=1
+deque_stress stress: FAIL
+result: deque-asan c-asan-P1 failed 13/30 first_fail_run=2 total_s=10.131105133

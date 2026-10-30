@@ -1,0 +1,25 @@
+# machine cloud (experiments/MACHINE-cloud.md), Measure step, 2026-10-30. binary sizes (bytes, stripped)
+c-release            core.a=  360806  w1-only stripped=   72464  full-harness stripped=   92952
+/usr/bin/ld: NOTE: This behaviour is deprecated and will be removed in a future version of the linker
+c-tcc                core.a=  305990  w1-only stripped=   87056  full-harness stripped=  115016
+rust-release         core.a=23328480  w1-only stripped= 1099016  full-harness stripped= 1119512
+rust-release-nostd   core.a= 9672336  w1-only stripped=  383592  full-harness stripped=  404088
+zig-release-fast     core.a= 1165934  w1-only stripped=  109120  full-harness stripped=  129608
+zig-release-safe     core.a= 7582178  w1-only stripped=  846280  full-harness stripped=  866760
+stub w1 stripped 39520
+tcclink-rust-release-nostd full stripped 615048
+tcclink-zig-release-fast full stripped 129080
+c-tcc full stripped 115016
+c-release            w1-only gc-sections stripped=   72456
+rust-release         w1-only gc-sections stripped=  439344
+rust-release-nostd   w1-only gc-sections stripped=  158264
+zig-release-fast     w1-only gc-sections stripped=  109112
+zig-release-safe     w1-only gc-sections stripped=  752064
+stub-release         w1-only gc-sections stripped=   39512
+   text	   data	    bss	    dec	    hex	filename
+  63689	   1184	    176	  65049	   fe19	../build/size/w1gc-c-release.s
+ 142094	   3128	      8	 145230	  2374e	../build/size/w1gc-rust-release-nostd.s
+ 422577	  12496	    168	 435241	  6a429	../build/size/w1gc-rust-release.s
+  27832	   2120	    192	  30144	   75c0	../build/size/w1gc-stub-release.s
+  98466	   2672	    168	 101306	  18bba	../build/size/w1gc-zig-release-fast.s
+ 697563	  43176	 262360	1003099	  f4e5b	../build/size/w1gc-zig-release-safe.s

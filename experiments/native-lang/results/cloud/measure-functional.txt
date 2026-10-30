@@ -1,0 +1,42 @@
+# machine cloud (experiments/MACHINE-cloud.md), Measure step, 2026-10-30. Clean release rebuild + W1-W4 suites (test.sh layout abi deque smoke io replay, WORKERS=1 4 8, DRIVERS=epoll uring)
+### c-release 17:07:05
+== layout (c-release)
+== abi (c-release)
+== deque (c-release)
+== smoke (c-release)
+== io (c-release)
+== replay (c-release)
+== summary c-release: 71 passed, 0 failed
+### rust-release 17:07:25
+== layout (rust-release)
+== abi (rust-release)
+== deque (rust-release)
+== smoke (rust-release)
+== io (rust-release)
+== replay (rust-release)
+== summary rust-release: 71 passed, 0 failed
+### rust-release-nostd 17:07:44
+== layout (rust-release-nostd)
+== abi (rust-release-nostd)
+== deque (rust-release-nostd)
+== smoke (rust-release-nostd)
+== io (rust-release-nostd)
+FAIL t_timer uring x4 (exit 1)
+     | t_timer: order or timing wrong
+     | harness: t_timer: workload check failed
+     | result: t_timer order=1,3,2,4,0
+     | metric: harness workload=t_timer driver=uring workers=4 wall_s=0.030767
+== replay (rust-release-nostd)
+== summary rust-release-nostd: 70 passed, 1 failed
+   failed: t_timer uring x4
+### zig-release-fast 17:08:01
+== layout (zig-release-fast)
+== abi (zig-release-fast)
+== deque (zig-release-fast)
+== smoke (zig-release-fast)
+== io (zig-release-fast)
+== replay (zig-release-fast)
+== summary zig-release-fast: 71 passed, 0 failed
+
+## t_timer repeat (100 runs per config, harness t_timer)
+see MEASURE.md §1

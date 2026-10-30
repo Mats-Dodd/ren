@@ -1,0 +1,116 @@
+# machine: cloud -- VERIFY re-run log (c-asan-P3-abi.log), 2026-10-30
+ok   basic
+  FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE
+FAIL stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+
+=================================================================
+==8241==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 618 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05e5b0 in realloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd25b0) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0a3940 in th_journal /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:41:68
+    #2 0x55e2ff0b448e in jb_emit /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/journal.c:40:3
+    #3 0x55e2ff0b4fcc in j_call /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/journal.c:85:3
+    #4 0x55e2ff0b0fd8 in ren_world /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:313:3
+    #5 0x55e2ff0a4241 in caller_resume /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:95:19
+    #6 0x55e2ff0ac0bb in run_task /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/sched.c:120:15
+    #7 0x55e2ff0ac0bb in ren_run /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/sched.c:216:5
+    #8 0x55e2ff09def6 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:213:3
+    #9 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #10 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #11 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #12 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 65536 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05e193 in malloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd2193) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0ad478 in xmalloc /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:10:13
+    #2 0x55e2ff0ad478 in ren_start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:93:14
+    #3 0x55e2ff09dda2 in start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:150:17
+    #4 0x55e2ff09dda2 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:205:17
+    #5 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #6 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #7 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #8 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 16384 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05e193 in malloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd2193) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0ad704 in xmalloc /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:10:13
+    #2 0x55e2ff0ad704 in ren_start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:107:19
+    #3 0x55e2ff09dda2 in start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:150:17
+    #4 0x55e2ff09dda2 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:205:17
+    #5 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #6 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #7 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #8 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 2056 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05e193 in malloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd2193) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0b269d in ring_new /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/dq.c:8:16
+    #2 0x55e2ff0b261a in dq_init /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/dq.c:19:3
+    #3 0x55e2ff0ad627 in ren_start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:97:5
+    #4 0x55e2ff09dda2 in start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:150:17
+    #5 0x55e2ff09dda2 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:205:17
+    #6 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #7 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #8 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #9 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 512 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05eb16 in aligned_alloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd2b16) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0ad428 in xalloc64 /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:15:13
+    #2 0x55e2ff0ad428 in ren_start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:92:10
+    #3 0x55e2ff09dda2 in start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:150:17
+    #4 0x55e2ff09dda2 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:205:17
+    #5 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #6 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #7 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #8 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 320 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05eb16 in aligned_alloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd2b16) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0ad21b in xalloc64 /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:15:13
+    #2 0x55e2ff0ad21b in ren_start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:81:17
+    #3 0x55e2ff09dda2 in start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:150:17
+    #4 0x55e2ff09dda2 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:205:17
+    #5 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #6 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #7 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #8 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 144 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05e193 in malloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd2193) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0b0d06 in xmalloc /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:10:13
+    #2 0x55e2ff0b0d06 in ren_world /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:304:11
+    #3 0x55e2ff0a4241 in caller_resume /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:95:19
+    #4 0x55e2ff0ac0bb in run_task /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/sched.c:120:15
+    #5 0x55e2ff0ac0bb in ren_run /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/sched.c:216:5
+    #6 0x55e2ff09def6 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:213:3
+    #7 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #8 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #9 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #10 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+Indirect leak of 128 byte(s) in 1 object(s) allocated from:
+    #0 0x55e2ff05e37d in calloc (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0xd237d) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+    #1 0x55e2ff0aa732 in ren_task_new /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/rt.c:51:29
+    #2 0x55e2ff0a3dc2 in new_caller /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:114:25
+    #3 0x55e2ff0a2ad0 in main_caller /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:137:87
+    #4 0x55e2ff0ada37 in ren_start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/core.c:119:20
+    #5 0x55e2ff09dda2 in start /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:150:17
+    #6 0x55e2ff09dda2 in t_stale /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:205:17
+    #7 0x55e2ff09c92f in main /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/harness/tests/abi_test.c:505:5
+    #8 0x7fc58d42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #9 0x7fc58d42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #10 0x55e2fefc3344 in _start (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/bin/c-asan-P3/abi_test+0x37344) (BuildId: cf4664a4e541eb644abb0f64d23969ef578be4e2)
+
+SUMMARY: AddressSanitizer: 85698 byte(s) leaked in 8 allocation(s).

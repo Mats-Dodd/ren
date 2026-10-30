@@ -1,0 +1,24 @@
+Setting up g++-14-x86-64-linux-gnu (14.2.0-4ubuntu2~24.04.1) ...
+Setting up g++-14 (14.2.0-4ubuntu2~24.04.1) ...
+141
+clang-22
+llvm-22
+llvm-22-dev
+llvm-22-linker-tools
+llvm-22-runtime
+llvm-22-tools
+-- Looking for histedit.h
+-- Looking for histedit.h - found
+-- Found LibEdit: /usr/include (found version "2.11") 
+-- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3")  
+-- Could NOT find zstd (missing: zstd_LIBRARY zstd_INCLUDE_DIR) 
+-- Found LibXml2: /usr/lib/x86_64-linux-gnu/libxml2.so (found version "2.9.14") 
+-- Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR) 
+-- Using LLVM 22.1.8 (/usr/lib/llvm-22/bin/llvm-config)
+-- Using clang /usr/lib/llvm-22/bin/clang
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Configuring done (1.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/genmc-src/build

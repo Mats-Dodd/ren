@@ -1,0 +1,483 @@
+# machine cloud, 2026-10-30T14:41:35Z, plant P5, stage tests-tsan
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=20 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/c-tsan-P5
+== layout (c-tsan-P5)
+PASS layout_check
+== abi (c-tsan-P5)
+PASS abi_test
+== deque (c-tsan-P5)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (c-tsan-P5)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+FAIL w1 epoll x4 (exit 66)
+     | 
+     |   Thread T2 (tid=15530, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15529, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w1 n=200000 sum=19999900000 left=0
+     | metric: w1 tasks_per_s=439914 inner_s=0.454634 wall_s=0.457990
+     | metric: harness workload=w1 driver=epoll workers=4 wall_s=0.457990
+FAIL w2 epoll x4 (exit 66)
+     | 
+     |   Thread T4 (tid=15546, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T3 (tid=15544, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w2 n=1000000 turn=1000000
+     | metric: w2 ns_per_switch=6119.31 inner_s=6.119312 wall_s=6.127708
+     | metric: harness workload=w2 driver=epoll workers=4 wall_s=6.127708
+PASS w3 epoll x4
+FAIL w1 epoll x8 (exit 66)
+     | 
+     |   Thread T3 (tid=15573, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T5 (tid=15575, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w1 n=200000 sum=19999900000 left=0
+     | metric: w1 tasks_per_s=430981 inner_s=0.464058 wall_s=0.469460
+     | metric: harness workload=w1 driver=epoll workers=8 wall_s=0.469460
+FAIL w2 epoll x8 (exit 66)
+     | 
+     |   Thread T1 (tid=15585, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T7 (tid=15591, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w2 n=1000000 turn=1000000
+     | metric: w2 ns_per_switch=7409.61 inner_s=7.409611 wall_s=7.415724
+     | metric: harness workload=w2 driver=epoll workers=8 wall_s=7.415724
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+FAIL w1 uring x4 (exit 66)
+     | 
+     |   Thread T1 (tid=15640, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T4 (tid=15643, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w1 n=200000 sum=19999900000 left=0
+     | metric: w1 tasks_per_s=419371 inner_s=0.476905 wall_s=0.481660
+     | metric: harness workload=w1 driver=uring workers=4 wall_s=0.481660
+FAIL w2 uring x4 (exit 66)
+     | 
+     |   Thread T1 (tid=15650, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15651, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w2 n=1000000 turn=1000000
+     | metric: w2 ns_per_switch=5800.46 inner_s=5.800456 wall_s=5.803967
+     | metric: harness workload=w2 driver=uring workers=4 wall_s=5.803967
+FAIL w3 uring x4 (exit 66)
+     | 
+     |   Thread T1 (tid=15668, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T4 (tid=15671, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: w3 n=20000 done=20000 csum=6db259241ec1ef25
+     | metric: w3 p50_ns=27548 p99_ns=68683 p999_ns=425901 min_ns=5713 wall_s=1.299321 rtt_per_s=15393
+     | metric: harness workload=w3 driver=uring workers=4 wall_s=1.299321
+FAIL w1 uring x8 (exit 66)
+     | 
+     |   Thread T4 (tid=15685, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15682, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w1 n=200000 sum=19999900000 left=0
+     | metric: w1 tasks_per_s=402536 inner_s=0.496850 wall_s=0.504484
+     | metric: harness workload=w1 driver=uring workers=8 wall_s=0.504484
+FAIL w2 uring x8 (exit 66)
+     | 
+     |   Thread T5 (tid=15702, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T6 (tid=15703, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: w2 n=1000000 turn=1000000
+     | metric: w2 ns_per_switch=6893.33 inner_s=6.893333 wall_s=6.899538
+     | metric: harness workload=w2 driver=uring workers=8 wall_s=6.899538
+FAIL w3 uring x8 (exit 66)
+     | 
+     |   Thread T1 (tid=15720, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15721, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: w3 n=20000 done=20000 csum=6db259241ec1ef25
+     | metric: w3 p50_ns=27379 p99_ns=80114 p999_ns=542745 min_ns=5335 wall_s=1.347025 rtt_per_s=14848
+     | metric: harness workload=w3 driver=uring workers=8 wall_s=1.347025
+== io (c-tsan-P5)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+FAIL t_pipe epoll x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T4 (tid=15773, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15771, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: t_pipe got=262144 sum=e1f9002954322325
+     | metric: harness workload=t_pipe driver=epoll workers=4 wall_s=0.130152
+FAIL t_tcp epoll x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15782, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15783, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_tcp got=pong
+     | metric: harness workload=t_tcp driver=epoll workers=4 wall_s=0.094424
+FAIL t_cancel epoll x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15792, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15793, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.104904
+FAIL t_block stop epoll x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15803, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T3 (tid=15804, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=4 wall_s=0.155060
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+FAIL t_pipe epoll x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15834, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15835, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: t_pipe got=262144 sum=e1f9002954322325
+     | metric: harness workload=t_pipe driver=epoll workers=8 wall_s=0.109229
+FAIL t_tcp epoll x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15848, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15849, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_tcp got=pong
+     | metric: harness workload=t_tcp driver=epoll workers=8 wall_s=0.092639
+FAIL t_cancel epoll x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15863, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T5 (tid=15866, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=8 wall_s=0.102376
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+FAIL t_pipe uring x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15935, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T4 (tid=15938, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: t_pipe got=262144 sum=e1f9002954322325
+     | metric: harness workload=t_pipe driver=uring workers=4 wall_s=0.099630
+FAIL t_tcp uring x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15945, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15946, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_tcp got=pong
+     | metric: harness workload=t_tcp driver=uring workers=4 wall_s=0.091352
+FAIL t_cancel uring x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=15955, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15956, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=4 wall_s=0.112307
+FAIL t_block stop uring x4 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=15966, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T3 (tid=15967, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=4 wall_s=0.143133
+PASS t_block kill uring x4
+PASS t_timer uring x8
+FAIL t_pipe uring x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T6 (tid=16001, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T5 (tid=15999, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: t_pipe got=262144 sum=e1f9002954322325
+     | metric: harness workload=t_pipe driver=uring workers=8 wall_s=0.109101
+FAIL t_tcp uring x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=16009, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T2 (tid=16010, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_tcp got=pong
+     | metric: harness workload=t_tcp driver=uring workers=8 wall_s=0.104988
+FAIL t_cancel uring x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T1 (tid=16023, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T3 (tid=16025, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=8 wall_s=0.099513
+FAIL t_block stop uring x8 (exit 66)
+     |     #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T7 (tid=16043, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     |   Thread T3 (tid=16039, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+     | 
+     | SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+     | ==================
+     | ThreadSanitizer: reported 2 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=8 wall_s=0.161028
+PASS t_block kill uring x8
+== replay (c-tsan-P5)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (c-tsan-P5)
+PASS fuzz_run random 300
+== summary c-tsan-P5: 47 passed, 25 failed
+   failed: w1 epoll x4
+   failed: w2 epoll x4
+   failed: w1 epoll x8
+   failed: w2 epoll x8
+   failed: w1 uring x4
+   failed: w2 uring x4
+   failed: w3 uring x4
+   failed: w1 uring x8
+   failed: w2 uring x8
+   failed: w3 uring x8
+   failed: t_pipe epoll x4
+   failed: t_tcp epoll x4
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_pipe epoll x8
+   failed: t_tcp epoll x8
+   failed: t_cancel epoll x8
+   failed: t_pipe uring x4
+   failed: t_tcp uring x4
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_pipe uring x8
+   failed: t_tcp uring x8
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+# exit 1 after 46.329010827 s

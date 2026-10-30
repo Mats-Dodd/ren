@@ -1,0 +1,9 @@
+# machine cloud, 2026-10-30T14:34:48Z, plant P2, stage build-ubsan-int-nowerror
+# $ env REN_C_WERROR=0 /home/user/ren/experiments/native-lang/build.sh c ubsan-int P2
+== c-ubsan-int-P2: /home/user/ren/experiments/native-lang/c/build.sh ubsan-int /home/user/ren/experiments/native-lang/build/c-ubsan-int-P2
+/home/user/ren/experiments/native-lang/c/dq.c:47:13: warning: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+1 warning generated.
+built c-ubsan-int-P2: language 2.13s, harness link 4.24s
+# exit 0 after 6.400824393 s

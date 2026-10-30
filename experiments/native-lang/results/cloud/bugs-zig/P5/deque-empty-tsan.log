@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:33:57Z, plant P5, stage deque-empty-tsan
+# $ timeout 20 /home/user/ren/experiments/native-lang/bin/zig-tsan-P5/deque_stress empty
+deque_stress empty: ok
+# exit 0 after .019666446 s

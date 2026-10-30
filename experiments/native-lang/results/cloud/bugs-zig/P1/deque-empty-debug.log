@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:15:45Z, plant P1, stage deque-empty-debug
+# $ timeout 20 /home/user/ren/experiments/native-lang/bin/zig-debug-P1/deque_stress empty
+deque_stress empty: ok
+# exit 0 after .019186953 s

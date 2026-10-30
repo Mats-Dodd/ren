@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:54:16Z, plant P2u, stage t_cancel-x4-release-safe
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/harness t_cancel --driver epoll --workers 4
+ren zig panic: integer overflow
+# exit 134 after .010787840 s

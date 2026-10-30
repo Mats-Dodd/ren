@@ -1,0 +1,15 @@
+# machine cloud, 2026-10-30T16:10:06Z, plant P0, stage abi-release-safe
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-safe/abi_test
+ok   basic
+ok   stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+# exit 0 after .008526961 s

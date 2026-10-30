@@ -1,0 +1,7 @@
+== rust-release-nostd-P1: /home/user/ren/experiments/native-lang/rust/build.sh release-nostd /home/user/ren/experiments/native-lang/build/rust-release-nostd-P1
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4.77s
+   Compiling ren_hot v0.1.0 (/home/user/ren/experiments/native-lang/rust/hot)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.45s
+built rust-release-nostd-P1: language 5.35s, harness link 2.75s

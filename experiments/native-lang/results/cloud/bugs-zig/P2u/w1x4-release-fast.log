@@ -1,0 +1,3 @@
+# machine cloud, 2026-10-30T16:52:15Z, plant P2u, stage w1x4-release-fast
+# $ bash -c for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-release-fast-P2u/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done
+# exit 124 after 120.014592933 s

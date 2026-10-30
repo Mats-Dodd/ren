@@ -1,0 +1,11 @@
+[package]
+name = "ren_hot"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+libc = { version = "0.2", default-features = false }

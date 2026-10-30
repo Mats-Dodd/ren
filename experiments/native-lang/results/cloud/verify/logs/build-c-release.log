@@ -1,0 +1,3 @@
+# machine: cloud -- VERIFY re-run log (build-c-release.log), 2026-10-30
+== c-release: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/build.sh release /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/c-release
+built c-release: language 1.91s, harness link 2.66s

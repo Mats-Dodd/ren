@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T14:00:02Z, plant P0, stage build-asan
+# $ /home/user/ren/experiments/native-lang/build.sh c asan
+== c-asan: /home/user/ren/experiments/native-lang/c/build.sh asan /home/user/ren/experiments/native-lang/build/c-asan
+built c-asan: language 2.66s, harness link 8.10s
+# exit 0 after 10.776677731 s

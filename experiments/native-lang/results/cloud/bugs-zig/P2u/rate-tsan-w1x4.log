@@ -1,0 +1,24 @@
+# machine cloud, 2026-10-30T16:57:31Z, plant P2u, stage rate-tsan-w1x4
+# $ bash -c f=0; for i in $(seq 10); do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1 || { f=$((f+1)); grep -m3 -A6 'WARNING: ThreadSanitizer' /tmp/ren-zig-bugs-P2u-$$.out | head -12; }; done; done; rm -f /tmp/ren-zig-bugs-P2u-$$.out; echo "failed $f/20"; [ $f = 0 ]
+bash: line 1: 13843 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13850 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13858 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13865 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13872 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13878 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13885 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13892 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13898 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13905 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13911 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13918 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13925 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13932 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13938 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13945 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13952 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13959 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13966 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+bash: line 1: 13973 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P2u-$$.out 2>&1
+failed 20/20
+# exit 1 after .473171813 s

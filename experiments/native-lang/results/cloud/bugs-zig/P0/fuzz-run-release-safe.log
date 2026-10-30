@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:12:04Z, plant P0, stage fuzz-run-release-safe
+# $ timeout 300 /home/user/ren/experiments/native-lang/bin/zig-release-safe/fuzz_run --random 20000 7
+fuzz_run: 20000 random inputs ok
+# exit 0 after .443350019 s

@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:54:17Z, plant P2u, stage abi-tsan
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/abi_test
+ren zig panic: integer overflow
+# exit 134 after .022329700 s

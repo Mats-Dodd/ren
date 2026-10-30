@@ -1,0 +1,13 @@
+# machine cloud, 2026-10-30T14:53:16Z: does helgrind/drd name the stolen_from lines? P5 lines sched.c:165 (thief +=) and :191 (owner read); P0 lines sched.c:167 (XADD) and :193 (LD)
+P0 helgrind run 1: sched.c:165=0 sched.c:191=0 sched.c:167=0 sched.c:193=0 total_reports=49
+P0 helgrind run 2: sched.c:165=0 sched.c:191=0 sched.c:167=0 sched.c:193=0 total_reports=46
+P0 helgrind run 3: sched.c:165=0 sched.c:191=0 sched.c:167=0 sched.c:193=0 total_reports=49
+P0 drd run 1: sched.c:165=0 sched.c:191=0 sched.c:167=0 sched.c:193=0 total_reports=57
+P0 drd run 2: sched.c:165=0 sched.c:191=0 sched.c:167=0 sched.c:193=0 total_reports=57
+P0 drd run 3: sched.c:165=0 sched.c:191=0 sched.c:167=0 sched.c:193=0 total_reports=55
+P5 helgrind run 1: sched.c:165=4 sched.c:191=2 sched.c:167=0 sched.c:193=0 total_reports=52
+P5 helgrind run 2: sched.c:165=4 sched.c:191=2 sched.c:167=0 sched.c:193=0 total_reports=52
+P5 helgrind run 3: sched.c:165=4 sched.c:191=2 sched.c:167=0 sched.c:193=0 total_reports=48
+P5 drd run 1: sched.c:165=2 sched.c:191=1 sched.c:167=0 sched.c:193=0 total_reports=56
+P5 drd run 2: sched.c:165=2 sched.c:191=1 sched.c:167=0 sched.c:193=0 total_reports=56
+P5 drd run 3: sched.c:165=2 sched.c:191=1 sched.c:167=0 sched.c:193=0 total_reports=58

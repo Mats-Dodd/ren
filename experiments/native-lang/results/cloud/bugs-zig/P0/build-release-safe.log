@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:04:37Z, plant P0, stage build-release-safe
+# $ /home/user/ren/experiments/native-lang/build.sh zig release-safe
+== zig-release-safe: /home/user/ren/experiments/native-lang/zig/build.sh release-safe /home/user/ren/experiments/native-lang/build/zig-release-safe
+built zig-release-safe: language 18.84s, harness link 2.62s
+# exit 0 after 21.488915999 s

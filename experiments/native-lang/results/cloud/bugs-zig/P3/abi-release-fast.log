@@ -1,0 +1,16 @@
+# machine cloud, 2026-10-30T16:22:31Z, plant P3, stage abi-release-fast
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-release-fast-P3/abi_test
+ok   basic
+  FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE
+FAIL stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+# exit 1 after .009187511 s

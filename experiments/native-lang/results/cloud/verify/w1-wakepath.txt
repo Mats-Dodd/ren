@@ -1,0 +1,9 @@
+# machine: cloud -- W1 cost breakdown (getrusage of the child; flock -x), 2026-10-30
+c-release w=2 nvcsw 29 sys 0.00 user 0.82 tasks_per_s=2415033 (n=1e6)
+c-release w=8 nvcsw 691337 sys 8.34 user 2.91 tasks_per_s=152265
+rust-release w=2 nvcsw 62 sys 0.01 user 1.15 tasks_per_s=1714321
+rust-release w=8 nvcsw 825613 sys 9.97 user 2.56 tasks_per_s=126892
+zig-release-fast w=2 nvcsw 9330 sys 0.10 user 1.18 tasks_per_s=1455870
+zig-release-fast w=8 nvcsw 901919 sys 10.73 user 2.05 tasks_per_s=122138
+c-release w1 epoll n=300000: x1 5.5M/s, x2 2.38M/s, x3 552k/s, x4 180-199k/s, x8 136k/s
+c-release w1 epoll x4 n=100000 under strace -f: 2.48M/s (the stall pattern disappears when strace perturbs timing)

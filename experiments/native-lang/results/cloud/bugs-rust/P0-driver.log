@@ -1,0 +1,22 @@
+build-release          rc=0      7.0s  
+build-debug            rc=0      3.1s  
+build-release-nostd    rc=0      6.4s  
+build-tsan             rc=0      7.3s  
+build-asanh            rc=0      9.0s  
+clippy                 rc=0      1.5s  
+cargo-test             rc=0      1.4s  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+tests-release          rc=1     64.4s  FAIL t_cancel epoll x8 (exit 124)
+tests-debug            rc=0     15.9s  == summary rust-debug: 72 passed, 0 failed
+tests-nostd            rc=0      9.1s  == summary rust-release-nostd: 72 passed, 0 failed
+tests-asanh            rc=0     17.0s  == summary rust-asanh: 73 passed, 0 failed
+tests-tsan             rc=0     35.6s  == summary rust-tsan: 72 passed, 0 failed
+tsan-w1x4              rc=0      0.3s  
+tsan-deque             rc=0      3.9s  
+deque-stress-x50       rc=0     36.5s  
+deque-stress-debug-x20 rc=0     17.9s  
+loom                   rc=0      4.2s  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+miri                   rc=0     13.8s  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+fuzz-run-release       rc=0      0.1s  
+fuzz-run-debug         rc=0      0.4s  
+fuzz-regress           rc=0      0.0s  
+libfuzzer-asanh        rc=0    121.2s  

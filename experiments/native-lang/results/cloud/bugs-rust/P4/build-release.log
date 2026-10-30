@@ -1,0 +1,7 @@
+== rust-release-P4: /home/user/ren/experiments/native-lang/rust/build.sh release /home/user/ren/experiments/native-lang/build/rust-release-P4
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4.66s
+   Compiling ren_hot v0.1.0 (/home/user/ren/experiments/native-lang/rust/hot)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.45s
+built rust-release-P4: language 5.27s, harness link 3.13s

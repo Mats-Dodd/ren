@@ -1,0 +1,43 @@
+# machine cloud, 2026-10-30T15:58:18Z, plant P5, c-tsan-P5: ./harness w1 --driver uring --workers 4 --n 200000 x20
+## first failing run 1
+==================
+WARNING: ThreadSanitizer: data race (pid=15678)
+  Write of size 8 at 0x727000000288 by thread T4:
+    #0 steal_any /home/user/ren/experiments/native-lang/c/sched.c:165:27 (harness+0xe69b3) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 ren_run /home/user/ren/experiments/native-lang/c/sched.c:210:17 (harness+0xe69b3)
+    #2 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf290e) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed1bb) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Previous write of size 8 at 0x727000000288 by thread T3:
+    #0 steal_any /home/user/ren/experiments/native-lang/c/sched.c:165:27 (harness+0xe69b3) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 ren_run /home/user/ren/experiments/native-lang/c/sched.c:210:17 (harness+0xe69b3)
+    #2 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf290e) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed1bb) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Location is heap block of size 1920 at 0x727000000000 allocated by main thread:
+    #0 aligned_alloc <null> (harness+0x5fc74) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 xalloc64 /home/user/ren/experiments/native-lang/c/core.c:15:13 (harness+0xe779f) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #2 ren_start /home/user/ren/experiments/native-lang/c/core.c:92:10 (harness+0xe779f)
+    #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Thread T4 (tid=15683, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Thread T3 (tid=15682, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=15678)
+  Read of size 8 at 0x7270000000b0 by thread T1:
+    #0 ren_run /home/user/ren/experiments/native-lang/c/sched.c:191:23 (harness+0xe64dd) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 drv_uring_worker /home/user/ren/experiments/native-lang/c/drv_uring.c:286:17 (harness+0xf290e) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #2 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:292:12 (harness+0xed1bb) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+result: w1x4-uring-tsan c-tsan-P5 failed 20/20 first_fail_run=1 total_s=9.087471822

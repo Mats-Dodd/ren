@@ -1,0 +1,40 @@
+# machine cloud, 2026-10-30T14:39:52Z, plant P4: abi_test subtests one by one
+release basic: exit 0 ok   basic
+release stale: exit 0 ok   stale
+release cancel_race: exit 139 
+release cancel_sent: exit 139 
+release retract: exit 139 
+release answer_now: exit 0 ok   answer_now
+release stop: exit 139 
+release kill: exit 0 ok   kill
+release budget: exit 0 ok   budget
+release full: exit 0 ok   full
+release steal: exit 0 ok   steal
+release determinism: exit 139 
+asan basic: exit 0 ok   basic
+asan stale: exit 0 ok   stale
+asan cancel_race: exit 1 ERROR: AddressSanitizer: heap-use-after-free
+asan cancel_sent: exit 1 ERROR: AddressSanitizer: heap-use-after-free
+asan retract: exit 1 ERROR: AddressSanitizer: heap-use-after-free
+asan answer_now: exit 0 ok   answer_now
+asan stop: exit 1 ERROR: AddressSanitizer: heap-use-after-free
+asan kill: exit 0 ok   kill
+asan budget: exit 0 ok   budget
+asan full: exit 0 ok   full
+asan steal: exit 0 ok   steal
+asan determinism: exit 1 ERROR: AddressSanitizer: heap-use-after-free
+==9462==ERROR: AddressSanitizer: heap-use-after-free on address 0x50d000000048 at pc 0x558cb3d7fff3 bp 0x7ffe3eb907d0 sp 0x7ffe3eb907c8
+    #0 0x558cb3d7fff2 in deliver /home/user/ren/experiments/native-lang/c/core.c:150:3
+    #1 0x558cb3d7fff2 in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+    #2 0x558cb3d7cb47 in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+    #3 0x558cb3d76e80 in race /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:281:3
+freed by thread T0 here:
+    #0 0x558cb3d2eefa in free (/home/user/ren/experiments/native-lang/bin/c-asan-P4/abi_test+0xd1efa) (BuildId: fcb4083a6bcde047609a01c66635b18cfe0b90ed)
+    #1 0x558cb3d7fb17 in deliver /home/user/ren/experiments/native-lang/c/core.c:146:47
+    #2 0x558cb3d7fb17 in drain_inbox /home/user/ren/experiments/native-lang/c/core.c:162:5
+    #3 0x558cb3d7cb47 in ren_run /home/user/ren/experiments/native-lang/c/sched.c:196:3
+previously allocated by thread T0 here:
+    #0 0x558cb3d2f193 in malloc (/home/user/ren/experiments/native-lang/bin/c-asan-P4/abi_test+0xd2193) (BuildId: fcb4083a6bcde047609a01c66635b18cfe0b90ed)
+    #1 0x558cb3d81d46 in xmalloc /home/user/ren/experiments/native-lang/c/core.c:10:13
+    #2 0x558cb3d81d46 in ren_world /home/user/ren/experiments/native-lang/c/core.c:304:11
+    #3 0x558cb3d7846a in race_root_resume /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:245:9

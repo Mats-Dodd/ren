@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:22:50Z, plant P3, stage rate-deque-release-fast
+# $ bash -c f=0; for i in $(seq 20); do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-release-fast-P3/deque_stress' stress 10 200000 > /tmp/ren-zig-bugs-P3-$$.out 2>&1 || { f=$((f+1)); tail -3 /tmp/ren-zig-bugs-P3-$$.out; }; done; rm -f /tmp/ren-zig-bugs-P3-$$.out; echo "failed $f/20"; [ $f = 0 ]
+failed 0/20
+# exit 0 after 19.879842100 s

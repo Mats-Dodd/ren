@@ -1,0 +1,432 @@
+# Zig entry: functional test summaries, machine cloud, 2026-10-30T14:18:29Z
+# harness/test.sh bin/zig-<profile> with WORKERS="1 4 8" DRIVERS="epoll uring" (default suites: layout abi deque smoke io replay fuzz; tsan: no fuzz suite)
+# zig 0.17.0; bin/zig-release-safe/fuzz (libFuzzer) was linked by hand: clang -fsanitize=fuzzer,address,undefined + the release-safe core
+## release-fast
+== layout (zig-release-fast)
+PASS layout_check
+== abi (zig-release-fast)
+PASS abi_test
+== deque (zig-release-fast)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (zig-release-fast)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (zig-release-fast)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+PASS t_cancel epoll x4
+PASS t_block stop epoll x4
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+PASS t_cancel epoll x8
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+PASS t_cancel uring x4
+PASS t_block stop uring x4
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+PASS t_cancel uring x8
+PASS t_block stop uring x8
+PASS t_block kill uring x8
+== replay (zig-release-fast)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (zig-release-fast)
+PASS fuzz_run random 300
+== summary zig-release-fast: 72 passed, 0 failed
+exit=0
+## release-safe
+== layout (zig-release-safe)
+PASS layout_check
+== abi (zig-release-safe)
+PASS abi_test
+== deque (zig-release-safe)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (zig-release-safe)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (zig-release-safe)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+PASS t_cancel epoll x4
+PASS t_block stop epoll x4
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+PASS t_cancel epoll x8
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+PASS t_cancel uring x4
+PASS t_block stop uring x4
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+PASS t_cancel uring x8
+PASS t_block stop uring x8
+PASS t_block kill uring x8
+== replay (zig-release-safe)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (zig-release-safe)
+PASS fuzz_run random 300
+PASS libFuzzer 20000 runs
+== summary zig-release-safe: 73 passed, 0 failed
+exit=0
+## debug
+== layout (zig-debug)
+PASS layout_check
+== abi (zig-debug)
+PASS abi_test
+== deque (zig-debug)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (zig-debug)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (zig-debug)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+PASS t_cancel epoll x4
+PASS t_block stop epoll x4
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+PASS t_cancel epoll x8
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+PASS t_cancel uring x4
+PASS t_block stop uring x4
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+PASS t_cancel uring x8
+PASS t_block stop uring x8
+PASS t_block kill uring x8
+== replay (zig-debug)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (zig-debug)
+PASS fuzz_run random 300
+== summary zig-debug: 72 passed, 0 failed
+exit=0
+## tsan
+== layout (zig-tsan)
+PASS layout_check
+== abi (zig-tsan)
+PASS abi_test
+== deque (zig-tsan)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (zig-tsan)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (zig-tsan)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+PASS t_cancel epoll x4
+PASS t_block stop epoll x4
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+PASS t_cancel epoll x8
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+PASS t_cancel uring x4
+PASS t_block stop uring x4
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+PASS t_cancel uring x8
+PASS t_block stop uring x8
+PASS t_block kill uring x8
+== replay (zig-tsan)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== summary zig-tsan: 71 passed, 0 failed
+exit=0
+## xreplay zig-release-fast <-> c-release
+== xreplay:bin/c-release (zig-release-fast)
+PASS xreplay w1 epoll: zig-release-fast -> c-release (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: zig-release-fast -> c-release (1525330 journal bytes, output identical)
+PASS xreplay t_cancel epoll: zig-release-fast -> c-release (4914 journal bytes, output identical)
+PASS xreplay t_timer epoll: zig-release-fast -> c-release (3274 journal bytes, output identical)
+PASS xreplay w1 uring: zig-release-fast -> c-release (4558 journal bytes, output identical)
+PASS xreplay w3 uring: zig-release-fast -> c-release (1525330 journal bytes, output identical)
+PASS xreplay t_cancel uring: zig-release-fast -> c-release (4970 journal bytes, output identical)
+PASS xreplay t_timer uring: zig-release-fast -> c-release (3274 journal bytes, output identical)
+== summary zig-release-fast: 8 passed, 0 failed
+exit=0
+== xreplay:bin/zig-release-fast (c-release)
+PASS xreplay w1 epoll: c-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: c-release -> zig-release-fast (1525330 journal bytes, output identical)
+PASS xreplay t_cancel epoll: c-release -> zig-release-fast (4914 journal bytes, output identical)
+FAIL xreplay t_timer epoll: c-release -> zig-release-fast record (exit 0)
+     | t_timer: order or timing wrong
+     | harness: t_timer: workload check failed
+     | result: t_timer order=2,4,1,3,0
+     | metric: harness workload=t_timer driver=epoll workers=1 wall_s=0.025661
+PASS xreplay w1 uring: c-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 uring: c-release -> zig-release-fast (1525330 journal bytes, output identical)
+PASS xreplay t_cancel uring: c-release -> zig-release-fast (4970 journal bytes, output identical)
+PASS xreplay t_timer uring: c-release -> zig-release-fast (3274 journal bytes, output identical)
+== summary c-release: 7 passed, 1 failed
+   failed: xreplay t_timer epoll: c-release -> zig-release-fast record
+exit=1
+## xreplay zig-release-fast <-> rust-release
+== xreplay:bin/rust-release (zig-release-fast)
+PASS xreplay w1 epoll: zig-release-fast -> rust-release (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: zig-release-fast -> rust-release (1525330 journal bytes, output identical)
+PASS xreplay t_cancel epoll: zig-release-fast -> rust-release (4914 journal bytes, output identical)
+PASS xreplay t_timer epoll: zig-release-fast -> rust-release (3274 journal bytes, output identical)
+PASS xreplay w1 uring: zig-release-fast -> rust-release (4558 journal bytes, output identical)
+PASS xreplay w3 uring: zig-release-fast -> rust-release (1525330 journal bytes, output identical)
+PASS xreplay t_cancel uring: zig-release-fast -> rust-release (4970 journal bytes, output identical)
+PASS xreplay t_timer uring: zig-release-fast -> rust-release (3274 journal bytes, output identical)
+== summary zig-release-fast: 8 passed, 0 failed
+exit=0
+== xreplay:bin/zig-release-fast (rust-release)
+PASS xreplay w1 epoll: rust-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: rust-release -> zig-release-fast (1525330 journal bytes, output identical)
+PASS xreplay t_cancel epoll: rust-release -> zig-release-fast (4858 journal bytes, output identical)
+PASS xreplay t_timer epoll: rust-release -> zig-release-fast (3274 journal bytes, output identical)
+PASS xreplay w1 uring: rust-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 uring: rust-release -> zig-release-fast (1525330 journal bytes, output identical)
+PASS xreplay t_cancel uring: rust-release -> zig-release-fast (4914 journal bytes, output identical)
+PASS xreplay t_timer uring: rust-release -> zig-release-fast (3274 journal bytes, output identical)
+== summary rust-release: 8 passed, 0 failed
+exit=0
+## xreplay zig-release-fast <-> stub-release
+== xreplay:bin/stub-release (zig-release-fast)
+PASS xreplay w1 epoll: zig-release-fast -> stub-release (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: zig-release-fast -> stub-release (1525330 journal bytes, output identical)
+PASS xreplay t_cancel epoll: zig-release-fast -> stub-release (4914 journal bytes, output identical)
+PASS xreplay t_timer epoll: zig-release-fast -> stub-release (3274 journal bytes, output identical)
+PASS xreplay w1 uring: zig-release-fast -> stub-release (4558 journal bytes, output identical)
+PASS xreplay w3 uring: zig-release-fast -> stub-release (1525330 journal bytes, output identical)
+PASS xreplay t_cancel uring: zig-release-fast -> stub-release (4970 journal bytes, output identical)
+PASS xreplay t_timer uring: zig-release-fast -> stub-release (3274 journal bytes, output identical)
+== summary zig-release-fast: 8 passed, 0 failed
+exit=0
+== xreplay:bin/zig-release-fast (stub-release)
+PASS xreplay w1 epoll: stub-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: stub-release -> zig-release-fast (1525330 journal bytes, output identical)
+FAIL xreplay t_cancel epoll: stub-release -> zig-release-fast record (exit 0)
+FAIL xreplay t_timer epoll: stub-release -> zig-release-fast record (exit 0)
+     | harness: worker 0 driver returned -1
+     | t_timer: order or timing wrong
+     | harness: t_timer: workload check failed
+     | result: t_timer order=1,4,2,3,0
+     | metric: harness workload=t_timer driver=epoll workers=1 wall_s=0.026552
+FAIL xreplay w1 uring: stub-release -> zig-release-fast record (exit 0)
+     | harness: ren_drv_new(uring) failed: stub: driver kind 2 is not provided by the stub
+FAIL xreplay w3 uring: stub-release -> zig-release-fast record (exit 0)
+     | harness: ren_drv_new(uring) failed: stub: driver kind 2 is not provided by the stub
+FAIL xreplay t_cancel uring: stub-release -> zig-release-fast record (exit 0)
+     | harness: ren_drv_new(uring) failed: stub: driver kind 2 is not provided by the stub
+FAIL xreplay t_timer uring: stub-release -> zig-release-fast record (exit 0)
+     | harness: ren_drv_new(uring) failed: stub: driver kind 2 is not provided by the stub
+== summary stub-release: 2 passed, 6 failed
+   failed: xreplay t_cancel epoll: stub-release -> zig-release-fast record
+   failed: xreplay t_timer epoll: stub-release -> zig-release-fast record
+   failed: xreplay w1 uring: stub-release -> zig-release-fast record
+   failed: xreplay w3 uring: stub-release -> zig-release-fast record
+   failed: xreplay t_cancel uring: stub-release -> zig-release-fast record
+   failed: xreplay t_timer uring: stub-release -> zig-release-fast record
+exit=1
+## note: the c-release -> zig t_timer epoll failure above is in the C binary's own RECORD run (t_timer: order or timing wrong, order=2,4,1,3,0, wall 0.026 s): a C-entry flake, not a replay mismatch. Rerun:
+== xreplay:bin/zig-release-fast (c-release)
+PASS xreplay w1 epoll: c-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 epoll: c-release -> zig-release-fast (1525330 journal bytes, output identical)
+PASS xreplay t_cancel epoll: c-release -> zig-release-fast (4914 journal bytes, output identical)
+PASS xreplay t_timer epoll: c-release -> zig-release-fast (3274 journal bytes, output identical)
+PASS xreplay w1 uring: c-release -> zig-release-fast (4558 journal bytes, output identical)
+PASS xreplay w3 uring: c-release -> zig-release-fast (1525330 journal bytes, output identical)
+PASS xreplay t_cancel uring: c-release -> zig-release-fast (4970 journal bytes, output identical)
+PASS xreplay t_timer uring: c-release -> zig-release-fast (3274 journal bytes, output identical)
+== summary c-release: 8 passed, 0 failed
+exit=0
+## note: every stub-release -> zig failure is the stub failing to RECORD (the stub has no io_uring and no I/O tests; README § stub). stub -> zig w1/w3 epoll passed.

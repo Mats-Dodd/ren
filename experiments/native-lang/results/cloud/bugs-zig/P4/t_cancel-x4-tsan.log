@@ -1,0 +1,37 @@
+# machine cloud, 2026-10-30T16:28:19Z, plant P4, stage t_cancel-x4-tsan
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-tsan-P4/harness t_cancel --driver epoll --workers 4
+==================
+WARNING: ThreadSanitizer: heap-use-after-free (pid=32146)
+  Read of size 4 at 0x722400000348 by thread T1:
+    #0 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 (harness+0xf6711) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #1 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (harness+0xf6711)
+    #2 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (harness+0xf4e2c) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #3 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #4 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #5 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #6 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+
+  Previous write of size 8 at 0x722400000348 by thread T1:
+    #0 free <null> (harness+0x63123) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #1 heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44 (harness+0xf6704) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #2 mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25 (harness+0xf6704)
+    #3 mem.Allocator.destroy__func_96 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17 (harness+0xf6704)
+    #4 alloc.destroy__func_95 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18 (harness+0xf6704)
+    #5 core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:450:39 (harness+0xf6704)
+    #6 core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16 (harness+0xf6704)
+    #7 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19 (harness+0xf4e2c) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #8 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #9 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #10 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #11 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+
+  Thread T1 (tid=32148, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x643ef) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe3025) (BuildId: 8a96a2cd029dab61bc6e315e112aaee6e8a70092)
+
+SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/zig/src/core.zig:452:34 in core.deliver
+==================
+ThreadSanitizer: reported 1 warnings
+result: t_cancel a=2 b=2 c=2
+metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.091490
+# exit 66 after .115561752 s

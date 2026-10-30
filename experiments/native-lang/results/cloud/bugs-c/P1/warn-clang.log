@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T14:15:06Z, plant P1, stage warn-clang
+# $ bash -c cd '/home/user/ren/experiments/native-lang/c' && for f in dq.c journal.c sched.c core.c layout.c drv_common.c drv_epoll.c drv_replay.c drv_uring.c; do clang -std=c11 -O2 -Wall -Wextra -Wconversion -Wno-unused-parameter -DREN_PLANT=1 -D_GNU_SOURCE -I'/home/user/ren/experiments/native-lang/harness' -I'/home/user/ren/experiments/native-lang/c' -fsyntax-only $f; done
+# exit 0 after .456431473 s
+warnings: 0

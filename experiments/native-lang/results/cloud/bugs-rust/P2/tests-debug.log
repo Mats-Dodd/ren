@@ -1,0 +1,1111 @@
+== layout (rust-debug-P2)
+PASS layout_check
+== abi (rust-debug-P2)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30706 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL abi_test (exit 134)
+     |              at ./rust/core/src/deque.rs:109:17
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: t_basic
+     |              at ./harness/tests/abi_test.c:178:3
+     |    7: main
+     |              at ./harness/tests/abi_test.c:505:5
+     |    8: __libc_start_call_main
+     |              at ./csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |    9: __libc_start_main_impl
+     |              at ./csu/../csu/libc-start.c:360:3
+     |   10: _start
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+== deque (rust-debug-P2)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30713 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL deque empty (exit 134)
+     |              at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/panicking.rs:175:17
+     |    3: <ren_core::deque::Deque>::take
+     |              at ./rust/core/src/deque.rs:109:17
+     |    4: ren_dq_take
+     |              at ./rust/core/src/ffi.rs:113:28
+     |    5: t_empty
+     |              at ./harness/tests/deque_stress.c:18:3
+     |    6: main
+     |              at ./harness/tests/deque_stress.c:90:49
+     |    7: __libc_start_call_main
+     |              at ./csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |    8: __libc_start_main_impl
+     |              at ./csu/../csu/libc-start.c:360:3
+     |    9: _start
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+PASS deque lifo
+PASS deque stress
+== smoke (rust-debug-P2)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30752 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30757 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30762 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30767 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30775 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30783 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30791 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30803 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30815 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30827 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30832 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30837 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30842 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30850 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30858 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30866 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30878 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30890 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+== io (rust-debug-P2)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30903 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30908 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30913 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30918 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30923 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30929 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill epoll x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30935 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30943 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30951 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30959 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30967 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30978 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill epoll x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30987 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 30999 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31011 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31023 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31044 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31057 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill epoll x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::epoll::EpW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:272:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31070 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31075 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31080 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31085 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31090 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31096 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill uring x1 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31102 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31110 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31118 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31126 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31134 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31143 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill uring x4 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31164 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31176 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31188 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31200 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31212 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31225 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill uring x8 (exit 134)
+     |    4: <ren_core::sched::Core>::run
+     |              at ./rust/core/src/sched.rs:675:31
+     |    5: ren_run
+     |              at ./rust/core/src/ffi.rs:34:13
+     |    6: ren_core::drv::linux::drive::<ren_core::drv::uring::UrW>
+     |              at ./rust/core/src/drv/linux.rs:34:17
+     |    7: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:273:31
+     |    8: worker_main
+     |              at ./harness/host_main.c:41:11
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+== replay (rust-debug-P2)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31239 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w1 epoll record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31244 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w3 epoll record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31249 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_cancel epoll record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31254 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_timer epoll record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 87: 31259 Aborted                 timeout "$TMO" "$B/harness" w3 --driver "$d" --workers 1 --n 200 --record "$j" > /dev/null 2>&1
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35: 31263 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a flipped input byte epoll
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35: 31265 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a truncated journal epoll
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31267 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w1 uring record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31272 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w3 uring record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31277 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_cancel uring record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66: 31284 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_timer uring record (exit 0)
+     |    9: start_thread
+     |              at ./nptl/pthread_create.c:447:8
+     |   10: clone3
+     |              at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78:0
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+/home/user/ren/experiments/native-lang/harness/test.sh: line 87: 31289 Aborted                 timeout "$TMO" "$B/harness" w3 --driver "$d" --workers 1 --n 200 --record "$j" > /dev/null 2>&1
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35: 31293 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a flipped input byte uring
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35: 31295 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a truncated journal uring
+== fuzz (rust-debug-P2)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 31298 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL fuzz_run random 300 (exit 134)
+     |              at ./rust/core/src/drv/replay.rs:362:26
+     |    8: <ren_core::drv::replay::Fuzz>::run
+     |              at ./rust/core/src/drv/replay.rs:416:22
+     |    9: ren_drv_worker
+     |              at ./rust/core/src/drv/mod.rs:275:40
+     |   10: fuzz_one
+     |              at ./harness/fuzz/fuzz_common.c:28:15
+     |   11: main
+     |              at ./harness/fuzz/fuzz_run.c:21:7
+     |   12: __libc_start_call_main
+     |              at ./csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |   13: __libc_start_main_impl
+     |              at ./csu/../csu/libc-start.c:360:3
+     |   14: _start
+     | note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+== summary rust-debug-P2: 7 passed, 65 failed
+   failed: abi_test
+   failed: deque empty
+   failed: w1 epoll x1
+   failed: w2 epoll x1
+   failed: w3 epoll x1
+   failed: w1 epoll x4
+   failed: w2 epoll x4
+   failed: w3 epoll x4
+   failed: w1 epoll x8
+   failed: w2 epoll x8
+   failed: w3 epoll x8
+   failed: w1 uring x1
+   failed: w2 uring x1
+   failed: w3 uring x1
+   failed: w1 uring x4
+   failed: w2 uring x4
+   failed: w3 uring x4
+   failed: w1 uring x8
+   failed: w2 uring x8
+   failed: w3 uring x8
+   failed: t_timer epoll x1
+   failed: t_pipe epoll x1
+   failed: t_tcp epoll x1
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_block kill epoll x1
+   failed: t_timer epoll x4
+   failed: t_pipe epoll x4
+   failed: t_tcp epoll x4
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_block kill epoll x4
+   failed: t_timer epoll x8
+   failed: t_pipe epoll x8
+   failed: t_tcp epoll x8
+   failed: t_cancel epoll x8
+   failed: t_block stop epoll x8
+   failed: t_block kill epoll x8
+   failed: t_timer uring x1
+   failed: t_pipe uring x1
+   failed: t_tcp uring x1
+   failed: t_cancel uring x1
+   failed: t_block stop uring x1
+   failed: t_block kill uring x1
+   failed: t_timer uring x4
+   failed: t_pipe uring x4
+   failed: t_tcp uring x4
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_block kill uring x4
+   failed: t_timer uring x8
+   failed: t_pipe uring x8
+   failed: t_tcp uring x8
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+   failed: t_block kill uring x8
+   failed: W4 replay w1 epoll record
+   failed: W4 replay w3 epoll record
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_timer epoll record
+   failed: W4 replay w1 uring record
+   failed: W4 replay w3 uring record
+   failed: W4 replay t_cancel uring record
+   failed: W4 replay t_timer uring record
+   failed: fuzz_run random 300

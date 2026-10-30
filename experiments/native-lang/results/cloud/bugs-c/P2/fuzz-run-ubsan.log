@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T15:39:32Z, plant P2, stage fuzz-run-ubsan
+# $ timeout 600 /home/user/ren/experiments/native-lang/bin/c-ubsan-int-P2/fuzz_run --random 5000 7
+/home/user/ren/experiments/native-lang/c/dq.c:58:32: runtime error: unsigned integer overflow: 0 - 1 cannot be represented in type 'uint64_t' (aka 'unsigned long')
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /home/user/ren/experiments/native-lang/c/dq.c:58:32 
+# exit 1 after .009207157 s

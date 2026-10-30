@@ -1,0 +1,58 @@
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+warning: unused import: `AtomicI64`
+ --> core/src/deque.rs:5:26
+  |
+5 | use crate::sync::{fence, AtomicI64, AtomicPtr, AtomicU64, Ordering::*};
+  |                          ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ren_core` (lib) generated 1 warning (run `cargo fix --lib -p ren_core` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.15s
+     Running unittests src/lib.rs (rust/target/miri-P2/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/adf0f7291496b0be/out/ren_core-adf0f7291496b0be)
+warning: unused import: `AtomicI64`
+ --> core/src/deque.rs:5:26
+  |
+5 | use crate::sync::{fence, AtomicI64, AtomicPtr, AtomicU64, Ordering::*};
+  |                          ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+
+running 2 tests
+test deque::tests::empty_and_lifo ... FAILED
+test deque::tests::threads ... ok
+
+failures:
+
+---- deque::tests::empty_and_lifo stdout ----
+
+thread 'deque::tests::empty_and_lifo' (8314) panicked at core/src/deque.rs:109:17:
+attempt to subtract with overflow
+stack backtrace:
+   0: std::panicking::panic_handler
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:676:5
+   1: core::panicking::panic_fmt
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:80:14
+   2: core::panicking::panic_const::panic_const_sub_overflow
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:175:17
+   3: deque::Deque::take
+             at core/src/deque.rs:109:17
+   4: deque::tests::empty_and_lifo
+             at core/src/deque.rs:171:20
+   5: deque::tests::empty_and_lifo::{closure#0}
+             at core/src/deque.rs:169:24
+   6: <{closure@core/src/deque.rs:169:5: 183:6} as std::ops::FnOnce<()>>::call_once - shim
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+   7: <fn() -> std::result::Result<(), std::string::String> as std::ops::FnOnce<()>>::call_once - shim(fn() -> std::result::Result<(), std::string::String>)
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    deque::tests::empty_and_lifo
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.03s
+
+error: test failed, to rerun pass `-p ren_core --lib`

@@ -1,0 +1,265 @@
+# machine cloud, 2026-10-30T14:52:55Z, plant P5, c-debug-P5, valgrind valgrind-3.22.0
+memcheck | abi_test | exit 0 | 0.4s | valgrind_errors 0 |  | race_fns 
+memcheck | deque_stress empty | exit 0 | 0.5s | valgrind_errors 0 |  | race_fns 
+memcheck | deque_stress lifo | exit 0 | 0.5s | valgrind_errors 0 |  | race_fns 
+memcheck | deque_stress stress 4 20000 | exit 0 | 0.9s | valgrind_errors 0 |  | race_fns 
+memcheck | harness w1 --driver epoll --workers 4 --n 20000 | exit 0 | 0.6s | valgrind_errors 0 |  | race_fns 
+    program: result: w1 n=20000 sum=199990000 left=0
+memcheck | harness w2 --driver epoll --workers 4 --n 20000 | exit 0 | 0.6s | valgrind_errors 0 |  | race_fns 
+    program: result: w2 n=20000 turn=20000
+memcheck | harness w3 --driver epoll --workers 1 --n 2000 | exit 0 | 0.7s | valgrind_errors 0 |  | race_fns 
+    program: result: w3 n=2000 done=2000 csum=2d058ec95559bd65
+memcheck | harness t_cancel --driver epoll --workers 1 | exit 0 | 0.5s | valgrind_errors 0 |  | race_fns 
+    program: result: t_cancel a=2 b=2 c=2
+memcheck | harness t_cancel --driver epoll --workers 4 | exit 0 | 0.5s | valgrind_errors 0 |  | race_fns 
+    program: result: t_cancel a=2 b=2 c=2
+memcheck | fuzz_run --random 100 1 | exit 0 | 0.5s | valgrind_errors 0 |  | race_fns 
+helgrind | deque_stress stress 4 20000 | exit 99 | 1.0s | valgrind_errors 33737 |       5 Possible data race during read;      8 Possible data race during write; | race_fns dq_push,dq_steal,dq_take,grow,ren_dq_push,ren_dq_steal,ren_dq_take,ren_ld,ren_st,t_stress,thief,
+---- first 60 lines of valgrind output for: helgrind deque_stress stress 4 20000
+==22763== Helgrind, a thread error detector
+==22763== Copyright (C) 2007-2017, and GNU GPL'd, by OpenWorks LLP et al.
+==22763== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==22763== Command: /home/user/ren/experiments/native-lang/bin/c-debug-P5/deque_stress stress 4 20000
+==22763== 
+==22763== ---Thread-Announcement------------------------------------------
+==22763== 
+==22763== Thread #1 is the program's root thread
+==22763== 
+==22763== ---Thread-Announcement------------------------------------------
+==22763== 
+==22763== Thread #4 was created
+==22763==    at 0x4A89CB3: clone (clone.S:76)
+==22763==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==22763==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==22763==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==22763==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==22763==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22763==    by 0x109974: t_stress (tests/deque_stress.c:63)
+==22763==    by 0x109374: main (tests/deque_stress.c:93)
+==22763== 
+==22763== ----------------------------------------------------------------
+==22763== 
+==22763== Possible data race during write of size 8 at 0x4B750C0 by thread #1
+==22763== Locks held: none
+==22763==    at 0x10A728: dq_push (dq.c:53)
+==22763==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==22763==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==22763==    by 0x109374: main (tests/deque_stress.c:93)
+==22763== 
+==22763== This conflicts with a previous read of size 8 by thread #4
+==22763== Locks held: none
+==22763==    at 0x10AA52: dq_steal (dq.c:86)
+==22763==    by 0x10AC14: ren_dq_steal (dq.c:113)
+==22763==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==22763==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22763==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==22763==    by 0x4A89CC3: clone (clone.S:100)
+==22763==  Address 0x4b750c0 is 64 bytes inside a block of size 192 alloc'd
+==22763==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22763==    by 0x10AB79: ren_dq_new (dq.c:105)
+==22763==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==22763==    by 0x109374: main (tests/deque_stress.c:93)
+==22763==  Block was alloc'd by thread #1
+==22763== 
+==22763== ---Thread-Announcement------------------------------------------
+==22763== 
+==22763== Thread #3 was created
+==22763==    at 0x4A89CB3: clone (clone.S:76)
+==22763==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==22763==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==22763==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==22763==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==22763==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22763==    by 0x109974: t_stress (tests/deque_stress.c:63)
+==22763==    by 0x109374: main (tests/deque_stress.c:93)
+==22763== 
+==22763== ----------------------------------------------------------------
+==22763== 
+==22763== Possible data race during read of size 8 at 0x4B750C0 by thread #3
+helgrind | harness w1 --driver epoll --workers 4 --n 20000 | exit 99 | 0.6s | valgrind_errors 13547 |      32 Possible data race during read;     17 Possible data race during write; | race_fns child_fin,child_resume,dq_steal,dq_take,drv_epoll_worker,finish,inj_lock,inj_pop,inj_push,inj_unlock,ren_drop,ren_drop_shared,ren_obj_free,ren_rc_drop,ren_run,ren_xadd,root_resume,run_task,steal_any,task_done,
+---- first 60 lines of valgrind output for: helgrind harness w1 --driver epoll --workers 4 --n 20000
+==22800== Helgrind, a thread error detector
+==22800== Copyright (C) 2007-2017, and GNU GPL'd, by OpenWorks LLP et al.
+==22800== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==22800== Command: /home/user/ren/experiments/native-lang/bin/c-debug-P5/harness w1 --driver epoll --workers 4 --n 20000
+==22800== 
+==22800== ---Thread-Announcement------------------------------------------
+==22800== 
+==22800== Thread #3 was created
+==22800==    at 0x4A89CB3: clone (clone.S:76)
+==22800==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==22800==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==22800==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==22800==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==22800==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22800==    by 0x10AFF1: main (host_main.c:164)
+==22800== 
+==22800== ---Thread-Announcement------------------------------------------
+==22800== 
+==22800== Thread #2 was created
+==22800==    at 0x4A89CB3: clone (clone.S:76)
+==22800==    by 0x4A89E32: __clone_internal_fallback (clone-internal.c:64)
+==22800==    by 0x4A89E32: __clone_internal (clone-internal.c:109)
+==22800==    by 0x49FC62F: create_thread (pthread_create.c:297)
+==22800==    by 0x49FD284: pthread_create@@GLIBC_2.34 (pthread_create.c:836)
+==22800==    by 0x4854975: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22800==    by 0x10AFF1: main (host_main.c:164)
+==22800== 
+==22800== ---Thread-Announcement------------------------------------------
+==22800== 
+==22800== Thread #1 is the program's root thread
+==22800== 
+==22800== ----------------------------------------------------------------
+==22800== 
+==22800== Possible data race during read of size 8 at 0x4B75730 by thread #3
+==22800== Locks held: none
+==22800==    at 0x111678: inj_lock (sched.c:10)
+==22800==    by 0x111724: inj_pop (sched.c:29)
+==22800==    by 0x111E6C: ren_run (sched.c:209)
+==22800==    by 0x1166B3: drv_epoll_worker (drv_epoll.c:335)
+==22800==    by 0x116328: ren_drv_worker (drv_common.c:289)
+==22800==    by 0x10B62F: worker_main (host_main.c:41)
+==22800==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22800==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==22800==    by 0x4A89CC3: clone (clone.S:100)
+==22800== 
+==22800== This conflicts with a previous write of size 8 by thread #2
+==22800== Locks held: none
+==22800==    at 0x1116D8: inj_unlock (sched.c:13)
+==22800==    by 0x111795: inj_pop (sched.c:37)
+==22800==    by 0x111E6C: ren_run (sched.c:209)
+==22800==    by 0x1166B3: drv_epoll_worker (drv_epoll.c:335)
+==22800==    by 0x116328: ren_drv_worker (drv_common.c:289)
+==22800==    by 0x10B62F: worker_main (host_main.c:41)
+==22800==    by 0x4854B7A: ??? (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22800==    by 0x49FCB83: start_thread (pthread_create.c:447)
+==22800==  Address 0x4b75730 is 112 bytes inside a block of size 320 alloc'd
+==22800==    at 0x48506DC: aligned_alloc (in /usr/libexec/valgrind/vgpreload_helgrind-amd64-linux.so)
+==22800==    by 0x112D21: xalloc64 (core.c:15)
+==22800==    by 0x1127F7: ren_start (core.c:81)
+==22800==    by 0x10ACEC: main (host_main.c:140)
+drd | deque_stress stress 4 20000 | exit 99 | 1.5s | valgrind_errors 659648 |       4 Conflicting load by thread;     12 Conflicting store by thread; | race_fns dq_push,dq_steal,dq_take,ren_dq_push,ren_dq_steal,ren_dq_take,t_stress,thief,
+---- first 60 lines of valgrind output for: drd deque_stress stress 4 20000
+==22829== drd, a thread error detector
+==22829== Copyright (C) 2006-2020, and GNU GPL'd, by Bart Van Assche.
+==22829== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==22829== Command: /home/user/ren/experiments/native-lang/bin/c-debug-P5/deque_stress stress 4 20000
+==22829== 
+==22829== Conflicting store by thread 1 at 0x04b980c0 size 8
+==22829==    at 0x10A728: dq_push (dq.c:53)
+==22829==    by 0x10ABCC: ren_dq_push (dq.c:110)
+==22829==    by 0x1099CC: t_stress (tests/deque_stress.c:68)
+==22829==    by 0x109374: main (tests/deque_stress.c:93)
+==22829== Address 0x4b980c0 is at offset 64 from 0x4b98080. Allocation context:
+==22829==    at 0x485498C: aligned_alloc (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22829==    by 0x10AB79: ren_dq_new (dq.c:105)
+==22829==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==22829==    by 0x109374: main (tests/deque_stress.c:93)
+==22829== Other segment start (thread 2)
+==22829==    at 0x4AACCB6: clone (clone.S:83)
+==22829==    by 0x4A1F7FF: ??? (allocatestack.c:605)
+==22829==    by 0x57986BF: ???
+==22829== Other segment end (thread 2)
+==22829==    at 0x109CE8: thief (tests/deque_stress.c:47)
+==22829==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22829==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22829==    by 0x4AACCC3: clone (clone.S:100)
+==22829== Other segment start (thread 3)
+==22829==    at 0x4AACCB6: clone (clone.S:83)
+==22829==    by 0x4A1F7FF: ??? (allocatestack.c:605)
+==22829==    by 0x5F996BF: ???
+==22829== Other segment end (thread 3)
+==22829==    at 0x109CE8: thief (tests/deque_stress.c:47)
+==22829==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22829==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22829==    by 0x4AACCC3: clone (clone.S:100)
+==22829== Other segment start (thread 4)
+==22829==    at 0x4AACCB6: clone (clone.S:83)
+==22829==    by 0x4A1F7FF: ??? (allocatestack.c:605)
+==22829==    by 0x679A6BF: ???
+==22829== Other segment end (thread 4)
+==22829==    at 0x10AC15: ren_dq_steal (dq.c:113)
+==22829==    by 0x109CE7: thief (tests/deque_stress.c:47)
+==22829==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22829==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22829==    by 0x4AACCC3: clone (clone.S:100)
+==22829== 
+==22829== Conflicting store by thread 1 at 0x04b980c0 size 8
+==22829==    at 0x10A927: dq_take (dq.c:60)
+==22829==    by 0x10ABF4: ren_dq_take (dq.c:111)
+==22829==    by 0x1099EA: t_stress (tests/deque_stress.c:69)
+==22829==    by 0x109374: main (tests/deque_stress.c:93)
+==22829== Address 0x4b980c0 is at offset 64 from 0x4b98080. Allocation context:
+==22829==    at 0x485498C: aligned_alloc (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22829==    by 0x10AB79: ren_dq_new (dq.c:105)
+==22829==    by 0x109926: t_stress (tests/deque_stress.c:60)
+==22829==    by 0x109374: main (tests/deque_stress.c:93)
+==22829== Other segment start (thread 2)
+==22829==    at 0x4AACCB6: clone (clone.S:83)
+==22829==    by 0x4A1F7FF: ??? (allocatestack.c:605)
+==22829==    by 0x57986BF: ???
+==22829== Other segment end (thread 2)
+==22829==    at 0x109CE8: thief (tests/deque_stress.c:47)
+drd | harness w1 --driver epoll --workers 4 --n 20000 | exit 99 | 0.8s | valgrind_errors 201139 |      38 Conflicting load by thread;     23 Conflicting store by thread; | race_fns child_fin,child_resume,dq_push,dq_steal,dq_take,drv_epoll_worker,finish,grow,inj_lock,inj_pop,inj_push,inj_unlock,ren_drop,ren_drop_shared,ren_drv_worker,ren_ld,ren_notify,ren_obj_free,ren_rc_drop,ren_run,ren_spawn,ren_xadd,root_resume,run_task,sched_notify,steal_any,task_done,try_park,
+---- first 60 lines of valgrind output for: drd harness w1 --driver epoll --workers 4 --n 20000
+==22878== drd, a thread error detector
+==22878== Copyright (C) 2006-2020, and GNU GPL'd, by Bart Van Assche.
+==22878== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==22878== Command: /home/user/ren/experiments/native-lang/bin/c-debug-P5/harness w1 --driver epoll --workers 4 --n 20000
+==22878== 
+==22878== Thread 3:
+==22878== Conflicting load by thread 3 at 0x04b985f0 size 8
+==22878==    at 0x111678: inj_lock (sched.c:10)
+==22878==    by 0x111724: inj_pop (sched.c:29)
+==22878==    by 0x111E6C: ren_run (sched.c:209)
+==22878==    by 0x1166B3: drv_epoll_worker (drv_epoll.c:335)
+==22878==    by 0x116328: ren_drv_worker (drv_common.c:289)
+==22878==    by 0x10B62F: worker_main (host_main.c:41)
+==22878==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22878==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22878==    by 0x4AACCC3: clone (clone.S:100)
+==22878== Address 0x4b985f0 is at offset 112 from 0x4b98580. Allocation context:
+==22878==    at 0x485498C: aligned_alloc (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22878==    by 0x112D21: xalloc64 (core.c:15)
+==22878==    by 0x1127F7: ren_start (core.c:81)
+==22878==    by 0x10ACEC: main (host_main.c:140)
+==22878== Other segment start (thread 2)
+==22878==    at 0x4AACCB6: clone (clone.S:83)
+==22878==    by 0x4A1F7FF: ??? (allocatestack.c:605)
+==22878==    by 0x57976BF: ???
+==22878== Other segment end (thread 2)
+==22878==    at 0x4AAD231: epoll_pwait2 (epoll_pwait2.c:27)
+==22878==    by 0x116A0A: drv_epoll_worker (drv_epoll.c:363)
+==22878==    by 0x116328: ren_drv_worker (drv_common.c:289)
+==22878==    by 0x10B62F: worker_main (host_main.c:41)
+==22878==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22878==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22878==    by 0x4AACCC3: clone (clone.S:100)
+==22878== 
+==22878== Conflicting load by thread 3 at 0x04b985f8 size 8
+==22878==    at 0x111729: inj_pop (sched.c:30)
+==22878==    by 0x111E6C: ren_run (sched.c:209)
+==22878==    by 0x1166B3: drv_epoll_worker (drv_epoll.c:335)
+==22878==    by 0x116328: ren_drv_worker (drv_common.c:289)
+==22878==    by 0x10B62F: worker_main (host_main.c:41)
+==22878==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22878==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22878==    by 0x4AACCC3: clone (clone.S:100)
+==22878== Address 0x4b985f8 is at offset 120 from 0x4b98580. Allocation context:
+==22878==    at 0x485498C: aligned_alloc (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22878==    by 0x112D21: xalloc64 (core.c:15)
+==22878==    by 0x1127F7: ren_start (core.c:81)
+==22878==    by 0x10ACEC: main (host_main.c:140)
+==22878== Other segment start (thread 2)
+==22878==    at 0x4AACCB6: clone (clone.S:83)
+==22878==    by 0x4A1F7FF: ??? (allocatestack.c:605)
+==22878==    by 0x57976BF: ???
+==22878== Other segment end (thread 2)
+==22878==    at 0x4AAD231: epoll_pwait2 (epoll_pwait2.c:27)
+==22878==    by 0x116A0A: drv_epoll_worker (drv_epoll.c:363)
+==22878==    by 0x116328: ren_drv_worker (drv_common.c:289)
+==22878==    by 0x10B62F: worker_main (host_main.c:41)
+==22878==    by 0x48558B8: ??? (in /usr/libexec/valgrind/vgpreload_drd-amd64-linux.so)
+==22878==    by 0x4A1FB83: start_thread (pthread_create.c:447)
+==22878==    by 0x4AACCC3: clone (clone.S:100)
+done P5

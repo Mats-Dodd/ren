@@ -1,0 +1,11 @@
+# machine: cloud -- VERIFY re-run log (build-rust-tsan.log), 2026-10-30
+== rust-tsan: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/rust/build.sh tsan /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/rust-tsan
+   Compiling compiler_builtins v0.1.160 (/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core)
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/rust/core)
+   Compiling alloc v0.0.0 (/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc)
+    Finished `release` profile [optimized + debuginfo] target(s) in 31.55s
+   Compiling ren_hot v0.1.0 (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/rust/hot)
+    Finished `release` profile [optimized + debuginfo] target(s) in 1.38s
+built rust-tsan: language 33.16s, harness link 3.59s

@@ -1,0 +1,62 @@
+# machine cloud, 2026-10-30T16:31:32Z, plant P4, stage asanh-t_cancel
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness t_cancel --driver epoll --workers 4
+=================================================================
+==2063==ERROR: AddressSanitizer: attempting double-free on 0x50d000013840 in thread T3:
+    #0 0x5637d7e04fda in free (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness+0xdcfda) (BuildId: dd15a035feea90ced219481bbb445208a13f65c2)
+    #1 0x5637d7e6dae9 in heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44
+    #2 0x5637d7e6dae9 in mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25
+    #3 0x5637d7e6dae9 in mem.Allocator.destroy__func_81 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17
+    #4 0x5637d7e6dae9 in alloc.destroy__func_80 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18
+    #5 0x5637d7e6dae9 in core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:455:14
+    #6 0x5637d7e6dae9 in core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16
+    #7 0x5637d7e6d02a in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19
+    #8 0x5637d7e69c8c in epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27
+    #9 0x5637d7e69c8c in drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63
+    #10 0x5637d7e468e0 in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+    #11 0x5637d7e02d5c in asan_thread_start(void*) asan_interceptors.cpp.o
+    #12 0x7f18f069cb83 in start_thread nptl/pthread_create.c:447:8
+    #13 0x7f18f0729ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+0x50d000013840 is located 0 bytes inside of 136-byte region [0x50d000013840,0x50d0000138c8)
+freed by thread T3 here:
+    #0 0x5637d7e04fda in free (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness+0xdcfda) (BuildId: dd15a035feea90ced219481bbb445208a13f65c2)
+    #1 0x5637d7e6da94 in heap.c_allocator_impl.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:327:44
+    #2 0x5637d7e6da94 in mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25
+    #3 0x5637d7e6da94 in mem.Allocator.destroy__func_81 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17
+    #4 0x5637d7e6da94 in alloc.destroy__func_80 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18
+    #5 0x5637d7e6da94 in core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:450:39
+    #6 0x5637d7e6da94 in core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16
+    #7 0x5637d7e6d02a in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19
+    #8 0x5637d7e69c8c in epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27
+    #9 0x5637d7e69c8c in drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63
+    #10 0x5637d7e468e0 in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+    #11 0x5637d7e02d5c in asan_thread_start(void*) asan_interceptors.cpp.o
+
+previously allocated by thread T3 here:
+    #0 0x5637d7e05273 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness+0xdd273) (BuildId: dd15a035feea90ced219481bbb445208a13f65c2)
+    #1 0x5637d7e743af in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x5637d7e743af in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x5637d7e743af in mem.Allocator.allocBytesAligned__func_17 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x5637d7e743af in mem.Allocator.createAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:195:79
+    #5 0x5637d7e743af in mem.Allocator.create__func_360 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:171:39
+    #6 0x5637d7e743af in alloc.create__func_359 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:26:24
+    #7 0x5637d7e743af in core.world /home/user/ren/experiments/native-lang/zig/src/core.zig:772:23
+    #8 0x5637d7e5dd6d in em_issue /home/user/ren/experiments/native-lang/harness/workloads/emit.h:15:15
+    #9 0x5637d7e5dd6d in tc_task_resume /home/user/ren/experiments/native-lang/harness/workloads/t_io.c:375:7
+    #10 0x5637d7e6d25b in core.runTask /home/user/ren/experiments/native-lang/zig/src/core.zig:373:28
+    #11 0x5637d7e6d25b in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:580:20
+    #12 0x5637d7e69c8c in epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27
+    #13 0x5637d7e69c8c in drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63
+    #14 0x5637d7e468e0 in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+    #15 0x5637d7e02d5c in asan_thread_start(void*) asan_interceptors.cpp.o
+
+Thread T3 created by T0 here:
+    #0 0x5637d7deabe5 in pthread_create (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness+0xc2be5) (BuildId: dd15a035feea90ced219481bbb445208a13f65c2)
+    #1 0x5637d7e44c81 in main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11
+    #2 0x7f18f062a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #3 0x7f18f062a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #4 0x5637d7d6a424 in _start (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness+0x42424) (BuildId: dd15a035feea90ced219481bbb445208a13f65c2)
+
+SUMMARY: AddressSanitizer: double-free (/home/user/ren/experiments/native-lang/bin/zig-asanh-P4/harness+0xdcfda) (BuildId: dd15a035feea90ced219481bbb445208a13f65c2) in free
+==2063==ABORTING
+# exit 1 after .104666634 s

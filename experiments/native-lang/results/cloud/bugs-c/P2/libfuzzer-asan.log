@@ -1,0 +1,44 @@
+# machine cloud, 2026-10-30T15:53:39Z, plant P2, stage libfuzzer-asan (rerun with -timeout=10)
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x558179a2fc88, 0x558179a30baf), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x558179a30bb0,0x558179a3fe20), 
+INFO:        0 files found in corpus
+ALARM: working on the last Unit for 11 seconds
+       and the timeout value is 10 (use -timeout=N to change)
+MS: 0 ; base unit: 0000000000000000000000000000000000000000
+
+
+artifact_prefix='./'; Test unit written to ./timeout-da39a3ee5e6b4b0d3255bfef95601890afd80709
+Base64: 
+==8752== ERROR: libFuzzer: timeout after 11 seconds
+    #0 0x558179956c65 in __sanitizer_print_stack_trace (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x140c65) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #1 0x5581798b077c in fuzzer::PrintStackTrace() (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x9a77c) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #2 0x55817989677b in fuzzer::Fuzzer::AlarmCallback() (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x8077b) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #3 0x7f237fa4532f  (/lib/x86_64-linux-gnu/libc.so.6+0x4532f) (BuildId: a4a7992a8e66555c8141ab2a08a8465ff6e0ea65)
+    #4 0x5581799c9f22 in grow /home/user/ren/experiments/native-lang/c/dq.c:32:5
+    #5 0x5581799c9f22 in dq_push /home/user/ren/experiments/native-lang/c/dq.c:47:31
+    #6 0x5581799b17c8 in ren_spawn /home/user/ren/experiments/native-lang/c/sched.c:227:3
+    #7 0x5581799ad422 in fz_root_resume /home/user/ren/experiments/native-lang/harness/workloads/w_fuzz.c:77:7
+    #8 0x5581799b0c5b in run_task /home/user/ren/experiments/native-lang/c/sched.c:120:15
+    #9 0x5581799b0c5b in ren_run /home/user/ren/experiments/native-lang/c/sched.c:216:5
+    #10 0x5581799c4bb0 in fz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:203:15
+    #11 0x5581799c4528 in drv_fuzz_run /home/user/ren/experiments/native-lang/c/drv_replay.c:289:42
+    #12 0x55817998a885 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #13 0x55817998a4a7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #14 0x558179897dd4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x81dd4) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #15 0x558179899001 in fuzzer::Fuzzer::ReadAndExecuteSeedCorpora(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x83001) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #16 0x5581798995f7 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x835f7) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #17 0x558179886aef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x70aef) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #18 0x5581798b1176 in main (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x9b176) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+    #19 0x7f237fa2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #20 0x7f237fa2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #21 0x55817987bad4 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz+0x65ad4) (BuildId: 021ae54b293fb76beca27bc0179e15e30a2a75a0)
+
+SUMMARY: libFuzzer: timeout
+stat::number_of_executed_units: 1
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              33
+# exit 70 after 12.150415681 s

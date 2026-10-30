@@ -1,0 +1,22 @@
+build-release          rc=0      8.2s  
+build-debug            rc=0      6.4s  
+build-release-nostd    rc=0      8.3s  
+build-tsan             rc=0     38.7s  
+build-asanh            rc=0      8.0s  
+clippy                 rc=0      1.8s  
+cargo-test             rc=0      4.1s  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+tests-release          rc=0      4.4s  == summary rust-release-P5: 72 passed, 0 failed
+tests-debug            rc=0      9.3s  == summary rust-debug-P5: 72 passed, 0 failed
+tests-nostd            rc=0      4.7s  == summary rust-release-nostd-P5: 72 passed, 0 failed
+tests-asanh            rc=0      7.8s  == summary rust-asanh-P5: 73 passed, 0 failed
+tests-tsan             rc=1     31.6s  FAIL w1 epoll x4 (exit 66)
+tsan-w1x4              rc=66     0.5s  WARNING: ThreadSanitizer: data race (pid=13979)
+tsan-deque             rc=0      3.9s  
+deque-stress-x50       rc=0     25.7s  
+deque-stress-debug-x20 rc=0     17.4s  
+loom                   rc=0     22.9s  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+miri                   rc=1     14.9s  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+fuzz-run-release       rc=0      0.1s  
+fuzz-run-debug         rc=0      0.3s  
+fuzz-regress           rc=0      0.0s  
+libfuzzer-asanh        rc=0    121.2s  

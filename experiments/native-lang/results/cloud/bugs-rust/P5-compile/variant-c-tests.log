@@ -1,0 +1,7 @@
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/p5/c/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.97s
+  Executable unittests src/lib.rs (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/p5/target-c/debug/deps/ren_core-4c47910977ba924e)
+  Executable tests/loom_deque.rs (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/p5/target-c/debug/deps/loom_deque-faeed03ebd2a87c1)
+  Executable tests/optable.rs (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/p5/target-c/debug/deps/optable-f7e2b1316f890841)
+cargo exit 0

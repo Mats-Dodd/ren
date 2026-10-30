@@ -1,0 +1,244 @@
+# machine cloud, 2026-10-30T16:37:10Z, plant P5, stage rate-tsan-w1x4
+# $ bash -c f=0; for i in $(seq 10); do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P5/harness' w1 --driver $d --workers 4 --n 200000 > /tmp/ren-zig-bugs-P5-$$.out 2>&1 || { f=$((f+1)); grep -m3 -A6 'WARNING: ThreadSanitizer' /tmp/ren-zig-bugs-P5-$$.out | head -12; }; done; done; rm -f /tmp/ren-zig-bugs-P5-$$.out; echo "failed $f/20"; [ $f = 0 ]
+WARNING: ThreadSanitizer: data race (pid=6879)
+  Read of size 8 at 0x727800000210 by thread T1:
+    #0 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 (harness+0xf4de8) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6879)
+  Read of size 8 at 0x727800000810 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+WARNING: ThreadSanitizer: data race (pid=6889)
+  Read of size 8 at 0x727800000210 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6889)
+  Write of size 8 at 0x727800000210 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6899)
+  Read of size 8 at 0x727800000b10 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6899)
+  Write of size 8 at 0x727800000b10 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6909)
+  Read of size 8 at 0x727800000210 by thread T1:
+    #0 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 (harness+0xf4de8) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6909)
+  Read of size 8 at 0x727800000b10 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+WARNING: ThreadSanitizer: data race (pid=6919)
+  Read of size 8 at 0x727800000810 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6919)
+  Write of size 8 at 0x727800000810 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6929)
+  Read of size 8 at 0x727800000b10 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6929)
+  Write of size 8 at 0x727800000b10 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6939)
+  Read of size 8 at 0x727800000b10 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6939)
+  Write of size 8 at 0x727800000b10 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6949)
+  Read of size 8 at 0x727800000b10 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6949)
+  Write of size 8 at 0x727800000b10 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6959)
+  Read of size 8 at 0x727800000210 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6959)
+  Write of size 8 at 0x727800000210 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6972)
+  Read of size 8 at 0x727800000510 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6972)
+  Write of size 8 at 0x727800000510 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6982)
+  Read of size 8 at 0x727800000510 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6982)
+  Write of size 8 at 0x727800000510 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=6992)
+  Read of size 8 at 0x727800000810 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=6992)
+  Write of size 8 at 0x727800000810 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7002)
+  Read of size 8 at 0x727800000810 by thread T3:
+    #0 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 (harness+0xf4de8) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7002)
+  Read of size 8 at 0x727800000510 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+WARNING: ThreadSanitizer: data race (pid=7012)
+  Read of size 8 at 0x727800000810 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7012)
+  Write of size 8 at 0x727800000810 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7022)
+  Read of size 8 at 0x727800000210 by thread T1:
+    #0 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 (harness+0xf4de8) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7022)
+  Write of size 8 at 0x727800000210 by thread T4:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7032)
+  Read of size 8 at 0x727800000b10 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7032)
+  Write of size 8 at 0x727800000b10 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7042)
+  Read of size 8 at 0x727800000810 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7042)
+  Write of size 8 at 0x727800000810 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7052)
+  Read of size 8 at 0x727800000210 by thread T1:
+    #0 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:562:45 (harness+0xf4de8) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #2 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe393c) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7052)
+  Write of size 8 at 0x727800000210 by thread T2:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7062)
+  Read of size 8 at 0x727800000810 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27 (harness+0xec1c7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63 (harness+0xec1c7)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7062)
+  Write of size 8 at 0x727800000810 by thread T1:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+WARNING: ThreadSanitizer: data race (pid=7072)
+  Read of size 8 at 0x727800000210 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:27 (harness+0xf5acf) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5acf)
+    #2 uring.run /home/user/ren/experiments/native-lang/zig/src/uring.zig:283:27 (harness+0xefe32) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #3 drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:87 (harness+0xefe32)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/zig/src/root.zig:96:22 (harness+0xebda7) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+--
+WARNING: ThreadSanitizer: data race (pid=7072)
+  Write of size 8 at 0x727800000210 by thread T3:
+    #0 core.stealAny /home/user/ren/experiments/native-lang/zig/src/core.zig:419:40 (harness+0xf5ae3) (BuildId: 6c8eb126fd7e8a65ddc5e4fa64f8d132f66b19d0)
+    #1 core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:578:36 (harness+0xf5ae3)
+failed 20/20
+# exit 1 after 8.895267010 s

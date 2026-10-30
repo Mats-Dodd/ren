@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T14:00:00Z, plant P0, stage build-debug
+# $ /home/user/ren/experiments/native-lang/build.sh c debug
+== c-debug: /home/user/ren/experiments/native-lang/c/build.sh debug /home/user/ren/experiments/native-lang/build/c-debug
+built c-debug: language 0.69s, harness link 1.59s
+# exit 0 after 2.296931965 s
