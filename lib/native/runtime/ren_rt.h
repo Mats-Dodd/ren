@@ -2124,3 +2124,32 @@ void ren_console_error(ren_obj *line);
    recursion, then flush stdout and print the statistics, if they're on.
    What `main` returns. */
 int ren_run(void (*program)(void));
+
+/* ---- string patterns (compiler.md, "Patterns stage") ----
+
+   A string `match`'s tests, which read a `Str` only through its
+   accessors. A literal arm is its length, then its bytes; a prefix or
+   suffix arm, `"Bearer " ..token`, a length at least the two pieces',
+   then each piece where it goes. The pieces are valid UTF-8, so a slice
+   between them is cut on character boundaries. No `memcmp` is given
+   no bytes: an empty string's data may be no pointer at all. */
+
+#ifdef REN_UNIT
+/* a unit includes no system header (above) */
+int memcmp(const void *a, const void *b, size_t n);
+#endif
+
+static inline bool ren_pat_bytes(const char *d, const char *lit, int64_t n) {
+  return n == 0 || memcmp(d, lit, (size_t)n) == 0;
+}
+
+static inline bool ren_pat_is(ren_obj *s, const char *lit, int64_t n) {
+  return ren_str_len(s) == n && ren_pat_bytes(ren_str_data(s), lit, n);
+}
+
+static inline bool ren_pat_affix(ren_obj *s, const char *pre, int64_t a,
+                                 const char *suf, int64_t b) {
+  int64_t n = ren_str_len(s);
+  return n >= a + b && ren_pat_bytes(ren_str_data(s), pre, a) &&
+         ren_pat_bytes(ren_str_data(s) + n - b, suf, b);
+}

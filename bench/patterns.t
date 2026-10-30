@@ -70,12 +70,36 @@ yet says so, with the first line of what `ren build` said (step 2).
   >    rm -f interp.out interp.err interp.code native.bin native.out native.err native.err2 native.code build.err spec.out spec.err spec.code)
   > }
   $ for f in strs guards arrays sizes hard lexer index; do native patterns/$f.ren; done
-  patterns/strs.ren: not native yet: error: a string or list pattern isn't in the native slice yet
-  patterns/guards.ren: not native yet: error: a string or list pattern isn't in the native slice yet
-  patterns/arrays.ren: not native yet: error: a string or list pattern isn't in the native slice yet
-  patterns/sizes.ren: not native yet: error: a string or list pattern isn't in the native slice yet
-  patterns/hard.ren: not native yet: error: a string or list pattern isn't in the native slice yet
-  patterns/lexer.ren: not native yet: error: a string or list pattern isn't in the native slice yet
+  patterns/strs.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/strs.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/strs.ren, release: the same, exit 0, objects live at exit 0
+  patterns/strs.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/strs.ren, ren run --release: the same
+  patterns/guards.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/guards.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/guards.ren, release: the same, exit 0, objects live at exit 0
+  patterns/guards.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/guards.ren, ren run --release: the same
+  patterns/arrays.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/arrays.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/arrays.ren, release: the same, exit 0, objects live at exit 0
+  patterns/arrays.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/arrays.ren, ren run --release: the same
+  patterns/sizes.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/sizes.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/sizes.ren, release: the same, exit 0, objects live at exit 0
+  patterns/sizes.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/sizes.ren, ren run --release: the same
+  patterns/hard.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/hard.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/hard.ren, release: the same, exit 0, objects live at exit 0
+  patterns/hard.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/hard.ren, ren run --release: the same
+  patterns/lexer.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/lexer.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/lexer.ren, release: the same, exit 0, objects live at exit 0
+  patterns/lexer.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/lexer.ren, ren run --release: the same
   patterns/index.ren, perceus: the same, exit 0, objects live at exit 0
   patterns/index.ren, naive: the same, exit 0, objects live at exit 0
   patterns/index.ren, release: the same, exit 0, objects live at exit 0

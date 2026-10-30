@@ -237,6 +237,12 @@ type rt =
   | Str_len
   | Str_concat
   | Str_eq
+  | Str_is of string
+      (** whether a `Str` is this literal: its length, then its bytes
+          (compiler.md, "Patterns stage"), a [Bool] *)
+  | Str_affix of string * string
+      (** whether a `Str` starts with the first and ends with the second, at
+          least as long as the two: a prefix or suffix pattern's test *)
   | Slice of sliced * part
       (** a slice of an array, a `Str` or `Bytes` (foundations.md, decision
           17), sharing its root's buffer and counting the root: [Range] of
@@ -878,6 +884,8 @@ let show_rt = function
   | Str_len -> "str-len"
   | Str_concat -> "str-concat"
   | Str_eq -> "str-eq"
+  | Str_is s -> "str-is:" ^ Ast.show_str s
+  | Str_affix (a, b) -> "str-affix:" ^ Ast.show_str a ^ ":" ^ Ast.show_str b
   | Slice (s, p) ->
       (match p with Range -> "slice" | Before -> "before" | After -> "after")
       ^ ":" ^ show_sliced s

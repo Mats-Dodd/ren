@@ -45,6 +45,45 @@ fn renkw_chain(s: Str) -> Int =
   else if s == "assert" then 34
   else -1
 
+fn renkw_match(s: Str) -> Int =
+  match s
+    "fn" => 0
+    "pub" => 1
+    "let" => 2
+    "var" => 3
+    "inout" => 4
+    "for" => 5
+    "while" => 6
+    "break" => 7
+    "todo" => 8
+    "in" => 9
+    "if" => 10
+    "then" => 11
+    "else" => 12
+    "true" => 13
+    "false" => 14
+    "type" => 15
+    "dep" => 16
+    "match" => 17
+    "import" => 18
+    "as" => 19
+    "uses" => 20
+    "opaque" => 21
+    "self" => 22
+    "not" => 23
+    "fail" => 24
+    "try" => 25
+    "attempt" => 26
+    "orelse" => 27
+    "with" => 28
+    "handler" => 29
+    "over" => 30
+    "finally" => 31
+    "test" => 32
+    "group" => 33
+    "assert" => 34
+    _ => -1
+
 fn jsreserved_chain(s: Str) -> Int =
   if s == "await" then 0
   else if s == "break" then 1
@@ -93,6 +132,55 @@ fn jsreserved_chain(s: Str) -> Int =
   else if s == "static" then 44
   else -1
 
+fn jsreserved_match(s: Str) -> Int =
+  match s
+    "await" => 0
+    "break" => 1
+    "case" => 2
+    "catch" => 3
+    "class" => 4
+    "const" => 5
+    "continue" => 6
+    "debugger" => 7
+    "default" => 8
+    "delete" => 9
+    "do" => 10
+    "else" => 11
+    "enum" => 12
+    "export" => 13
+    "extends" => 14
+    "false" => 15
+    "finally" => 16
+    "for" => 17
+    "function" => 18
+    "if" => 19
+    "import" => 20
+    "in" => 21
+    "instanceof" => 22
+    "new" => 23
+    "null" => 24
+    "return" => 25
+    "super" => 26
+    "switch" => 27
+    "this" => 28
+    "throw" => 29
+    "true" => 30
+    "try" => 31
+    "typeof" => 32
+    "var" => 33
+    "void" => 34
+    "while" => 35
+    "with" => 36
+    "yield" => 37
+    "implements" => 38
+    "interface" => 39
+    "package" => 40
+    "private" => 41
+    "protected" => 42
+    "public" => 43
+    "static" => 44
+    _ => -1
+
 fn methods_chain(s: Str) -> Int =
   if s == "GET" then 0
   else if s == "HEAD" then 1
@@ -104,6 +192,19 @@ fn methods_chain(s: Str) -> Int =
   else if s == "TRACE" then 7
   else if s == "PATCH" then 8
   else -1
+
+fn methods_match(s: Str) -> Int =
+  match s
+    "GET" => 0
+    "HEAD" => 1
+    "POST" => 2
+    "PUT" => 3
+    "DELETE" => 4
+    "CONNECT" => 5
+    "OPTIONS" => 6
+    "TRACE" => 7
+    "PATCH" => 8
+    _ => -1
 
 fn headers_chain(s: Str) -> Int =
   if s == "Accept" then 0
@@ -127,6 +228,30 @@ fn headers_chain(s: Str) -> Int =
   else if s == "Via" then 18
   else if s == "X-Forwarded-For" then 19
   else -1
+
+fn headers_match(s: Str) -> Int =
+  match s
+    "Accept" => 0
+    "Accept-Encoding" => 1
+    "Authorization" => 2
+    "Cache-Control" => 3
+    "Connection" => 4
+    "Content-Length" => 5
+    "Content-Type" => 6
+    "Cookie" => 7
+    "Date" => 8
+    "Host" => 9
+    "If-None-Match" => 10
+    "Location" => 11
+    "Origin" => 12
+    "Referer" => 13
+    "Server" => 14
+    "Set-Cookie" => 15
+    "User-Agent" => 16
+    "Vary" => 17
+    "Via" => 18
+    "X-Forwarded-For" => 19
+    _ => -1
 
 fn json24_chain(s: Str) -> Int =
   if s == "id" then 0
@@ -155,6 +280,34 @@ fn json24_chain(s: Str) -> Int =
   else if s == "notification_settings" then 23
   else -1
 
+fn json24_match(s: Str) -> Int =
+  match s
+    "id" => 0
+    "name" => 1
+    "email" => 2
+    "created_at" => 3
+    "updated_at" => 4
+    "deleted_at" => 5
+    "status" => 6
+    "owner_id" => 7
+    "org_id" => 8
+    "tags" => 9
+    "title" => 10
+    "description" => 11
+    "priority" => 12
+    "due_date" => 13
+    "assignee_id" => 14
+    "labels" => 15
+    "version" => 16
+    "etag" => 17
+    "parent_id" => 18
+    "metadata" => 19
+    "visibility" => 20
+    "archived" => 21
+    "last_modified_by" => 22
+    "notification_settings" => 23
+    _ => -1
+
 // the next number of the LCG every twin shares
 fn next(x: Int) -> Int = (x * 1103515245 + 12345) % 2147483648
 
@@ -180,11 +333,11 @@ fn keys(set: Str) -> Array<Str> =
   else []
 
 fn classify(set: Str, hashed: Bool, s: Str) -> Int =
-  if set == "renkw" then (if hashed then renkw_chain(s) else renkw_chain(s))
-  else if set == "jsreserved" then (if hashed then jsreserved_chain(s) else jsreserved_chain(s))
-  else if set == "methods" then (if hashed then methods_chain(s) else methods_chain(s))
-  else if set == "headers" then (if hashed then headers_chain(s) else headers_chain(s))
-  else if set == "json24" then (if hashed then json24_chain(s) else json24_chain(s))
+  if set == "renkw" then (if hashed then renkw_match(s) else renkw_chain(s))
+  else if set == "jsreserved" then (if hashed then jsreserved_match(s) else jsreserved_chain(s))
+  else if set == "methods" then (if hashed then methods_match(s) else methods_chain(s))
+  else if set == "headers" then (if hashed then headers_match(s) else headers_chain(s))
+  else if set == "json24" then (if hashed then json24_match(s) else json24_chain(s))
   else -1
 
 fn rounds_renkw_chain(qs: Array<Str>, rounds: Int) -> Int =
@@ -194,11 +347,25 @@ fn rounds_renkw_chain(qs: Array<Str>, rounds: Int) -> Int =
       t += renkw_chain(q) + 1
   t
 
+fn rounds_renkw_match(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += renkw_match(q) + 1
+  t
+
 fn rounds_jsreserved_chain(qs: Array<Str>, rounds: Int) -> Int =
   var t = 0
   for _ in 0..rounds
     for q in qs
       t += jsreserved_chain(q) + 1
+  t
+
+fn rounds_jsreserved_match(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += jsreserved_match(q) + 1
   t
 
 fn rounds_methods_chain(qs: Array<Str>, rounds: Int) -> Int =
@@ -208,11 +375,25 @@ fn rounds_methods_chain(qs: Array<Str>, rounds: Int) -> Int =
       t += methods_chain(q) + 1
   t
 
+fn rounds_methods_match(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += methods_match(q) + 1
+  t
+
 fn rounds_headers_chain(qs: Array<Str>, rounds: Int) -> Int =
   var t = 0
   for _ in 0..rounds
     for q in qs
       t += headers_chain(q) + 1
+  t
+
+fn rounds_headers_match(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += headers_match(q) + 1
   t
 
 fn rounds_json24_chain(qs: Array<Str>, rounds: Int) -> Int =
@@ -222,16 +403,23 @@ fn rounds_json24_chain(qs: Array<Str>, rounds: Int) -> Int =
       t += json24_chain(q) + 1
   t
 
+fn rounds_json24_match(qs: Array<Str>, rounds: Int) -> Int =
+  var t = 0
+  for _ in 0..rounds
+    for q in qs
+      t += json24_match(q) + 1
+  t
+
 // [rounds] rounds of [n] queries of [set], by the chain or the match:
 // the sum of each answer plus one, which the twins print too
 pub fn run(set: Str, hashed: Bool, n: Int, rounds: Int) uses Console =
   let qs = queries(keys(set), n)
   var t = 0
-  if set == "renkw" then t = if hashed then rounds_renkw_chain(qs, rounds) else rounds_renkw_chain(qs, rounds)
-  else if set == "jsreserved" then t = if hashed then rounds_jsreserved_chain(qs, rounds) else rounds_jsreserved_chain(qs, rounds)
-  else if set == "methods" then t = if hashed then rounds_methods_chain(qs, rounds) else rounds_methods_chain(qs, rounds)
-  else if set == "headers" then t = if hashed then rounds_headers_chain(qs, rounds) else rounds_headers_chain(qs, rounds)
-  else if set == "json24" then t = if hashed then rounds_json24_chain(qs, rounds) else rounds_json24_chain(qs, rounds)
+  if set == "renkw" then t = if hashed then rounds_renkw_match(qs, rounds) else rounds_renkw_chain(qs, rounds)
+  else if set == "jsreserved" then t = if hashed then rounds_jsreserved_match(qs, rounds) else rounds_jsreserved_chain(qs, rounds)
+  else if set == "methods" then t = if hashed then rounds_methods_match(qs, rounds) else rounds_methods_chain(qs, rounds)
+  else if set == "headers" then t = if hashed then rounds_headers_match(qs, rounds) else rounds_headers_chain(qs, rounds)
+  else if set == "json24" then t = if hashed then rounds_json24_match(qs, rounds) else rounds_json24_chain(qs, rounds)
   print(t)
 
 // every set, both forms, which must agree with each other

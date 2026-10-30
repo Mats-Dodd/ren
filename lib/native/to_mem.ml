@@ -4202,6 +4202,12 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
      that doesn't match has made nothing to drop. *)
   let flats = Hashtbl.create 4 in
   let pending = ref [] in
+  (* What a string or list pattern read to test or bind, owned: an
+     array's elements and a rest's slice (compiler.md, "Patterns stage").
+     Each is dropped where its pattern's tests end, on the paths that
+     fall through to the next arm, and on the way to an arm, after its
+     names are counted: [temps] holds those of the path being tested. *)
+  let temps = ref [] in
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
   let no_arm = new_site cx e.loc in
   (* the arm [a] has matched, its pattern's names bound to [vars]: count
@@ -4229,6 +4235,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
       (fun (_, (m : var)) -> if not (List.memq m made) then dup fs (Var m))
       vars;
     let go () =
+      List.iter (fun t -> drop_now fs (Var t)) !temps;
       List.iter
         (fun x ->
           match x with Var v when counted v.layout -> drop_now fs x | _ -> ())
@@ -4317,9 +4324,115 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
             in
             emit fs (If (c, block fs inner, []))
         in
+        (* [ts], owned, read for what [f] tests: dropped where it ends,
+           and on the way to an arm (see [temps]) *)
+        let holding ts f =
+          let saved = !temps in
+          temps := ts @ saved;
+          f ();
+          temps := saved;
+          List.iter (fun t -> drop_now fs (Var t)) ts
+        in
+        let temp name l rhs =
+          let v = fresh fs name l in
+          emit fs (Let (v, rhs));
+          v
+        in
+        let site () = new_site cx p.ploc in
         match p.pkind with
-        | PStr _ | PStr_rest _ | PArray _ ->
-            unsupported p.ploc "a string or list pattern"
+        | PStr s -> check (Runtime (Str_is s, [ x ], None))
+        | PStr_rest { prefix; rest = None; suffix } ->
+            check (Runtime (Str_affix (prefix, suffix), [ x ], None))
+        | PStr_rest { prefix; rest = Some v; suffix } ->
+            (* the middle, cut where the pieces end: on character
+               boundaries, since the pieces are valid UTF-8, so it's cut
+               as `Bytes` are, unchecked (ren_rt.h, [ren_str_slice]) *)
+            let c =
+              borrowed fs "$test" Bool
+                (Runtime (Str_affix (prefix, suffix), [ x ], None))
+            in
+            emit fs
+              (If
+                 ( c,
+                   block fs (fun () ->
+                       let n = borrowed fs "$len" Int (Runtime (Str_len, [ x ], None)) in
+                       let b = Int64.of_int (String.length suffix) in
+                       let j = borrowed fs "$to" Int (Arith (Sub, n, Int b, site ())) in
+                       let a = Int64.of_int (String.length prefix) in
+                       let r =
+                         temp "$rest" Boxed
+                           (Runtime (Slice (Of_bytes, Range), [ x; Int a; j ], Some (site ())))
+                       in
+                       holding [ r ] (fun () ->
+                           emit fs (Set (slot vars v, Var r));
+                           rest_then ())),
+                   [] ))
+        | PArray { front; rest = middle; back } ->
+            (* the length, then each element a piece tests, read where
+               the length says it is, and the middle, a slice *)
+            let f = List.length front and b = List.length back in
+            let n = borrowed fs "$len" Int (Runtime (Array_len, [ x ], None)) in
+            let fits =
+              borrowed fs "$fits" Bool
+                (Compare
+                   ( (if middle = No_rest then Eq else Ge),
+                     n,
+                     Int (Int64.of_int (f + b)) ))
+            in
+            emit fs
+              (If
+                 ( fits,
+                   block fs (fun () ->
+                       let read (q : C.pattern) i =
+                         match q.pkind with
+                         | PWild -> None
+                         | _ ->
+                             let l = element cx (layout_at fs q.ploc q.pty) in
+                             (* in bounds: the length test above *)
+                             Some (q, temp "$elem" l (Runtime (Array_get l, [ x; i ], None)))
+                       in
+                       let firsts =
+                         List.mapi (fun i q -> read q (Int (Int64.of_int i))) front
+                       in
+                       let lasts =
+                         List.mapi
+                           (fun k (q : C.pattern) ->
+                             match q.pkind with
+                             | PWild -> None
+                             | _ ->
+                                 let i =
+                                   borrowed fs "$at" Int
+                                     (Arith (Sub, n, Int (Int64.of_int (b - k)), site ()))
+                                 in
+                                 read q i)
+                           back
+                       in
+                       let pieces = List.filter_map Fun.id (firsts @ lasts) in
+                       let mid =
+                         match middle with
+                         | Rest (Some v) ->
+                             let j =
+                               borrowed fs "$to" Int
+                                 (Arith (Sub, n, Int (Int64.of_int b), site ()))
+                             in
+                             let r =
+                               temp "$rest" Boxed
+                                 (Runtime
+                                    ( Slice (Of_array_elems, Range),
+                                      [ x; Int (Int64.of_int f); j ],
+                                      Some (site ()) ))
+                             in
+                             [ (v, r) ]
+                         | Rest None | No_rest -> []
+                       in
+                       holding
+                         (List.map snd pieces @ List.map snd mid)
+                         (fun () ->
+                           List.iter (fun (v, r) -> emit fs (Set (slot vars v, Var r))) mid;
+                           test ~known vars
+                             (List.map (fun (q, t) -> (q, Var t)) pieces @ rest)
+                             k)),
+                   [] ))
         | PWild -> rest_then ()
         | PVar v -> set (slot vars v) rest_then
         | PAs (q, v) ->

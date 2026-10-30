@@ -471,6 +471,10 @@ let runtime rt args site_arg =
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
+  | Str_is s -> sprintf "ren_pat_is(%s, %s, %d)" (a 0) (c_string s) (String.length s)
+  | Str_affix (p, s) ->
+      sprintf "ren_pat_affix(%s, %s, %d, %s, %d)" (a 0) (c_string p)
+        (String.length p) (c_string s) (String.length s)
   (* slices (ren_rt.c, "slices"): a `Str`'s and `Bytes`' are strings, a
      `Str`'s checked not to cut a character *)
   | Slice (Of_array_elems, Range) ->

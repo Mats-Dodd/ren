@@ -11921,30 +11921,37 @@ guarded, and almost always there are none.
 
 ### The DAG
 
-Native `match` (to_mem.ml's `match_`) becomes a decision DAG over the
+Native `match` (to_mem.ml's `match_`) is a decision DAG over the
 subject's columns: one, or a tuple's parts written in the `match`.
 
 - **Tag switch:** the tag of a sum, today's.
-- **Length switch:** an array's length, when some arm has a sequence
-  pattern there; the branches are the column's constructors above.
-- **Hash lookup:** a string column with literals: the subject looked up
-  in their set, then a switch on the literal's index, a jump table.
+- **Hash lookup:** a string column with two literals or more: the
+  subject looked up in their set once, then a switch on the literal's
+  number, a jump table.
 - **Prefix test, suffix test:** a length test and a fixed compare each.
+- **Length test:** an array's length against its pattern's pieces,
+  `==` without a rest, `>=` with one.
 - **Element and field tests:** today's, an element read from an array
   at its index from the front or the back.
 - **Guard:** an arm's `if`, falling through on false to the rest of
   that branch's arms.
 - **Join point:** each arm's body is a join, `Joins`, emitted once
-  however many branches reach it, and so is each shared tail below.
+  however many branches reach it.
 
-At each node the first column, left to right, that a remaining arm
-switches on is switched; each branch keeps the arms that can match it,
-in order, and knows what the switch decided, so that test is never
-emitted again in it. Below the switch a branch tests its arms' other
-columns in order (Maranget's default matrix). `--emit-c` shows each
-lookup as a call to its generated `ren_ph<N>` function, the switch on
-its result, and each branch's `case` commented with the literal it
-stands for.
+A switch's branch keeps the arms that can match it, in order, decided
+at build time, and knows what the switch decided, so that test is
+never emitted again in it; below the switch a branch tests its arms'
+patterns in order, each a chain of the tests above. `--emit-c` shows
+each lookup as a call of its `ren_ph<N>`, whose comment numbers its
+keys, and the `switch` on the number it gives, a `case` for each.
+
+**What isn't built** (Progress log, step 2): the switch is on one
+subject, a sum's tag or a string's literals, not on a tuple's columns
+one after another, and an array's length is tested per arm, not
+switched on; so this is Maranget's tree at its first column, with the
+rest of each branch a chain, not the whole tree. Every arm's body is
+shared, but a test below the switch is emitted once in each branch that
+needs it.
 
 ### The generator
 
@@ -12058,6 +12065,42 @@ error: this arm can never match                                      (Exhaust, t
   help: the arms above already match everything this one does
 ```
 
+### Step 2, as built: natively, as chains
+
+to_mem.ml's `match_` tests each arm's pattern in order, as it did,
+with three new tests:
+
+- **A literal,** `"GET"`: `Str_is`, a runtime call that compares the
+  length, then the bytes (ren_rt.h, `ren_pat_is`).
+- **A prefix or suffix,** `"Bearer " ..token`: `Str_affix`, the length
+  at least the two pieces', then each piece where it goes
+  (`ren_pat_affix`). A named rest is then a slice, `Slice (Of_bytes,
+  Range)` from the prefix's end to the suffix's start: cut as `Bytes`
+  are, without the character check, since the cuts are where valid
+  UTF-8 pieces end (rule 2). Its bounds are in range by the length
+  test.
+- **A list,** `[a, ..rest, z]`: `Array_len` against the pieces' count,
+  `==` without a rest and `>=` with one, then each element a piece tests
+  read with `Array_get` at its index from the front, or from the back at
+  `len - b + k`, unchecked, since the length test holds; and a named rest
+  a `Slice (Of_array_elems, Range)`.
+
+**What's read is owned.** `Array_get` counts the element again, and a
+slice is a new header, so each is owned by the matcher, not borrowed as
+a field is. `temps` holds those of the path being tested: each is
+dropped where its pattern's tests end, which is where the paths that
+don't match fall through, and on the way to an arm, after the names
+bound to it are counted (`matched`'s `go`). A name bound to one is set
+to it, then counted where the arm matches, as a field's name is; the
+drop on the way leaves the name the one reference the arm owns. A
+guard that fails drops the names, falls through, and the temps are
+dropped there. Mem Lint checks it on every path, and so do both
+countings and the sanitizers (bench/patterns.t).
+
+**The literal is in the call.** `Str_is` and `Str_affix` carry their
+literals, which emit_c.ml writes as C string literals; nothing is
+allocated for them.
+
 ### Where this stage may differ
 
 Choices the documents don't make, made here:
@@ -12075,7 +12118,8 @@ Choices the documents don't make, made here:
 | step | commit | done | left |
 |---|---|---|---|
 | 0 | 230aa07 | this section: the AST and Core forms, coverage (lengths as constructors, the `Str` family, the pairwise covered-arm rule and why hashing literals first keeps first match), the DAG's nodes, the generator's budget, output and determinism, the compare per build, every error; the keyword baseline (bench/native/keywords, its Rust and Go twins, RESULTS.md "Patterns stage"); test/test_patterns.ml, every test behind `until "p1"`; bench/patterns.t over bench/patterns/ (gen.py's key sets computed in Python), `index.ren` already as specified in `ren run`, every other program `not yet` | steps 1 to 5; `keys.index` takes a literal, not a top-level `let`, which doesn't exist yet |
-| 1 | this commit | the front end and the interpreter: `PStr` and `PSeq` (ast.ml), parsed by `parse_str_pattern` and `parse_list_pattern` with `parse_rest`, adjacent literals joined, `let [a, ..] = xs else ...`; Resolve binds a rest's name in place; inference types a list pattern as `Array<T>` and a string one as `Str`, a `Bytes` subject its own error (`str_pattern`); exhaust.ml's `Seq` and `Str` spaces, `lengths` splitting a column's lengths, `covers` and `specialize_str`, the missing arm `[_, _, ..]`; Core's `PStr`, `PStr_rest` and `PArray` (`map_seq`, `seq_pieces`, `seq_rest` for the passes that walk patterns), Core Lint's checks of them; eval.ml's matcher, a rest bound through `Builtins.slice_value`; every p1 test on; tree-sitter's `string_pattern`, `list_pattern` and `sequence_rest`, the corpus, a highlight, differential.py over bench/patterns; bench/patterns.t's programs as specified in `ren run`. Natively a string or list pattern is refused (`unsupported`) until step 2 | steps 2 to 5; language.md's table still says "none" for string and list patterns, and this stage may not edit it |
+| 1 | 933b988 | the front end and the interpreter: `PStr` and `PSeq` (ast.ml), parsed by `parse_str_pattern` and `parse_list_pattern` with `parse_rest`, adjacent literals joined, `let [a, ..] = xs else ...`; Resolve binds a rest's name in place; inference types a list pattern as `Array<T>` and a string one as `Str`, a `Bytes` subject its own error (`str_pattern`); exhaust.ml's `Seq` and `Str` spaces, `lengths` splitting a column's lengths, `covers` and `specialize_str`, the missing arm `[_, _, ..]`; Core's `PStr`, `PStr_rest` and `PArray` (`map_seq`, `seq_pieces`, `seq_rest` for the passes that walk patterns), Core Lint's checks of them; eval.ml's matcher, a rest bound through `Builtins.slice_value`; every p1 test on; tree-sitter's `string_pattern`, `list_pattern` and `sequence_rest`, the corpus, a highlight, differential.py over bench/patterns; bench/patterns.t's programs as specified in `ren run`. Natively a string or list pattern is refused (`unsupported`) until step 2 | steps 2 to 5; language.md's table still says "none" for string and list patterns, and this stage may not edit it |
+| 2 | this commit | natively, as chains: to_mem.ml's `match_` tests `PStr` with `Str_is`, `PStr_rest` with `Str_affix` and a rest's slice cut unchecked (`Slice (Of_bytes, Range)`), `PArray` with a length test, its elements read by `Array_get` and its rest a slice, all owned and dropped through `temps`; Mem's `Str_is` and `Str_affix`, Mem Lint's signatures, ren_rt.h's "string patterns" section (`ren_pat_is`, `ren_pat_affix`, no `memcmp` of no bytes); bench/patterns.t's programs native in every build, and the keyword kernel's `match` forms (bench/native/keywords). The first run of the checks found `memcmp` undeclared in a debug build's units, which include no system header: the section declares it under `REN_UNIT`. examples/net.t, whose journal records whether a socket's read was ready, failed once under load and passed on 4 reruns | steps 3 to 5; of the DAG, a length switch and a switch on a tuple's columns after the first (The DAG, "What isn't built") |
 
 ## The runtime model
 
