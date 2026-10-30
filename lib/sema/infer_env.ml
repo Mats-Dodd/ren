@@ -321,11 +321,13 @@ type env = {
           the first use of each only: the module's own opaque types, whose
           representation it used, by their paths, and its private methods, by
           theirs *)
-  mutable pinned_by : (Path.t * string) list;
+  mutable pinned_by : (Path.t * string * bool) list;
       (** the keyed instance families the blocks being checked are pinned
           by, innermost first: each by the dependency its library is
           installed as, `Docs`, with the call that pins it, as written,
-          `Docs.at` (compiler.md, "Services stage", "Actors (step 7)") *)
+          `Docs.at` (compiler.md, "Services stage", "Actors (step 7)"),
+          and whether it's `at_all`'s, inside which `at` of its family is
+          checked by key at run time *)
   mutable in_sight : label list;
       (** what the `with`s around the code being checked, in its own
           function, install, innermost first, in the order they're

@@ -1749,16 +1749,13 @@ let rec no_fun_args env (e : expr) =
     fail env e.loc (sprintf "a block inside the type `%s`" (show e.ty));
   List.iter (no_fun_args env) (children e)
 
-(* A scope and a task's handle are blocks too (foundations.md, decision
-   2, rule D): never inside another type, a type argument a use picked
-   among them, so never in a constructor, a record, a tuple or an array;
-   and never a function's result but the prelude's `Scope.start`, which
-   makes one. Inference checked it (Infer_top.check_blocks). *)
+(* A scope is a block too (foundations.md, decision 2, rule D): never
+   inside another type, a type argument a use picked among them, so
+   never in a constructor, a record, a tuple or an array; and never a
+   function's result. Inference checked it (Infer_top.check_blocks). A
+   task has no handle (concurrency.md, "The tree side"). *)
 let is_handle (t : Ty.ty) =
-  match t with
-  | Con (p, []) -> p = Path.prelude "Scope"
-  | Con (p, [ _ ]) -> p = Path.prelude "Task"
-  | _ -> false
+  match t with Con (p, []) -> p = Path.prelude "Scope" | _ -> false
 
 let rec has_handle (t : Ty.ty) =
   is_handle t
@@ -1791,7 +1788,7 @@ let rec no_kept_handles env ~prelude (e : expr) =
   | Intrinsic (i, a, _, _) -> args (Intrinsic.name i) a
   | _ -> ());
   if handle_inside e.ty then
-    fail env e.loc (sprintf "a scope or a task's handle inside `%s`" (show e.ty));
+    fail env e.loc (sprintf "a scope inside `%s`" (show e.ty));
   List.iter (no_kept_handles env ~prelude) (children e)
 
 (* No code reached from a call with an empty row runs a scheduling point
@@ -1845,7 +1842,7 @@ let fn_def env (f : fn_def) =
   waits_only_with_async env f;
   (match f.scheme.ty with
   | Fun (_, ret, _, _) when is_handle ret && f.path.home <> Path.prelude_home ->
-      fail env f.loc "a function gives a scope or a task's handle"
+      fail env f.loc "a function gives a scope"
   | _ -> ());
   instances env f.body;
   (* each index marked in bounds is, and each step marked as not

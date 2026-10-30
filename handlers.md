@@ -586,8 +586,8 @@ task's calls from its own entries, compares each task's outputs with its
 own, and runs in the recorded order while it can, its schedule prefix,
 before the seeded tape takes over. Version 3 adds what the runtime's
 keyed instance families do, each on the task that did it
-(compiler.md, "Services stage", "Journal version 3"): `main opened docs
-parts 1`, `main made docs[DocId(1)]#1`, `main/main:0 evicted
+(compiler.md, "Services stage", "Journal version 3"): `main opened docs`,
+`main made docs[DocId(1)]#1`, `main/main:0 evicted
 docs[DocId(1)]#1` and `posted docs[Key(2)] Ping { left: 2 }`, an
 instance named where its family is installed, by its key and its life,
 and the calls a delivered post makes under that name. A version 1 or 2

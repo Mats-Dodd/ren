@@ -1049,15 +1049,11 @@ handler single_runtime() for Async =
 // (foundations.md, decision 2, rule D)
 pub type Scope = builtin
   // starts `body` as a task of this scope, waiting first while `max`
-  // of its tasks run
+  // of its tasks run. It gives no handle: the scope owns the task, and
+  // waits for it (concurrency.md, "The tree side"). Waiting
+  // for two things is `Async.both`, and the first to finish
+  // `Async.race`
   pub fn spawn(self, body: spawned fn()) uses Async = task_spawn(self, body)
-  // the same, giving the task's handle, to join it or cancel it
-  pub fn start<T>(self, body: spawned fn() -> T) -> Task<T> uses Async =
-    task_start(self, body)
-  // `spawn`, after cancelling the task this scope started under `key`,
-  // if it's still running, and waiting for it to stop
-  pub fn replace<K has hash>(self, key: K, body: spawned fn()) uses Async =
-    task_replace(self, key, body)
 
 // what `Async.background` gives its body: a scope whose tasks may fail,
 // with the errors `E` says, which are the body's. Passed and called,
@@ -1081,15 +1077,6 @@ type Inbox<T, E> = builtin
 handler sends<T>(out: Outbox<T>) for Send<T> uses Async =
   send(x) => outbox_send(out, x)
 
-// a task's handle (rule D, as `Scope`)
-pub type Task<T> = builtin
-  // waits for the task to end: what it gave, or `None` if it was
-  // cancelled first
-  pub fn join(self) -> Option<T> uses Async = task_join(self)
-  // asks the task to stop, and returns at once: it stops at its next
-  // dependency call, or now, if it's waiting
-  pub fn cancel(self) uses Async = task_cancel(self)
-
 // ---- the keyed instance family (foundations.md, decision 18) ----
 //
 // Where instances live is the runtime's, as the scheduler is: a library
@@ -1110,28 +1097,33 @@ pub type Pinned<D> = builtin
 // what a family counts: its live instances, and those made and evicted
 pub type InstanceCounts = { live: Int, made: Int, evicted: Int }
 
+// an evictable instance, as a full family gives it to the library's
+// `victim`: its key, and its use stamp, the family's count of takes when
+// it was last taken, the smallest the longest ago
+pub type Stamped<K> = { key: K, used: Int }
+
 // the runtime's keyed instance family. Nothing installs it and no
 // `uses` names it: it's the runtime's, as the scheduler is, and only
 // these members reach it. Their waits are those of an operation of the
 // handler that opened the family, which is installed outside each call
 // that reaches them, and keeps the family's handle in its state
 pub dep Instances =
-  // a family of the instances `make` describes, one per key, in `parts`
-  // partitions of at most `cap` live instances each, each key's mailbox
-  // holding at most `mailbox` posted calls
-  pub fn open<K, D>(make: spawned fn(k: K) -> D, parts: Int, cap: Int, mailbox: Int) -> Family<K, D> =
-    family_open(make, parts, cap, mailbox)
+  // a family of the instances `make` describes, one per key, at most
+  // `cap` of them live, each key's mailbox holding at most `mailbox`
+  // posted calls
+  pub fn open<K, D>(make: spawned fn(k: K) -> D, cap: Int, mailbox: Int) -> Family<K, D> =
+    family_open(make, cap, mailbox)
   // `c` as one operation of `k`'s instance, made first if it isn't
-  // live, the instance kept from eviction meanwhile; waiting while its
-  // partition is full
+  // live, the instance kept from eviction meanwhile; waiting while the
+  // family is full
   pub fn call<K, D, R>(f: Family<K, D>, k: K, c: Call<D, R, ! ..e>) -> R ! ..e =
     try family_call(f, k, c)
-  // `k`'s instance made now, if it isn't live, waiting while its
-  // partition is full
+  // `k`'s instance made now, if it isn't live, waiting while the family
+  // is full
   pub fn make<K, D>(f: Family<K, D>, k: K) = family_make(f, k)
   // the live keys, in the order they were made
   pub fn keys<K, D>(f: Family<K, D>) -> Array<K> = family_keys(f)
-  // the evictable keys, least recently released first
+  // the evictable keys, in the order they were made
   pub fn evictable<K, D>(f: Family<K, D>) -> Array<K> = family_evictable(f)
   // evicts `k`'s instance now, running its `finally` on this task, if
   // it's live and evictable: whether it did
@@ -1139,18 +1131,19 @@ pub dep Instances =
   pub fn counts<K, D>(f: Family<K, D>) -> InstanceCounts = family_counts(f)
   // `body`, with `k`'s instance installed as the dependency it's of,
   // pinned, so it isn't evicted meanwhile: made first if it isn't live,
-  // so it fails as making one does. Making one in a full partition
-  // evicts the key `victim` picks from its evictable ones, the least
-  // recently released first, running its `finally` on this task; while
-  // it picks none, it waits
-  pub fn pin<K, D, T>(f: Family<K, (D ! ..e)>, k: K, victim: fn(lru: Array<K>) -> Option<K>, body: fn() -> T uses D) -> T ! ..e =
+  // so it fails as making one does. Pinning it takes it, which writes its
+  // use stamp. Making one in a full family evicts the key `victim` picks
+  // from its evictable ones, given in the order they were made, each with
+  // its stamp, running its `finally` on this task; while it picks none,
+  // it waits
+  pub fn pin<K, D, T>(f: Family<K, (D ! ..e)>, k: K, victim: spawned fn(evictable: Array<Stamped<K>>) -> Option<K>, body: fn() -> T uses D) -> T ! ..e =
     try family_pin(f, k, victim, body)
   // `body` with `k`'s instance installed, pinned, if it's live, without
   // making it or counting as use: whether it was
   pub fn visit<K, D>(f: Family<K, D>, k: K, body: fn() uses D) -> Bool =
     try family_visit(f, k, body)
-  // the evictable keys released at least `d` ago, by the scheduler's
-  // clock, the least recently released first
+  // the evictable keys last used at least `d` ago, by the scheduler's
+  // clock, in the order they were made
   pub fn idle<K, D>(f: Family<K, D>, d: Duration) -> Array<K> = family_idle(f, d.in_ms())
   // `each` run at each call from outside the family into one of its
   // instances, an operation called through a pinned block, on the
@@ -1160,15 +1153,23 @@ pub dep Instances =
   // `pin` for a block that gives nothing and can't fail, what making the
   // instance failed with kept in what it gives, for `made`: a library's
   // operation pins with it, since its type can't name that error
-  pub fn enter<K, D>(f: Family<K, D>, k: K, victim: fn(lru: Array<K>) -> Option<K>, body: fn() uses D) -> Pinned<D> =
+  pub fn enter<K, D>(f: Family<K, D>, k: K, victim: spawned fn(evictable: Array<Stamped<K>>) -> Option<K>, body: fn() uses D) -> Pinned<D> =
     try family_enter(f, k, victim, body)
   // puts `c` in `k`'s mailbox and returns: a task of the family's runs
   // it, as one operation of `k`'s instance, after those queued before
   // it. The instance is made first if it isn't live, as `enter` makes
   // it, what making it failed with kept in what it gives, for `made`;
   // then it waits for room in `k`'s mailbox, and only there
-  pub fn post<K, D>(f: Family<K, D>, k: K, c: Call<D, Unit, !>, victim: fn(lru: Array<K>) -> Option<K>) -> Pinned<D> =
-    try family_post(f, k, c, victim)
+  pub fn post<K, D>(f: Family<K, D>, k: K, c: Call<D, Unit, !>, victim: spawned fn(evictable: Array<Stamped<K>>) -> Option<K>) -> Pinned<D> =
+    family_post(f, k, c, victim)
+  // `body` with the instances of `ks` held for it, each key once, in
+  // the keys' order, each made first if it isn't live, as `enter` makes
+  // it, what making one failed with kept in what it gives, for `made`.
+  // No instance is installed for it: inside it, a `pin` of a key it holds
+  // is pinned at once, and one of any other key of the family panics. It
+  // never waits for room while it holds some of them
+  pub fn hold<K, D>(f: Family<K, D>, ks: Array<K>, victim: spawned fn(evictable: Array<Stamped<K>>) -> Option<K>, body: fn()) -> Pinned<D> =
+    try family_hold(f, ks, victim, body)
   // fails as making the instance `enter` pinned did, if it failed
   pub fn made<D>(p: Pinned<(D ! ..e)>) ! ..e = try family_made(p)
   // the family's end: what's posted is delivered, then the live
@@ -1246,7 +1247,7 @@ pub handler striped<D>(h: D, by: By = Key, merge: Fold<D> = Unmerged) for D uses
     Key(k) => k
     Worker => 0
   let _ = stripes_refused(h, by, n, merge)
-  let fam = Instances.open(fn(i: Int) => h, 1, if n > 0 then n else 1024, 1)
+  let fam = Instances.open(fn(i: Int) => h, if n > 0 then n else 1024, 1)
   let _ = stripes_made(fam, n)
   finally(r) =>
     Instances.close(fam)
@@ -1319,7 +1320,7 @@ fn folded<D, R, E>(merge: Fold<D>, c: Call<D, R, E>, a: R, b: R) -> R =
 // ---- actors (foundations.md, decision 18; language.md §11) ----
 //
 // `actors` keeps one instance of a handler per key, made on demand, in
-// the runtime's family, evicting the least recently released past
+// the runtime's family, evicting the oldest-used of a sample past
 // `max:`. It's plain Ren over the family's dependency, `Instances`, as
 // any library can be (compiler.md, "Services stage", "Actors (step 7)").
 
@@ -1347,6 +1348,9 @@ pub dep Actors<K, D> =
   // puts the call `c` in `k`'s mailbox, making its actor first if it
   // isn't live: what making it failed with, if it did. `post`'s step
   send: fn(k: K, c: Call<D, Unit, !>) -> Pinned<D>
+  // `body` with the actors of `ks` held, making those that aren't live:
+  // what making one failed with, if one did. `at_all`'s step
+  hold: fn(ks: Array<K>, body: fn()) -> Pinned<D>
 
   // installs `k`'s actor as `D` for `body`, making it if it isn't live:
   // what making it fails with is `at`'s. Each operation in `body` takes
@@ -1358,6 +1362,20 @@ pub dep Actors<K, D> =
     match got
       Some(r) => try r
       None => lib_panic("`at`'s block didn't run")
+  // `body` with the actors of `ks` held, each made first if it isn't
+  // live: what making one fails with is `at_all`'s. It holds them in the
+  // keys' order, each key once, so two `at_all`s over the same keys can't
+  // wait on each other, and installs none: inside it, `at` of a key it
+  // holds doesn't wait, and names which actor `D` means, and `at` of any
+  // other key of the family panics (concurrency.md, "Several keys
+  // at once"). `Docs.at_all([from, to]) fn() => ...`
+  pub fn at_all<T>(ks: Array<K>, body: fn() -> T) -> T ! ..e uses Actors<K, (D ! ..e)> =
+    var got = None
+    let p: Pinned<(D ! ..e)> = Actors.hold(ks, fn() => got = Some(family_kept(body)))
+    try Instances.made(p)
+    match got
+      Some(r) => try r
+      None => lib_panic("`at_all`'s block didn't run")
   // puts one call of `D` in `k`'s mailbox and returns, Erlang's cast:
   // `Docs.post(k, Doc.Call.Edit { op })`. Its arguments are evaluated
   // now; the call is one that gives `()` and can't fail, run later as
@@ -1376,22 +1394,20 @@ pub dep Actors<K, D> =
       let _ = Actors.visit(k, fn() => got = family_kept(body))
       try got
 
-// which actor `actors` evicts when a partition is full: the least
-// recently released (`Lfu` later)
+// which actor `actors` evicts when the family is full: under `Lru`, the
+// oldest-used of a sample of 5, which is sampled LRU (`Lfu` later)
 pub type Evict = | Lru
 
 // the actors of `h`, a handler whose one parameter is the key: at most
-// `max` live, the least recently released that nothing pins evicted to
-// make room past it, in `parts` partitions, each with `max / parts` of
-// them and its own order of release (one, below 64 a partition). Each
+// `max` live, one that nothing pins and that has no mail evicted to make
+// room past it, the oldest-used of 5 such that `Random` samples. Each
 // key's mailbox holds at most `mailbox` posts, which a post waits for
 // room in. `chaos: true`, a test's, evicts at each call into the family
 // the evictable actors `Random` picks
-pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: Int = 64, evict: Evict = Lru, chaos: Bool = false, parts: Int = 4) for Actors<K, D> uses Random =
-  let n = partitions(max, parts)
+pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: Int = 64, evict: Evict = Lru, chaos: Bool = false) for Actors<K, D> uses Random =
   // the maker written here, so the instances are made with what's
   // installed where `actors` is
-  let fam = Instances.open(fn(k: K) => h(k), n, cap_of(max, n), mailbox)
+  let fam = Instances.open(fn(k: K) => h(k), at_least_one(max), mailbox)
   // chaos at each call into the family: its own operations below, and
   // each operation called through `at`'s block, at the family's edge
   let _ = if chaos then Instances.at_edge(fam, fn() => shake(fam, chaos))
@@ -1400,7 +1416,7 @@ pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: In
     try r
   enter(k, body) =>
     shake(fam, chaos)
-    Instances.enter(fam, k, fn(lru: Array<K>) => victim(evict, lru), body)
+    Instances.enter(fam, k, fn(evictable: Array<Stamped<K>>) => victim(evict, evictable), body)
   visit(k, body) =>
     shake(fam, chaos)
     Instances.visit(fam, k, body)
@@ -1421,28 +1437,47 @@ pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: In
   evicted() => Instances.counts(fam).evicted
   send(k, c) =>
     shake(fam, chaos)
-    Instances.post(fam, k, c, fn(lru: Array<K>) => victim(evict, lru))
+    Instances.post(fam, k, c, fn(evictable: Array<Stamped<K>>) => victim(evict, evictable))
+  hold(ks, body) =>
+    shake(fam, chaos)
+    Instances.hold(fam, ks, fn(evictable: Array<Stamped<K>>) => victim(evict, evictable), body)
 
-// how many partitions `actors` keeps of `max` actors, asked for `parts`:
-// as many as keep 64 each, up to `parts`, and at least 1
-fn partitions(max: Int, parts: Int) -> Int =
+// `max`, which `actors` checks keeps at least 1 actor
+fn at_least_one(max: Int) -> Int =
   if max < 1 then lib_panic("`actors` keeps at least 1 actor, not " + show(max))
-  if parts < 1 then lib_panic("`actors` keeps at least 1 partition, not " + show(parts))
-  var n = max / 64
-  if n > parts then n = parts
-  if n < 1 then n = 1
-  n
+  max
 
-// how many actors each of `n` partitions keeps of `max`
-fn cap_of(max: Int, n: Int) -> Int =
-  var c = max / n
-  if c < 1 then c = 1
-  c
-
-// the actor to evict: under `Lru`, the least recently released
-fn victim<K>(evict: Evict, lru: Array<K>) -> Option<K> =
+// the actor to evict: under `Lru`, sampled (experiments/runtime-p2/
+// SYNTHESIS.md, K1b), the oldest-used of 5 evictable actors `Random`
+// picks, within half a point of exact LRU's hit rate in K1b's traces
+fn victim<K>(evict: Evict, evictable: Array<Stamped<K>>) -> Option<K> uses Random =
   match evict
-    Lru => lru.first()
+    Lru => oldest(sample(evictable, 5))
+
+// `n` of `xs`, each at most once, that `Random` picks: the first `n` of
+// a shuffle, Fisher and Yates'. All of them, drawing nothing, if there
+// are `n` or fewer
+fn sample<T>(xs: Array<T>, n: Int) -> Array<T> uses Random =
+  if xs.len() <= n then xs
+  else
+    var ys = xs
+    for i in 0..n
+      let j = i + Random.int(ys.len() - i)
+      let y = ys[i]
+      ys[i] = ys[j]
+      ys[j] = y
+    ys[0..n]
+
+// the key of the one of `xs` used longest ago, its stamp the smallest
+fn oldest<K>(xs: Array<Stamped<K>>) -> Option<K> =
+  var best: Option<Stamped<K>> = None
+  for x in xs
+    best = match best
+      Some(b) if b.used <= x.used => Some(b)
+      _ => Some(x)
+  match best
+    Some(b) => Some(b.key)
+    None => None
 
 // under `chaos: true`, evicts each evictable actor `Random` picks, so a
 // test finds what lives only in memory (foundations.md, decision 18,
@@ -1647,6 +1682,16 @@ let set t = Ty.Con (Path.prelude "Set", [ t ])
 let journal = Ty.Con (Path.prelude "Journal", [])
 let net_outcome t = Ty.Con (Path.prelude "NetOutcome", [ t ])
 let family k d = Ty.Con (Path.prelude "Family", [ k; d ])
+
+(* A library's [victim], `spawned fn(evictable: Array<Stamped<K>>) ->
+   Option<K>`, the key [k]'s: it can't fail, and uses what it captured,
+   as a `spawned fn` does, so its row is its own, [Some 2]. *)
+let victim k =
+  Ty.Fun
+    ( [ { mode = Read; ty = Ty.Con (Path.prelude "Array", [ Ty.Con (Path.prelude "Stamped", [ k ]) ]) } ],
+      Ty.Con (Path.prelude "Option", [ k ]),
+      Ty.closed,
+      open_row 2 )
 
 (* A call of [d] giving [r], `Call<D, R, E>`, as `Call`'s members take
    it: they don't fail with what it fails with, so its error set is only
@@ -1987,26 +2032,6 @@ let scheme (x : Intrinsic.t) =
   | Task_spawn ->
       let scope = Con (Path.prelude "Scope", []) in
       fn [ read scope; read (Fun ([], unit, open_row 2, open_row 3)) ] unit
-  (* fn<T>(s: Scope, body: fn() -> T) -> Task<T>: the same, giving its
-     handle *)
-  | Task_start ->
-      let scope = Con (Path.prelude "Scope", []) in
-      fn
-        [ read scope; read (Fun ([], Var 0, open_row 2, open_row 3)) ]
-        (Con (Path.prelude "Task", [ Var 0 ]))
-  (* fn<K has hash>(s: Scope, key: K, body: fn()): [body] as a task of
-     [s] under [key], once the one under it has been cancelled and has
-     ended *)
-  | Task_replace ->
-      let scope = Con (Path.prelude "Scope", []) in
-      fn ~reqs:[ (0, "hash") ]
-        [ read scope; read (Var 0); read (Fun ([], unit, open_row 2, open_row 3)) ]
-        unit
-  (* fn<T>(t: Task<T>) -> Option<T>: what it gave, once it has ended *)
-  | Task_join ->
-      fn [ read (Con (Path.prelude "Task", [ Var 0 ])) ] (option (Var 0))
-  (* fn<T>(t: Task<T>): asks it to stop *)
-  | Task_cancel -> fn [ read (Con (Path.prelude "Task", [ Var 0 ])) ] unit
   (* fn(cond: fn() -> Bool): waits until the instance whose operation
      it's in is released with [cond] holding; the caller has checked it
      doesn't hold now (compiler.md, "The rest of `Async`") *)
@@ -2165,14 +2190,12 @@ let scheme (x : Intrinsic.t) =
   (* The keyed instance family's (family.ml; compiler.md, "Services
      stage", "The keyed instance family"), which `Instances`' members
      call, and nothing else (Core Lint). fn<K, D>(make: fn(k: K) -> D,
-     parts: Int, cap: Int, mailbox: Int) -> Family<K, D>: a family whose
-     instances [make] describes, by key, in [parts] partitions of at most
-     [cap] live ones each *)
+     cap: Int, mailbox: Int) -> Family<K, D>: a family whose instances
+     [make] describes, by key, at most [cap] of them live *)
   | Family_open ->
       fn
         [
           read (Fun ([ read (Var 0) ], Var 1, open_row 2, open_row 3));
-          read int;
           read int;
           read int;
         ]
@@ -2195,7 +2218,7 @@ let scheme (x : Intrinsic.t) =
      isn't live *)
   | Family_make -> fn [ read (family (Var 0) (Var 1)); read (Var 0) ] unit
   (* fn<K, D>(f: Family<K, D>) -> Array<K>: the live keys, in the order
-     they were made; and those evictable, least recently released first *)
+     they were made; and those evictable, in the same order *)
   | Family_keys | Family_evictable -> fn [ read (family (Var 0) (Var 1)) ] (array (Var 0))
   (* fn<K, D>(f: Family<K, D>, k: K) -> Bool: [k]'s instance evicted, its
      `finally` run on this task, if it's live and evictable *)
@@ -2206,12 +2229,13 @@ let scheme (x : Intrinsic.t) =
   (* fn<K, D>(f: Family<K, D>): the family's end: its instances' `finally`s
      run, the last made's first *)
   | Family_close -> fn [ read (family (Var 0) (Var 1)) ] unit
-  (* fn<K, D, T>(f: Family<K, (D ! E)>, k: K, victim: fn(lru: Array<K>) ->
-     Option<K>, body: fn() -> T uses D) -> T ! E: [body] with [k]'s
-     instance installed as the dependency [D] is of, pinned, made first if
-     it isn't live, its setup's errors [E]; making it in a full partition
-     evicts the key [victim] picks from the evictable ones, the least
-     recently released first, or waits while it picks none *)
+  (* fn<K, D, T>(f: Family<K, (D ! E)>, k: K, victim: spawned
+     fn(evictable: Array<Stamped<K>>) -> Option<K>, body: fn() -> T uses
+     D) -> T ! E: [body] with [k]'s instance installed as the dependency
+     [D] is of, pinned, made first if it isn't live, its setup's errors
+     [E]; making it in a full family evicts the key [victim] picks from
+     the evictable ones, each with its use stamp, or waits while it picks
+     none *)
   | Family_pin ->
       let fails = Ty.Impl { deps = [ { dpath = Ty.param_path; dargs = [ Var 1 ] } ]; over = false; needs = Ty.closed; fails = open_row 0 } in
       let uses_d = { Ty.labels = [ Ty.dep_of { dpath = Ty.param_path; dargs = [ Var 1 ] } ]; tail = None } in
@@ -2220,7 +2244,7 @@ let scheme (x : Intrinsic.t) =
            ( [
                read (family (Var 0) fails);
                read (Var 0);
-               read (Fun ([ read (array (Var 0)) ], option (Var 0), open_row 0, Ty.closed));
+               read (victim (Var 0));
                read (Fun ([], Var 2, open_row 0, uses_d));
              ],
              Var 2,
@@ -2242,16 +2266,17 @@ let scheme (x : Intrinsic.t) =
              open_row 0,
              open_row 1 ))
   (* fn<K, D>(f: Family<K, D>, ms: Int) -> Array<K>: the evictable keys
-     released at least [ms] milliseconds ago, by the scheduler's clock,
-     the least recently released first *)
+     last used at least [ms] milliseconds ago, by the scheduler's clock,
+     in the order they were made *)
   | Family_idle -> fn [ read (family (Var 0) (Var 1)); read int ] (array (Var 0))
   (* fn<K, D>(f: Family<K, D>, each: fn()): [each] run at each call into
      [f] from outside it, an operation of an instance called through a
      pinned block, before it takes the instance *)
   | Family_edge ->
       fn [ read (family (Var 0) (Var 1)); read (Fun ([], unit, Ty.closed, open_row 2)) ] unit
-  (* fn<K, D>(f: Family<K, D>, k: K, victim: fn(lru: Array<K>) ->
-     Option<K>, body: fn() uses D) -> Pinned<D>: [Family_pin]'s, for a
+  (* fn<K, D>(f: Family<K, D>, k: K, victim: spawned fn(evictable:
+     Array<Stamped<K>>) -> Option<K>, body: fn() uses D) -> Pinned<D>:
+     [Family_pin]'s, for a
      block that gives nothing and can't fail, what making the instance
      failed with kept in what it gives rather than failed with, so an
      operation of a library's can pin, whose type can't name what its
@@ -2263,14 +2288,15 @@ let scheme (x : Intrinsic.t) =
            ( [
                read (family (Var 0) (Var 1));
                read (Var 0);
-               read (Fun ([ read (array (Var 0)) ], option (Var 0), open_row 0, Ty.closed));
+               read (victim (Var 0));
                read (Fun ([], unit, open_row 0, uses_d));
              ],
              Con (Path.prelude "Pinned", [ Var 1 ]),
              open_row 0,
              open_row 1 ))
-  (* fn<K, D>(f: Family<K, D>, k: K, c: Call<D, (), !>, victim: fn(lru:
-     Array<K>) -> Option<K>) -> Pinned<D>: [c] put in [k]'s mailbox once
+  (* fn<K, D>(f: Family<K, D>, k: K, c: Call<D, (), !>, victim: spawned
+     fn(evictable: Array<Stamped<K>>) -> Option<K>) -> Pinned<D>: [c] put
+     in [k]'s mailbox once
      it has room, its instance made first as [Family_enter]'s is, what
      making it failed with kept in what it gives (compiler.md, "Services
      stage", "Actors (step 7)", "Step 10: structured actors") *)
@@ -2281,11 +2307,29 @@ let scheme (x : Intrinsic.t) =
                read (family (Var 0) (Var 1));
                read (Var 0);
                read (Con (Ty.generic_call, [ Var 1; unit; Errors Ty.closed ]));
-               read (Fun ([ read (array (Var 0)) ], option (Var 0), open_row 0, Ty.closed));
+               read (victim (Var 0));
              ],
              Con (Path.prelude "Pinned", [ Var 1 ]),
              open_row 0,
              Ty.closed ))
+  (* fn<K, D>(f: Family<K, D>, ks: Array<K>, victim: spawned
+     fn(evictable: Array<Stamped<K>>) -> Option<K>, body: fn()) ->
+     Pinned<D>: [body] with the instances of [ks] held, in the keys'
+     order, each made first as [Family_enter]'s is, what making one
+     failed with kept in what it gives: `at_all`'s (compiler.md,
+     "Services stage", "Step 10: structured actors") *)
+  | Family_hold ->
+      scheme_of
+        (Fun
+           ( [
+               read (family (Var 0) (Var 1));
+               read (array (Var 0));
+               read (victim (Var 0));
+               read (Fun ([], unit, open_row 0, open_row 1));
+             ],
+             Con (Path.prelude "Pinned", [ Var 1 ]),
+             open_row 0,
+             open_row 1 ))
   (* fn<D>(p: Pinned<(D ! E)>) ! E: what making the instance failed with,
      if it did *)
   (* fn<T>(body: fn() -> T ! E uses U) -> Result<T, ! E> uses U: what
@@ -2362,7 +2406,7 @@ let reaches (x : Intrinsic.t) =
   | Seeded_next | Seeded_int | Journal_kept | Journal_gave | Journal_answer
   | Journal_outputs | Journal_load | Map_empty | Set_empty | Array_sort | Map_of
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
-  | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
+  | Scope_run | Task_spawn
   | Task_until | Arm_release | Arm_retake | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background | Background_spawn
   | Task_produce | Task_map_pull | Outbox_send | Inbox_take | Async_yield
@@ -2370,7 +2414,7 @@ let reaches (x : Intrinsic.t) =
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Task_random
   | Async_worker | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
   | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge
-  | Family_enter | Family_post | Family_made | Family_kept
+  | Family_enter | Family_post | Family_hold | Family_made | Family_kept
   | Call_first_hash | Call_add | Call_max | Call_min
   | Call_concat | Call_fold | Call_operations
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
@@ -2416,8 +2460,8 @@ let caller (x : Intrinsic.t) =
   | None, (Lib_panic | Family_kept) -> Any
   | ( None,
       ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum
-      | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-      | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
+      | Scope_run | Task_spawn
+      | Task_until | Arm_release | Arm_retake | Task_timeout
       | Task_isolate | Task_map
       | Task_each | Task_both | Task_race | Task_beside | Task_background
       | Task_produce | Task_map_pull | Outbox_send | Inbox_take
@@ -2426,7 +2470,7 @@ let caller (x : Intrinsic.t) =
       | Sim_advance | Sim_alarm | Task_drain | Hash | Pulled_count | Pulled_count_by | Async_worker
       | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
       | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge
-      | Family_enter | Family_post | Family_made
+      | Family_enter | Family_post | Family_hold | Family_made
       | Call_first_hash | Call_add | Call_max
       | Call_min | Call_concat | Call_fold | Call_operations ) ) ->
       Internal
@@ -2454,6 +2498,7 @@ let runtime_of (x : Intrinsic.t) =
   | Family_edge -> Some ("Instances", "at_edge")
   | Family_enter -> Some ("Instances", "enter")
   | Family_post -> Some ("Instances", "post")
+  | Family_hold -> Some ("Instances", "hold")
   | Family_made -> Some ("Instances", "made")
   | _ -> None
 
@@ -2496,10 +2541,6 @@ let fns : Intrinsic.t list =
     Lib_panic;
     Scope_run;
     Task_spawn;
-    Task_start;
-    Task_replace;
-    Task_join;
-    Task_cancel;
     Task_until;
     Arm_release;
     Arm_retake;
@@ -2539,6 +2580,7 @@ let fns : Intrinsic.t list =
     Family_edge;
     Family_enter;
     Family_post;
+    Family_hold;
     Family_made;
     Family_kept;
     Call_first_hash;
@@ -2663,10 +2705,9 @@ let types =
        value, since each function that takes one is made for each set it's
        given (compiler.md, "`over any` and `retry`") *)
     t "Tags";
-    (* a task's scope, and a task's handle (stage 11a): their members are
-       the source's *)
+    (* a task's scope (stage 11a): its members are the source's. A
+       task has no handle (concurrency.md, "The tree side") *)
     t "Scope";
-    t "Task" ~arity:1;
     (* what `Async.background` gives its body, a scope whose tasks may
        fail, with what its type argument, an error set, says (compiler.md,
        "Services stage", "Background work") *)

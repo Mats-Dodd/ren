@@ -146,7 +146,9 @@ $ ren test --only "two deposits" --seed 3815     # the same failure, exactly
   --chaos`.
 - **Queue depths.** `sim` and debug builds report each key's queue
   depth, the most posts queued at once, so a key whose mail backs up is
-  found; a post waits only for room in its key's `mailbox:`.
+  found; a post waits only for room in its key's `mailbox:`. Not built
+  yet: the interpreter has no debug builds, and `ren test` no line for
+  it (compiler.md, "Step 10: structured actors", "Chosen in step 10b").
 
 ### Test items
 
@@ -400,7 +402,7 @@ test "a recorded run of build replays" =
   `with` can install them too. [examples/just](examples/just) has one,
   `tests/build.journal`.
 - **The runtime's families are in it too** (journal version 3): a
-  family's `opened` line with its partitions, and `made`, `evicted` and
+  family's `opened` line, and `made`, `evicted` and
   `posted` lines, each on the task that did it, an instance named where
   its family is installed, by its key and its life, `docs[DocId(7)]#3`,
   and a delivery's calls under that name. A replay checks each where it

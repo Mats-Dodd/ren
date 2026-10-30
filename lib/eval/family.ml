@@ -9,18 +9,23 @@
    it's a module of its own, beside sched.ml, using its waits, and only
    its waits. It does what's the runtime's: make an instance for a key,
    pin one while an operation of it runs, evict one that's evictable,
-   list the live keys, and keep the order instances became evictable in,
-   the least recently released first, which a library's policy reads. It
-   decides nothing a library decides: which instance to evict, when, how
-   many to keep, how to route. The interpreter's half, making an instance
-   and running an operation of it or its `finally`, is eval.ml's, which
-   gives a family what it needs of it when it opens one ([opened]).
+   list the live keys, and stamp each instance with when it was last
+   taken, which a library's policy reads. It decides nothing a library
+   decides: which instance to evict, when, how many to keep, how to
+   route. The interpreter's half, making an instance and running an
+   operation of it or its `finally`, is eval.ml's, which gives a family
+   what it needs of it when it opens one ([opened]).
 
-   Partitions: a key belongs to the partition its hash says, by
-   [Walk.fixed_hash], the same in every run; each has its own instances
-   and its own cap, and a library fixes how many there are, never the
-   runtime, so which instance a full one evicts is the same on one core or
-   many (decision 18).
+   **Eviction is sampled** (experiments/runtime-p2/SYNTHESIS.md, K1b):
+   one cap for the whole family, and each take of an instance, a pin,
+   writes its use stamp, the family's count of takes then, which is the
+   only thing a take writes for eviction. A full family gives the
+   library its evictable instances, in the order they were made, each
+   with its stamp, and the library picks the victim: `actors` samples 5
+   with `Random` and evicts the oldest-stamped. Nothing here keeps an
+   order of release, and there are no partitions, so the victim depends
+   only on the takes and on what the library draws, which a journal
+   replays (concurrency.md, "Many cores": `parts:` left `actors`).
 
    **Names, by one rule** (decision 11, as a task's path is named): a
    family is named where it's installed, by the dependency its opening
@@ -30,7 +35,7 @@
    key's lives from 1: `docs[DocId(7)]#3` ([name_of]). The deadlock panic
    names an instance a parked task holds so.
 
-   **Posts** (structured-actors.md, rules 2 to 4): a call put in a key's
+   **Posts** (concurrency.md, rules 2 to 4): a call put in a key's
    mailbox, which belongs to the key, not to its instance, so the order of
    one task's posts survives eviction; a task of the family's, one per key
    with mail, delivers each as one operation of the key's instance, in
@@ -52,19 +57,20 @@
 (* Where an instance is in its life. *)
 type state = Making | Live | Evicting
 
-(* An instance: its key, its life ([name_of]), when it was made among
-   the family's, [born]; its implementation of the family's dependency
-   and its `finally`, once it's made; how many operations of it are
-   running, [pins]; when it last stopped being pinned, for the order of
-   release; and what waits for it to be made, or, while it's evicted,
-   for its `finally` to end, which [evictor] runs. *)
+(* An instance: its key, its life ([name_of]); its implementation of
+   the family's dependency and its `finally`, once it's made; how many
+   operations of it are running, [pins]; its use stamp, [used], the family's count of takes
+   when it was last taken; when it last stopped being pinned, by the
+   scheduler's clock, which is how long it's been idle ([evictable_keys]);
+   and what waits for it to be made, or, while it's evicted, for its
+   `finally` to end, which [evictor] runs. *)
 type inst = {
   key : Value.t;
   life : int;
-  born : int;
   mutable installed : Value.installed option;
   mutable finally : Value.t option;
   mutable pins : int;
+  mutable used : int;
   mutable released_at : float;
   mutable state : state;
   mutable waiting : (unit -> bool) list;
@@ -72,16 +78,6 @@ type inst = {
       (** what its setup failed with, which those that waited for it to be
           made fail with too *)
   mutable evictor : Sched.task option;
-}
-
-(* A partition: its instances, the first made first, at most [cap] of
-   them; those evictable, the least recently released first, [lru]; and
-   the tasks waiting for room, [room]. *)
-type part = {
-  mutable insts : inst list;
-  mutable lru : inst list;
-  cap : int;
-  mutable room : (unit -> bool) list;
 }
 
 (* What eval.ml does for a family: make an instance for a key, its
@@ -122,11 +118,15 @@ type family = {
   shield : int;
       (** how deep in `finally`s the `with` that installs it began, which
           its drain sees a cancel as ([close]) *)
-  hash : Value.t -> int64;  (** a key's, the same in every run *)
   equal : Value.t -> Value.t -> bool;
-  parts : part array;
+  compare : Value.t -> Value.t -> int;
+      (** keys in their type's derived order, which `at_all` holds them
+          in ([hold]) *)
+  cap : int;  (** the most instances it keeps *)
+  mutable insts : inst list;  (** its instances, the first made first *)
+  mutable room : (unit -> bool) list;  (** the tasks waiting for room in it *)
+  mutable takes : int;  (** how many times an instance was taken, which stamps each ([take]) *)
   runner : runner;
-  mutable order : int;  (** instances made, which numbers each's [born] *)
   mutable made : int;
   mutable evicted : int;
   mutable lives : (Value.t * int) list;
@@ -154,13 +154,13 @@ type Value.sched += Family of family
 let panic msg = raise (Builtins.Panic msg)
 
 (* What's journaled of a family (journal.ml, version 3), on the task
-   that did it: a family opened, with its partitions, an instance made
+   that did it: a family opened, an instance made
    and one evicted, each named by the one rule, and a call posted, to a
    key, not an instance, since the queue is the key's: `posted
    docs[DocId(7)] Edit { op: "a" }`. *)
 let on_made name = Sched.family_event ("made " ^ name)
 let on_evicted name = Sched.family_event ("evicted " ^ name)
-let on_opened name parts = Sched.family_event (Printf.sprintf "opened %s parts %d" name parts)
+let on_opened name = Sched.family_event ("opened " ^ name)
 let on_posted to_ call = Sched.family_event (Printf.sprintf "posted %s %s" to_ call)
 
 (* The family each live instance is of, and the instance, by its number
@@ -205,6 +205,40 @@ let drop_pin f =
           if !fs = [] then pinning := List.filter (fun (t', _) -> t' != t) !pinning
       | None -> ())
 
+(* The instances each task holds for an `at_all` block, with their
+   family, the last held first, by the task: inside the block, `at` of a
+   key it holds doesn't wait, and `at` of any other key of the family is
+   rule 3's panic ([pin]). *)
+let holding : (Sched.task * (family * inst list) list ref) list ref = ref []
+
+(* What this task holds of [f] for an `at_all` block, the innermost's, if
+   it holds any. *)
+let holds f =
+  match me () with
+  | None -> None
+  | Some t -> (
+      match List.find_opt (fun (t', _) -> t' == t) !holding with
+      | Some (_, hs) -> List.assq_opt f !hs
+      | None -> None)
+
+let add_hold f insts =
+  match me () with
+  | None -> ()
+  | Some t -> (
+      match List.find_opt (fun (t', _) -> t' == t) !holding with
+      | Some (_, hs) -> hs := (f, insts) :: !hs
+      | None -> holding := (t, ref [ (f, insts) ]) :: !holding)
+
+let drop_hold f =
+  match me () with
+  | None -> ()
+  | Some t -> (
+      match List.find_opt (fun (t', _) -> t' == t) !holding with
+      | Some (_, hs) ->
+          hs := List.remove_assq f !hs;
+          if !hs = [] then holding := List.filter (fun (t', _) -> t' != t) !holding
+      | None -> ())
+
 (* A dependency's name snake_cased: `HitCounter`'s `hit_counter`. *)
 let snake name =
   let b = Buffer.create (String.length name + 4) in
@@ -229,13 +263,11 @@ let installing dep f =
   Fun.protect ~finally:(fun () -> opening := around) f
 
 (* A family opened now, by the handler being made for the innermost
-   `with` that's installing one, in [parts] partitions of [cap] instances
-   each. *)
+   `with` that's installing one, of at most [cap] instances. *)
 let opened_count = ref 0
 
-let opened ~parts ~cap ~mailbox ~hash ~equal runner =
-  if parts < 1 then panic (Printf.sprintf "a family has at least 1 partition, not %d" parts);
-  if cap < 1 then panic (Printf.sprintf "a family's partition keeps at least 1 instance, not %d" cap);
+let opened ~cap ~mailbox ~equal ~compare runner =
+  if cap < 1 then panic (Printf.sprintf "a family keeps at least 1 instance, not %d" cap);
   if mailbox < 1 then panic (Printf.sprintf "a key's mailbox holds at least 1 call, not %d" mailbox);
   let dep, name =
     match !opening with
@@ -245,7 +277,7 @@ let opened ~parts ~cap ~mailbox ~hash ~equal runner =
     | [] -> ("Instances", "family")
   in
   incr opened_count;
-  on_opened name parts;
+  on_opened name;
   let f =
     {
       name;
@@ -253,11 +285,13 @@ let opened ~parts ~cap ~mailbox ~hash ~equal runner =
       num = !opened_count;
       mailbox;
       shield = Sched.shield ();
-      hash;
       equal;
-      parts = Array.init parts (fun _ -> { insts = []; lru = []; cap; room = [] });
+      compare;
+      cap;
+      insts = [];
+      room = [];
+      takes = 0;
       runner;
-      order = 0;
       made = 0;
       evicted = 0;
       lives = [];
@@ -278,23 +312,12 @@ let name_of f (i : inst) =
 let ended f =
   if f.closed then panic "this family ended with the `with` that opened it"
 
-(* The partition [k] belongs to. *)
-let part_of f k =
-  let n = Int64.of_int (Array.length f.parts) in
-  f.parts.(Int64.to_int (Int64.unsigned_rem (f.hash k) n))
-
 (* [k]'s instance, if it has one that isn't being evicted. *)
-let find f k =
-  List.find_opt
-    (fun i -> i.state <> Evicting && f.equal i.key k)
-    (part_of f k).insts
+let find f k = List.find_opt (fun i -> i.state <> Evicting && f.equal i.key k) f.insts
 
 (* [k]'s instance whose `finally` is running, if one is: a key has one
    instance at a time, so the next isn't made until it's over. *)
-let dying f k =
-  List.find_opt
-    (fun i -> i.state = Evicting && f.equal i.key k)
-    (part_of f k).insts
+let dying f k = List.find_opt (fun i -> i.state = Evicting && f.equal i.key k) f.insts
 
 (* [k]'s queue of posted calls, if it has calls queued or being
    delivered. *)
@@ -309,24 +332,20 @@ let has_mail f k =
    call is queued for it, so a delivery never makes one. *)
 let evictable f i = i.state = Live && i.pins = 0 && not (has_mail f i.key)
 
-(* The order of release: [i], once nothing pins it, goes where the time
-   it was last released puts it, the least recently released first, and
-   a task waiting for room in its partition may take it. A pin that isn't
-   use ([visit]) leaves that time as it was, so it goes back where it
-   was. *)
-let place f i =
-  let p = part_of f i.key in
-  let before, after =
-    List.partition (fun j -> j.released_at <= i.released_at) (List.filter (fun j -> j != i) p.lru)
-  in
-  p.lru <- before @ (i :: after);
-  p.room <- Sched.wake_first p.room
+(* [i] taken now, pinned once more: its use stamp is the family's count
+   of takes, the one write a take makes for eviction (K1b). A pin that
+   isn't use ([visit]) leaves the stamp as it was. *)
+let take ?(use = true) f i =
+  i.pins <- i.pins + 1;
+  if use then (
+    f.takes <- f.takes + 1;
+    i.used <- f.takes)
 
-(* [i] has stopped being pinned, and was used: it's the most recently
-   released. *)
-let released f i =
-  i.released_at <- Sched.now ();
-  place f i
+(* Nothing pins [i] any more: a task waiting for room may evict it. Used,
+   it's been idle since now ([evictable_keys]). *)
+let released ~use f i =
+  if use then i.released_at <- Sched.now ();
+  f.room <- Sched.wake_first f.room
 
 (* The next life of [k]. *)
 let next_life f k =
@@ -342,24 +361,22 @@ let next_life f k =
    `with`'s is, under the cleanup deadline if the task is cancelled
    meanwhile: the task that evicts pays for it (decision 18). *)
 let evict_now f i =
-  let p = part_of f i.key in
   i.state <- Evicting;
   i.evictor <- me ();
-  p.lru <- List.filter (fun j -> j != i) p.lru;
   on_evicted (name_of f i);
   Fun.protect
     ~finally:(fun () ->
-      p.insts <- List.filter (fun j -> j != i) p.insts;
+      f.insts <- List.filter (fun j -> j != i) f.insts;
       Option.iter (fun (ins : Value.installed) -> Hashtbl.remove owners ins.inst) i.installed;
       f.evicted <- f.evicted + 1;
       (* those waiting to make its key's next instance *)
       List.iter (fun w -> ignore (w ())) i.waiting;
       i.waiting <- [];
-      p.room <- Sched.wake_first p.room)
+      f.room <- Sched.wake_first f.room)
     (fun () ->
       Option.iter (fun fin -> Sched.shielded (fun () -> f.runner.finish ~cancelled:false fin)) i.finally)
 
-(* Rule 3 (structured-actors.md): a block that pins one of a family's
+(* Rule 3 (concurrency.md): a block that pins one of a family's
    instances holds the family, and while it's held, its task can't reach
    that family or one installed inside it, by `at` or by `post`, so every
    wait it makes points outward and can't close a cycle (decision 10's
@@ -369,17 +386,22 @@ let evict_now f i =
    panic, said at the program's call that reached it, for a pin of [f]'s
    ([`Pin]) or a post to it ([`Post]). A family opened after [g] while
    [g] is open was opened inside its `with`, or in a task that can't
-   reach [g] (decision 7). *)
+   reach [g] (decision 7). The one pin it allows is `at` of a key an
+   `at_all` block holds, which [pin] takes before asking. *)
 let held f how =
   match List.find_opt (fun g -> f.num >= g.num) (pinned ()) with
   | Some g when g == f ->
       panic
-        (match how with
-        | `Pin ->
+        (match (how, holds f) with
+        | `Pin, Some _ ->
+            Printf.sprintf
+              "`%s` pins an instance its `at_all` block doesn't hold, which could wait for a slot the block holds"
+              f.dep
+        | `Pin, None ->
             Printf.sprintf
               "`%s` pins one of its instances inside a block that pins another, which could wait for a slot its own block holds"
               f.dep
-        | `Post ->
+        | `Post, _ ->
             Printf.sprintf
               "`%s` is posted to inside a block that pins one of its instances, which could wait for what its own block holds"
               f.dep)
@@ -396,27 +418,31 @@ let held f how =
               g.dep f.dep)
   | None -> ()
 
+(* What [pin ~room:false] raises where it would wait for room: whether
+   there were evictable instances that the library's [victim] declined. *)
+exception No_room of bool
+
 (* [k]'s instance, pinned: made first if it isn't live, its setup run on
    this task while any other task asking for it waits, and fails as
    setup did for each of them; a setup that's cancelled leaves the key
-   unmade, and the first of those waiting tries again. A partition that's
-   full asks [victim] which of its evictable instances, the least
-   recently released first, to evict, and the evicting task runs its
-   `finally`; when [victim] gives none, or none is evictable, it waits
-   for room. That wait can't close a cycle: what holds a slot is a block
-   that reaches only families installed outside this one ([held]), an
-   operation, which does too, or mail, which a delivery drains. [block]
-   says it's pinned for a block, not for one operation, which rule 3
-   checks ([held]). Each [pin] is matched by an [unpin]. *)
-let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
+   unmade, and the first of those waiting tries again. A full family asks
+   [victim] which of its evictable instances to evict, given each, in the
+   order they were made, with its use stamp, and the evicting task runs
+   its `finally`; when [victim] gives none, or none is evictable, it
+   waits for room, or, with [room] false, raises [No_room]. That wait
+   can't close a cycle: what holds a slot is a block that reaches only
+   families installed outside this one ([held]), an operation, which
+   does too, or mail, which a delivery drains. [block] says it's pinned
+   for a block, not for one operation, which rule 3 checks ([held]):
+   `at` of a key an `at_all` block of this task's holds is pinned at
+   once, since it's live and pinned already, and doesn't wait. Each
+   [pin] is matched by an [unpin]. *)
+let pin ?at ?(victim = fun _ -> None) ?(block = false) ?(room = true) f k =
   ended f;
-  if block then held f `Pin;
   let rec go () =
     match find f k with
     | Some ({ state = Live; _ } as i) ->
-        i.pins <- i.pins + 1;
-        let p = part_of f k in
-        p.lru <- List.filter (fun j -> j != i) p.lru;
+        take f i;
         i
     | Some ({ state = Making; _ } as i) -> (
         Sched.wait ?at
@@ -444,18 +470,20 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
           (fun wake -> i.waiting <- i.waiting @ [ wake ]);
         go ()
     | None ->
-        let p = part_of f k in
-        if List.length p.insts < p.cap then fresh p
+        if List.length f.insts < f.cap then fresh ()
         else
-          let lru = List.filter (evictable f) p.lru in
-          match if lru = [] then None else victim (List.map (fun i -> i.key) lru) with
+          let stamped =
+            List.filter_map (fun i -> if evictable f i then Some (i.key, i.used) else None) f.insts
+          in
+          match if stamped = [] then None else victim stamped with
           | None ->
+              if not room then raise (No_room (stamped <> []));
               Sched.wait ?at
                 (Printf.sprintf "waits for room in `%s`" f.name)
-                (fun wake -> p.room <- p.room @ [ wake ]);
+                (fun wake -> f.room <- f.room @ [ wake ]);
               go ()
           | Some v ->
-              if not (List.exists (fun i -> f.equal i.key v) lru) then
+              if not (List.exists (fun (k', _) -> f.equal k' v) stamped) then
                 panic "`victim` picked a key that isn't evictable";
               (* the victim was asked by a block, which may have let
                  another task run: it's evicted only if it still can be *)
@@ -463,16 +491,17 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
               | Some j when evictable f j -> evict_now f j
               | _ -> ());
               go ()
-  (* [k]'s instance made now, in [p], on this task, pinned *)
-  and fresh p =
+  (* [k]'s instance made now, on this task, pinned *)
+  and fresh () =
+    f.takes <- f.takes + 1;
     let i =
       {
         key = k;
         life = next_life f k;
-        born = f.order;
         installed = None;
         finally = None;
         pins = 1;
+        used = f.takes;
         released_at = 0.;
         state = Making;
         waiting = [];
@@ -480,8 +509,7 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
         evictor = None;
       }
     in
-    f.order <- f.order + 1;
-    p.insts <- p.insts @ [ i ];
+    f.insts <- f.insts @ [ i ];
     let wake_all () =
       List.iter (fun w -> ignore (w ())) i.waiting;
       i.waiting <- []
@@ -499,24 +527,97 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) f k =
         (* its setup failed, or was cancelled: the key is left
            unmade; those waiting fail with the same error, or, if
            it was cancelled, the first of them tries again *)
-        p.insts <- List.filter (fun j -> j != i) p.insts;
+        f.insts <- List.filter (fun j -> j != i) f.insts;
         (match e with Sched.Cancelled -> () | e -> i.failed <- Some e);
         wake_all ();
-        p.room <- Sched.wake_first p.room;
+        f.room <- Sched.wake_first f.room;
         raise e);
     i
   in
-  let i = go () in
+  let i =
+    match if block then holds f else None with
+    | Some insts when List.exists (fun i -> f.equal i.key k) insts ->
+        let i = List.find (fun i -> f.equal i.key k) insts in
+        take f i;
+        i
+    | _ ->
+        if block then held f `Pin;
+        go ()
+  in
   if block then add_pin f;
   i
 
 (* The pin [i] is over: one of [pin]'s, [block] as it was given; or a
-   [visit]'s, which isn't use, so [i] goes back where it was in the order
-   of release. *)
+   [visit]'s, which isn't [use]. *)
 let unpin ?(block = false) ?(use = true) f i =
   if block then drop_pin f;
   i.pins <- i.pins - 1;
-  if i.pins = 0 && i.state = Live then if use then released f i else place f i
+  if i.pins = 0 && i.state = Live then released ~use f i
+
+(* Several keys at once (concurrency.md, "Several keys at once"):
+   `at_all`'s instances of [ks], each made first if it isn't live, as
+   [pin] makes it, pinned for its block, in the keys' order, so two
+   `at_all`s over the same keys can't wait on each other; each key once.
+   The block holds the family ([held]), and inside it, `at` of a key it
+   holds is pinned at once ([pin]). It never waits for room in the family
+   while it holds part of it, since what it would wait for could be
+   another `at_all` holding the rest: where a key needs room no instance
+   can give, it lets go of what it pinned and waits, holding nothing,
+   until the family has room for every key it asks for, and tries again
+   (what it let go of may have been evicted by then, and is made again).
+   Matched by a [let_go]. *)
+let hold ?at ?victim f ks =
+  ended f;
+  held f `Pin;
+  let ks = List.sort_uniq f.compare ks in
+  let n = List.length ks in
+  if n > f.cap then
+    panic
+      (Printf.sprintf "`%s.at_all` asks for %d keys of a family that keeps at most %d" f.dep n
+         f.cap);
+  let wait_for_room () =
+    Sched.wait ?at
+      (Printf.sprintf "waits for room in `%s`" f.name)
+      (fun wake -> f.room <- f.room @ [ wake ])
+  in
+  (* whether the family has room for every key of [ks]: the instances of
+     other keys that can't be evicted leave at least [n] slots *)
+  let fits () =
+    let busy =
+      List.filter
+        (fun i -> (not (evictable f i)) && not (List.exists (f.equal i.key) ks))
+        f.insts
+    in
+    List.length busy + n <= f.cap
+  in
+  let rec attempt () =
+    while not (fits ()) do
+      wait_for_room ()
+    done;
+    let got = ref [] in
+    match List.iter (fun k -> got := pin ?at ?victim ~room:false f k :: !got) ks with
+    | () -> List.rev !got
+    | exception No_room declined ->
+        List.iter (fun i -> unpin ~use:false f i) !got;
+        (* a [victim] that declined is waited on as [pin] waits on it;
+           otherwise another task took a slot while this one evicted,
+           and [fits] says when to try again *)
+        if declined then wait_for_room ();
+        attempt ()
+    | exception e ->
+        List.iter (fun i -> unpin ~use:false f i) !got;
+        raise e
+  in
+  let insts = attempt () in
+  add_pin f;
+  add_hold f insts;
+  insts
+
+(* The end of an `at_all` block: what [hold] pinned is let go of. *)
+let let_go f insts =
+  drop_hold f;
+  drop_pin f;
+  List.iter (fun i -> unpin f i) insts
 
 (* [k]'s instance pinned for a block if it's live, without making it or
    counting as use: [None] if it isn't. Matched by an [unpin ~use:false
@@ -526,9 +627,7 @@ let visit f k =
   held f `Pin;
   match find f k with
   | Some ({ state = Live; _ } as i) ->
-      i.pins <- i.pins + 1;
-      let p = part_of f k in
-      p.lru <- List.filter (fun j -> j != i) p.lru;
+      take ~use:false f i;
       add_pin f;
       Some i
   | _ -> None
@@ -542,7 +641,7 @@ let evict f k =
       true
   | _ -> false
 
-(* ---- posts (structured-actors.md, rules 2 and 4) ---- *)
+(* ---- posts (concurrency.md, rules 2 and 4) ---- *)
 
 (* Whether [t] posted a call in [b] that hasn't been delivered yet. *)
 let posted_by t (b : box) =
@@ -580,14 +679,12 @@ let entering ?at inst =
       Option.iter (fun each -> each ()) f.at_edge
   | _ -> ()
 
-(* [k]'s instance, which a call is queued for and so is live, pinned for
+(* [k]'s instance, which a call is queued for and so is live, taken for
    one delivery. *)
 let delivered_to f k =
   match find f k with
   | Some ({ state = Live; _ } as i) ->
-      i.pins <- i.pins + 1;
-      let p = part_of f k in
-      p.lru <- List.filter (fun j -> j != i) p.lru;
+      take f i;
       i
   | _ -> failwith "bug: the family: a delivery to an instance that isn't live"
 
@@ -681,26 +778,20 @@ let post ?at ?victim f k c =
       enqueue f k b i c)
 
 (* Every instance, in the order they were made. *)
-let all f =
-  Array.to_list f.parts
-  |> List.concat_map (fun p -> p.insts)
-  |> List.sort (fun a b -> compare a.born b.born)
+let all f = f.insts
 
 (* The live keys, in the order they were made. *)
 let keys f =
   ended f;
   List.filter_map (fun i -> if i.state = Live then Some i.key else None) (all f)
 
-(* The evictable keys, least recently released first, across
-   partitions; with [idle], in seconds, only those released at least that
-   long ago, by the scheduler's clock. *)
+(* The evictable keys, in the order they were made; with [idle], in
+   seconds, only those last used at least that long ago, by the
+   scheduler's clock. *)
 let evictable_keys ?(idle = 0.) f =
   ended f;
   let now = Sched.now () in
-  Array.to_list f.parts
-  |> List.concat_map (fun p -> List.filter (evictable f) p.lru)
-  |> List.filter (fun i -> now -. i.released_at >= idle)
-  |> List.stable_sort (fun a b -> compare a.released_at b.released_at)
+  List.filter (fun i -> evictable f i && now -. i.released_at >= idle) f.insts
   |> List.map (fun i -> i.key)
 
 (* Live, made and evicted. *)
@@ -708,7 +799,7 @@ let counts f =
   ended f;
   (List.length (keys f), f.made, f.evicted)
 
-(* The family's end (structured-actors.md, rule 4). If its `with`'s body
+(* The family's end (concurrency.md, rule 4). If its `with`'s body
    returned, what's queued is delivered first, by its tasks, which may
    post outward (decision 7: a scope waits for its tasks), then its
    instances' `finally`s run, the last made's first. The drain isn't

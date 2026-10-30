@@ -383,10 +383,18 @@ let pattern_by_name env c (fields : Iface.field list) (ps : pattern list) =
    dependency's member that runs a block given the dependency a type
    variable names, `Actors.at`'s `body: fn() -> T uses D`. *)
 let family_pins =
-  List.map (Path.member (Path.prelude "Instances")) [ "pin"; "visit"; "enter" ]
+  List.map (Path.member (Path.prelude "Instances")) [ "pin"; "visit"; "enter"; "hold" ]
+
+(* `Actors.at_all`, which pins several keys for its block, and installs
+   none: inside it, `at` of the same family is the one pin rule 3 allows,
+   checked by key at run time (concurrency.md, "Several keys at
+   once"). *)
+let family_holds = Path.member (Path.prelude "Actors") "at_all"
+let actors_at = Path.member (Path.prelude "Actors") "at"
 
 let pins_for_a_block env (p : Path.t) =
   List.mem p family_pins
+  || p = family_holds
   || p.member <> None
      && Path.owner p <> Path.prelude "Instances"
      && Iface.is_dep (Hashtbl.find_opt env.types) (Path.owner p)
@@ -3172,10 +3180,15 @@ and pinning env (e : expr) (f : expr) check =
         | Var (Global p) -> env.names fam ^ "." ^ Path.short p
         | _ -> Option.value (env.source f) ~default:(env.names fam)
       in
-      (match List.find_opt (fun (outer, _) -> installed_inside env fam ~outer) env.pinned_by with
-      | Some (outer, block) when outer = fam && reach = Pins ->
+      let is p = match f.kind with Var (Global q) -> q = p | _ -> false in
+      (match List.find_opt (fun (outer, _, _) -> installed_inside env fam ~outer) env.pinned_by with
+      | Some (outer, _, true) when outer = fam && is actors_at ->
+          (* `at` inside `at_all`'s block: of a key it holds, it doesn't
+             wait, and of another, the family panics *)
+          ()
+      | Some (outer, block, _) when outer = fam && reach = Pins ->
           report env (pinned_inside e.loc ~inner:written ~outer:block)
-      | Some (outer, block) ->
+      | Some (outer, block, _) ->
           report env
             (reaches_held e.loc ~call:written ~block ~family:(env.names fam)
                ~holds:(env.names outer) ~same:(outer = fam))
@@ -3183,7 +3196,7 @@ and pinning env (e : expr) (f : expr) check =
       match reach with
       | Posts -> check ()
       | Pins ->
-          env.pinned_by <- (fam, written) :: env.pinned_by;
+          env.pinned_by <- (fam, written, is family_holds) :: env.pinned_by;
           Fun.protect ~finally:(fun () -> env.pinned_by <- List.tl env.pinned_by) check)
 
 (* Whether the family installed as [fam] is [outer] or installed inside

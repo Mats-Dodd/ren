@@ -1175,7 +1175,7 @@ let pinned_inside loc ~inner ~outer =
 (* A call [call], `Docs.post` or `Inners.at`, inside a block of [block],
    `Docs.at`, that holds the family installed as [holds], reaching
    [family], which is that one ([same]) or installed inside it
-   (structured-actors.md, rule 3). *)
+   (concurrency.md, rule 3). *)
 let reaches_held loc ~call ~block ~family ~holds ~same =
   Diag.make loc
     ~notes:
@@ -2190,27 +2190,19 @@ let block_kept ~written loc place =
     ~says:(if written then "a block's type" else "a block")
     ~notes:[ block_lives ] ~help header
 
-(* A scope, or a task's handle: blocks too (foundations.md, decision 2,
-   rule D), good only inside the `Async.scope` call that made the scope.
-   [Handle] is a task's, its type as it's written, `Task<Int>`. *)
-type handle = Scope_of | Handle of string
+(* A scope: a block too (foundations.md, decision 2, rule D), good only
+   inside the `Async.scope` call that made it. It's the one value of its
+   kind: a task has no handle (concurrency.md, "The tree side"). *)
+type handle = Scope_of
 
 (* [h], at [loc], in [place], where a block can't be either; [written]
    says [loc] is a type written there. A dependency's operation's
    parameter is [Elsewhere], said as one. *)
 let handle_kept ?(op = false) ~written loc h place =
-  let what = match h with Scope_of -> "a scope" | Handle _ -> "a task's handle" in
-  let good =
-    match h with
-    | Scope_of -> "a scope is only good inside its `Async.scope` call"
-    | Handle _ -> "a task's handle is only good inside its scope"
-  in
-  let help =
-    match h with
-    | Scope_of -> "pass it to the functions that spawn into it"
-    | Handle _ -> "keep what the task makes instead: `t.join()`"
-  in
-  let shown = match h with Scope_of -> "Scope" | Handle t -> t in
+  let (Scope_of : handle) = h in
+  let what = "a scope" in
+  let good = "a scope is only good inside its `Async.scope` call" in
+  let help = "pass it to the functions that spawn into it" in
   let header, help, notes =
     match place with
     | _ when op ->
@@ -2221,25 +2213,12 @@ let handle_kept ?(op = false) ~written loc h place =
     | In_payload c -> (sprintf "`%s`'s payload can't hold %s" c what, help, [ good ])
     | In_error -> (sprintf "an error can't hold %s" what, help, [ good ])
     | In_type_arg | In_array | In_tuple ->
-        ( sprintf "`%s` can't be a type argument: %s" shown good,
-          (match h with
-          | Scope_of -> help
-          | Handle _ ->
-              "keep what the tasks make instead: `Async.map` gives every \
-               result, in order"),
+        (sprintf "`Scope` can't be a type argument: %s" good, help, [])
+    | Returned ->
+        ( "a scope can't be returned: it's only good inside its \
+           `Async.scope` call",
+          help,
           [] )
-    | Returned -> (
-        match h with
-        | Handle _ ->
-            ( sprintf "a task's handle can't be returned: %s"
-                "it's only good inside its scope",
-              "return what the task makes: `t.join()`",
-              [] )
-        | Scope_of ->
-            ( "a scope can't be returned: it's only good inside its \
-               `Async.scope` call",
-              help,
-              [] ))
     | In_var -> (sprintf "a `var` can't hold %s" what, help, [ good ])
     | In_state -> (sprintf "a handler's state can't hold %s" what, help, [ good ])
     | In_value _ -> (sprintf "an associated value can't hold %s" what, help, [ good ])
@@ -2293,11 +2272,11 @@ let let_not_literal loc ~name ~arity how =
 
 (* A handler's parameter [name], at [loc], whose type has a block in it;
    or, without [name], a block given to a handler's parameter. *)
-(* A handler's parameter, [name], that's a scope or a task's handle, [h]
-   (rule D). *)
+(* A handler's parameter, [name], that's a scope, [h] (rule D). *)
 let handler_param_handle ~name loc h =
+  let (Scope_of : handle) = h in
   Diag.make loc
-    ~says:(sprintf "`%s` is %s" name (match h with Scope_of -> "a scope" | Handle _ -> "a task's handle"))
+    ~says:(sprintf "`%s` is a scope" name)
     ~notes:
       [
         "a handler's description is a value, which can outlive the scope its \

@@ -657,14 +657,10 @@ let is_cancelled_tag = function
   | VTag { name = "Cancelled"; args = []; _ } -> true
   | _ -> false
 
-(* The scope or the task a value of `Scope` or `Task<T>` is. *)
+(* The scope a value of `Scope` is. *)
 let scope_of = function
   | VSched (Sched.Scope sc) -> sc
   | _ -> bug "a scope that isn't one"
-
-let task_of = function
-  | VSched (Sched.Handle t) -> t
-  | _ -> bug "a task's handle that isn't one"
 
 (* A task at [path] failed with [err] after another task beside it had,
    while it was being cancelled: what's said of it, on stderr, since the
@@ -1470,7 +1466,7 @@ and builtin ?loc ?ev cx f args =
   | VBuiltin
       ( (( Family_open | Family_call | Family_make | Family_keys | Family_evict
          | Family_evictable | Family_counts | Family_close | Family_pin | Family_visit
-         | Family_idle | Family_edge | Family_enter | Family_post | Family_made | Family_kept
+         | Family_idle | Family_edge | Family_enter | Family_post | Family_hold | Family_made | Family_kept
          | Call_first_hash
          | Call_add | Call_max | Call_min | Call_concat | Call_fold
          | Call_operations ) as x),
@@ -1494,17 +1490,17 @@ and builtin ?loc ?ev cx f args =
         _ ) ->
       (Ok (journal cx x tys args), args)
   | VBuiltin
-      ( (( Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-         | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
+      ( (( Scope_run | Task_spawn
+         | Task_until | Arm_release | Arm_retake | Task_timeout
          | Task_isolate | Task_map
          | Task_each | Task_both | Task_race | Task_beside | Task_background
          | Background_spawn | Task_produce | Task_map_pull | Outbox_send
          | Inbox_take | Async_yield | Async_tick
          | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
          | Sim_advance | Sim_alarm | Task_random | Task_drain ) as x),
-        tys,
-        dicts ) ->
-      tasks ?loc cx x tys dicts args
+        _,
+        _ ) ->
+      tasks ?loc cx x args
   | VBuiltin (Proc_run, _, _) -> (
       (* the real `Proc.run`: the task waits for its program, and the
          others run *)
@@ -1557,6 +1553,46 @@ and builtin ?loc ?ev cx f args =
    `Instances` call (Core Lint), and `Call`'s, which read the program's
    types: each of a call at [loc], in the prelude, with what its type
    variables stand for, [tys], and the evidence it's given, [ev]. *)
+(* The order `at_all` holds a family's keys in, [a] against [b], of type
+   [t] (family.ml, [hold]): the type's derived order where it has one
+   ([Walk.compare]: by its key, if it has one, a number, a string, a
+   variant of no fields by its place, a tuple part by part), carried on
+   to what has none, so that any key can be held in one order: a variant
+   by its place, then its fields, a record by its fields in the order
+   they're declared, an array element by element, the shorter first if
+   one starts the other. Only keys are ordered, which are data. *)
+and key_order (w : Walk.cx) t a b =
+  let fields xs ys =
+    let rec first = function
+      | ((t, x), (_, y)) :: rest ->
+          let c = key_order w t x y in
+          if c <> 0 then c else first rest
+      | [] -> 0
+    in
+    first (List.combine xs ys)
+  in
+  match (Walk.keyed w t a, Walk.keyed w t b) with
+  | Some (k, x), Some (_, y) -> key_order w k x y
+  | _ -> (
+      match (Walk.view w.types t a, Walk.view w.types t b) with
+      | Ctor x, Ctor y ->
+          if x.index <> y.index then Int.compare x.index y.index else fields x.fields y.fields
+      | Record x, Record y ->
+          let tv = List.map (fun (_, t, v) -> (t, v)) in
+          fields (tv x.fields) (tv y.fields)
+      | Parts xs, Parts ys -> fields xs ys
+      | Elems (t, xs), Elems (_, ys) ->
+          let n = min (Array.length xs) (Array.length ys) in
+          let rec from i =
+            if i = n then Int.compare (Array.length xs) (Array.length ys)
+            else
+              let c = key_order w t xs.(i) ys.(i) in
+              if c <> 0 then c else from (i + 1)
+          in
+          from 0
+      | Opaque (_, rep), _ -> key_order w rep a b
+      | _ -> Walk.compare w t a b)
+
 and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
   let loc =
     match loc with Some l -> l | None -> Loc.point ~file:Prelude.file 1 1
@@ -1591,11 +1627,23 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
              (Printf.sprintf "an instance of `%s` failed to start, with `%s`" f.dep
                 (Value.show err)))
   in
+  (* the key a library's [victim] picks from the evictable ones, each
+     given as a `Stamped<K>`, its key and its use stamp, in the order they
+     were made (Family.pin) *)
+  let victim_of victim stamped =
+    let stamped =
+      List.map (fun (k, used) -> VRecord [ ("key", k); ("used", VInt (Int64.of_int used)) ]) stamped
+    in
+    match fst (call_at cx loc victim [ Value.array_of_list stamped ] ev) with
+    | Ok (VCon { name = "Some"; args = [ v ]; _ }) -> Some v
+    | Ok _ -> None
+    | Error err -> raise (Failed err)
+  in
   (* the type of the call's result, which what a merge folds is: [tys]'s
      second, what `Call<D, R, ! E>`'s [R] stands for *)
   let result () = match tys with _ :: r :: _ -> r | _ -> bug "a call of no result" in
   match (x, args) with
-  | Family_open, [ make; VInt parts; VInt cap; VInt mailbox ] ->
+  | Family_open, [ make; VInt cap; VInt mailbox ] ->
       let kty, dep, dargs =
         match tys with
         | [ k; Impl { deps = [ d ]; _ } ] -> (k, d.dpath, d.dargs)
@@ -1692,10 +1740,9 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
       Ok
         (VSched
            (Family.Family
-              (Family.opened ~parts:(Int64.to_int parts) ~cap:(Int64.to_int cap)
-                 ~mailbox:(Int64.to_int mailbox)
-                 ~hash:(fun k -> Walk.fixed_hash (walk cx) kty k)
+              (Family.opened ~cap:(Int64.to_int cap) ~mailbox:(Int64.to_int mailbox)
                  ~equal:(fun a b -> Walk.equal (walk cx) kty a b)
+                 ~compare:(fun a b -> key_order (walk cx) kty a b)
                  runner)))
   | Family_call, [ f; k; VCon { name = case; args = cargs; _ } ] -> (
       let f = fam f in
@@ -1722,13 +1769,7 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
           raise e)
   | (Family_pin | Family_enter), [ f; k; victim; body ] -> (
       let f = fam f in
-      (* the key a library's [victim] picks from the evictable ones *)
-      let victim keys =
-        match fst (call_at cx loc victim [ Value.array_of_list keys ] ev) with
-        | Ok (VCon { name = "Some"; args = [ v ]; _ }) -> Some v
-        | Ok _ -> None
-        | Error err -> raise (Failed err)
-      in
+      let victim = victim_of victim in
       (* `enter`'s: what making the instance failed with, kept *)
       let pinned = function
         | Ok _ -> Ok (VCon { ty = Path.prelude "Pinned"; name = "Pinned"; args = [] })
@@ -1759,17 +1800,30 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
               raise e))
   | Family_post, [ f; k; c; victim ] -> (
       let f = fam f in
-      let victim keys =
-        match fst (call_at cx loc victim [ Value.array_of_list keys ] ev) with
-        | Ok (VCon { name = "Some"; args = [ v ]; _ }) -> Some v
-        | Ok _ -> None
-        | Error err -> raise (Failed err)
-      in
+      let victim = victim_of victim in
       (* what making the instance failed with, kept, as `enter`'s is *)
       let pinned = Path.prelude "Pinned" in
       match Family.post ?at ~victim f k c with
       | () -> Ok (VCon { ty = pinned; name = "Pinned"; args = [] })
       | exception Failed err -> Ok (VCon { ty = pinned; name = "Unmade"; args = [ err ] }))
+  | Family_hold, [ f; ks; victim; body ] -> (
+      let f = fam f in
+      let victim = victim_of victim in
+      (* what making an instance failed with, kept, as `enter`'s is *)
+      let pinned = Path.prelude "Pinned" in
+      let ks = match ks with VArray a -> Array.to_list (Value.items a) | _ -> bug "keys that aren't an array" in
+      match Family.hold ?at ~victim f ks with
+      | exception Failed err -> Ok (VCon { ty = pinned; name = "Unmade"; args = [ err ] })
+      | insts -> (
+          (* [body] is the caller's block, which reaches the family
+             through what it's given: no instance is installed for it *)
+          match fst (call_at cx loc body [] ev) with
+          | r ->
+              Family.let_go f insts;
+              Result.map (fun _ -> VCon { ty = pinned; name = "Pinned"; args = [] }) r
+          | exception e ->
+              Family.let_go f insts;
+              raise e))
   | Family_kept, [ body ] -> (
       let result = Path.prelude "Result" in
       match fst (call_at cx loc body [] ev) with
@@ -1963,8 +2017,8 @@ and pulled cx loc src =
 (* ---- tasks (sched.ml) ----
 
    The scheduler's intrinsics, which `Async.scope` and the members of
-   `Scope` and `Task` call (prelude.ml), from [loc], in the prelude. *)
-and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
+   `Scope` call (prelude.ml), from [loc], in the prelude. *)
+and tasks ?loc cx (x : Intrinsic.t) args =
   let loc =
     match loc with Some l -> l | None -> Loc.point ~file:Prelude.file 1 1
   in
@@ -1979,7 +2033,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
      (compiler.md, "Services stage", "Background work"). A spawned block
      can't fail (infer), so it never gives an error, but a background's
      can, which [failed] is given *)
-  let spawn ?key ?(failed = fun _ -> bug "a spawned block that failed") sc body =
+  let spawn ?(failed = fun _ -> bug "a spawned block that failed") sc body =
     share_reach body;
     let body = copied body in
     (match Sched.inner sc ~reaching:(fun () -> reaching cx.fns body) with
@@ -1997,7 +2051,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
         ~help:"spawn it in a scope that's still running: the task's own, or one outside it"
         "a task is started in a scope that has ended"
     in
-    Sched.spawn ?key ?at sc ~label:cx.site ~ended (fun () ->
+    Sched.spawn ?at sc ~label:cx.site ~ended (fun () ->
         match fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) with
         | Ok v -> v
         | Error err ->
@@ -2184,26 +2238,6 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       (Fun.protect ~finally:(fun () -> Sched.closed sc) run, args)
   | Task_spawn, [ s; body ] ->
       ignore (spawn (scope_of s) body);
-      (Ok VUnit, args)
-  | Task_start, [ s; body ] ->
-      (Ok (VSched (Sched.Handle (spawn (scope_of s) body))), args)
-  | Task_replace, [ s; key; body ] ->
-      let sc = scope_of s in
-      let ty, equal =
-        match (tys, dicts) with
-        | [ ty ], [ VDict (Hash { equal; _ }) ] -> (ty, equal)
-        | _ -> bug "a call of `task_replace` without its key's type and `hash`"
-      in
-      (* the task under the key is cancelled and waited for first
-         (Sched.spawn) *)
-      ignore (spawn ~key:(ty, key, equal) sc body);
-      (Ok VUnit, args)
-  | Task_join, [ t ] ->
-      let t = task_of t in
-      Sched.join ?at t;
-      (Ok (match t.result with Some v -> some v | None -> none), args)
-  | Task_cancel, [ t ] ->
-      Sched.cancel (task_of t);
       (Ok VUnit, args)
   | Async_yield, [] ->
       Sched.yield_ ?at ();

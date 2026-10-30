@@ -4431,29 +4431,12 @@ let written_at : Resolved.ty -> Loc.t = function
       l
   | TyErrors es -> es.eloc
 
-(* Whether a written type is a scope, or a task's handle, which rule D
-   keeps where a block is kept: which, a task's handle as it's written. *)
+(* Whether a written type is a scope, which rule D keeps where a block is
+   kept. A task has no handle (concurrency.md, "The tree side"). *)
 let rec written_handle (t : Resolved.ty) =
-  let rec show (t : Resolved.ty) =
-    match t with
-    | TyName ({ tref = Named p; _ }, []) -> p.name
-    | TyName ({ tref = Named p; _ }, args) ->
-        p.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
-    | TyName ({ tref = Param _; _ }, _) -> "T"
-    | TyVariant ({ tref = Named p; _ }, c, []) -> p.name ^ "." ^ c.name
-    | TyVariant ({ tref = Named p; _ }, c, args) ->
-        p.name ^ "." ^ c.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
-    | TyVariant ({ tref = Param _; _ }, c, _) -> "T." ^ c.name
-    | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show ts) ^ ")"
-    | TyFn _ -> "fn(...)"
-    | TyImpl _ | TyErrors _ -> "..."
-    | TyInout (t, _) -> "&" ^ show t
-  in
   match t with
   | TyName ({ tref = Named p; _ }, []) when p = Path.prelude "Scope" ->
       Some Infer_msg.Scope_of
-  | TyName ({ tref = Named p; _ }, [ _ ]) when p = Path.prelude "Task" ->
-      Some (Infer_msg.Handle (show t))
   | TyInout (t, _) -> written_handle t
   | _ -> None
 
@@ -4461,9 +4444,8 @@ let no_kept_blocks env (items : Resolved.program) =
   let kept loc place =
     Diag.report env.sink (Infer_msg.block_kept ~written:true loc place)
   in
-  (* a scope or a task's handle, written where a block can't be (rule D,
-     compiler.md, "Stage 11a", "The checker"): the prelude's own `start`
-     gives one *)
+  (* a scope, written where a block can't be (rule D, compiler.md,
+     "Stage 11a", "The checker") *)
   let kept_handle ?op loc h place =
     if env.home <> Path.prelude_home then
       Diag.report env.sink (Infer_msg.handle_kept ?op ~written:true loc h place)
@@ -4585,7 +4567,7 @@ let no_kept_blocks env (items : Resolved.program) =
           | Errors es -> errors es
           | Dep ops ->
               (* an operation is a function, which may take a block, but
-                 not a scope or a task's handle: another task can call it *)
+                 not a scope: another task can call it *)
               List.iter
                 (fun (fd : Resolved.field) ->
                   (match fd.field_ty with

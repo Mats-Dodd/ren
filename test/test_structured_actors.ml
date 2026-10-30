@@ -1,4 +1,4 @@
-(* The services stage, step 10a: structured actors (structured-actors.md,
+(* The services stage, step 10a: structured actors (concurrency.md,
    rules 2 to 4; compiler.md, "Services stage", "Step 10: structured
    actors"). There's no mail inside a family, a post waits for room in its
    key's mailbox and only there, an `at` block holds its family (rule 3),

@@ -73,10 +73,6 @@ type t =
   | Lib_panic
   | Scope_run
   | Task_spawn
-  | Task_start
-  | Task_replace
-  | Task_join
-  | Task_cancel
   | Task_until
   | Arm_release
   | Arm_retake
@@ -117,6 +113,7 @@ type t =
   | Family_edge
   | Family_enter
   | Family_post
+  | Family_hold
   | Family_made
   | Family_kept
   | Call_first_hash
@@ -253,10 +250,6 @@ let path x =
   | Lib_panic -> fn "lib_panic"
   | Scope_run -> fn "scope_run"
   | Task_spawn -> fn "task_spawn"
-  | Task_start -> fn "task_start"
-  | Task_replace -> fn "task_replace"
-  | Task_join -> fn "task_join"
-  | Task_cancel -> fn "task_cancel"
   | Task_until -> fn "task_until"
   | Arm_release -> fn "arm_release"
   | Arm_retake -> fn "arm_retake"
@@ -297,6 +290,7 @@ let path x =
   | Family_edge -> fn "family_edge"
   | Family_enter -> fn "family_enter"
   | Family_post -> fn "family_post"
+  | Family_hold -> fn "family_hold"
   | Family_made -> fn "family_made"
   | Family_kept -> fn "family_kept"
   | Call_first_hash -> fn "call_first_hash"
@@ -408,8 +402,8 @@ let member_name x = Path.short (path x)
    scheduler, as the rest do. The world's waits, `Clock.sleep`, `Net`'s
    and `Proc.run`, aren't these: only the runtime installs the world. *)
 let waits = function
-  | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-  | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
+  | Scope_run | Task_spawn
+  | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
   | Task_produce | Task_map_pull | Outbox_send | Inbox_take
   | Async_yield | Async_tick | Sim_sleep ->

@@ -431,7 +431,7 @@ error: `with` installs only handlers
   error: it chooses another name.
 - `Async`, the runtime, is the seventh (stage 11a, [async.md](async.md)):
   the runtime installs it around `main` and each test, as it does the
-  others, and `Scope` and `Task<T>` come with it. `ren run` installs
+  others, and `Scope` comes with it. `ren run` installs
   `Async.single()`, one thread in real time; a test gets
   `sim.scheduler(seed)`, which draws the order its tasks run in from its
   seed, in the virtual time `sim.clock()` reads, so a test that sleeps

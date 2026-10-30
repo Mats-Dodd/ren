@@ -1535,7 +1535,7 @@ and install env cx (lk : with_link) (i : impl) ~keys inner =
      need (Infer_expr.kept_needs), so an actor that names its own
      family, `doc` that uses `Docs` in `actors(doc) as Docs`, is the
      ordinary cycle in one `with` set: there's no mail inside a family
-     (structured-actors.md, rule 3) *)
+     (concurrency.md, rule 3) *)
   let needs = i.needs in
   use_row env cx ~loc ~needs:true ?callee
     (copy_needs env ~loc ~what:Installing needs);

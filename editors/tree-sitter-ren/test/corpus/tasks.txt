@@ -109,7 +109,7 @@ a block given without parentheses
 fn main() uses Async =
   Async.scope fn(s) =>
     s.spawn fn() => handle(conn)
-    let t = s.start fn() => 1
+    let ys = xs.map fn() => 1
   print(twice fn() => 21)
   twice() fn() => 1
 

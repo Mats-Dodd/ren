@@ -273,7 +273,7 @@ dep Shards =
   handle: fn() -> Family<Shard, Count>
 
 handler shards() for Shards =
-  let fam = Instances.open(count, 1, 2, 16)
+  let fam = Instances.open(count, 2, 16)
   finally(r) =>
     Instances.close(fam)
     try r

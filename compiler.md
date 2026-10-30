@@ -13666,6 +13666,137 @@ making past `max:`, this step took them out. Step 10 is two halves:
   step 9); bench/services/lost_update's seed is still 4702, memory's
   9904.
 
+**As built in 10b** (the owner's items 5 to 8; the design is now
+concurrency.md, which structured-actors.md became in 3302520, with the
+same rules):
+
+- **Sampled eviction under one global `max:`** (K1b,
+  experiments/runtime-p2/SYNTHESIS.md). family.ml's partitions (`part`,
+  `parts`, `part_of`, `hash`) and its order of release (`lru`, `place`)
+  are gone: a family has one cap and one list of instances, the first
+  made first. Each take, a pin for an operation, a block or a delivery
+  ([take]), writes the instance's use stamp, the family's count of takes
+  then; `visit` (`each`) isn't use and writes none. A full family gives
+  the library's `victim` its evictable instances, no pin and no mail, in
+  the order they were made, each as a `Stamped<K>` (`{ key, used }`),
+  and `actors`' `victim` samples 5 of them with `Random`, distinct, the
+  first 5 of a Fisher–Yates shuffle, and evicts the oldest-stamped; of 5
+  or fewer it takes all of them and draws nothing, so a small family is
+  exact LRU and its runs draw what they drew before. `victim` is a
+  `spawned fn` now, since it uses `Random`. `parts:` left `actors`, with
+  `partitions` and `cap_of`; `Instances.open(make, cap, mailbox)` lost
+  its `parts`; the journal's line is `main opened docs`, still version 3
+  (no journal with a family is kept in the repository, so none was
+  recorded again). `evict: Lru` keeps its name, documented as sampled.
+  `Instances.evictable` and `idle` give keys in the order they were
+  made; `idle` still reads when an instance was last let go of, by the
+  clock, which is how long it's been idle.
+- **`Docs.at_all(keys) fn() => ...`** (concurrency.md, "Several keys at
+  once"): `Actors.at_all` over the operation `hold` and `Instances.hold`
+  (`family_hold`, `Family.hold` and `let_go`). It sorts the keys by the
+  key type's derived order, carried on to a variant's fields and a
+  record's where the type has none (eval.ml's `key_order`), each key
+  once, and pins them in that order, making each as `at` does, setup's
+  errors `at_all`'s. The block installs no instance; inside it, `at` of
+  a key it holds is pinned at once (`Family.holds`, checked in `pin`
+  before rule 3), and `at` of any other key of the family panics, "`Docs`
+  pins an instance its `at_all` block doesn't hold". Infer treats
+  `at_all` as a pin for a block (`family_holds`, `pinned_by`'s third
+  field): `post`, `each` and `at_all` inside its block, and `at_all`
+  inside an `at` block, are rule 3's refusals; `at` inside it is left to
+  the run time. More keys than `max:` panics at the call.
+- **`s.start`, the task handle and `s.replace` are gone**: the prelude's
+  `start`, `replace` and `Task<T>` with `join` and `cancel`, the
+  intrinsics `task_start`, `task_replace`, `task_join` and `task_cancel`,
+  sched.ml's `Handle`, `join`, `joiners` and a scope's `keyed`, and the
+  handle's half of rule D (Infer_msg's `Handle`, Resolve's `written_handle`,
+  Infer_top's and Core Lint's `is_handle` keep only `Scope`). Excl's
+  spawns are `s.spawn` and `bg.spawn`. examples/server's "after the
+  signal" test spawns the server and asserts after its scope.
+
+**AUDIT.md's "Already built", row by row:**
+
+| Row | Change it asks for | Where it ended |
+|---|---|---|
+| `lib/eval/family.ml` | per-key bound, every post waits | done in 10a |
+| | meter on `at` operations, sibling path, 2× panic, high-water mark, delivery past `max:` removed | done in 10a |
+| | partitions removed | done in 10b |
+| | exact LRU becomes sampled eviction | done in 10b |
+| | drain on a normal end, a cancelled `with` drops queued mail | done in 10a |
+| | `at_all` and the held-key rule | done in 10b |
+| `lib/sema/infer_*.ml`, `resolve.ml` | an actor naming its own family is the `with` set's error; rule 3 on `at` blocks with a run-time backstop | done in 10a; `at_all`'s rows of it in 10b |
+| `lib/core/prelude.ml` | `mailbox:` per key, default 64 | done in 10a |
+| | `parts:` goes; `evict: Lru` documented as sampled | done in 10b |
+| `lib/eval/journal.ml` | probably unchanged; the high-water lines go | 10a (it never wrote them); 10b: `opened docs` loses `parts N`, still version 3 |
+| `lib/test_runner.ml` | the high-water mark removed, or kept as a per-key queue statistic | removed in 10a; the per-key queue depth isn't built (explained below) |
+| `lib/eval/sched.ml`, `eval.ml` | remove `start`, `Task<T>`, `join`/`cancel`, `replace` | done in 10b |
+| `test/test_services.ml` s7 | sibling posts as refusals or across two families; the high-water test goes | done in 10a |
+| `test/test_actors.ml` | review against the per-key bound | 10a reviewed it; 10b: the partitions test is the one-cap journal line, the rest hold (with 5 or fewer evictable, sampling is exact) |
+| `test/test_tasks.ml` | `s.start` and `s.replace` removed, or "no such method" tests | done in 10b: refusals of `s.start`, `s.replace` and `Task<T>`; the cancellation tests that used a handle cancel through `Async.timeout`, `Async.race` or a failing body instead, each keeping what it tested; `replace`'s two tests are the race-in-a-loop test |
+| `examples/server/main.ren:101` | rewrite with `Async.both` or a scope and an assertion after it | done in 10b: a scope, and the assertion after it |
+| `editors/tree-sitter-ren/test/corpus/actors.txt` | check for a sibling post | 10a; 10b: tasks.txt's `s.start` line is a plain method call |
+
+**Chosen in step 10b** (where concurrency.md is silent):
+
+- **The sample is 5 distinct instances, or all of them when there are 5
+  or fewer**, drawn by the library from the program's `Random` (the
+  test's under `sim`, from the tape; journaled under `ren run`), on the
+  task that evicts, so its draws are on a stream of its own. K1b's
+  simulator sampled with replacement; distinct is what "the oldest of 5
+  sampled" reads as, and taking all of 5 or fewer keeps small families
+  exact and drawing nothing.
+- **The use stamp is a count of the family's takes, not a clock**:
+  K1b's stamp is the access's index too, and a clock under `sim` ties.
+- **A key type with no derived order is still ordered for `at_all`**,
+  by the same rules carried on to its fields, so `at_all` takes any
+  key, as `at` does; a key with a `key` is ordered by it.
+- **`at_all` never waits for room while it holds part of what it
+  asks for.** Two `at_all`s over disjoint keys of a full family could
+  each hold one slot and wait for the other's: where a key needs room
+  that nothing evictable gives, it lets go of what it pinned (as a visit
+  does, not as use) and waits, holding nothing, until the family has
+  room for every key, and tries again. Sorting doesn't cover that case;
+  this keeps rule 3's "no wait on a family while holding it". Under
+  contention it can let go and try again more than once; it never
+  waits holding a slot. More keys than `max:` panics, since it could
+  never be met.
+- **`at` inside `at_all`'s block is left to the run time even where
+  the keys are literals**: Infer would have to know two keys equal,
+  which is a value's; an `at` lexically inside an `at` block of the same
+  family stays Infer's refusal, inside `at_all` too.
+- **"1 and 4 workers" is `single` and `sim`'s two**: the interpreter has
+  no other worker count. The test records one program on
+  `Async.single()` and on `sim.scheduler(seed)` under three seeds;
+  each records again to the same bytes, the `single` one replays, and
+  the family's made and evicted lines are the same in all four. A `sim`
+  journal whose tasks interleave without waiting on the world doesn't
+  replay, since `ren replay` follows `single`'s order: that's the
+  journal's, unchanged here.
+- **The per-key queue depth in `sim` and debug builds isn't built.**
+  The interpreter has no debug builds, 10a took the family's line out of
+  `ren test`'s output, and a per-key line under every test that posts
+  would change every such output without a design for where it goes;
+  testing.md says it isn't built yet. Low.
+- **The task handle's half of rule D is removed, not kept unused**: a
+  `Scope` is the one value of its kind (Infer_msg's `handle` has one
+  case), and the messages say "a scope".
+- **Tests that changed with the design:** test_tasks.ml's handle tests
+  (above); test_actors.ml's partitions test; the `opened` lines of
+  test_actors.ml's and test_services.ml's journals; test_calls.ml's and
+  the third library's `Instances.open` without `parts`. New, in
+  test/test_structured_actors_10b.ml (`[s10b ...]`): exact LRU of 5 or
+  fewer drawing nothing, the victim of more than 5 among the 3 oldest
+  under 40 seeds, `parts:` refused, the replay and the victims at one
+  worker and two, `at_all` moving money between two accounts, its keys
+  made in order and once, its setup error, two `at_all`s in a full
+  family under 300 seeds, and the refusals and panics.
+- **Measured:** examples/docs' thousand seeds take 9.8 s, as at 10a;
+  bench/services/lost_update's seed is still 4702, memory's 9904
+  (their tests' families keep at most 4 actors, so a full one has 5 or
+  fewer evictable and sampling draws nothing; chaos now walks the
+  evictable actors in the order they were made, and finds the same
+  seeds).
+
 ### Progress log
 
 | step | commit | done | left |
@@ -13688,6 +13819,7 @@ making past `max:`, this step took them out. Step 10 is two halves:
 | 9 (docs and tooling) | e9a5b44 | the docs and tooling lens ("Step 9, docs and tooling", above): async.md, stdlib.md, testing.md, handlers.md's journal, errors.md, the README, language.md's table; this section's "As built" notes, superseded choices marked, step 5's and 2b's "Chosen" lists, the `expire(now)` note, the progress log; examples/breaker's and examples/docs' READMEs; differential.py over bench/services' folders, corpus cases for background work, producers and generic calls, `release`'s highlight, Zed's `rev`; test_calls.ml's §11 test named for what it changes | foundations.md's `Doc.edit` in `at` (low, design) |
 | 9 (soundness) | 6df76e0 | the soundness lens: adversarial programs for wirings, services, the pipe, background work, `release`, `produce`, stripes and actors ("Step 9, soundness"); fixed: `with live, live`'s internal error, `provides` through a call of the same recursive group, two lives of one key while a `finally` runs, a family's handle leaving its handler, `family_kept` and `lib_panic` open to any library (the third library's `at` generic again), chaos at operations through `at` (`Instances.at_edge`), a wiring's errors naming its function, actors refused natively at `actors`; test/test_services_review.ml | the low items in "Step 9, soundness"; the spec and docs lenses |
 | 10a | 35b978d | structured actors, rules 2 to 4 ("Step 10: structured actors"): no mail inside a family (the sibling path, the edge's meter, the panic past twice `mailbox:`, the high-water mark and its `ren test` line, `Full` and the pin rule, delivery past `max:` gone; an actor naming its own family is the `with` set's error); `mailbox:` per key, default 64, every post waiting for room in its key's mailbox and only there; the post's refusal naming `Docs.at`; rule 3 on `at` blocks, by Infer where the `with`s are in sight and by the family at run time; a cancelled `with` cancelling what runs, dropping queued mail and giving the `finally`s `Err(Cancelled)`, and a drain that isn't shielded; test_services.ml's s7 sibling tests refusals or across two families, the high-water test gone; test/test_structured_actors.ml; testing.md, stdlib.md | step 10b: the owner's items 5 to 8, and AUDIT.md's rows left for it; the low item in "Chosen in step 10a" (a plain handler or stripe installed inside a family, reached from its `at` block) |
+| 10b | (next) | structured actors, the owner's items 5 to 8 ("Step 10: structured actors", "As built in 10b"): sampled eviction under one global `max:` (a use stamp at each take, `actors`' `victim` the oldest-stamped of 5 that `Random` samples), the partitions and `parts:` gone, `opened docs` without `parts`; `Docs.at_all(keys)` over `Instances.hold`, in the keys' order, `at` of a held key not waiting and of another panicking, Infer's rule 3 for its block; `s.start`, the task handle and `s.replace` removed, with their intrinsics, sched.ml's `Handle`, `join` and `keyed`, and the handle's half of rule D; test_tasks.ml's handle tests as refusals or cancelling through `timeout`, `race` or a failing body; examples/server; test/test_structured_actors_10b.ml; AUDIT.md's rows, each placed; references to structured-actors.md now concurrency.md; stdlib.md, testing.md, handlers.md, deps.md | the per-key queue depth in `sim` and debug builds (low, "Chosen in step 10b"); 10a's low item (a plain handler or stripe installed inside a family, reached from its `at` block) |
 
 ## Patterns stage
 

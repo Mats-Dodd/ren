@@ -98,8 +98,8 @@ test "a request still running at the deadline is cut off" =
 
 test "after the signal, nothing new is accepted" =
   with simulated in
+    // the scope returns once the server has: it stops when it's signalled
     Async.scope fn(s) =>
-      let server = s.start fn() => run_server()
+      s.spawn fn() => run_server()
       SimNet.signal(Signal.term)
-      assert server.join() == Some(())
-      assert attempt SimNet.connect(here()) == Err(Refused(here()))
+    assert attempt SimNet.connect(here()) == Err(Refused(here()))

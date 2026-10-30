@@ -50,10 +50,6 @@ type t =
   | Lib_panic
   | Scope_run
   | Task_spawn
-  | Task_start
-  | Task_replace
-  | Task_join
-  | Task_cancel
   | Task_until
   | Arm_release
   | Arm_retake
@@ -94,6 +90,7 @@ type t =
   | Family_edge
   | Family_enter
   | Family_post
+  | Family_hold
   | Family_made
   | Family_kept
   | Call_first_hash

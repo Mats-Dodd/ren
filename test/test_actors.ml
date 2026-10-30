@@ -224,7 +224,7 @@ fn main() uses Console, Async, Random =
     evicted DocId(1)
     evicted DocId(2)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened docs parts 1
+    1 main opened docs
     2 main made docs[DocId(1)]#1
     3 main/main:0 evicted docs[DocId(1)]#1
     4 main/main:0 Console.write("evicted DocId(1)")
@@ -271,7 +271,7 @@ fn main() uses Console, Random =
     evicted DocId(1)
     evicted DocId(2)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened docs parts 1
+    1 main opened docs
     2 main made docs[DocId(1)]#1
     3 main evicted docs[DocId(1)]#1
     4 main Console.write("evicted DocId(1)")
@@ -287,14 +287,15 @@ fn main() uses Console, Random =
        help: the code changed since this was recorded; record it again
     |}]
 
-let%expect_test "partitions: as many as keep 64 actors each, up to `parts:`, recorded in the journal" =
+let%expect_test "a family has one cap and no partitions, so the journal opens it by its name alone" =
+  (* step 10b: `parts:` left `actors` (concurrency.md, "Many cores") *)
   in_folder
     [
       ( "main.ren",
         noisy
         ^ {|
 fn main() uses Console, Random =
-  with actors(doc, max: 1000, parts: 2) as Docs in
+  with actors(doc, max: 1000) as Docs in
     with actors(doc, max: 100) as Docs in
       Docs.at(DocId(1)) fn() => Doc.poke()
 |}
@@ -304,8 +305,8 @@ fn main() uses Console, Random =
   [%expect {|
     evicted DocId(1)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened docs parts 2
-    2 main opened docs parts 1
+    1 main opened docs
+    2 main opened docs
     3 main made docs[DocId(1)]#1
     4 main Console.write("evicted DocId(1)")
     5 main exit 0

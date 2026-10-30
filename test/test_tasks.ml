@@ -263,23 +263,68 @@ fn main() uses Console, Async =
     4 │     s.spawn fn() => seen += 1
       │                     ^^^^ changed here
       = a spawned task only reads what it captures, while other tasks run
-      help: change it through a handler's operation, or give it back: `t.join()` has what the task returned
+      help: change it through a handler's operation, or make it with `Async.map` or `Async.both`, which give back what each task returns
     |}]
 
-(* ---- s1: rule D, a scope and a handle are blocks too ---- *)
+(* ---- s1: rule D, a scope is a block too ---- *)
 
-let%expect_test "[s1 reject] a task's handle returned" =
+let%expect_test "[s1 reject] a scope returned" =
+  (* a task has no handle (concurrency.md, "The tree side"): rule D is
+     the scope's *)
   check_error
     {|
-fn first(s: Scope) -> Task<Int> uses Async = s.start fn() => 1
-fn main() uses Async = Async.scope fn(s) => first(s).cancel()
+fn first(s: Scope) -> Scope uses Async = s
+fn main() uses Async = Async.scope fn(s) => first(s).spawn fn() => ()
 |};
   [%expect {|
-    error: a task's handle can't be returned: it's only good inside its scope
+    error: a scope can't be returned: it's only good inside its `Async.scope` call
       ┌─ test.ren:1:23
-    1 │ fn first(s: Scope) -> Task<Int> uses Async = s.start fn() => 1
-      │                       ^^^^ a task's handle's type
-      help: return what the task makes: `t.join()`
+    1 │ fn first(s: Scope) -> Scope uses Async = s
+      │                       ^^^^^ a scope's type
+      help: pass it to the functions that spawn into it
+    |}]
+
+let%expect_test "[s10 reject] a scope has no `start`: a task has no handle" =
+  check_error
+    {|
+fn main() uses Console, Async =
+  Async.scope fn(s) =>
+    let t = s.start fn() => 6 * 7
+    print(t.join())
+|};
+  [%expect {|
+    error: `Scope` has no method named `start`
+      ┌─ test.ren:3:15
+    3 │     let t = s.start fn() => 6 * 7
+      │               ^^^^^
+      help: its methods: `spawn`
+    |}]
+
+let%expect_test "[s10 reject] a scope has no `replace`" =
+  check_error
+    {|
+fn main() uses Async =
+  Async.scope fn(s) => s.replace("k") fn() => ()
+|};
+  [%expect {|
+    error: `Scope` has no method named `replace`
+      ┌─ test.ren:2:26
+    2 │   Async.scope fn(s) => s.replace("k") fn() => ()
+      │                          ^^^^^^^
+      help: its methods: `spawn`
+    |}]
+
+let%expect_test "[s10 reject] there's no `Task<T>`" =
+  check_error
+    {|
+fn first(t: Task<Int>) -> Int = 1
+fn main() = ()
+|};
+  [%expect {|
+    error: there's no type named `Task`
+      ┌─ test.ren:1:13
+    1 │ fn first(t: Task<Int>) -> Int = 1
+      │             ^^^^
     |}]
 
 let%expect_test "[s1 reject] a scope kept in a record" =
@@ -297,26 +342,27 @@ fn main() = ()
       help: pass it to the functions that spawn into it
     |}]
 
-let%expect_test "[s1 reject] tasks' handles kept in an array" =
+let%expect_test "[s1 reject] scopes kept in an array" =
   check_error
     {|
 fn main() uses Console, Async =
   Async.scope fn(s) =>
-    let ts = [s.start fn() => 1, s.start fn() => 2]
-    print(ts.len())
+    Async.scope fn(t) =>
+      let ss = [s, t]
+      print(ss.len())
 |};
   [%expect {|
-    error: `Task<Int>` can't be a type argument: a task's handle is only good inside its scope
-      ┌─ test.ren:3:14
-    3 │     let ts = [s.start fn() => 1, s.start fn() => 2]
-      │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a task's handle
-      help: keep what the tasks make instead: `Async.map` gives every result, in order
+    error: `Scope` can't be a type argument: a scope is only good inside its `Async.scope` call
+      ┌─ test.ren:4:16
+    4 │       let ss = [s, t]
+      │                ^^^^^^ a scope
+      help: pass it to the functions that spawn into it
 
-    error: `Task<Int>` can't be a type argument: a task's handle is only good inside its scope
-      ┌─ test.ren:4:11
-    4 │     print(ts.len())
-      │           ^^^^^^ a task's handle
-      help: keep what the tasks make instead: `Async.map` gives every result, in order
+    error: `Scope` can't be a type argument: a scope is only good inside its `Async.scope` call
+      ┌─ test.ren:5:13
+    5 │       print(ss.len())
+      │             ^^^^^^ a scope
+      help: pass it to the functions that spawn into it
     |}]
 
 (* ---- s1: blocks that can't fail ---- *)
@@ -540,30 +586,28 @@ fn main() uses Console, Async =
     ()
     |}]
 
-let%expect_test "[s2 accept] a task's handle joins it" =
+let%expect_test "[s2 accept] what a task makes is had from `Async.both`, not a handle" =
   run
     {|
 fn main() uses Console, Async =
-  Async.scope fn(s) =>
-    let t = s.start fn() => 6 * 7
-    print(t.join())
+  print(Async.both(fn() => 6 * 7, fn() => "and"))
 |};
   [%expect {|
-    Some(42)
+    (42, "and")
     ()
     |}]
 
 let%expect_test "[s2 accept] a task cancelled before it runs never runs" =
+  (* the body fails before the task has run, which cancels it *)
   run
     {|
 fn main() uses Console, Async =
-  Async.scope fn(s) =>
-    let t = s.start fn() => print("never")
-    t.cancel()
-    print(t.join())
+  print(attempt Async.scope fn(s) =>
+    s.spawn fn() => print("never")
+    fail Stop)
 |};
   [%expect {|
-    None
+    Err(Stop)
     ()
     |}]
 
@@ -585,36 +629,34 @@ handler logged() for Log uses Console =
   note(s) => print(s)
 
 fn main() uses Console, Async, Clock =
-  Async.scope fn(s) =>
-    let t = s.start fn() =>
-      with logged() in
-        Log.note("started")
-        Clock.sleep(Duration.seconds(60))
-        Log.note("never")
-    Clock.sleep(Duration.ms(5))
-    t.cancel()
+  print(attempt Async.timeout(Duration.ms(5)) fn() =>
+    with logged() in
+      Log.note("started")
+      Clock.sleep(Duration.seconds(60))
+      Log.note("never"))
   print("after")
 |};
   [%expect {|
     started
     cancelled
+    Err(Timeout)
     after
     ()
     |}]
 
-let%expect_test "[s2 accept] `replace` cancels the task under its key" =
+let%expect_test "[s2 accept] the last one cancelled is `race` in a loop, not `replace`" =
+  (* concurrency.md, "The tree side": search as you type, each query
+     cancelled when the next input comes *)
   run
     {|
 fn main() uses Console, Async, Clock =
-  Async.scope fn(s) =>
-    s.replace("k") fn() =>
-      Clock.sleep(Duration.seconds(60))
-      print("first")
-    Clock.sleep(Duration.ms(5))
-    s.replace("k") fn() => print("second")
+  for q in ["a", "ab", "abc"]
+    Async.race(fn() =>
+      Clock.sleep(Duration.ms(10))
+      print("results for " + q), fn() => Clock.sleep(Duration.ms(if q == "abc" then 20 else 5)))
 |};
   [%expect {|
-    second
+    results for abc
     ()
     |}]
 
@@ -748,15 +790,11 @@ handler logged() over Store uses Console =
 
 fn main() uses Console, Async, Clock =
   with logged() over slow() in
-    Async.scope fn(s) =>
-      let t = s.start fn() => Store.save(1)
-      Clock.sleep(Duration.ms(5))
-      t.cancel()
-      print(t.join())
+    print(attempt Async.timeout(Duration.ms(5)) fn() => Store.save(1))
 |};
   [%expect {|
     cancelled while saving
-    None
+    Err(Timeout)
     ()
     |}]
 
@@ -764,70 +802,59 @@ let%expect_test "[s2 accept] cancelling a task cancels the tasks of its scopes" 
   run
     {|
 fn main() uses Console, Async, Clock =
-  Async.scope fn(s) =>
-    let t = s.start fn() =>
-      Async.scope fn(inner) =>
-        inner.spawn fn() =>
-          Clock.sleep(Duration.seconds(60))
-          print("never: the inner task")
+  print(attempt Async.timeout(Duration.ms(5)) fn() =>
+    Async.scope fn(inner) =>
+      inner.spawn fn() =>
         Clock.sleep(Duration.seconds(60))
-        print("never: the outer task")
-    Clock.sleep(Duration.ms(5))
-    t.cancel()
-    print(t.join())
+        print("never: the inner task")
+      Clock.sleep(Duration.seconds(60))
+      print("never: the outer task"))
   print("after")
 |};
   [%expect {|
-    None
+    Err(Timeout)
     after
     ()
     |}]
 
 let%expect_test "[s2 accept] a cancelled task runs until its next dependency call" =
-  (* no preemption: `main` and `t` both wait for `u`, and are woken in
-     that order when it ends, so `t` is asked to stop after its wait has
-     ended, while it waits for its turn. It isn't stopped then, since its
-     wait gave what it waited for: it runs on, and stops at its next
+  (* no preemption: both of `race`'s blocks sleep until 5 ms, and are
+     woken in that order, so the second is asked to stop after its wait
+     has ended, while it waits for its turn. It isn't stopped then, since
+     its wait gave what it waited for: it runs on, and stops at its next
      call, `print`, which never happens *)
   run
     {|
 fn main() uses Console, Async, Clock =
-  Async.scope fn(s) =>
-    let u = s.start fn() => Clock.sleep(Duration.ms(5))
-    let t = s.start fn() =>
-      let _ = u.join()
-      let n = 6 * 7
-      print(n)
-      n
-    let _ = u.join()
-    t.cancel()
-    print(t.join())
+  print(Async.race(fn() =>
+    Clock.sleep(Duration.ms(5))
+    1, fn() =>
+    Clock.sleep(Duration.ms(5))
+    let n = 6 * 7
+    print(n)
+    n))
   print("after")
 |};
   [%expect {|
-    None
+    1
     after
     ()
     |}]
 
 let%expect_test "[s2 accept] a cancel after a task has ended changes nothing" =
-  (* `t` was spawned first, so it runs first, to its end *)
+  (* the body ends before the deadline, which then cancels nothing *)
   run
     {|
-fn main() uses Console, Async =
-  Async.scope fn(s) =>
-    let t = s.start fn() =>
-      print("t")
-      6 * 7
-    s.spawn fn() => t.cancel()
-    print("body")
-    print(t.join())
+fn main() uses Console, Async, Clock =
+  print(attempt Async.timeout(Duration.ms(5)) fn() =>
+    print("t")
+    6 * 7)
+  Clock.sleep(Duration.ms(10))
   print("after")
 |};
   [%expect {|
-    body
     t
-    Some(42)
+    Ok(42)
     after
     ()
     |}]
@@ -859,65 +886,24 @@ fn main() uses Console =
 
 fn cancelled() uses Console, Async, Clock =
   let began = Clock.instant()
-  Async.scope fn(s) =>
-    let t = s.start fn() =>
-      with slow() in
-        Log.note("working")
-        Clock.sleep(Duration.seconds(60))
-    Clock.sleep(Duration.ms(5))
-    t.cancel()
-    print(t.join())
+  print(attempt Async.timeout(Duration.ms(5)) fn() =>
+    with slow() in
+      Log.note("working")
+      Clock.sleep(Duration.seconds(60)))
   print(Clock.instant() - began == Duration.ms(5005))
 |};
   [%expect {|
     working
     cleaning
-    None
+    Err(Timeout)
     true
     ()
     |}]
 
-let%expect_test "[s2 accept] `replace` waits for the task it cancels" =
-  (* the first task is cancelled while it sleeps, and its `finally` runs
-     to its end before the second task starts; the second's `finally`
-     sleeps too, while the task under the string's key runs *)
-  run
-    {|
-dep Log =
-  note: fn(s: Str)
-
-handler logs(name: Str) for Log uses Clock, Console =
-  finally(r) =>
-    Clock.sleep(Duration.ms(5))
-    print(name + " cleaned up")
-    try r
-  note(s) => print(name + ": " + s)
-
-fn main() uses Console, Async, Clock =
-  Async.scope fn(s) =>
-    s.replace(1) fn() =>
-      with logs("first") in
-        Log.note("working")
-        Clock.sleep(Duration.seconds(60))
-    Clock.sleep(Duration.ms(5))
-    s.replace(1) fn() =>
-      with logs("second") in
-        Log.note("working")
-    // a key of another type is another key
-    s.replace("1") fn() => print("a string's")
-|};
-  [%expect {|
-    first: working
-    first cleaned up
-    second: working
-    a string's
-    second cleaned up
-    ()
-    |}]
-
 let%expect_test "[s2 accept] `fail Cancelled` in a `finally` goes on cancelling" =
-  (* nothing asked the task to stop, but its `finally` goes on as if
-     something had: the task ends as a cancelled one does *)
+  (* nothing asked the block to stop, but its `finally` goes on as if
+     something had: the block ends as a cancelled one does, so it gives
+     `race` nothing, and the other block's 2 wins *)
   run
     {|
 dep Log =
@@ -929,18 +915,18 @@ handler stopping() for Log uses Console =
     fail Cancelled
   note(s) => print(s)
 
-fn main() uses Console, Async =
-  Async.scope fn(s) =>
-    let t = s.start fn() =>
-      with stopping() in
-        Log.note("working")
-        1
-    print(t.join())
+fn main() uses Console, Async, Clock =
+  print(Async.race(fn() =>
+    with stopping() in
+      Log.note("working")
+      1, fn() =>
+    Clock.sleep(Duration.ms(5))
+    2))
 |};
   [%expect {|
     working
     stopping
-    None
+    2
     ()
     |}]
 
@@ -1404,11 +1390,10 @@ fn main() uses Console, Async =
     Async.scope fn(s) =>
       s.spawn fn() => Gate.wait("first")
       s.spawn fn() => Gate.wait("second")
-      let t = s.start fn() => Gate.wait("third")
-      s.spawn fn() =>
+      // the third waits, and is cancelled once the gate has opened twice
+      Async.race(fn() => Gate.wait("third"), fn() =>
         Gate.open()
-        Gate.open()
-        t.cancel()
+        Gate.open())
   print("done")
 |};
   [%expect {|
@@ -1435,9 +1420,8 @@ handler gate() for Gate uses Async, Console =
 
 fn main() uses Console, Async =
   with gate() in
-    Async.scope fn(s) =>
-      let t = s.start fn() => Gate.wait()
-      s.spawn fn() => t.cancel()
+    // the first block waits, and is cancelled as the second ends
+    Async.race(fn() => Gate.wait(), fn() => ())
   print("done")
 |};
   [%expect {|
@@ -2031,10 +2015,10 @@ fn main() uses Console, Async, Clock =
   with gate() in
     Async.scope fn(s) =>
       s.spawn fn() => Gate.hold()
-      let t = s.start fn() => Gate.pass("cancelled, so never")
+      // the first block queues for the instance `hold` has, and is
+      // cancelled there as the second ends
+      s.spawn fn() => Async.race(fn() => Gate.pass("cancelled, so never"), fn() => Async.yield())
       s.spawn fn() => Gate.pass("second in line")
-      Async.yield()
-      t.cancel()
 |};
   [%expect {|
     second in line
@@ -2069,9 +2053,14 @@ handler slot() for Box uses Async, Clock, Console =
 fn main() uses Console, Async, Clock =
   with slot() in
     Async.scope fn(s) =>
-      let t = s.start fn() => print(Box.take())
-      s.spawn fn() => Box.slow()
-      s.spawn fn() => t.cancel()
+      // `take` waits in `Async.until`, `slow` takes the instance, and
+      // `take` is cancelled as the race's second block ends
+      s.spawn fn() => Async.race(fn() => print(Box.take()), fn() =>
+        Async.yield()
+        Async.yield())
+      s.spawn fn() =>
+        Async.yield()
+        Box.slow()
   print("done")
 |};
   [%expect {|
@@ -2847,13 +2836,11 @@ handler h() for D uses Async, Clock =
 
 fn main() uses Console, Async, Clock =
   with h() in
-    Async.scope fn(s) =>
-      let t = s.start fn() => D.go()
-      Clock.sleep(Duration.seconds(1))
-      t.cancel()
+    print(attempt Async.timeout(Duration.seconds(1)) fn() => D.go())
     print(D.seen())
 |};
   [%expect {|
+    Err(Timeout)
     1
     ()
     |}]
@@ -2943,57 +2930,6 @@ fn main() uses Console, Async, Clock =
     inner done
     outer done
     ()
-    |}]
-
-let%expect_test "[s9 accept] two tasks replacing one key at once leave one task under it" =
-  (* each `replace` waits for the task it cancels; the one woken second
-     finds the first's new task under the key, and cancels that too *)
-  test ~seeds:300
-    {|
-pub dep Count =
-  enter: fn()
-  leave: fn()
-  most: fn() -> Int
-
-test handler count() for Count =
-  var n = 0
-  var m = 0
-  enter() =>
-    n += 1
-    if n > m then m = n
-  leave() => n -= 1
-  most() => m
-
-pub dep Inside =
-  nothing: fn()
-
-// counts the task in while it runs, and out however it ends
-test handler inside() for Inside uses Count =
-  let entered = Count.enter()
-  finally(r) =>
-    Count.leave()
-    try r
-  nothing() => ()
-
-test fn work() uses Count, Clock =
-  with inside() in
-    Clock.sleep(Duration.ms(30))
-
-test "one task under a key" =
-  with count() in
-    Async.scope fn(s) =>
-      s.replace("k") fn() => work()
-      Async.scope fn(t) =>
-        t.spawn fn() => s.replace("k") fn() => work()
-        t.spawn fn() => s.replace("k") fn() => work()
-    assert Count.most() == 1
-|};
-  [%expect {|
-    test.ren
-      ✓ one task under a key
-
-    1 passed, each under 300 seeds
-    [exit 0]
     |}]
 
 let%expect_test "[s9 reject] a block bound by `let` and passed to an operation calls back into it" =

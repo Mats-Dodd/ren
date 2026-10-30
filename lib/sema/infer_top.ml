@@ -803,7 +803,7 @@ let given_defaults ~method_ ds =
 (* ---- rule 3 (compiler.md, "Services stage", "Step 10: structured
    actors") ----
 
-   A keyed instance family's one no-deadlock rule (structured-actors.md,
+   A keyed instance family's one no-deadlock rule (concurrency.md,
    rule 3) is a check on the calls that reach a family from inside a
    block that holds one: an `at` block holds its family, and while it's
    held, its code can't reach that family or one installed inside it, by
@@ -1856,14 +1856,11 @@ let rec has_fun (t : Ty.ty) =
       List.exists (fun (l : Ty.label) -> List.exists has_fun l.payload) r.labels
   | Var _ | Impl _ | Error -> false
 
-(* Whether [t] is a scope or a task's handle, blocks too (rule D,
-   compiler.md, "Stage 11a", "The checker"), and whether it has one in
-   it anywhere. *)
+(* Whether [t] is a scope, a block too (rule D, compiler.md, "Stage
+   11a", "The checker"), and whether it has one in it anywhere. A task
+   has no handle (concurrency.md, "The tree side"). *)
 let is_handle (t : Ty.ty) =
-  match t with
-  | Con (p, []) -> p = Path.prelude "Scope"
-  | Con (p, [ _ ]) -> p = Path.prelude "Task"
-  | _ -> false
+  match t with Con (p, []) -> p = Path.prelude "Scope" | _ -> false
 
 let rec has_handle (t : Ty.ty) =
   is_handle t
@@ -1928,17 +1925,8 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
             Some (Option.map name (Option.bind callee scheme_of)))
     | None -> None
   in
-  (* how a scope's or a handle's type is written, for a message *)
-  let shown_handle (t : Ty.ty) : Infer_msg.handle =
-    match t with
-    | Con (_, []) -> Scope_of
-    | _ ->
-        Handle
-          (Ty.show
-             (Ty.printer ~names:env.names
-                { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
-             t)
-  in
+  (* what a message says a scope is *)
+  let shown_handle (_ : Ty.ty) : Infer_msg.handle = Scope_of in
   let rec handle_in (t : Ty.ty) =
     if is_handle t then Some t
     else
@@ -1952,7 +1940,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
     | Some tvar ->
         generic := (blame, Infer_msg.generic_block blame ~tvar) :: !generic
     | None -> (
-        (* nor for a scope or a task's handle *)
+        (* nor for a scope *)
         match Option.bind (Nodes.find_opt e.node nodes) (fun n -> n.targs) with
         | Some (a : Ty.args) when not prelude -> (
             match List.find_map handle_in a.tys with
@@ -2052,7 +2040,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
     | _, Kept place ->
         say e.loc (Infer_msg.block_kept ~written:false e.loc place)
   in
-  (* a scope or a task's handle [h], [e], at [pos]: it can be passed, a
+  (* a scope [h], [e], at [pos]: it can be passed, a
      callee's receiver, or the value of a `let`; elsewhere it's kept. What
      an indented block, a `with`, an `if` or a `match` gives is said at
      the part that gives it *)

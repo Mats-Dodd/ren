@@ -578,8 +578,8 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Journal_kept | Journal_gave | Journal_answer | Journal_outputs
   | Journal_load
   (* and the scheduler's, which run blocks, and wait (eval.ml, [tasks]) *)
-  | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
-  | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
+  | Scope_run | Task_spawn
+  | Task_until | Arm_release | Arm_retake | Task_timeout
   | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
   | Background_spawn | Task_produce | Task_map_pull | Outbox_send | Inbox_take
@@ -591,7 +591,7 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
      [family]) *)
   | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
   | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge
-  | Family_enter | Family_post | Family_made | Family_kept
+  | Family_enter | Family_post | Family_hold | Family_made | Family_kept
   | Call_first_hash | Call_add | Call_max
   | Call_min | Call_concat | Call_fold | Call_operations
   (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,

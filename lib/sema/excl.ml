@@ -62,7 +62,7 @@
    block parameter passed on to such a parameter needs a mode at least as
    strong, `Spawned` over `Concurrent` over `Ordinary`: written on a
    public function, inferred on a private one, before any body is checked
-   ([infer_modes]). Rule D, that a scope and a task's handle are kept as
+   ([infer_modes]). Rule D, that a scope is kept as
    blocks are, is inference's (Infer_top.check_blocks).
 
    Prior art: this is Swift's static exclusivity for non-escaping
@@ -710,8 +710,8 @@ let task_write cx (a : access) (m : Ty.block_mode) =
       report cx a.loc ~says:"changed here"
         ~notes:[ "a spawned task only reads what it captures, while other tasks run" ]
         ~help:
-          "change it through a handler's operation, or give it back: \
-           `t.join()` has what the task returned"
+          "change it through a handler's operation, or make it with \
+           `Async.map` or `Async.both`, which give back what each task returns"
         (sprintf "a spawned task can't change `%s`, which it only reads" x)
 
 (* [a] changes a place [r], which a task spawned into a scope that's
@@ -906,16 +906,14 @@ let reach cx (e : expr) =
   go e;
   !found
 
-(* [f] with [args] is a spawn, `s.spawn(body)`, `s.start(body)`,
-   `s.replace(k, body)` or `bg.spawn(body)`, into the scope [receiver] of
+(* [f] with [args] is a spawn, `s.spawn(body)` or `bg.spawn(body)`, into the scope [receiver] of
    an `Async.scope` or `Async.background` being walked: its task can't
    reach what a `with` inside that scope installs, since it could outlive
    it. Decision 7's compile error, where the scope is seen; a scope
    passed to a helper is the run time's (eval.ml, [spawn]). *)
 let inner_spawn cx (f : expr) receiver args =
   let spawns =
-    List.map (Path.member (Path.prelude "Scope")) [ "spawn"; "start"; "replace" ]
-    @ [ Path.member (Path.prelude "Background") "spawn" ]
+    [ Path.member (Path.prelude "Scope") "spawn"; Path.member (Path.prelude "Background") "spawn" ]
   in
   match (callee_of cx.nodes cx.schemes f, receiver, List.rev args) with
   | Some (p, _), Some ({ kind = Var (Local s); _ } : expr), body :: _

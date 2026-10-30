@@ -81,7 +81,7 @@ let%expect_test "a handler `for D`, over a family of one instance, made for the 
     (hits
    ^ {|
 handler one<D>(h: D) for D uses Async =
-  let fam = Instances.open(fn(i: Int) => h, 1, 1, 1)
+  let fam = Instances.open(fn(i: Int) => h, 1, 1)
   finally(r) =>
     Instances.close(fam)
     try r
@@ -103,7 +103,7 @@ let%expect_test "a handler `for D`'s signature" =
     (hits
    ^ {|
 pub handler one<D>(h: D) for D uses Async =
-  let fam = Instances.open(fn(i: Int) => h, 1, 1, 1)
+  let fam = Instances.open(fn(i: Int) => h, 1, 1)
   call(c) => try Instances.call(fam, 0, c)
 
 fn main() = ()
@@ -137,7 +137,7 @@ handler longest() for Seen =
       See { .. } => a
 
 handler both<D>(h: D, m: D) for D uses Async =
-  let fam = Instances.open(fn(i: Int) => h, 1, 2, 1)
+  let fam = Instances.open(fn(i: Int) => h, 2, 1)
   finally(r) =>
     Instances.close(fam)
     try r
@@ -266,7 +266,7 @@ handler last() for Seen =
 
 handler keeps<D>(h: D) for D uses Async =
   var kept = None
-  let fam = Instances.open(fn(i: Int) => h, 1, 1, 1)
+  let fam = Instances.open(fn(i: Int) => h, 1, 1)
   call(c) =>
     let r = try Instances.call(fam, 0, c)
     kept = Some(r)
@@ -312,7 +312,7 @@ handler docs() for Docs =
   each(body) => body()
 
 handler one<D>(h: D) for D uses Async =
-  let fam = Instances.open(fn(i: Int) => h, 1, 1, 1)
+  let fam = Instances.open(fn(i: Int) => h, 1, 1)
   call(c) => try Instances.call(fam, 0, c)
 
 fn main() uses Async =

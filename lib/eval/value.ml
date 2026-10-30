@@ -87,11 +87,11 @@ type t =
       (** evidence (core.ml): what's installed, the innermost first. A program
           never sees one *)
   | VSched of sched
-      (** a scope, a task's handle, which the scheduler made (sched.ml), or a
-          keyed instance family's handle (family.ml) *)
+      (** a scope or a background, which the scheduler made (sched.ml), or
+          a keyed instance family's handle (family.ml) *)
 
-(* What the scheduler gives a program to hold, `Scope` and `Task<T>`'s
-   values. It's an extensible type, one whose constructors are declared
+(* What the scheduler gives a program to hold, `Scope`'s and
+   `Background`'s values. It's an extensible type, one whose constructors are declared
    elsewhere, with [+=]: sched.ml declares them, since they hold its own
    records, which hold values, so neither module can come first. *)
 and sched = ..

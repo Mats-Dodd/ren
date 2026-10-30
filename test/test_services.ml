@@ -3093,7 +3093,7 @@ fn main() = ()
     |}]
 
 let%expect_test "[s7 reject] an actor naming its own family is the `with` set's error" =
-  (* there's no mail, and no `at`, inside a family (structured-actors.md,
+  (* there's no mail, and no `at`, inside a family (concurrency.md,
      rule 3): an actor's `uses` are met from the `with`s outside the one
      that installs its family, so `doc` naming `Docs` needs what nothing
      outside installs, the `with` set's ordinary error (step 10a; it said
@@ -3193,7 +3193,7 @@ fn main() uses Random =
     |}]
 
 let%expect_test "[s7 reject] `at` of a family installed inside the one a block holds" =
-  (* rule 3 (structured-actors.md): a block of `Outers.at` holds
+  (* rule 3 (concurrency.md): a block of `Outers.at` holds
      `Outers`, and inside it only families installed outside `Outers` can
      be reached, so every wait points outward. It replaces decision 18's
      `Full`, which this program gave when the first task held the only
@@ -3267,7 +3267,7 @@ dep Shards<D> =
 dep Counts = Shards<Count>
 
 handler shards<D>(h: spawned fn(s: Shard) -> D) for Shards<D> =
-  let fam = Instances.open(fn(s: Shard) => h(s), 1, 2, 16)
+  let fam = Instances.open(fn(s: Shard) => h(s), 2, 16)
   finally(r) =>
     Instances.close(fam)
     try r
@@ -3355,7 +3355,7 @@ fn main() uses Console, Random =
     DocId(2)
     DocId(1)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened docs parts 1
+    1 main opened docs
     2 main made docs[DocId(1)]#1
     3 main Console.write("DocId(1)")
     4 main evicted docs[DocId(1)]#1
@@ -3373,7 +3373,7 @@ fn main() uses Console, Random =
     DocId(2)
     DocId(1)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened docs parts 1
+    1 main opened docs
     2 main made docs[DocId(1)]#1
     3 main Console.write("DocId(1)")
     4 main evicted docs[DocId(1)]#1
@@ -3540,7 +3540,7 @@ fn main() uses Console, Random =
     |}]
 
 let%expect_test "[s7 reject] an actor that posts to its own family names it, which its `with` can't install" =
-  (* there's no mail inside a family (structured-actors.md, rule 3, step
+  (* there's no mail inside a family (concurrency.md, rule 3, step
      10a): separate concerns are separate families, below *)
   check_error
     {|
@@ -3813,8 +3813,8 @@ fn main() uses Console, Random =
     Key(2) 1
     ping 1 to Key(2)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened says parts 1
-    2 main opened peers parts 1
+    1 main opened says
+    2 main opened peers
     3 main made peers[Key(1)]#1
     4 main posted peers[Key(1)] Ping { left: 3 }
     5 peers[Key(1)]#1 Console.write("Key(1) 3")
@@ -3851,8 +3851,8 @@ fn main() uses Console, Random =
     Key(2) 1
     ping 1 to Key(2)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened says parts 1
-    2 main opened peers parts 1
+    1 main opened says
+    2 main opened peers
     3 main made peers[Key(1)]#1
     4 main posted peers[Key(1)] Ping { left: 3 }
     5 peers[Key(1)]#1 Console.write("Key(1) 3")
@@ -3897,7 +3897,7 @@ dep Shards<D> =
 dep Counts = Shards<Count>
 
 handler shards<D>(h: spawned fn(s: Shard) -> D) for Shards<D> =
-  let fam = Instances.open(fn(s: Shard) => h(s), 1, 2, 16)
+  let fam = Instances.open(fn(s: Shard) => h(s), 2, 16)
   finally(r) =>
     Instances.close(fam)
     try r
