@@ -8,7 +8,10 @@ line says it:
 
 > **Status:** proposed. It builds on [concurrency.md](concurrency.md)
 > and the prior-art research in [research/runtime/SYNTHESIS.md](research/runtime/SYNTHESIS.md),
-> and it frames foundations.md decision 9 and the runtime core stage. Lock
+> and in [research/runtime-frames/SYNTHESIS.md](research/runtime-frames/SYNTHESIS.md),
+> and it frames foundations.md decision 9 and the runtime core stage. The
+> core is C ([experiments/native-lang/SYNTHESIS.md](experiments/native-lang/SYNTHESIS.md));
+> everything around it is Ren. Lock
 > mechanics, memory and the record layout are
 > [compiler.md](compiler.md#the-runtime-model)'s.
 
@@ -22,6 +25,7 @@ core         time, order and place, over three nouns:
 (sans-I/O)   tasks · instances · queues of D.Calls
 ─────────────── D.Call out, D.Reply in
 drivers      the world: Clock, Net, Fs, Proc; real, sim, replay, hosted
+(Ren, trust) plain code: a driver uses no world dependency
 ─────────────── the host ABI, nine functions
 host         threads, rings, event loops, a JS isolate
 ```
@@ -101,6 +105,125 @@ released instance, which sampled actor is evicted, when a reply lands.
 `Sched.Call.Pick` from a seeded tape. A runtime is correct if it keeps
 the list; `sim` covers everything off it.
 
+## Scheduling points and colours
+
+Two things that look alike, kept apart:
+
+- **A scheduling point is meaning.** It's where `sim` draws from its
+  tape, where a recording journals the order, and where a cancel lands.
+  The set is the same in the interpreter, in debug and in release, under
+  every scheduler, or a seed found in one build won't replay in another.
+  It's the interpreter's set, built in 11a: every wait (a world call,
+  `until`, `yield`, `tick`, a scope's end, room in a queue, taking an
+  instance someone else holds), and **every call of an operation of a
+  shared, exclusive instance**, before the call: one a spawned task can
+  reach, whose handler keeps state. That's where two tasks' order can be
+  seen, and where `sim` finds a lost update between two operations.
+- **A colour is a calling convention:** whether a call can return
+  pending in this build. **A function is coloured if it can wait in this
+  build.** Release decides per specialization, since dispatch is static
+  over a closed world; debug, which doesn't specialize, decides by the
+  inferred row. A colour may over-approximate the waits, never miss one.
+
+So a point needn't be a wait. Under `per_core`, an uncontended take and
+a lock-free handler's operation are plain code: they're points only to
+`sim`, which stops there, and to a recording, which journals the order
+of shared takes so a run on sixteen cores replays on one. A stateless
+handler, or one no other task can reach, is neither, so a test's
+`Clock.frozen` costs nothing.
+
+- **A plain function never stops.** Cancellation lands only at
+  points; plain code is never interrupted. A long plain loop holds its
+  core: the stall watchdog names it, heavy pure work goes to `Async.map`,
+  and `Async.yield()` checks for a cancel on every call and yields only
+  when the budget is spent. The compiler inserts nothing.
+- **A shared take** is a compare-and-swap when no one holds it; on
+  contention it spins briefly, then parks the task, so a core never
+  blocks while one of its tasks waits. (Measured by X3:
+  research/runtime-frames/SYNTHESIS.md §7.)
+- **A shared plain handler under `per_core` is a family of one key,**
+  with a home core. State every core hits belongs in `striped(by:
+  Worker)`.
+
+## How code meets the core: frames
+
+**A frame is a call that hasn't answered.** Each coloured function
+compiles to a frame, holding what lives across a wait, and one resume
+function, a switch on where it waited. The calling convention is one
+register convention for both builds: a call takes the task, the frame
+and the frame stack's top, and returns a status and a value in two
+registers.
+
+- **The fast path is an ordinary call.** A callee runs at once and
+  returns done or pending. If nothing waits, a driver answering inline
+  included, the chain is nested C calls plus a bump per frame: about
+  0.4 ns a level over plain C.
+- **Frames live on a per-task stack,** bump-allocated, sized statically
+  where no recursion crosses a wait (capped at 256 B inline), with one
+  spare chunk kept. Calls nest, so frames are last in, first out. A
+  pulled generator's frame is a hidden local of its consumer's; a pulled
+  *recursive* generator gets a frame stack of its own, so `zip` over two
+  can't interleave their frames.
+- **A reply resumes the innermost frame.** When it finishes, the core's
+  loop resumes its parent: a trampoline, so the C stack stays shallow
+  and nothing needs `musttail`, which tcc ignores. Nothing re-polls from
+  the root.
+- **The tree is in memory.** A task holds its frame stack, its
+  innermost frame, its scope, its path and a cancel flag; a scope holds
+  its owner's frame, a count of its tasks, `max:`, the first error and a
+  cancelled flag.
+- **Ends once is the call id's generation.** Frame addresses are reused,
+  so a reply finds its frame by id, and one for a frame that ended is
+  released.
+- **Cancel walks the subtree eagerly** and sets each flag; at its next
+  point a task's call returns `Cancelled`, or sends a cancel and waits
+  for the reply. A `finally` masks the flag: shielded cleanup, under the
+  deadline. A panic ends the program: nothing unwinds, and there are no
+  landing pads.
+- **Depth** is one byte limit for native and frame stacks; the exact
+  depth at which recursion overflows isn't meaning.
+- **A table maps each resume site to its source line,** part of the
+  compiler's interface with the core, for backtraces (`ren bt`) and the
+  profiler.
+
+## Drivers are Ren
+
+**The world has one primitive: `Async.submit(call) -> reply`,** inside
+`trust`. A world dependency's bottom handler is the `trust` code that
+calls it, which is what "the bottom handler is the boundary" means:
+
+```ren
+trust handler real_fs() for Fs =
+  read(f, &buf) => Async.submit(Fs.Call.Read { f, buf: &buf })
+```
+
+Nothing else may submit, so no code reaches the world past the
+handlers installed above it, and `sim` and `over` see every call.
+
+- **A driver is Ren in `trust`,** answering the world's calls by calling
+  the OS through foreign calls. It uses no world dependency, because it
+  is the world, so it compiles to plain code by the rule above. io_uring,
+  kqueue, epoll and the sim driver are Ren; the sim driver is the same
+  source as `sim.fs` and `sim.net`. A driver reaches a ring through
+  ordered atomics on raw memory, in `trust`.
+- **The host loop is Ren too:** start the core, make the worker threads
+  (the host may; the core never does), then run, hand calls to the
+  kernel, wait, reply.
+- **The core is the only part that isn't Ren,** and it's C: tasks and
+  scopes, frame stacks, instances, queues, the scheduler policies, the
+  journal writer, the host ABI, a thread-entry trampoline, the signal
+  settings and a crash handler.
+- **Foreign calls, in `trust`:** a `foreign fn` is a plain C call, pure
+  by assertion, which a driver makes inline; a `blocking fn` block runs
+  on the driver's pool thread as one world call, so errno and
+  thread-locals stay on one thread, and its result is data a replay can
+  answer; a callback into Ren needs an empty row, checked by type;
+  `foreign include` compiles in its own C file. Foreign memory is
+  borrowed for the call, never kept.
+- **`main`'s scheduler is chosen when compiling.** A `sim` build is a
+  different specialization from a `per_core` one; what they share is
+  the set of points.
+
 ## What's journaled: time and order, and place only when it's read
 
 The core writes the journal, through the host's `journal` hook: each
@@ -160,7 +283,8 @@ names and signatures are the runtime core stage's:
   JS runtime, sleep until a completion, a timer or a wake, and hand
   back replies.
 - **The host's hooks are leaves:** `wake`, `answer_now`, `pages` and
-  `journal` never call back into the core.
+  `journal` never call back into the core. Keeping that true needs
+  foreign calls marked `blocking` and a core handle no task can hold.
 
 ## What it isn't
 
@@ -178,3 +302,7 @@ names and signatures are the runtime core stage's:
 - The core's own record layout, shared with the journal and the hosted
   wire: the runtime core stage.
 - A user-written scheduler: later, inside `trust`, against this page.
+- Lock or park on a contended shared take, and the frame-stack sizes:
+  experiments X1, X3 and X5 (research/runtime-frames/SYNTHESIS.md §7).
+- The core's wake, cancel and reply protocol, model-checked before it's
+  built (research/runtime-core-model/).
