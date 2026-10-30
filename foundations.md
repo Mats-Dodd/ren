@@ -12,7 +12,8 @@ follow-ups (decisions 7 and 10), then the actor design and the language
 record, [language.md](language.md): decision 18 is new, 3 is reframed,
 10 changed, and [Staging](#staging) is rewritten. On 2026-10-29 it took
 [formats.md](formats.md): decision 19 is new, and explicit layout is no
-longer open. language.md is the
+longer open; then decision 20, what the language owns and what std
+owns. language.md is the
 language a program is written in, data, services, the pipe and
 collections; this record is how it runs. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
@@ -1133,6 +1134,60 @@ representation is the compiler's choice.
   is a fact of this build, never a promise.
 - **Machine byte order and C layouts are `trust`.** Every format writes
   its byte order.
+
+### 20. What the language owns, and what std owns
+
+The language gives a few solid primitives, and the standard library
+builds abstractions out of them. Every feature is placed by five rules:
+
+1. **The language has no media and no protocols.** Nothing in the
+   language names json, HTTP, a status, a tag field or a casing. It
+   names types, values, effects and the program's own declarations.
+2. **std has no powers a user library lacks.** If std needs something
+   to be fast or safe, it becomes a language primitive open to every
+   library, so a third party's msgpack or protobuf is as fast and as
+   checked as std's json. **The one exception:** the world and the
+   runtime come in through dependencies (decision 9), and their
+   built-in handlers (`Fs`, `Net`, `Clock`, the scheduler) are the only
+   privileged code. Everything else in std is plain Ren.
+3. **The language owns what only the compiler can know or guarantee:**
+   the program's declarations as data (a type's shape, a dependency's
+   operations), building a value that respects its type's rules, checks
+   that run at build time (through one general mechanism, top-level
+   `let` and `assert`, never a check written for one library), and
+   whatever must behave the same in every library (the derived walk and
+   its reserved names `show`, `key`, `parse`, `repr`).
+4. **Optimizations are invisible.** Specializing a library over a
+   constant, a string `match` compiled to a perfect hash, unboxing:
+   none changes what a program means. A debug build means the same,
+   slower.
+5. **A policy lives with the library that applies it.** How json writes
+   a sum, strict decoding, the first error or all of them: each is that
+   library's default, in its settings. Consistency across std is a
+   written convention, not a language rule.
+
+**The toolchain reads the language, never a library.** `ren explain`,
+freezing a format's fingerprint and generated round-trip tests work from
+shapes and declarations, so they serve every library alike.
+
+**Placing a feature.** Does it name a medium or a protocol? std. Does it
+need to see the program's declarations, or guarantee a type's rules?
+language, as a general primitive. Is it only faster? the compiler,
+invisibly. A language feature that only one library uses is a sign the
+line is in the wrong place: make the primitive general, or move the
+feature out.
+
+For example, formats ([formats.md](formats.md)): the language owns
+`format ... for T`, because a format talks about the program's own
+names, `customerId = customer` refers to a field, and a library could
+only do that with strings. But the format's vocabulary has no medium in
+it: a tag is a constant the language checks is well typed and distinct,
+and json makes it a string, http a route. The language owns reshaping;
+libraries own spelling. A dependency whose operations can fail remotely
+says so with the header's error set, `pub dep Keys ! Unavailable`, the
+form `Actors<DocId, Doc> ! StoreDown` already has, rather than a
+keyword: the language gives "errors on the header", std gives
+`Unavailable`.
 
 ## What's given up
 
