@@ -1,4 +1,4 @@
-{ tinycc, fetchFromGitHub, lib, stdenv }:
+{ tinycc, fetchFromGitHub, lib, stdenv, makeWrapper, darwin }:
 # Last upstream stable (0.9.27) predates native arm64 macOS support.
 # This is the same mob revision as tools/tcc.sh, pinned by content hash.
 tinycc.overrideAttrs (old: {
@@ -11,8 +11,18 @@ tinycc.overrideAttrs (old: {
   };
   # Darwin strip adds a BSD archive index to TCC's GNU-format libtcc1.a,
   # leaving TCC unable to resolve runtime helpers such as __builtin_ctz.
+  # Ren needs a native compiler; omit the unrelated cross-toolchains.
+  configureFlags = builtins.filter (flag: flag != "--enable-cross") old.configureFlags;
+  preBuild = "";
+  nativeBuildInputs = old.nativeBuildInputs ++ [ makeWrapper ];
   dontStrip = stdenv.hostPlatform.isDarwin;
-  postFixup = (old.postFixup or "") + lib.optionalString
+  postFixup = (old.postFixup or "")
+    + lib.optionalString stdenv.hostPlatform.isDarwin ''
+      # TCC invokes codesign after linking Mach-O. Supply it even in --clean
+      # shells, without relying on Apple's command-line tools on the host.
+      wrapProgram $out/bin/tcc --prefix PATH : ${lib.makeBinPath [ darwin.sigtool ]}
+    ''
+    + lib.optionalString
     (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
       cat > builtin-smoke.c <<'C'
       int main(void) {

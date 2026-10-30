@@ -4,6 +4,8 @@ let
   tinycc = pkgs.callPackage ./nix/tinycc.nix { };
 
 in {
+  # Upstream v2.4.0's module version stamp still says 2.3.1.
+  devenv.latestVersion = "2.4.0";
   packages = [
     ocaml.ocaml ocaml.findlib ocaml.ppx_deriving ocaml.ppx_expect
     ocaml.ocaml-lsp pkgs.ocamlformat ocaml.dune_3
