@@ -72,3 +72,48 @@ was recorded by `ren run --record v1.journal hello.ren -- a b` before
   >  if cmp -s spec.out v1.expected; then echo "v1.journal: as specified"; else echo "v1.journal: not yet"; fi;
   >  rm -f spec.out)
   v1.journal: as specified
+
+The services stage's milestone (compiler.md, "Services stage", "The
+tests"; foundations.md, Staging, item 6), in services/ until step 8
+moves `docs` to examples/docs, where THE CHECKS run its tests: the
+document server, language.md §11's, whose `expected` is what `ren test`
+prints there.
+
+  $ spec services/docs
+  services/docs: not yet
+
+Then, once step 8 lands: the server's tests pass under a thousand seeds
+with chaos eviction, `ren test --chaos --seeds 1000`; in
+services/lost_update, a read and a write in two operations of one actor
+inside one `Docs.at` block, `ren test --sim --seeds 200` finds a seed
+that loses an edit, and `--seed` with it fails the same way again,
+while fixed.ren's one operation passes under a thousand seeds; and in
+services/memory, a document kept only in memory passes under a
+thousand seeds without chaos, and fails under some seed with it, which
+`--chaos --seed` fails again.
+
+  $ services_milestone() {
+  >   (cd services/docs && ren test --chaos --seeds 1000 > /dev/null 2>&1); docs=$?
+  >   (cd services/lost_update &&
+  >    ren test --sim --seeds 200 --only "two sessions" > seeds.out 2>&1; found=$?
+  >    seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
+  >    ren test --seed "${seed:-0}" --only "two sessions" > again.out 2>&1; again=$?
+  >    ren test --seeds 1000 --only "one operation" > /dev/null 2>&1; fixed=$?
+  >    [ "$found" = 1 ] && [ -n "$seed" ] && [ "$again" = 1 ] &&
+  >      grep -q "two sessions' edits both land" seeds.out &&
+  >      [ "$(grep -e 'left:' -e 'right:' seeds.out)" = "$(grep -e 'left:' -e 'right:' again.out)" ] &&
+  >      [ "$fixed" = 0 ]; ok=$?; rm -f seeds.out again.out; exit $ok); lost=$?
+  >   (cd services/memory &&
+  >    ren test --seeds 1000 > /dev/null 2>&1; calm=$?
+  >    ren test --chaos --seeds 200 > seeds.out 2>&1; found=$?
+  >    seed=$(sed -n 's/.*rerun: .*--seed \([0-9][0-9]*\).*/\1/p' seeds.out | head -n 1)
+  >    ren test --chaos --seed "${seed:-0}" > again.out 2>&1; again=$?
+  >    [ "$calm" = 0 ] && [ "$found" = 1 ] && [ -n "$seed" ] && [ "$again" = 1 ]; ok=$?
+  >    rm -f seeds.out again.out; exit $ok); memory=$?
+  >   if [ "$docs" = 0 ] && [ "$lost" = 0 ] && [ "$memory" = 0 ]
+  >   then echo "the services milestone holds"
+  >   else echo "the services milestone: not yet"
+  >   fi
+  > }
+  $ services_milestone
+  the services milestone: not yet

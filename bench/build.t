@@ -2059,3 +2059,29 @@ naive counting too, under the sanitizers.
   data/review_state.ren, release, naive: the same, exit 0, objects live at exit 0
   data/review_state_panic.ren, release, naive: the same, exit 1, objects live at exit 2
   data/review_todo_panic.ren, release, naive: the same, exit 1, objects live at exit 1
+
+The services stage's programs (compiler.md, "Services stage", "The
+tests"), in services/, checked as data/'s are. What's sequential builds
+natively and agrees with `ren run`: `pipe`, a chain, lands in step 1;
+`wiring`, wirings flattened where they're used, in step 2; `release`,
+`release` with no other task, a plain call, in step 4. The step that
+lands one changes its line here to say so, and adds it to the loops
+above. `refused` starts a task beside its body and keeps stripes, which
+`ren run` runs once steps 3 and 6 land, and `ren build` refuses at its
+first such call, the line `refused.native` holds; and `ren
+explain-wiring live wiring.ren` prints `wiring.explain` once step 2
+lands.
+
+  $ for f in pipe wiring release refused; do spec services/$f.ren; done
+  services/pipe.ren: not yet
+  services/wiring.ren: not yet
+  services/release.ren: not yet
+  services/refused.ren: not yet
+  $ (cd services && ren build refused.ren -o ./refused.bin 2>&1 | head -n 1 > native.out;
+  >  if cmp -s native.out refused.native; then echo "refused natively: as specified"; else echo "refused natively: not yet"; fi;
+  >  rm -f native.out refused.bin)
+  refused natively: not yet
+  $ (cd services && ren explain-wiring live wiring.ren > explain.out 2>&1;
+  >  if cmp -s explain.out wiring.explain; then echo "explain-wiring: as specified"; else echo "explain-wiring: not yet"; fi;
+  >  rm -f explain.out)
+  explain-wiring: not yet

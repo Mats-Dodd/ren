@@ -46,6 +46,10 @@
   (glob_files 11a/*.expected)
   (glob_files data/*.ren)
   (glob_files data/*.expected)
+  (glob_files services/*.ren)
+  (glob_files services/*.expected)
+  services/refused.native
+  services/wiring.explain
   (glob_files %{project_root}/examples/*.ren)
   (glob_files %{project_root}/examples/shop/*.ren)
   (glob_files %{project_root}/examples/shop/billing/*.ren)
@@ -53,7 +57,8 @@
 
 ; tasks.t runs stage 11a's programs, in 11a/tasks/ until their steps
 ; land them in examples/, each `ren test` in its folder, and says which
-; are as specified yet (compiler.md, "Stage 11a", "The tests").
+; are as specified yet (compiler.md, "Stage 11a", "The tests"); and the
+; services stage's milestone, in services/ ("Services stage").
 
 (cram
  (applies_to tasks)
@@ -73,7 +78,11 @@
   %{project_root}/examples/refresh/expected
   %{project_root}/examples/server/expected
   11a/tasks/journal/v1.journal
-  11a/tasks/journal/v1.expected))
+  11a/tasks/journal/v1.expected
+  (glob_files services/docs/*.ren)
+  services/docs/expected
+  (glob_files services/lost_update/*.ren)
+  (glob_files services/memory/*.ren)))
 
 ; bytes.t runs the bytes stage's programs, in bytes/, through `ren run`
 ; and, once each step lands them, `ren build` under the sanitizers, and

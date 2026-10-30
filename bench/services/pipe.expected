@@ -1,0 +1,8 @@
+Ok(12)
+Err(Empty)
+Err(TooBig(501))
+20
+0
+6
+Ok([7])
+exit 0

@@ -1,0 +1,49 @@
+// The services stage, step 2 (compiler.md, "Services stage"): wirings,
+// flattened where they're used, built natively and checked against `ren
+// run`. `core` needs `Db`, which `live` adds; an item beside a wiring
+// shares what it installs; teardown runs in reverse install order; and
+// `ren explain-wiring live wiring.ren` prints wiring.explain.
+
+dep Db =
+  get: fn(id: Int) -> Str ! DbDown
+dep Audit =
+  note: fn(s: Str)
+dep Users =
+  name: fn(id: Int) -> Str ! DbDown
+dep Count =
+  hit: fn() -> Int
+
+handler mem_db(prefix: Str) for Db uses Console =
+  finally(r) =>
+    print("db closed")
+    try r
+  get(id) => prefix.concat(show(id))
+
+handler console_audit() for Audit uses Console =
+  finally(r) =>
+    print("audit closed")
+    try r
+  note(s) => print("audit: ".concat(s))
+
+handler db_users() for Users uses Db, Audit =
+  name(id) =>
+    Audit.note(show(id))
+    try Db.get(id)
+
+handler counted() for Count uses Db =
+  var n = 0
+  hit() =>
+    n += 1
+    match Db.get(n)
+      _ => n
+      fail DbDown => 0
+
+wiring core provides Users = console_audit(), db_users()
+wiring live(prefix: Str) provides Users = core, mem_db(prefix)
+
+fn main() uses Console =
+  with live("ann") in
+    print(attempt Users.name(1))                  // audit: 1, Ok("ann1")
+  with live("bob"), counted() in
+    print(attempt Users.name(2))                  // audit: 2, Ok("bob2")
+    print(Count.hit())                            // 1

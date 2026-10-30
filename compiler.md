@@ -9432,6 +9432,1493 @@ Choices where strings.md, decision 17 and the brief are silent:
 | step | commit | what's done | what's left |
 |---|---|---|---|
 
+## Services stage
+
+Services and concurrency (foundations.md, Staging, item 6; decisions 2,
+7, 10, 11 and 18; language.md §4, §5, §8 and §11; streams.md,
+"Concurrency and time"): a composition root named as a wiring,
+workflows as pipes with a `try` on each step that can fail, background
+work that can't outlive its handler, `release` on one call, pull
+arguments, channels as dependencies and `Async.produce`, and the two
+standard-library services that keep many stateful things, `striped`,
+which replaces `sync.keyed`, and `actors`, with `post`. Interpreter
+first, as tasks are: what's sequential (wirings, the pipe, `release`
+with no other task) builds natively and agrees with `ren run`; what
+starts tasks or keeps instances is refused by `ren build`, as 11a
+refuses `Async.scope` and `keyed`. Ten steps, each green on its own, as
+11a's and the data stage's were (briefs/stage-services.md):
+
+0. **This specification,** its tests (The tests, below), and the
+   inventory of what the stage changes.
+1. **The pipe,** `x |> f(a)`, through the whole pipeline, natively too,
+   with `|>` and `.` continuing a line in the lexer and tree-sitter's
+   scanner; the README's and language.md's end-to-end shapes as
+   examples that run.
+2. **Wirings,** through the whole pipeline, natively too, every error of
+   language.md §5 and `ren explain-wiring`; the examples that repeat a
+   `with` list moved to wirings.
+3. **Background work:** decision 7's compile error for a task that can
+   reach a handler installed inside its scope, the run time's check where
+   a helper hides which scope is inner, `Async.beside` and
+   `Async.background`; 11a's cancel-beside-the-`with` rule removed.
+4. **`release`, deadlocks and `Proc.run(kill:)`:** `release` on one
+   call; decision 2's handler-state row narrowed in excl.ml; `sim`
+   naming the instances a parked task holds; `sim`'s fair choice among
+   an instance's waiters and arrivals; `kill: Tree | Child`, and a
+   default that's a variant with no fields.
+5. **Pull arguments, channels and producers:** `Async.each` and
+   `Async.map` over what `for` takes, `Chan<T>`'s `items()`,
+   `Async.produce` with `Send<T>`, and `Async.map_pull`.
+6. **`striped`,** where `keyed` was, with `by:`, `merge:` and the derived
+   `Merge<D>`; `sync.keyed` removed.
+7. **`actors`,** then **`post`**, with partitions, the LRU, pins,
+   mailboxes, incarnations, `sim`'s chaos eviction and journal version 3.
+8. **The milestone:** examples/docs, language.md §11's document server
+   behind a wiring, its lost update found by seeds and its in-memory
+   variant found by chaos eviction.
+9. **A review** of the whole stage: soundness, the spec, the docs and
+   tooling.
+
+Each step takes its feature through the whole pipeline: lexer and
+parser, Resolve, inference, Core and Core Lint, the interpreter, Mem IR
+and the C it emits where the feature is sequential, the tree-sitter
+grammar and its corpus (with differential.py agreeing with the
+compiler's parser), the Zed queries, the error messages with their
+help, and the documents that describe it (language.md's "What Ren has
+today" table, async.md, stdlib.md, testing.md, handlers.md, deps.md,
+the README). What follows settles what each step builds; a step that
+finds something here unsound or unworkable says so instead of building
+something else, and records what it chose in "Where this stage may
+differ", below. The design itself is signed off (foundations.md,
+language.md, streams.md, async.md): what's decided there is cited here,
+not argued again.
+
+### The decisions, and where each is settled
+
+The brief's "What's decided" and "Decided after the draft", each cited
+where it's built; none is argued again here.
+
+| decision | settled in |
+|---|---|
+| What's decided 1, wirings (language.md §5) | The grammar; Wirings (step 2); Errors |
+| What's decided 2, the pipe (language.md §8), every link `[try \| attempt] term`, `\|>` ending `try`'s and `attempt`'s reach, the `\|>` and `.` continuation lines | The grammar; The pipe (step 1); Errors |
+| What's decided 3, 11a's follow-ups: decision 7's compile error and `beside`/`background`; `release` and `sim` switching at it; decision 10's deadlock rules; `Proc.run(kill:)` | Background work (step 3); `release`, deadlocks and `Proc.run(kill:)` (step 4) |
+| What's decided 4, from streams.md: pull arguments, channels as dependencies, `Async.produce` | Pull arguments, channels and producers (step 5) |
+| What's decided 5, `striped` | Stripes (step 6) |
+| What's decided 6, `actors` and `post` | Actors (step 7); Journal version 3 |
+| What's decided 7, interpreter first | Native |
+| What's decided 8, decision 2's row narrowed, built in excl.ml with `release` | `release`, deadlocks and `Proc.run(kill:)` (step 4) |
+| What's decided 9, defaults, a variant with no fields among them | The grammar; "Where this stage may differ" (lands in step 4) |
+| Sequencing: after the data stage | the data stage is merged (83924d5) before step 0 |
+| By-name arguments: defaults only; `max: Int = 10_000`, `mailbox: Int = 10_000`, `cap: Int = 16`, `n: Int = 16`; no default `merge:` | The grammar; Stripes; Actors; Pull arguments (`cap`) |
+| `striped(h, n: Int = 16, by: Key)`, one function | Stripes (step 6) |
+| Stale reads after `release`: found by `sim`'s seeds, no warning | `release` (step 4), and its test "a stale read across `release` is found by a seed" |
+| `Docs.at`'s errors declared on the family; `Full` only where waiting could close a cycle | Actors (step 7), "The family's type" and "No deadlock, statically" |
+| `post` is Erlang's cast | Actors (step 7), "`post`" |
+| `Async.produce`'s `items` a block parameter, looped with `for p in try items`; `Async.map_pull` in `produce`'s shape | Pull arguments, channels and producers (step 5) |
+| Pull arguments now: collections, temporary cursors, `&r`, a hand-written block, a channel's `items()` | Pull arguments, channels and producers (step 5) |
+| A trailing block in a pipe only in the last link | The grammar ("A step"); Errors |
+| The journal: made, evicted and posted lines, `docs[DocId(7)]#3`, version 3, recorded journals recorded again | Journal version 3 (step 7) |
+| `sim` chooses fairly among an instance's waiters and arrivals, from the tape, in step 4 | `release`, deadlocks and `Proc.run(kill:)` (step 4), "`sim`'s fair choice" |
+| Partitions now, `parts: Int = 4` under every runtime, recorded in the journal | Actors (step 7), the family's `parts`; Journal version 3's header |
+| `Lfu` later | Actors (step 7): `Evict = \| Lru` |
+| Native: wirings, the pipe and `release` with no other task build; the rest refused as `keyed` is | Native |
+| Decision 7's run-time half: a panic at the spawn | Background work (step 3) |
+| `Async.background`'s tasks may fail, the first failure cancelling the body | Background work (step 3) |
+| The milestone: a line protocol over `sim.net`, an `Op` that appends, `--seeds 1000` with `evict: AnyIdle` | The tests (bench/services/docs, bench/tasks.t); "Where this stage may differ" |
+| `sim` has two virtual workers for `by: Worker` | Stripes (step 6) |
+| `Merge<D>`'s `Custom(m)` takes a stateless handler of the derived `Merge<D>`; the `fn(a, b) => ...` shorthand is the inline handler | Stripes (step 6) |
+
+### The tests
+
+**test/test_services.ml is the specification,** as test_tasks.ml was
+11a's and test_data.ml the data stage's, with the same `until "sN"`
+(test/helpers.ml): a test still to land holds its target, `~want` for a
+program that runs or `~says` for the lines an error or a panic must
+hold, its headline and its help, and its `[%expect]` holds today's
+output after `(until sN)`. When the program prints its target the test
+fails, saying the step has landed, and **the step turns it on**:
+written plainly, `run src`, `test src` or `check_error src`, its
+`[%expect]` the target, the whole message for a `says`. Each error
+below is one such refusal test, but three, which are crams: the native
+build's refusal (bench/build.t), `ren explain-wiring`'s listing
+(bench/build.t) and a version 2 journal's (bench/tasks.t, once step 7
+records journals as version 3). A step leaves no `until` of its own
+number behind. A test whose program works already, and which a step
+mustn't break, is written plainly now: a scope opened inside the `with`
+waits for its tasks (s3), and a task taking an instance it already
+holds panics rather than hangs (s4: 11a's step 4 built that half of
+decision 10).
+
+Programs run with `run` are `ren run`'s, on `single`'s fixed order, or
+on a `sim.scheduler(seed)` they install; programs run with `test` are
+`ren test`'s, on `sim`, under `~seeds`, and assert only what holds under
+every schedule, or, for a test that's meant to fail under some seed (a
+lost update, the split law, a fair choice), say `✗` in their `says`. A
+program `test` runs has its items made `pub` by `pub_all` (a test sees
+what an importer sees, testing.md).
+
+| step | expect tests (test/test_services.ml) | bench/services |
+|---|---|---|
+| 1 | to each kind of target; a vertical chain with a `try` on each step; `try` and `attempt` on the head stopping at `\|>`; `orelse` after a chain; a `.` line continuing; a statement after a chain not swallowed; a trailing block in the last step; the end-to-end program's checkout; fourteen refusals (§8's nine, a step's missing `try` inside `attempt (...)`, the "takes second" line or not, `&` on a step, a trailing block on a step that isn't the last, a field of a value as a step) | `pipe` |
+| 2 | flattened where used; an item beside a wiring meets its `Db`; wirings combine and nest, and a test splits one; a description as a parameter; `try with` of a wiring that fails to start; teardown in reverse install order; a plain `with` still exposes everything; a private wiring's `uses` inferred, a `pub` one's written (`types`); a `pub` wiring from another module; twelve refusals (§5's seven, its cycle both through wirings and among the items one flattens, a `pub` wiring's undeclared need, no `provides`, a body that isn't items, `provides` naming what a nested wiring hides) | `wiring`, and `wiring.explain` |
+| 3 | the compile error, and the run time's panic at the spawn through a helper; `Async.beside` cancelling its task before the `finally`; a pool's order (work drains, the background stops, `finally`); a background failure cancelling the body and being its error; `Async.background`, and its first failure; a scope inside the `with`, plainly | `refused` (with step 6) |
+| 4 | `release` with no other task; letting callers in; the arm's copies written back and read again; `try release`; a stale read found by seeds, and the fix holding; two refusals (outside an operation, not a dependency's operation); a loop over a reader in the state while calling another service, accepted; state borrowed across `release`, refused; re-taking an instance, plainly; `until`'s deadlock naming what each parked task holds; the fair choice, found by seeds; a variant default, and one with fields refused; `Proc.run(kill:)` under `sim.proc()` | `release` |
+| 5 | `Async.map` over a temporary cursor, in order; `Async.each` over `&r`, which goes on after; over a hand-written block; `&r` while the block touches `r`, refused; pulled only when a slot frees; `Events.items()` in a `for` and as a pull argument, and refused elsewhere; `Async.produce`; a `break` cancelling the producer; `cap` and a slow consumer under seeds; a producer's failure ending the stream; `Async.map_pull` | none |
+| 6 | `by: Key` with `merge: Sum`; `by: Worker` under seeds; the split law failing under some seed; a keyless `()` broadcast; `Concat` and `Custom(m)`; five refusals (no `merge:`, `by: Worker` with `n`, `Custom` of a handler with state, `Sum` of what isn't a number, not a description); `sync.keyed` gone | `refused` (with step 3) |
+| 7 | `at` on demand; setup's errors and the retry; LRU eviction past `max:`, the `finally` on the caller's task, the counts; an evicted actor made again from the store; a pinned actor not evicted, the maker waiting; `evict`, `evict_idle` and `each`; teardown in reverse creation order; two operations racing and one not; chaos eviction finding text kept only in memory; the journal's lives, recorded and replayed; `Full`; five refusals (`at` in `at`, an actor `at`-ing its family, a handler of more than its key, setup failing outside the family's `!`, a `finally` that can fail); `post`: arguments evaluated when posted, order under seeds, setup's errors, teardown draining, posting to its own family, two refusals (a value, an error), siblings never waiting past `mailbox:`, a chain reaction panicking past twice it, research/actors-post/'s first two counterexamples | none |
+| 8 | the document server's actors under chaos, in miniature | `docs`, `lost_update`, `memory` (bench/tasks.t) |
+
+**bench/services/ holds the programs** with native relevance, each with
+a `.expected` as bench/data's (what `ren run` prints, `exit N`, the
+first line of stderr), and bench/build.t's last section runs them
+through `spec`: `pipe` (step 1), `wiring` (step 2), `release` (step 4)
+and `refused`, which `ren run` runs once steps 3 and 6 land and whose
+`ren build` must say `refused.native`'s line. `wiring.explain` is `ren
+explain-wiring live wiring.ren`'s output (step 2). The step that lands
+one says `as specified` there and adds it to the `same`, `release` and
+`tcc_same` loops.
+
+**bench/services/docs, lost_update and memory are the milestone**
+(step 8), run by bench/tasks.t: `docs` is the document server, whose
+`expected` is what `ren test` prints there; its `services_milestone`
+holds once `ren test --chaos --seeds 1000` passes in docs, `ren test
+--sim --seeds 200` fails lost_update's "two sessions' edits both land"
+with a seed that `--seed` fails again with the same `left:` and
+`right:`, fixed.ren's one operation passes a thousand seeds, and
+memory's text kept only in memory passes a thousand seeds without
+chaos but fails under `--chaos` by a seed that fails again. Step 8
+moves `docs` to examples/docs (`git mv`), where THE CHECKS run its
+tests, as 11a's programs moved; `lost_update` and `memory` stay, since
+their tests are meant to fail.
+
+**Existing tests that change,** each by the step named:
+
+- step 1: none; `|>` and a line starting with `.` parse only where
+  nothing did. `try`'s reach is unchanged for every expression with no
+  `|>` in it.
+- step 2: none of the compiler's tests; ledger's and server's tests are
+  split the way §5's "Tests" says (The inventory).
+- step 3: test_tasks.ml's five tests of 11a's rule (s2 "a task beside a
+  `with` is cancelled when its body ends"; the two s8 batcher tests,
+  whose flusher is spawned beside `with sync.batcher()`; s9 "a task
+  spawned beside a `with` by a task inside its body" and "a task's task
+  spawned outside a `with`"), each rewritten with `Async.beside` or
+  `Async.background`, or turned into the compile error where that's
+  what it shows; s1's "a handler has no task of its own", whose help
+  names `Async.beside`; examples/refresh's three tests, unchanged in
+  what they assert.
+- step 4: every journal text with a `Proc.run` line, which gains the
+  `kill` argument, `Proc.run("sh", ["-c", "echo base"], Tree)`
+  (examples/journal.t, examples/just.t, examples/console.t,
+  test_journal.ml); test_deps.ml's handlers for `Proc`, whose `run` arm
+  takes `kill`; deadlock panics in test_tasks.ml, which gain the
+  instances each task holds where it holds one.
+- step 5: none; an `Array` is a pull argument by snapshot, as `for`
+  takes it, so every `Async.map` and `Async.each` reads the same.
+- step 6: test_tasks.ml's five `keyed` tests (s8), moved to
+  test_services.ml as `striped` tests.
+- step 7: examples/just/tests/build.journal, recorded again as version
+  3; bench/11a/tasks/journal/v1.expected, whose help names version 3
+  (a version 1 journal is still refused, as is a version 2); every
+  journal's header in a test, which gains `parts:` once a family is
+  installed (none today).
+
+### The inventory
+
+Every site the stage changes, counted by grep over every Ren source and
+document (examples/, bench/, the strings of test/*.ml, lib/core's
+prelude.ml and std_lib.ml, the tree-sitter corpus, and the `.md` files
+outside briefs/ and research/), and the compiler's own code.
+
+**`sync.keyed`**, which `striped` replaces (step 6):
+
+| where | sites |
+|---|---|
+| test/test_tasks.ml: five s8 tests, `keyed` by key, refused of an `Int`, two keys overlapping, `finally`s last made first, fewer than 1 panicking | 7 calls |
+| lib/core/std_lib.ml: `pub fn keyed`, its section and the header's mention | 3 |
+| lib/core/prelude.ml: `Sync_keyed`'s type (`intrinsic_type`), and the three lists that name it (`runtime_only`, `waits`'s exclusions, the table of all) | 4 |
+| lib/core/intrinsic.ml: `Sync_keyed` and its name | 2 |
+| lib/eval/builtins.ml: `Sync_keyed`'s evaluation, the panic for fewer than 1 | 1 |
+| lib/eval/value.ml: `VKeyed`, `VKeys`, and their `show` | 4 |
+| lib/eval/eval.ml: `Dep_call` on `VKeys`, `With` and `With_handler` of a `VKeyed`, `share_reach`, `endings`' comment | 5 |
+| lib/eval/walk.ml: `VKeyed` and `VKeys` in two walks (`fixed_hash` stays, for `striped`'s key) | 2 |
+| lib/sema/infer_expr.ml: `keyed_described`, and its call | 2 |
+| lib/sema/infer_msg.ml: `keyed_not_described` | 1 |
+| docs: async.md (the `sync` table's row and the sentence before it), deps.md:440, handlers.md:295, README.md's 11a roadmap row | 5 |
+| examples/, bench/, the corpus | 0 |
+| **total** | **36** |
+
+foundations.md and language.md name `keyed` only as what `striped`
+replaces; they're design and stay. compiler.md's 11a sections are its
+history and stay.
+
+**The rule 11a built for background work** (step 3): a task spawned
+into a scope that began before a `with` whose instance it can reach is
+that `with`'s background task, cancelled when the body ends.
+
+| where | sites |
+|---|---|
+| examples/refresh/main.ren: `shop`'s refresher, spawned into the scope outside `try with refreshing()`, and the comment that says the `with` cancels it (its three tests assert what stays so) | 1 |
+| async.md: "Background work is a task beside the `with`" (the metrics flusher), the batcher's flusher in "What tasks share", the refresh program's prose, the Effect table's `Layer.scoped` row, the summary line | 5 |
+| test/test_tasks.ml: s2 "a task beside a `with` is cancelled when its body ends"; s8's batcher tests (2); s9's two `context` tests; s1's "a handler has no task" help | 6 |
+| lib/core/std_lib.ml: the batcher's comment ("a task's, spawned beside the `with`") | 1 |
+| lib/eval/sched.ml: `frame.bg`, `task.context`, `beside`, `enter_with`'s frame, `leave_with`'s cancelling, and `spawn`'s registration (`beside sc evidence`) | 6 |
+| lib/eval/eval.ml: `endings`' `Sched.enter_with` and three `Sched.leave_with`s | 4 |
+| **total** | **23** |
+
+A task spawned into a scope opened inside the `with`, as every server's
+connections are, isn't touched: the rule only ever applied to a scope
+that began before the `with`.
+
+**`Async.map` and `Async.each` taking only an `Array`** (step 5):
+
+| where | sites |
+|---|---|
+| lib/core/prelude.ml: `map` and `each`'s parameters `xs: Array<T>`, and `task_map`'s and `task_each`'s types | 4 |
+| lib/eval/builtins.ml and eval.ml: `Task_map` and `Task_each`, which index an array | 2 |
+| lib/sema/infer_expr.ml: `each`'s block giving a value (unchanged), the pull parameter's check (new) | 1 |
+| async.md's "Later" line on streams; stdlib.md's `Async` table | 2 |
+| callers: test_tasks.ml (29 lines), examples/crawler (1), examples/just (1), README (6), async.md (13), errors.md, runtime-io.md, language.md, foundations.md, streams.md | 0 to change: an `Array` is a pull argument by snapshot |
+
+**`Proc.run`,** which gains `kill: Kill = Tree` (step 4):
+
+| where | sites |
+|---|---|
+| lib/core/prelude.ml: the operation; `real_proc`'s, `test_proc`'s and the replayer's `run` arms | 4 |
+| lib/core/std_lib.ml: `sim_proc`'s `run` arm, `SimProc` (gains `kills`) | 2 |
+| lib/core/intrinsic.ml, builtins.ml, eval.ml, sched.ml (`proc_run`, `wait_pid`'s kill) | 5 |
+| callers: examples/just/main.ren (1), test_deps.ml (10), test_journal.ml (1), test_tasks.ml (1) | 13, unchanged: `kill` has a default |
+| journals: examples/just/tests/build.journal (3 lines), and the journal texts in examples/journal.t (6), examples/just.t (6), examples/console.t (3) | 18 lines, each gaining `, Tree` |
+| docs: README (4), async.md (2), deps.md (3), handlers.md (6), runtime-io.md (3), examples/just/README.md (1) | 19 |
+
+**Examples that repeat a `with` list or wrap one in a function that
+takes a block** (step 2). The brief names bank, shop, ledger and server;
+counted:
+
+| example | `with`s | repeated lists | a function taking a block | what step 2 does |
+|---|---|---|---|---|
+| bank | 0 (its `with` is a group's, `clock_conforms(c) with c`) | 0 | 0 | nothing to move; noted in its README |
+| shop | 0 | 0 | 0 | nothing to move |
+| ledger | 6 | 5 × `sql.mem_sql(start(), _)` | 0 | `wiring mem(fail: FailAt) provides Sql = sql.mem_sql(start(), fail)`, its tests installing `mem(Never)` |
+| server | 5 | 4 × `sim.net()` in tests | 0 | `wiring live(addr: Addr) provides ...` for `main`, tests on a split wiring |
+| prices, crawler, transfer, refresh, just | 4, 4, 5, 5, 10 | none of more than one item | 0 | none required |
+
+Docs with the function-that-takes-a-block pattern: deps.md:685 and
+README.md:412's `with_fake_net(body: fn() uses Net)`, which step 2
+rewrites as a wiring; language.md §5's `live(body: ...)` and
+foundations.md's decision 5 show it on purpose and stay.
+
+**Names the stage makes words:** `wiring`, `provides` and `release` are
+contextual, as `concurrent` and `spawned` are (The grammar), since
+`release` is an operation's name today (`sync.Semaphore.release`,
+test_tasks.ml's `Sem.release`, bench/11a/limit_panic.ren) and nothing
+may break. `|>` is a new token; no program writes `|` then `>` today
+(grep over every Ren source: 0).
+
+### The grammar
+
+The forms this stage adds, in parser.ml's notation (its header comment
+gains them):
+
+```
+item     := ... | ["pub"] wiring
+wiring   := "wiring" IDENT ["(" param, ... ")"] "provides" tyname {"," tyname}
+            [uses] [errors] "=" witem {"," witem}
+                                               (`wiring` and `provides`
+                                                are words only here; the
+                                                items may go on lines
+                                                after a `,`, as a `with`'s)
+expr     := pipe ["orelse" expr]
+pipe     := link {"|>" link}                  (one link is just `or`)
+link     := ["try" | "attempt"] or            (the head: `or`, which is
+                                                one term or refused below)
+          | ["try" | "attempt"] step          (after `|>`)
+step     := target ["(" arg, ... ")"] [lambda]
+                                              (a trailing lambda only in
+                                                the chain's last step)
+target   := IDENT | IDENT "." IDENT | tyname "." IDENT
+                                              (a function, `module.f`,
+                                                `Type.f`, a parameter or a
+                                                `let`-bound block: Resolve
+                                                decides which)
+unary    := ... | ["try" | "attempt"] "release" postfix
+                                              (`release` a word only before
+                                                a name on its line)
+param    := ... ["=" (literal | ctor_ref)]    (a default: a literal, or a
+                                                variant with no fields)
+```
+
+**`|>`** is the token `PIPEGT`, lexed before `|` (lexer.ml's
+`lex_token`, beside `||`), as language.md §8 says; nothing that looks
+for `|` alone (sum types' lines, error sets, `fail A | fail B`, or-
+patterns) sees it.
+
+**Where the chain sits.** `pipe` is between `orelse` and `or`
+(language.md §8, "Grammar and layout"): `parse_orelse` calls a new
+`parse_pipe`, which calls `parse_or` for the head and, while the next
+token is `PIPEGT`, parses a step. So `a orelse b |> f` is `a orelse (b
+|> f)`, and a chain followed by `orelse` is `(chain) orelse ...`. The
+head is one term: if what `parse_or` gave is a `Binop` (anything but a
+unary or postfix expression, `try`, `attempt` or a parenthesized one),
+it's "`|>` takes one value on its left". After the last step, a binary
+operator or a comparison is "a chain ends its expression"; `orelse`,
+`)`, `]`, `,`, `then`, `else`, `in`, `=>` and the end of the line are
+what may follow. `&` before the head (`Ref`) is "`|>` passes a value".
+
+**A step** is parsed by its own function, `parse_step`, not as a
+postfix expression, since what it may be is narrower: an optional
+`try` or `attempt`, then an `IDENT`, `IDENT . IDENT` or `UIDENT .
+IDENT`, then optional arguments in parentheses (`parse_call_arg`, so
+by-name arguments work: `|> Async.map(max: 8) fn(x) => ...`), then an
+optional trailing `fn` block. `&` there is "`|>` passes a value"; `fn`
+there is "a step is a function by name, not a block"; anything else (a
+literal, `(`, `[`, a constructor) is the same error, whose help names
+the block as a `let`. A trailing block on a step followed by `|>` is
+"only the chain's last step can take a block" (decided after the
+draft).
+
+**`try` and `attempt` stop at `|>`.** `parse_unary`'s `TRY` parses
+`parse_expr` today, the whole expression to its right (parser.ml,
+"`try` covers every call to its right"), and `ATTEMPT` `parse_add`. The
+parser gains a mutable field, `p.chain_stops : bool`, set while a
+`try`'s or an `attempt`'s operand is parsed and saved and put back
+around it; while it's set, `parse_pipe` returns its head without
+looking for `PIPEGT`. Every place that starts a fresh expression inside
+brackets or a body sets it back to `false` for what it parses: a
+parenthesized expression, an array literal, a call's and an index's
+arguments, a record's fields, a lambda's body, `if`'s branches, a
+`match`'s arms and a `with`'s body. So `try order |> validate` is `(try
+order) |> validate`, `try f(a |> g)` is `try f((a |> g))`, and `try a()
++ b()` with no `|>` is what it was. `attempt`'s operand, `parse_add`,
+already stops before `|>`, which isn't an additive operator; the field
+makes it explicit. `assert` still takes the whole expression, chains
+included.
+
+**Continuation lines** (lexer.ml's `continues ()`): an indented line
+that starts with `|>`, or with `.` followed by a letter or `_` (not `..`
+and not a digit), continues the line above, as one starting with `uses`
+or `!` does, and gets no layout token. "Indented" is as for `uses`: its
+column is past the innermost block's indent (`!i - !bol > current
+()`). A line at the block's indent, or one starting with anything else,
+is a statement as before; a line starting with `.` today is always a
+parse error ("expected an expression"), so nothing that parsed changes.
+In brackets nothing changes either, since `continues` is only asked
+inside a block. tree-sitter's external scanner (editors/tree-sitter-
+ren/src/scanner.c) does the same where it decides a newline is a
+`_newline` or nothing.
+
+**`wiring`** is an item: `parse_item` sees `IDENT "wiring"` followed by
+an `IDENT` (a lowercase name) and calls `parse_wiring`. `provides` is a
+word after the parameters (or the name, when there are none, `wiring
+core provides ...`); a missing one is "a wiring says what it provides".
+`uses` and `!` are `parse_uses` and `parse_errors`, as a function's,
+and may start a line, indented, as a function's do. After `=` come
+`with` items, each `parse_with_item` (so chains, `over` and `as` work
+as in a `with`), separated by `,`, which may end a line. Anything that
+isn't a list of items, a block whose first line is a statement, is "a
+wiring's body lists what it installs". `pub wiring`'s `pub` is
+`parse_item`'s, as for the other items.
+
+**`release`** is a word in `parse_unary` when `IDENT "release"` is
+followed, on the same line, by an `IDENT` (`Next`, `next`): `release
+Next.get(id)`, and `try release ...` through `TRY`'s operand. Followed
+by `(`, `:`, `=` or anything else, `release` is the name it is today: a
+call, an arm `release() =>`, an operation `release: fn()`. Its operand
+is `parse_postfix`, one call.
+
+**A default that's a variant with no fields** (What's decided 9):
+`parse_param`'s `pdefault` accepts a `ctor_ref`, `Tree` or `Kill.Tree`,
+not followed by `(` or `{`; one followed by them is "a parameter's
+default is a literal, or a variant with no fields". Ast's `pdefault`
+becomes `(default * Loc.t * int) option` with `default = Lit of literal
+| Ctor of 't ctor_ref`; Resolve resolves the constructor as it does in
+an expression; Iface's `defaults` keep it as the constructor's path;
+Infer checks it against the parameter's type as an argument would be
+(a constructor of that sum, with no fields); Lower fills a call's
+missing argument with the constructor, as it fills a literal. An
+operation's parameter may have a default too, written in its
+dependency's declaration (`run: fn(cmd: Str, args: Array<Str>, kill:
+Kill = Tree) -> Int ! ProcError`, `parse_fn_ty_param`), since
+`Proc.run` is an operation: a `Dep_call` fills it as a function call
+does (`Infer_env.defaults_of`, keyed by the operation's path), and an
+arm takes the parameter as any other. Step 4 builds both, as the first
+step whose surface needs them ("Where this stage may differ").
+
+### The AST
+
+ast.ml gains, each a constructor the compiler then points at every
+`match` that needs it:
+
+- expressions: `Pipe of { subject : expr; step : expr; args : expr
+  list; mark : mark option; block : expr option }`, one link, the
+  subject the chain before it (so a chain of three is two nested
+  `Pipe`s), `step` the target as written (a `Var`, or a `Field` of a
+  module or a type), `mark` the step's own `Try` or `Attempt` (`mark =
+  Mark_try of Loc.t | Mark_attempt of Loc.t`) and `block` its trailing
+  lambda; `Release of expr`, the call it covers.
+- items: `Wiring of wiring_def`, with `wiring_def = { wpub : bool;
+  wname : ident; wparams : param list; provides : 't dep_ref list;
+  wuses : 't uses option; werrors : 't errors option; witems : with_item
+  list; wloc : Loc.t }`.
+- `with_item` gains `from : 't wired option`, `None` as parsed, and
+  Resolve's record of the wiring an item was flattened from ("Wirings
+  (step 2)", below).
+- parameters: `pdefault`'s `Ctor`, above.
+
+The tree-sitter grammar gains `pipe_expression` (with `pipe_step`
+children, each with an optional `try`/`attempt` field), `release_
+expression`, and `wiring_definition` with `provides`, `uses`, `errors`
+and `with_item` children; Zed's highlights give `|>` the operator
+colour and `wiring`, `provides` and `release` the keyword colour where
+the grammar has them.
+
+### The pipe (step 1)
+
+**`x |> f(a)` is `f(x, a)`, checked as that call** (language.md §8,
+"The rules"). Resolve resolves `step` as the callee of a call, so a
+function, `module.f`, `Type.f` (an associated function or a method), a
+function parameter or a `let`-bound block; anything else, a field of a
+value, `rules.apply` with `rules` a local, is "a step is a function by
+name, and `rules.apply` is a field of `rules`" (Resolve: the parser
+can't tell `m.f` from `o.f`). Infer infers `subject` first, with its
+own markers, then checks the call `step(subject, args..., block)`
+through `infer_call`'s path for a call (so defaults, by-name arguments
+and the trailing block are as a call's), with three differences:
+
+- **The step's `mark` covers only the step's call,** not the subject's:
+  the subject was inferred already, so its calls carry their own
+  markers, and the call's `ecall` gets the step's marker alone. A step
+  that can fail without one is "`validate` can fail, and nothing handles
+  it" with the note "in a chain each step that can fail carries its own
+  `try`" and the help "write `|> try validate`, or handle it with
+  `match`", even inside `attempt (...)` or `match (...)`, which still
+  receive what a step's `try` passes on (§8, "`try` on each step"). A
+  `try` on a step that can't fail is today's "nothing here can fail".
+- **A `Try` or `Attempt` that is a chain's subject and covers nothing
+  that can fail** is "`try` stops at `|>`", with the note "it covers
+  only `order`, which can't fail; each step is marked on its own" and a
+  help that writes the chain with a `try` on each step that can fail
+  (Infer knows which by then). The check runs where a marker's coverage
+  is checked (`Marker`, solve.ml), which knows the marker is a pipe's
+  head by a flag the `Pipe` sets on its subject's node.
+- **The subject's type against the first parameter.** A mismatch at the
+  first argument is "`|>` puts `rules` first, but `apply` takes an
+  `Order` there", with "`rules` is a `Rules`, which `apply` takes
+  second" when another parameter's type unifies with the subject's (a
+  trial unification, `Unify.atomically`), the note "`|>` always passes
+  its value as the first argument", and the help "call it directly:
+  `apply(order, rules)`" (or `twice(...)` when no other parameter
+  matches). **A step that's a method of the subject's own type**, `Type.f`
+  where `Type` is the subject's type and `f` has `self`, is "`len` is
+  `Array`'s own method, so it's called with `.`" with "help: write
+  `(...).len()`, or end the chain with a `let`".
+
+Lower makes `let s = subject in step(s, args)`, so Core, the
+interpreter and native code see a call; Core Lint has nothing new. A
+chain builds natively with nothing more, which bench/services/pipe and
+build.t check.
+
+### Wirings (step 2)
+
+A wiring adds three things to a `with` set: a name, a limit on what the
+body sees, and parameters (language.md §5, "The rules"). The decisions
+(What's decided 1): `[pub] wiring name(params) provides Ds [uses Ds] [!
+Es] = items`; flattened where it's used into one `with` set;
+`provides` always written, limiting only what the body calls; `uses`
+and `!` inferred for a private wiring and written for a `pub` one,
+direct needs only; not a value; items only; wirings combine and nest;
+parameters carry config and descriptions; plain `with` still exposes
+everything; teardown in reverse install order; every error of §5 with
+its fix-it, and `ren explain-wiring`. Left out: `but`, overrides,
+sealed wirings, two copies of a sub-graph.
+
+**Flattened in Resolve, into calls of functions it makes.** An item of
+a wiring is an expression that makes an implementation, in the
+wiring's scope (its parameters, its module's names). Another module
+can use a `pub` wiring, but can't see the private names in its items,
+so a use site can't be given the items' text. Resolve gives each link
+of each item a function of its own instead, `live$1(url: Str) =
+pg_db(url)`, `live$2() = console_audit()`, ... (paths `Path.member live
+"$1"`, as a member's), taking the wiring's parameters and returning the
+link's implementation, as `fn at(minutes: Int) -> Clock =
+Clock.frozen(...)` does today (test_deps.ml); `pub` when the wiring is,
+with its type inferred (a function's result may be an implementation,
+whose needs are its named row, `-> (Db uses ..d)`). A link that's
+exactly one of the wiring's parameters, `db` in `wiring app(db: Db)
+provides Users = db, ...`, gets no function: the use site passes the
+argument straight through, since a dependency-typed parameter used as a
+value isn't transparent ("`c` is used as a value here", test_deps.ml).
+
+**The wiring's shape** is what a use site needs, kept in Resolve's
+module table and, for a `pub` one, in its interface (`Iface.t` gains
+`wirings : wiring list`): its path, its parameters' names and types,
+its `provides`, and its items flattened, each with its links' function
+paths (or the parameter it passes on), its `under`, its `alias` and its
+origin, the chain of wirings it came through with each one's
+`provides` and where it's declared. A wiring that lists another
+flattens that one's items into its own, recursively, with the outer's
+parameters passed to the inner's functions as its call gives them; a
+wiring that lists itself, through any number of others, is "`a` lists
+itself: a → b → a" (Resolve, a depth-first walk over the wirings'
+items, as `no_set_cycles` walks error sets).
+
+**A use.** A `with` item whose top link is a wiring's name, `live`, or
+a call of one, `live(url)` (Resolve decides by what the name is,
+`Hashtbl.find_opt env.wirings`), becomes, in Resolve's output:
+
+- its arguments bound by `let`s around the `with`, in order, once, so
+  `live(Os.args()[0])` reads the arguments once however many items use
+  them (decided here: §5 doesn't say, and an item's arguments are
+  evaluated before any is installed today, so this keeps the order);
+- one item for each of the wiring's flattened items, in its order, each
+  link a call of its function with the bound arguments, each with
+  `from = Some { wiring; origin; provides }`.
+
+So Infer's `with_` (infer_handlers.ml) sees one flat set and does what
+it does today: classifies each link, refuses a dependency installed
+twice, finds the install order (`install_order`), and nests each item
+around the ones after it. Only the items' `from` is new, and these use
+it:
+
+- **`provides`, enforced at the body.** An item whose `from` chain has
+  a wiring whose `provides` lacks a dependency the item installs hides
+  that dependency from the body. `install` passes it, `~hidden:(Some
+  wiring)`, into the `Install` constraint it defers (`Install` gains
+  `whidden`), and solve.ml's `install` reports, when the body's row has
+  the hidden label, "`live` installs `Db` but doesn't provide it" at the
+  body's first call that uses it (the body's `calls`, as the missing
+  need's error finds its call), with "help: add `Db` to `live`'s
+  `provides`, or install your own inside: `with mem_db() in`". The
+  items still meet each other, and an item beside the wiring in the
+  same `with` meets what it hides, since that's installation, not the
+  body. A dependency that's installed hidden is never also the outer
+  one for the body: the body can't reach it at all, so a nested `with`
+  installs its own.
+- **The errors name the wiring.** "this `with` installs `Db` twice:
+  `mem_db()` here, and `pg_db(url)` in `live` (main.ren:2)" (Infer_msg's
+  `installed_twice` gains the origin); "nothing installs `Db`, which
+  `db_users()` in `live` needs", pointing at the `with` and at the
+  wiring's line, with "help: add an item that installs `Db` beside
+  `live`: `with live, mem_db() in`"; "`ping()` and `pong()` in `both`
+  each need what the other installs" with the loop drawn as a note,
+  "`ping()` → `pong()` → `ping()`" (`needs_each_other`, as ZIO draws
+  it).
+
+**The wiring's own check.** Infer checks each wiring as it checks a
+function, through a function Resolve makes for it, `live$wiring(url:
+Str) = try with <its items> in ()`, never called and dropped by Lower:
+the `with`'s needs from outside are the wiring's `uses`, and what
+installing it can fail with its `!`, by the machinery a function's row
+and errors already have. For a private wiring they're inferred and
+kept as its scheme; for a `pub` one they're written and checked with
+`Declared`, so a need it doesn't write is "`live` needs `Db`, which it
+doesn't declare" with "help: add it to `uses`: `uses Db`". The `with`
+is marked as the wiring's (`Install_order` at its node, and a flag on
+`with_`), which adds three checks there:
+
+- **`provides` names what nothing installs:** "`live` provides `Clock`,
+  which nothing in it installs";
+- **an item nothing uses:** an item none of whose installs is provided
+  or needed by another item of the wiring is "`audit()` in `live`
+  provides `Audit`, which nothing needs" (Ren has no warnings);
+- **`provides` naming what a nested wiring hides** is that wiring's
+  hidden-service error, "`core` installs `Audit` but doesn't provide it".
+
+A wiring's scheme is `ren types`' line, `wiring live(url: Str) provides
+Users uses Console ! DbDown`. **A wiring used as a value**, its name
+anywhere but a `with`'s item (or another wiring's), is Resolve's "a
+wiring isn't a value" with "help: install it: `with live in ...`".
+Teardown needs nothing: the set's install order is the order of its
+`finally`s reversed, as today.
+
+**`ren explain-wiring live [file]`** (bin/main.ml, Driver's new
+`explain_wiring`) checks the program and prints, for the wiring's own
+`with`, the install order and what each item meets: each item on a
+line, numbered in install order, what it installs, and what it needs,
+each met by an item's number or "from outside"; the wiring it came
+through, if it's a nested one's; then the wiring's `uses` and its
+teardown order. bench/services/wiring.explain is its output for
+bench/services/wiring.ren.
+
+Natively a wiring is nothing new: its link functions are functions
+that return descriptions, which 10d's dispatch already compiles, and
+the `with` is a `with`. bench/services/wiring checks it.
+
+### Background work (step 3)
+
+Decision 7: "A task can't reach a handler installed inside the scope
+it's spawned into. It's a compile error, since the task could outlive
+the handler; its help says to open the scope inside the `with`... where
+a scope passed to a helper hides which is inner, the check is the run
+time's"; "Background work is a scope of its own: `Async.beside(task)
+fn() => body` ... `Async.background fn(bg) => body`"; "A background
+task's failure cancels the body and is its error". This replaces 11a's
+rule ("Structured tasks (step 2)", "A task spawned beside a `with` is
+its background task"), which step 3 removes from sched.ml and eval.ml
+(The inventory).
+
+**The compile error** is Excl's, which already knows rule C's frames:
+for `s.spawn`, `s.start` and `s.replace` where `s` is the parameter of
+an `Async.scope` block in the same function (the case rule C finds
+syntactically), the `with`s between that block and the spawn are known;
+if the spawned block's evidence, the dependencies it uses (Infer's
+`calls` for the block, recorded at the spawn's node), names one any of
+those `with`s installs, it's "this task can reach `Ticks`, installed
+inside the scope it's spawned into" with the label on the `with` and
+"help: open the scope inside the `with`: `with ticks() in Async.scope
+fn(s) => ...`, or run it beside the body with `Async.beside`".
+
+**The run time's check** is the spawn's: `Sched.spawn` is given the
+block's evidence (it is today, for `beside`); if any instance in it was
+installed after the scope began (11a's one compare: `With`s are
+numbered in one order across tasks, `Sched.begun`) and its `with`'s
+body is still running in the spawning task, the spawn panics with the
+same headline as the compile error, "panic: this task can reach
+`Ticks`, installed inside the scope it's spawned into", and "help: open
+the scope inside the `with`" (decided after the draft: a panic at the
+spawn). What was `beside`'s registration becomes this check; `frame.bg`,
+`leave_with`'s cancelling and the tasks' `context` go.
+
+**`Async.beside` and `Async.background`** are members of `Async` in the
+prelude, over intrinsics, as `scope` is:
+
+```ren
+// runs `task` beside `body`: when `body` ends, by returning, failing or
+// being cancelled, `task` is cancelled and waited for; a failure of
+// `task` cancels `body` and is the result
+pub fn beside<T>(task: concurrent fn(), body: fn() -> T) -> T uses Async =
+  try task_beside(task, body)
+
+// the same for tasks spawned with `bg.spawn` as `body` goes
+pub fn background<T>(body: fn(bg: Scope) -> T) -> T uses Async =
+  try task_background(body)
+```
+
+Both run `body` in the calling task. `task_beside` starts `task` as a
+task of a scope of its own, runs `body`, then cancels the scope's tasks
+and waits for them (`Sched.cancel_all`, then `wait_empty`), then gives
+`body`'s result; if a background task fails first, the body is
+cancelled from the beside down (as `Async.timeout` cancels its body),
+and once that's reached the beside, it fails with the background
+task's error (the first one's, as a scope's first failure wins).
+`background`'s `bg` is a `Scope` whose spawned blocks may fail
+(`task_background` gives `body` a scope whose `spawn` takes a block
+with an open error row, which Infer types by the member's signature:
+`Background` is a builtin type beside `Scope` whose `spawn` is `fn
+spawn(self, body: spawned fn())` with the block's errors passed out of
+`background`), and the rest is `beside`'s. So in `with pool() in
+Async.beside(health) fn() => Async.scope ...`, the scope's work drains
+when the body's scope ends, then the health task is cancelled and
+waited for, then the `with`'s `finally` runs: decision 7's pool order,
+test_services.ml's "a pool's order". `beside`'s `task` is `concurrent`
+(it runs while the caller's body runs, so rule B's read-only captures
+apply, as `race`'s do); it may fail, unlike a spawned block (decided
+after the draft: background tasks may fail).
+
+Neither is native: `ren build` refuses them as it refuses `Async.scope`
+(to_mem.ml's `tasks_not_native`, which gains `beside` and
+`background`).
+
+### `release`, deadlocks and `Proc.run(kill:)` (step 4)
+
+Decision 10: "`release` lets go for one call. `try release
+next.get(id)`: the instance is let go of while that call runs, and
+taken back after it, queueing like any caller ... `sim` switches tasks
+at every `release`"; "`sim` names the instances a parked task holds ...
+a task taking an instance it already holds panics rather than hangs";
+"The queue is fair, not first in first out ... `sim` chooses among the
+waiters and the arrivals from its tape". Decision 2's table's last row
+is narrowed to "Inside a handler arm, `Async.until`, a `release` call,
+or a block-parameter call: write of all the handler's state, that call"
+(What's decided 8).
+
+**`release`** is written in a handler's arm (lexically, blocks
+included, as `Async.until` is: Excl's `in_op`) and nowhere else, "`release`
+lets go of a handler's instance, so it's only written in one of its
+operations" with "help: call it without `release`"; its operand is a
+call of an operation of a dependency installed outside the handler (a
+`Dep_call` after Lower; Infer's `Calls_op` before), anything else
+"`release` lets go of the instance for one call of another dependency's
+operation, and `twice(1)` isn't one" with "help: write it on the
+operation's call: `release Next.get(id)`". Infer types `Release e` as
+`e`, its errors and uses `e`'s; a marker on it covers `e`'s call (`try
+release ...`).
+
+Lower lowers it as `until_released` lowers `Async.until` (lower.ml):
+the arm's copies of its state written back to their cells (`Set_cell`
+of each of `cx.cells`), then the intrinsic `arm_release()`, then the
+call inside a Core `Finally` whose `after` is `arm_retake()`, so the
+instance is taken back however the call ends, then each copy read
+again (`Get_cell`). In the interpreter `arm_release` is `Sched.released`
+of the instance the task's innermost operation holds
+(`Sched.op_instance`), after setting the lock's holder to none and
+remembering its depth, as `Sched.until` does; under `sim` it's a
+scheduling point; `arm_retake` is `Sched.holding`'s queueing, back to
+the depth it had. With no other task, and natively, both do nothing,
+and the writes and reads give back what they wrote: a plain call
+(decided after the draft; bench/services/release).
+
+**Decision 2's row, narrowed** (excl.ml). Today a `Dep_call` in an arm
+is a change of all the handler's state for the call (Excl's `Dep_call`
+access kind, and `across`'s error, "`r` is changed across a dependency
+call", with `dep_call_note`). After step 4 only three calls are: a
+`Release`, `Async.until` and a call of a block parameter (`Block_call`,
+unchanged). A plain dependency call holds none of the state, sound by
+decision 10 (an operation calls only handlers installed outside it, so
+nothing it calls can come back into the instance running it, and
+research/decision-11/'s model found no two writers, no lost update and
+no stale read). So an actor's loop `for x in &r => Sink.put(x)` over a
+reader kept in its state is accepted, and the same with `release
+Sink.put(x)` is "`r` is changed across a call that lets go of the
+handler" (the error's wording for `release`; `dep_call_note` becomes
+"at `release` and `Async.until` other tasks run the handler"). The
+native build's borrow of state across a plain dependency call is then
+sound for the same reason: no other code can reach the instance during
+it, and Mem Lint's checks stay as they are.
+
+**Deadlocks.** A task taking an instance it already holds already
+panics (11a's step 4, `Sched.holding`'s `reentered`, test_services.ml
+keeps it plainly). The deadlock panic, and the cycle panic of 11a's
+step 9, gain, for each parked task, the instances it holds:
+`task.holding`'s labels, "= main/main:0 waits in `Async.until` at
+test.ren:11:13, holding `A` (a.go)". So decision 10's "other waits"
+deadlock, an operation of `A` calling `B`, which waits in `until` for a
+task that must go through `A`, says where it is.
+
+**`sim`'s fair choice** (decided after the draft: it lands here). Today
+a released instance goes to the first waiter whose condition holds,
+else the first queued caller (`Sched.released`, first in first out).
+Under `sim` it goes to none: the waiters whose conditions hold and the
+queued callers are all woken, and so is nothing else; each competes
+with the tasks that can run, and the first of them the tape picks to
+run that calls the instance takes it (an arrival, a task that wasn't
+queued, can win: `Sched.holding` gives an unheld instance to whoever
+asks). The others queue again in the order they're woken. That's
+decision 10's "chooses among the waiters and the arrivals from its
+tape". Under `single` nothing changes, so `ren run`'s output doesn't.
+No waiter is passed over without bound: under `sim` by the tape's
+uniformity, and `single` stays first in first out.
+
+**`Proc.run(cmd, args, kill: Kill = Tree)`** (What's decided 3): the
+prelude gains `pub type Kill = | Tree | Child` and the operation's
+parameter with its default. The real `Proc.run`'s child is made by a
+small C stub, not `Unix.create_process`, which can't set a process
+group: `fork`, then in the child `setpgid(0, 0)` and `execvp`, with no
+OCaml code between them (a C function in lib/eval's stubs, `ren_spawn_
+group`); a cancel with `Tree` sends SIGTERM to the group (`kill(-pid,
+...)`), then SIGKILL after the cleanup deadline, and `Child` keeps 11a's
+behaviour, the process alone. `sim.proc()`'s `SimProc` gains `kills:
+fn() -> Array<Kill>`, the kill of each cancelled run, in `killed()`'s
+order. examples/just.t's `sh -c "sleep 5; true"` cancelled leaves no
+`sleep`.
+
+### Pull arguments, channels and producers (step 5)
+
+streams.md's "Concurrency and time" and rule 3: "`Async.each` and
+`Async.map` take any pull argument ... pull the next item only when a
+slot frees, and are bounded by `max:`, 64 by default"; "A pull
+parameter takes what `for` takes, written the same way". Decided after
+the draft: pull arguments now are collections (by snapshot), temporary
+data cursors, `&r`, a hand-written `fn() -> Option<T>` block, and a
+channel's `items()`.
+
+**A pull parameter** is a new parameter mode, written `xs: pull T` (a
+word there, as `concurrent` is; `Ty.param`'s `block` gains `Pull`),
+meaning "takes what `for x in ...` takes, its items `T`". The prelude's
+`map` and `each` become `pub fn map<T, U>(xs: pull T, max: Int = 64, f:
+concurrent fn(x: T) -> U) -> Array<U> uses Async` and the same for
+`each`. Infer checks a pull argument as it checks a `for`'s subject
+(infer_expr.ml's `for` path): an `Array<T>`, `Map` or `Set` (by
+snapshot), a value with `next(inout self) -> Option<T>` (a temporary
+cursor, as itself), `&r` of a named cursor, or a block `fn() ->
+Option<T>`, its items `T`. Excl records `&r` as decision 2's new row,
+"a write, held for the call", so the block touching `r` is "`r` is
+changed for the whole call". Lower turns each into a step block, `fn()
+-> Option<T>` (an index over the snapshot; `r.next()` on the place for
+`&r`; the block itself), which `task_map` and `task_each` call on the
+caller's task only when a slot frees, so memory is bounded by `max`;
+`map` keeps its results in order, a finished one behind a slow head
+keeping its slot (streams.md). A pull argument's errors (a block that
+can fail, `for p in try items`) pass out of the call as its block's do.
+
+**Channels as dependencies.** `sync.Chan<T>` stays a dependency; a
+program names one, `dep Events = Chan<Event>`, and installs it, `with
+sync.channel(16) as Events`. **`Events.items()`** is derived: Infer
+types `D.items()`, for a `D` that is `Chan<T>` or an alias of one, as
+the block `fn() -> Option<T> uses D` whose step is `D.recv()`, and Lower
+writes that block where it's called. Since a block can't be returned or
+kept (decision 1, rule D), `items()` is written only where it's pulled,
+as a `for`'s subject or a pull argument; anywhere else it's "`Events.
+items()` is pulled where it's written: in a `for`, or as a pull
+argument" with "help: loop over it: `for e in Events.items()`". Typed
+by the dependency's name, two channels of one element type don't mix
+(streams.md).
+
+**`Async.produce`** (decided after the draft: its `items` is a block
+parameter, `fn() -> Option<T>`, looped with `for p in try items`):
+
+```ren
+pub dep Send<T> =
+  send: fn(x: T)
+
+// runs `f` on a task in the consumer's scope, sending through `Send<T>`,
+// at most `cap` items ahead; `body` pulls them. When `body` ends, by
+// finishing, `break` or a failure, the producer is cancelled and waited
+// for; a failure in the producer ends the stream with it
+pub fn produce<T, R>(cap: Int = 16, f: concurrent fn() uses Send<T>,
+    body: fn(items: fn() -> Option<T>) -> R) -> R uses Async
+```
+
+`Send<T>` is a prelude dependency `produce` installs for `f` (decision
+5: dependencies are found where a block is written; `f`'s parameter
+type says `uses Send<T>`, so the call provides it and `f` may use more,
+transparently). The interpreter's `task_produce` makes a buffer of
+`cap` items (a prelude-private handler `buffer<T>(cap)` for `Send<T>`,
+whose `send` waits in `Async.until` while it's full), starts `f` as a
+task of a scope of its own with it installed, and runs `body` with the
+pull block `fn() => buffer's take()`, which waits while it's empty and
+the producer runs, gives `None` once the producer has returned and it's
+empty, and, once the producer has failed and it's empty, fails with the
+producer's error (so `items` can fail with `f`'s errors, which is why
+it's looped with `try`). When `body` ends the producer's scope is
+cancelled and waited for, as `beside`'s is. A producer blocked at `cap`
+makes progress as the consumer takes (each take releases the buffer's
+instance, waking `send`'s `until`). **`Async.map_pull(src, max: Int =
+64, f) fn(results) => body`** has `produce`'s shape: `src` a pull
+argument, `f` concurrent, `results` the pull block of `f`'s results in
+`src`'s order, the tasks living exactly as long as `body`.
+
+None of it is native: to_mem refuses `produce` and `map_pull` with
+`tasks_not_native`, and `each` and `map` as today.
+
+### Stripes (step 6)
+
+Decision 18 and language.md §11, "Stripes" and "Policies are data":
+`striped(h, n: Int = 16, by: Key)` keeps n instances; an operation whose
+first parameter has a key goes to one stripe (`by: Key`); `by: Worker`
+gives the caller's worker's stripe and takes no `n` (a compile error
+with `n` given); a keyless operation runs on every stripe, one that
+returns a value folded with `merge:`, left to right in stripe order,
+with no default `merge:`; not an atomic snapshot; the split law, with at
+least two virtual workers under `sim`, routing from the tape; it
+replaces `sync.keyed`.
+
+**Declared in the prelude** (language.md writes them bare,
+`striped(counter(), by: Worker, merge: Sum)`), as Ren over an intrinsic,
+as `keyed` was in `sync`:
+
+```ren
+pub type By = | Key | Worker
+pub type Folding<D> = | Unmerged | Sum | Max | Min | Concat | Custom(m: Merge<D>)
+
+// `n` instances of the handler `h` describes, 1 or more ...
+pub fn striped<D>(h: D, n: Int = 16, by: By = Key, merge: Folding<D> = Unmerged) -> D =
+  stripes(h, n, by, merge)
+```
+
+`merge:` is given by name and so has a default (decision 9's rule:
+given by name means defaulted), `Unmerged`, which is "no `merge:`":
+Infer refuses a `striped` whose `merge:` is `Unmerged`, left out or
+written, over a dependency with a keyless operation that returns a
+value: "`total` runs on every stripe and gives an `Int`, so `striped`
+needs `merge:`" with "help: say how to fold them: `merge: Sum`, `Max`,
+`Min`, `Concat` or `Custom(m)`". Infer checks `striped`'s call as it
+checked `keyed`'s (`keyed_described` becomes `striped_described`): `h`
+a description ("`striped` takes a handler's description, and `16` is
+an `Int`"); `n` given with `by: Worker`, which it sees from the
+arguments as written (a constructor written there), "`by: Worker` gives
+each worker a stripe, so it takes no `n`" with "help: remove `n: 4`";
+`merge:` given as a constructor written at the call, since what it
+folds is checked against each keyless operation's result: `Sum` on
+`Int` or `Float`, `Max` and `Min` on a type with order, `Concat` on an
+`Array`, else "`merge: Sum` adds what `all` gives, and an `Array<Str>`
+isn't a number".
+
+**`Merge<D>` is derived** (decided after the draft): for a dependency
+`D`, `Merge<D>` is a dependency with one operation per keyless
+operation of `D` that returns a value, of the same name, `fn(a: R, b:
+R) -> R`. It's built in, as `Actors` is: Resolve resolves `Merge<D>`
+to `Ty.dep_label` of a derived path (`Path.member (Path.prelude
+"Merge") D's path`), and Infer's `dep_fields` makes its operations from
+`D`'s when asked. `Custom(m)` takes a description of a handler for it,
+checked stateless as the data stage's step 6 checks a description
+called as a method (`Stateless.check`): "`Custom` takes a stateless
+handler of `Merge<Hits>`". Decision 18's `fn(a, b) => ...` shorthand is
+the inline handler a one-operation dependency already has.
+
+**The interpreter** keeps 11a's representation, renamed: `VKeyed (n,
+h)` becomes `VStriped { n; by; merge; h }`, and `VKeys` stays the
+installed form, `n` instances each with its own number and lock. A
+`Dep_call` with parameters picks a stripe by `Walk.fixed_hash` of the
+first argument's key (its type's `key` member, or the value), as
+`keyed` did, under `by: Key`; under `by: Worker` by the caller's worker:
+`single` has one worker, so one stripe (decision 18's table: "one
+stripe: the merge is the identity"), and `sim` has two virtual workers,
+each task's worker drawn from the tape when it's spawned (decided
+after the draft), so `striped(by: Worker)` keeps two stripes under
+`sim` whatever `n`. A keyless operation runs on each stripe in turn,
+in stripe order, and folds the results left to right with the merge
+(`Custom`'s by calling `m`'s operation of the same name), or gives `()`.
+Each stripe is an instance as any other, so a call holds one stripe's
+lock at a time, and the fold is not a snapshot.
+
+`striped` isn't native: to_mem refuses it, "`striped` keeps instances,
+which aren't native yet" with "help: run it with `ren run`"
+(bench/services/refused.native), as `keyed` was refused (decided after
+the draft). `sync.keyed`, `Sync_keyed`, `VKeyed` and their sites go
+(The inventory), and `sync` has no `keyed`: Resolve's "`sync` has no
+`keyed`" is the ordinary missing member's.
+
+### Actors (step 7)
+
+Decision 18 and language.md §11, "Actors are a service"; What's decided
+6, and decided after the draft: `Docs.at`'s errors declared on the
+family, `Actors<K, D> ! E`, with `Full` in `at`'s errors only where the
+checker sees waiting could close a cycle; `post` is Erlang's cast;
+partitions now, `parts: Int = 4`, the same under every runtime;
+`Lfu` later; the journal's version 3.
+
+**The family's type.** `Actors<K, D>` is a builtin dependency in the
+prelude (`pub dep Actors<K, D> = builtin`, as `Array` is a builtin
+type), and a dependency alias may carry an error row, `dep Docs =
+Actors<DocId, Doc> ! StoreDown` (the parser's `Dep_alias` takes
+`[errors]` after the `dep_ref`; ast.ml's `Dep_alias of 't dep_ref * 't
+errors option`; only an alias of `Actors` may have one, else "only a
+family of actors declares errors on its dependency"). Its members,
+typed by Infer from the alias (K, D and E):
+
+| member | type | what |
+|---|---|---|
+| `at(k: K) fn() => body` | `fn<T>(k: K, body: fn() -> T uses D) -> T ! E` | installs k's actor as `D` for the block, pinned; makes it if it isn't live; setup's errors are `E`'s; `Full` added where the checker sees waiting could close a cycle |
+| `post(k: K).op(args)` | `-> () ! E` | puts one operation of `D` in k's mailbox; makes the actor as `at` does |
+| `evict(k: K)` | `fn(k: K)` | evicts k's actor if it's live and evictable, now |
+| `evict_idle(d: Duration)` | `fn(d: Duration)` | evicts every evictable actor released longer than `d` ago |
+| `each fn() => body` | `fn(body: fn() uses D)` | each live actor, in creation order, pinned in turn; doesn't make any, doesn't count as use |
+| `count()`, `made()`, `evicted()`, `high_water()` | `fn() -> Int` | live actors; made and evicted so far; the most mail queued at once |
+
+`at` and `post` are written as calls of the dependency's members, so
+they're dependency calls for the checker's rows (`uses Docs`). `at`'s
+block is a block passed to a member, transparent as `Async.scope`'s
+is, with `D` provided (decision 5). `post(k)` is only ever followed by
+`.op(args)`: Infer types `Docs.post(k).edit(op)` as one call, the
+operation's arguments checked against `edit`'s parameters.
+
+**The handler and `actors`.** `actors(h, max: Int = 10_000, evict:
+Evict = Lru, mailbox: Int = 10_000, parts: Int = 4)` in the prelude,
+`pub type Evict = | Lru` (`Lfu` later), returns an implementation of
+`Actors<K, D>` installed `as Docs`. `h` is a handler's name, a
+function of one parameter, the key, giving an implementation of `D`:
+Infer checks it has exactly one parameter, of type `K` ("`actors` makes
+each actor from its key, so `doc` takes one parameter, a `DocId`"),
+that it implements `D`, and that its setup (its state's lines, which
+`at` runs) fails with no more than `E` ("making a `doc` can fail with
+`StoreDown`, which `Docs` doesn't declare" with "help: declare it on the
+family: `dep Docs = Actors<DocId, Doc> ! StoreDown`"), as any handler
+fits its dependency. Its other dependencies are the `actors` item's
+needs, met by the `with` set like any item's: an actor's `with` is
+deferred to `at`, so its needs are the family's. **`finally` can't
+fail:** an actor handler's `finally` with any error in its row is "an
+actor's `finally` can't fail" with "help: save in the operations,
+write-through, or flush before the family ends: `Docs.each(fn() => try
+Doc.flush())`".
+
+**No deadlock, statically.** `Docs.at` inside a block of `Docs.at`
+(lexically, blocks included, or through a function the block calls
+that `uses Docs` and calls `at`: Infer's `calls` of the block) is "`Docs.
+at` inside a block of `Docs.at` could wait for a slot its own block
+holds" with "help: finish with the first actor, then `at` the second;
+or send it a message: `Docs.post(k).op(...)`". **An actor names its own
+family in its handler's `uses` and may only `post` to it:** an `at` of
+the family in an arm of `h` is "`doc` is an actor of `Docs`, so it can
+only `post` to it" with "help: send it a message instead:
+`Docs.post(k).edit(...)`". The `with` set's cycle rule makes an
+exception for exactly this: the `actors` item may need what it
+installs, `Docs`, through `h`'s `uses`, since a post holds nothing. A
+task that pins an actor of family A (inside `A.at`) and calls `B.at`
+for B installed inside or beside A gets `Full` when B has no free slot,
+instead of waiting; Infer adds `Full` to that `at`'s errors (its
+evidence says which families are pinned around it: the `at` blocks it's
+lexically in, and, for a function, none, so a helper's `at` never adds
+`Full`, and the run time's rule covers it: a pinning task that would
+wait for a slot of a family not outside the ones it pins fails with
+`Full`).
+
+**`post`** (What's decided 6, all of it, research/actors-post/'s fixed
+rules): only an operation that returns `()` and can't fail can be
+posted, "`text` gives a `Str`, which a post has nobody to give to" and
+"`edit` can fail with `StoreDown`, which a post has nobody to give to",
+each with a help to handle it inside the actor or use `at`; the
+arguments are evaluated when posted and kept as data, a value of the
+enum of `D`'s operations the compiler writes (language.md §6, as
+`call.args` is made for `over any`), so a `var` changed after doesn't
+change the message; a post makes its actor as `at` does, so its only
+errors are setup's, `try Docs.post(k).op(args)`; a delivery never runs
+setup; queued mail counts as waiting for the actor, so an actor with
+mail is never evicted; an actor made for a post may go past `max:` when
+none is evictable, instead of waiting; posts from one task to one actor
+run in order, each as one operation, on a task the family's `with` owns
+(one delivery task per key with mail, research/actors-post/'s model);
+the mailbox belongs to the key, so order survives eviction. **The edge
+meters every call from outside:** a post, and an operation called
+through `at` before it takes the actor, wait while the family's mail is
+over `mailbox:`; a sibling's post never waits; past twice `mailbox:` a
+sibling's post panics, "`Peers` has 5 posts queued, past twice its
+`mailbox:` of 2", with the high-water mark. Teardown drains: queued
+posts are delivered (and may post more) before the `finally`s run.
+
+**The family in the scheduler: lib/eval/family.ml,** a module of its
+own beside sched.ml (the brief's risk: "a second scheduler inside the
+first"), using sched.ml's waits, scheduling points, tape and journal
+hooks and nothing else of it:
+
+```ocaml
+type family = {
+  fname : string;               (* `docs`: the alias's name, snake_cased *)
+  max : int; mailbox : int;     (* the bounds *)
+  parts : part array;           (* [parts] partitions, a key's by
+                                   Walk.fixed_hash mod parts *)
+  make : Value.t -> Value.t;    (* runs `h(k)`'s setup: an instance *)
+  mutable order : int;          (* creation counter, for teardown and `each` *)
+  mutable mail : int;           (* posts queued, across the family *)
+  mutable high : int;           (* the most at once *)
+  mutable made : int; mutable evicted : int;
+  incarnations : (Value.t, int) Hashtbl.t;   (* by key, the last life's
+                                                number, kept across
+                                                eviction *)
+  mailboxes : (Value.t, mail Queue.t) Hashtbl.t;  (* by key, not by actor *)
+}
+and part = {
+  live : (Value.t, actor) Hashtbl.t;  (* its own map *)
+  lru : actor Dll.t;                  (* exact LRU of its evictable actors,
+                                         least recently released first *)
+  cap : int;                          (* max / parts, at least 1 *)
+}
+and actor = {
+  key : Value.t; life : int; born : int;  (* `docs[DocId(7)]#3`, and its
+                                             place in creation order *)
+  inst : Value.installed;           (* its instance: number, lock, finally *)
+  mutable pins : int;               (* `at` blocks and `each` holding it *)
+  mutable waiters : int;            (* tasks waiting for it: setup, a slot *)
+  mutable released_at : float;      (* for `evict_idle` *)
+  mutable state : Making of setup | Live | Evicting;
+}
+```
+
+An actor is **evictable** when it's `Live` with no pins, no waiters, no
+operation running (its lock has no holder) and no mail queued for its
+key; the LRU holds exactly the evictable ones, an actor going to its
+back when it becomes evictable (when the last pin or operation lets go,
+"least recently released"). **Making one past its partition's `cap`**
+evicts the LRU's front, whose `finally` runs on the making task, shielded
+under the cleanup deadline as 11a's `finally`s are (a cancelled caller
+still pays the eviction it began); with none evictable, the maker
+waits (a scheduler wait on the partition, woken when one becomes
+evictable), or, for a post's making, goes past the cap. **Setup** runs
+on the first caller's task, state `Making`; others asking for the key
+wait for it and share its error; a setup that's cancelled leaves the
+key unmade and wakes its waiters, the first of whom tries again.
+**Under `sim`,** eviction happens only through `max:`, `evict_idle` and
+`evict`, unless the scheduler was installed with `evict: AnyIdle`:
+`sim.scheduler(seed: Int, evict: Chaos = AsAsked)`, `pub type Chaos =
+| AsAsked | AnyIdle` in `sim`, at which every scheduling point first
+draws from the tape whether to evict one evictable actor of any family,
+and which. `ren test --chaos` installs `sim.scheduler(seed, evict:
+AnyIdle)` for every test (decided here, for the milestone's "passes
+`ren test --seeds 1000` with `evict: AnyIdle`").
+
+eval.ml's `With` of a `VActors` description makes the family
+(`Family.make`), installs it as the implementation of the alias, and
+its ending is `Family.teardown`: drain the mailboxes (deliveries run
+until no mail is left), then each live actor's `finally` in reverse
+creation order. `Dep_call` on the family's members goes to `Family`'s
+functions; an operation of an actor is a `Dep_call` on `D` inside
+`at`'s block, whose evidence holds the actor's implementation, as any
+installed instance's.
+
+**Partitions** decide which actor is evicted, so their count is fixed
+by the program, `parts:` (4 by default), never by the runtime or the
+cores: a journal from one thread replays on many (decision 18). The
+journal's header records each family's `parts`.
+
+None of it is native: to_mem refuses `actors`, "`actors` keeps
+instances, which aren't native yet".
+
+### Journal version 3 (step 7)
+
+Decided after the draft: actors add made, evicted and posted lines, and
+an operation names `docs[DocId(7)]#3`; that's version 3, and recorded
+journals are recorded again.
+
+```
+# ren journal 3 · main.ren · deps: Console Net · parts: docs 4
+1 main/session:0 made docs[DocId(7)]#1
+2 main/session:0 Net.write(...)
+3 main/session:1 posted docs[DocId(7)].edit(Append("a"))
+4 docs[DocId(7)]#1 Store.save(...)
+5 main/session:2 evicted docs[DocId(7)]#1
+6 main/session:3 made docs[DocId(7)]#2
+```
+
+- **`made`** and **`evicted`** lines name the task that made or evicted
+  the actor (the maker pays) and the actor, its family, key (written
+  as a value is) and incarnation, which counts the key's lives from 1.
+- **`posted`** lines are a post as data: the actor's family and key
+  (no incarnation: the mailbox is the key's) and the operation with
+  its arguments, written as a value.
+- **A delivery's task is named by its actor,** `docs[DocId(7)]#1`, so
+  the world calls a delivered post makes are written under that name.
+- The header gains `parts:`, each family's name and partition count, a
+  replay refusing a program whose counts differ.
+- A replay checks each `made`, `evicted` and `posted` line where it
+  comes, strictly, as it checks a call, so a replay that evicts
+  differently stops there and says so; as a test's schedule prefix, the
+  replay follows the recorded order while it can, as version 2's does.
+- **Version 2 is refused** as version 1 is, "`tests/build.journal` is a
+  version 2 journal, which this `ren` doesn't read" with "version 3
+  names actors and their posts" and the same help, record it again
+  (journal.ml's `version_1_said` becomes `old_version_said`).
+  examples/just/tests/build.journal is recorded again.
+
+### Native
+
+What's sequential builds natively and agrees with `ren run` (decided
+after the draft): the pipe (step 1, a `let` and a call), wirings (step
+2, functions that return descriptions, and a `with`), and `release`
+with no other task (step 4, a plain call: `arm_release` and
+`arm_retake` compile to nothing). `beside`, `background`, `produce`,
+`map_pull`, `striped` and `actors` are interpreter-only, refused by
+`ren build` at the first call to_mem meets, `tasks_not_native`'s
+message for the first four and "`striped` keeps instances, which aren't
+native yet" (and `actors`') for the others, each with "help: run it
+with `ren run`".
+
+### Errors
+
+Each is a refusal test in test_services.ml (but the three crams of The
+tests), with the pass that says it.
+
+The pipe (step 1):
+
+```
+error: `validate` can fail, and nothing handles it                   (Infer)
+  = in a chain each step that can fail carries its own `try`
+  help: write `|> try validate`, or handle it with `match`
+
+error: nothing here can fail                                         (Infer, today's)
+  = `try` marks the calls that can fail, so a reader can see where the code can stop
+  help: remove the `try`
+
+error: `try` stops at `|>`                                           (Infer)
+  = it covers only `order`, which can't fail; each step is marked on its own
+  help: `order |> try validate |> try place`
+
+error: `len` is `Array`'s own method, so it's called with `.`        (Infer)
+  help: write `(...).len()`, or end the chain with a `let`
+
+error: `|>` puts `rules` first, but `apply` takes an `Order` there   (Infer)
+  - `rules` is a `Rules`, which `apply` takes second
+  = `|>` always passes its value as the first argument
+  help: call it directly: `apply(order, rules)`
+
+error: `|>` passes a value, so nothing in a chain can change it      (parser)
+  help: call it with `&` directly: `add(&cart, item)`
+
+error: a step is a function by name, not a block                     (parser)
+  help: name it first, `let apply_rules = fn(o) => ...`, then `|> apply_rules`
+
+error: `|>` takes one value on its left                              (parser)
+  help: put it in parentheses: `(total + fee) |> round`
+
+error: a chain ends its expression                                   (parser)
+  help: put the chain in parentheses, or name it with `let`
+
+error: only the chain's last step can take a block                   (parser)
+  help: name the block first, `let f = fn(x) => ...`, and pass it in the parentheses
+
+error: a step is a function by name, and `rules.apply` is a field of `rules`   (Resolve)
+  help: name it first: `let apply = rules.apply`, then `|> apply`
+```
+
+Wirings (step 2):
+
+```
+error: nothing installs `Db`, which `db_users()` in `live` needs     (Infer)
+  help: add an item that installs `Db` beside `live`: `with live, mem_db() in`
+
+error: `live` needs `Db`, which it doesn't declare                   (Infer)
+  help: add it to `uses`: `uses Db`
+
+error: `live` installs `Db` but doesn't provide it                   (Infer, the solver)
+  help: add `Db` to `live`'s `provides`, or install your own inside: `with mem_db() in`
+
+error: this `with` installs `Db` twice: `mem_db()` here, and `pg_db(url)` in `live` (main.ren:2)   (Infer)
+  help: use a smaller wiring that leaves `Db` out, or remove one
+
+error: `a` lists itself: a → b → a                                   (Resolve)
+  help: a wiring can list another, but not one that lists it
+
+error: `ping()` and `pong()` in `both` each need what the other installs   (Infer, today's with the wiring)
+  = `ping()` → `pong()` → `ping()`
+  help: install one of them in a `with` around this one
+
+error: `live` provides `Clock`, which nothing in it installs         (Infer)
+  help: remove it from `provides`, or add an item that installs it
+
+error: `console_audit()` in `live` provides `Audit`, which nothing needs   (Infer)
+  help: remove it, or add `Audit` to `live`'s `provides`
+
+error: a wiring isn't a value                                        (Resolve)
+  help: install it: `with live in ...`
+
+error: a wiring says what it provides                                (parser)
+  help: write `provides` and the dependencies the body may call
+
+error: a wiring's body lists what it installs                        (parser)
+  help: code that runs around a block stays a function: `fn live(body: fn() -> T) -> T`
+```
+
+Background work (step 3):
+
+```
+error: this task can reach `Ticks`, installed inside the scope it's spawned into   (Excl)
+  help: open the scope inside the `with`: `with ticks() in Async.scope fn(s) => ...`, or run it beside the body with `Async.beside`
+
+panic: this task can reach `Ticks`, installed inside the scope it's spawned into   (the interpreter, at the spawn)
+  help: open the scope inside the `with`
+```
+
+`release`, deadlocks and defaults (step 4):
+
+```
+error: `release` lets go of a handler's instance, so it's only written in one of its operations   (Excl)
+  help: call it without `release`
+
+error: `release` lets go of the instance for one call of another dependency's operation, and `twice(1)` isn't one   (Infer)
+  help: write it on the operation's call: `release Next.get(id)`
+
+error: `r` is changed across a call that lets go of the handler       (Excl)
+  = at `release` and `Async.until` other tasks run the handler
+
+panic: every task is waiting, and nothing can wake one               (the interpreter, today's, with what each holds)
+  = main/main:0 waits in `Async.until` at test.ren:11:13, holding `A` (a.go)
+
+error: a parameter's default is a literal, or a variant with no fields   (parser, today's widened)
+  help: give it where it's called instead
+```
+
+Pull arguments, channels and producers (step 5):
+
+```
+error: `r` is changed for the whole call                             (Excl, the `&r` row)
+
+error: `Events.items()` is pulled where it's written: in a `for`, or as a pull argument   (Infer)
+  help: loop over it: `for e in Events.items()`
+```
+
+Stripes (step 6):
+
+```
+error: `total` runs on every stripe and gives an `Int`, so `striped` needs `merge:`   (Infer)
+  help: say how to fold them: `merge: Sum`, `Max`, `Min`, `Concat` or `Custom(m)`
+
+error: `by: Worker` gives each worker a stripe, so it takes no `n`    (Infer)
+  help: remove `n: 4`
+
+error: `Custom` takes a stateless handler of `Merge<Hits>`           (Infer, Stateless)
+
+error: `merge: Sum` adds what `all` gives, and an `Array<Str>` isn't a number   (Infer)
+
+error: `striped` takes a handler's description, and `16` is an `Int` (Infer)
+  help: describe the handler whose instances it keeps: `striped(counter(), merge: Sum)`
+
+error: `striped` keeps instances, which aren't native yet            (to_mem)
+  help: run it with `ren run`
+```
+
+Actors and `post` (step 7):
+
+```
+error: `Docs.at` inside a block of `Docs.at` could wait for a slot its own block holds   (Infer)
+  help: finish with the first actor, then `at` the second; or send it a message: `Docs.post(k).op(...)`
+
+error: `doc` is an actor of `Docs`, so it can only `post` to it       (Infer)
+  help: send it a message instead: `Docs.post(k).edit(...)`
+
+error: `actors` makes each actor from its key, so `doc` takes one parameter, a `DocId`   (Infer)
+
+error: making a `doc` can fail with `StoreDown`, which `Docs` doesn't declare   (Infer)
+  help: declare it on the family: `dep Docs = Actors<DocId, Doc> ! StoreDown`
+
+error: an actor's `finally` can't fail                               (Infer)
+  help: save in the operations, write-through, or flush before the family ends: `Docs.each(fn() => try Doc.flush())`
+
+error: `text` gives a `Str`, which a post has nobody to give to      (Infer)
+  help: use it inside the actor, or call it with `at`: `Docs.at(k) fn() => Doc.text()`
+
+error: `edit` can fail with `StoreDown`, which a post has nobody to give to   (Infer)
+  help: handle it inside the actor, or call it with `at`: `try Docs.at(k) fn() => try Doc.edit(...)`
+
+error: only a family of actors declares errors on its dependency     (Resolve)
+
+panic: `Peers` has 5 posts queued, past twice its `mailbox:` of 2    (the interpreter)
+  = the high-water mark: 5
+  = an actor that posts twice around a cycle grows its family's mail without end
+
+error: `tests/build.journal` is a version 2 journal, which this `ren` doesn't read   (`ren replay`)
+  = version 3 names actors and their posts
+  help: record it again: `ren run --record tests/build.journal main.ren`
+
+error: `actors` keeps instances, which aren't native yet             (to_mem)
+  help: run it with `ren run`
+```
+
+### What each step changes
+
+- **Step 1:** token.ml (`PIPEGT`), lexer.ml (`lex_token`'s `|>`,
+  `continues ()`'s `|>` and `.`), parser.ml (`parse_pipe`,
+  `parse_step`, `chain_stops`, the errors), ast.ml (`Pipe`), resolve.ml
+  (a step's target, the field error), infer_expr.ml (`infer_pipe`, the
+  first argument's message), infer_msg.ml, solve.ml (`try` stops at
+  `|>`), lower.ml (a `let` and a call), excl.ml and mut.ml where they
+  walk expressions; tree-sitter's grammar.js and scanner.c, the corpus,
+  differential.py's cases, Zed's highlights; examples of language.md's
+  end-to-end shapes; language.md's "What Ren has today" row, operators.md.
+- **Step 2:** parser.ml (`parse_wiring`), ast.ml (`Wiring`,
+  `with_item.from`), resolve.ml (the link functions, the flattening, the
+  cycle, the value error), iface.ml(i) (`wirings`), infer_handlers.ml
+  (`with_`'s origin, the wiring's checks, `install ~hidden`),
+  infer_env.ml and solve.ml (`Install.whidden`), infer_top.ml (a
+  wiring's scheme), infer_msg.ml, driver.ml and bin/main.ml (`ren
+  explain-wiring`, `ren types`' line); tree-sitter, corpus, Zed;
+  examples/ledger and examples/server, deps.md's and the README's
+  `with_fake_net`.
+- **Step 3:** prelude.ml (`beside`, `background`, `Background`),
+  intrinsic.ml, builtins.ml and sched.ml (`task_beside`,
+  `task_background`; `beside`, `frame.bg`, `context` and `leave_with`'s
+  cancelling removed; the spawn's check), eval.ml (`endings`), excl.ml
+  (the compile error), to_mem.ml (refused); examples/refresh, async.md.
+- **Step 4:** lexer.ml/parser.ml (`release`; a constructor default; an
+  operation's parameter's default), ast.ml (`Release`, `pdefault`),
+  resolve.ml, iface.ml (defaults), infer_expr.ml, infer_top.ml
+  (`defaults_of` for operations), lower.ml (`release`'s write-back and
+  read-again, as `until_released`), intrinsic.ml (`Arm_release`,
+  `Arm_retake`), sched.ml (`released` without handing off under `sim`,
+  the deadlock panic's holdings), excl.ml (the row narrowed), to_mem.ml
+  (both intrinsics to nothing), prelude.ml (`Kill`, `Proc.run`'s
+  `kill`, its handlers), std_lib.ml (`sim_proc`, `SimProc.kills`), a C
+  stub for the process group, sched.ml's `wait_pid` killing the group;
+  a circuit breaker example; the journals that write `Proc.run`.
+- **Step 5:** ast.ml/ty.ml (`Pull`), parser.ml (`pull`), infer_expr.ml
+  (pull arguments as `for`'s subject; `D.items()`), excl.ml (`&r`'s
+  row), lower.ml (the step blocks, `items()`'s block), prelude.ml
+  (`map`, `each`, `produce`, `map_pull`, `Send`, `buffer`),
+  intrinsic.ml, builtins.ml and sched.ml (`task_produce`,
+  `task_map_pull`, `task_map` and `task_each` pulling), to_mem.ml
+  (refused); async.md's "Later" line, stdlib.md, the crawler if it
+  reads better.
+- **Step 6:** prelude.ml (`By`, `Folding`, `striped`), resolve.ml and
+  infer_lookup.ml (`Merge<D>` derived), infer_expr.ml
+  (`striped_described`), infer_msg.ml, stateless.ml (`Custom`'s
+  description), value.ml, eval.ml and builtins.ml (`VStriped`, `by:`,
+  the fold), sched.ml (`sim`'s two workers, drawn at spawn),
+  to_mem.ml; `keyed` removed everywhere (The inventory); test_tasks.ml's
+  `keyed` tests moved.
+- **Step 7:** parser.ml and ast.ml (`Dep_alias`'s errors), prelude.ml
+  (`Actors`, `actors`, `Evict`), std_lib.ml (`sim.scheduler`'s `evict:`,
+  `Chaos`), resolve.ml, infer_expr.ml and infer_handlers.ml (the
+  family's members, `at` and `post`, the handler's checks, `at` in `at`,
+  `Full`), infer_msg.ml, lib/eval/family.ml (new), eval.ml (`With` of a
+  family, its members, deliveries), sched.ml (hooks: a scheduling
+  point's chaos, waits on a partition), journal.ml (version 3),
+  driver.ml and the test runner (`--chaos`), to_mem.ml; examples/just's
+  journal recorded again.
+- **Step 8:** bench/services/docs moved to examples/docs; bench/tasks.t's
+  milestone; THE CHECKS' examples list gains docs.
+
+### Where this stage may differ from foundations.md and language.md
+
+Choices this specification made where the record is silent, or doesn't
+fit the code, each to revisit if a step finds it wrong:
+
+- **A wiring is flattened into calls of functions Resolve makes, one per
+  link,** since another module's use of a `pub` wiring can't see the
+  private names in its items' text. A link that's one of the wiring's
+  parameters is passed straight through, as a dependency-typed
+  parameter can't be returned as a value.
+- **A wiring's arguments are evaluated once, before any item,** bound
+  by `let`s around the `with`.
+- **A dependency a wiring hides can't be reached by the body at all,**
+  not even an outer one of the same name: the body gets a fresh one by
+  a nested `with`, which is the help §5 gives.
+- **A wiring's `provides` may name what a nested wiring provides, not
+  what it hides.**
+- **A wiring a test splits is `pub`.** language.md §5's test splits a
+  private `core`, but a test sees what an importer sees (testing.md),
+  so in a test the split wiring is `pub`, its `uses` written.
+- **Two parser errors language.md §8 doesn't list:** a trailing block on
+  a step that isn't the last ("decided after the draft" allows one only
+  in the last link), and a field of a value as a step (Resolve's, since
+  the parser can't tell `o.f` from `m.f`).
+- **`try`'s and `attempt`'s stop at `|>` is a parser flag** reset in
+  every bracket and body, so `try f(a |> g)` keeps `try` covering the
+  whole call.
+- **The variant default and an operation's parameter's default land in
+  step 4,** not step 0 (What's decided 9 says step 0): step 0 builds no
+  language, and step 4's `Proc.run(kill:)` is the first surface that
+  needs them. An operation may have a default because `Proc.run` is
+  one.
+- **A cancelled `Tree` run is killed by a C stub** that forks, calls
+  `setpgid` and `execvp`s, OCaml's `Unix` having no process groups.
+- **`SimProc` keeps `killed()` and adds `kills()`,** rather than
+  changing `killed()`'s type, which 11a's tests read.
+- **`sim`'s fair choice wakes every eligible waiter and queued caller
+  and lets the tape pick who runs first;** `single` stays first in
+  first out, so `ren run`'s output doesn't change.
+- **`release` is a word only before a name on its line,** so the
+  operation `Semaphore.release()` and arms named `release` stay.
+- **A pull parameter is a mode, `xs: pull T`,** checked as a `for`'s
+  subject; Lower makes every pull argument a step block, so the
+  interpreter's `task_map` and `task_each` take one kind of source.
+- **`Events.items()` is a block Lower writes where it's called,** and is
+  refused anywhere it isn't pulled, since a block can't be returned.
+- **`Async.produce`'s producer is `concurrent`,** and its failure reaches
+  the body through `items`, after what it sent before failing.
+- **`Async.background`'s scope is a `Background`,** a `Scope` whose
+  blocks may fail, since a `Scope`'s spawned blocks can't.
+- **`striped`, `actors`, `Actors`, `Merge`, `By`, `Folding` and `Evict`
+  are in the prelude,** since language.md writes them bare; `sync` keeps
+  its channel, semaphore, `limit` and batcher.
+- **`merge:` has a default, `Unmerged`,** which is "no `merge:`", since a
+  parameter given by name has a default (decision 9's rule), and decision
+  18 says there's no default fold; `merge:` is given as a constructor
+  written at the call, since what it folds is checked there.
+- **`striped(by: Worker)` under `sim` keeps two stripes whatever `n`,**
+  each task's worker drawn from the tape when it's spawned; under
+  `single`, one.
+- **A family's name in the journal is its alias's, snake_cased** (`Docs`
+  is `docs`); the incarnation counts a key's lives from 1.
+- **`ren test --chaos`** is how a test run opts into `evict: AnyIdle`,
+  and `sim.scheduler(seed, evict: AnyIdle)` how a program does; `Chaos =
+  AsAsked | AnyIdle` is `sim`'s type for it.
+- **`Docs.each`'s block takes no parameters** (decision 18's `Docs.each(fn()
+  => try Doc.flush())`), and the family exposes `count`, `made`,
+  `evicted` and `high_water`.
+- **A delivery task per key with mail,** named by the actor in the
+  journal, research/actors-post/'s model.
+- **`Full` is added statically only where the `at` is lexically inside
+  another family's `at`;** a helper's `at` gets the run time's rule.
+- **The milestone's stand-ins** (the brief's risk): a session's message is
+  the document's name and its edits on lines, read in one `Net.read`,
+  and an `Op` appends (`Append(text)`); subscribers are seen through a
+  test `Conns`.
+
+### Progress log
+
+| step | commit | done | left |
+|---|---|---|---|
+| 0 | this commit | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

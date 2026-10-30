@@ -1,0 +1,6 @@
+live(prefix: Str), wiring.ren:42, provides Users
+  1. console_audit()    installs Audit    needs Console, from outside     (core)
+  2. mem_db(prefix)     installs Db       needs Console, from outside
+  3. db_users()         installs Users    meets Audit (1), Db (2)         (core)
+  uses Console
+  teardown: 3, 2, 1

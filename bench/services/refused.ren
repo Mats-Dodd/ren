@@ -1,0 +1,20 @@
+// The services stage (compiler.md, "Services stage", "Native"): what
+// starts tasks, or keeps instances, is the interpreter's. `ren build`
+// refuses this program at `Async.beside`, as 11a's refuses
+// `Async.scope`; `ren run` runs it.
+
+dep Hits =
+  hit: fn(path: Str)
+  total: fn() -> Int
+
+handler counter() for Hits =
+  var n = 0
+  hit(_) => n += 1
+  total() => n
+
+fn main() uses Console, Async =
+  with striped(counter(), n: 2, merge: Sum) in
+    Async.beside(fn() => Hits.hit("/a")) fn() =>
+      Async.yield()
+      Hits.hit("/b")
+    print(Hits.total())

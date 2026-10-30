@@ -1,0 +1,26 @@
+// The services stage, step 4 (compiler.md, "Services stage"): `release`
+// with no other task is a plain call, natively too. The arm writes its
+// state back before the call and reads it again after, which with one
+// task changes nothing.
+
+dep Next =
+  get: fn(id: Int) -> Int ! Down
+dep Breaker =
+  call: fn(id: Int) -> Int ! Down
+  calls: fn() -> Int
+
+handler next() for Next =
+  get(id) => if id < 0 then fail Down else id * 10
+
+handler breaker() for Breaker uses Next =
+  var calls = 0
+  call(id) =>
+    calls += 1
+    try release Next.get(id)
+  calls() => calls
+
+fn main() uses Console =
+  with next(), breaker() in
+    print(attempt Breaker.call(1))                // Ok(10)
+    print(attempt Breaker.call(-1))               // Err(Down)
+    print(Breaker.calls())                        // 2

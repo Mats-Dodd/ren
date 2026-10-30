@@ -1,0 +1,27 @@
+// main.ren's document, with the read and the write in one operation,
+// `add`: each operation takes the actor for one call, so no other
+// session's edit can come in between, under any schedule.
+
+pub type DocId = | DocId(name: Str)
+
+pub dep Doc =
+  text: fn() -> Str
+  add: fn(s: Str)
+
+pub handler doc(id: DocId) for Doc =
+  var text = ""
+  text() => text
+  add(s) => text = text.concat(s)
+
+pub dep Docs = Actors<DocId, Doc>
+
+pub fn append(id: DocId, s: Str) uses Docs =
+  Docs.at(id) fn() => Doc.add(s)
+
+test "one operation keeps both edits" =
+  with actors(doc) as Docs in
+    Async.scope fn(s) =>
+      s.spawn fn() => append(DocId("a"), "x")
+      s.spawn fn() => append(DocId("a"), "y")
+    Docs.at(DocId("a")) fn() =>
+      assert Doc.text().bytes().len() == 2

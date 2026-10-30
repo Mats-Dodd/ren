@@ -1,0 +1,29 @@
+// The services stage's milestone, part three (compiler.md, "Services
+// stage"): a document that keeps its text only in memory, with no
+// write-through. Its test passes under any schedule without chaos, since
+// nothing is evicted below `max:`; under chaos eviction, `ren test
+// --chaos --seeds 200`, which evicts any evictable actor at any
+// scheduling point, some seed evicts it between two sessions and the
+// second finds the text gone, and `--seed` with it fails the same way
+// again.
+
+pub type DocId = | DocId(name: Str)
+
+pub dep Doc =
+  add: fn(s: Str)
+  text: fn() -> Str
+
+pub handler doc(id: DocId) for Doc =
+  var text = ""
+  add(s) => text = text.concat(s)
+  text() => text
+
+pub dep Docs = Actors<DocId, Doc>
+
+test "every edit is still there" =
+  with actors(doc) as Docs in
+    Async.scope fn(s) =>
+      s.spawn fn() => Docs.at(DocId("a")) fn() => Doc.add("x")
+      s.spawn fn() => Docs.at(DocId("a")) fn() => Doc.add("y")
+    Docs.at(DocId("a")) fn() =>
+      assert Doc.text().bytes().len() == 2

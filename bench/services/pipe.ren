@@ -1,0 +1,41 @@
+// The services stage, step 1 (compiler.md, "Services stage"): a chain
+// with a `try` on each step that can fail, `orelse` after one, a line
+// starting with `.` that continues the one above, and the head's
+// `attempt`, built natively and checked against `ren run`.
+
+fn validate(xs: Array<Int>) -> Array<Int> ! Empty =
+  if xs == [] then fail Empty
+  xs
+
+fn total(xs: Array<Int>, fee: Int) -> Int =
+  var t = fee
+  for x in xs
+    t += x
+  t
+
+fn capped(n: Int, most: Int) -> Int ! TooBig(n: Int) =
+  if n > most then fail TooBig(n)
+  n
+
+fn checkout(xs: Array<Int>) -> Int ! Empty | TooBig(n: Int) =
+  xs
+    |> try validate
+    |> total(1)
+    |> try capped(100)
+
+fn first_over(xs: Array<Int>, n: Int) -> Option<Int> =
+  var found: Option<Int> = None
+  for x in xs
+    if found == None && x > n then found = Some(x)
+  found
+
+fn main() uses Console =
+  print(attempt checkout([5, 6]))                  // Ok(12)
+  print(attempt checkout([]))                      // Err(Empty)
+  print(attempt checkout([500]))                   // Err(TooBig(501))
+  print([5, 20, 30] |> first_over(10) orelse 0)    // 20
+  print([5] |> first_over(10) orelse 0)            // 0
+  let evens = [1, 2, 3, 4]
+    .select(fn(x) => x % 2 == 0)
+  print(evens |> total(0))                         // 6
+  print(attempt [7] |> show)                       // Ok([7])

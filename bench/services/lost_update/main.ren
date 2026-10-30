@@ -1,0 +1,39 @@
+// The services stage's milestone, part two (compiler.md, "Services
+// stage"; foundations.md, Staging, item 6): a lost update split over two
+// operations of one actor. `append` reads the text with one operation
+// and writes it with a second inside one `Docs.at` block, and another
+// session's operations can come in between, since the block pins the
+// actor but each operation takes it for one call. `ren test --sim
+// --seeds 200` finds a seed under which an edit is lost, and `ren test
+// --seed` with it fails the same way again. fixed.ren is the same
+// document with one operation, which can't lose one.
+
+pub type DocId = | DocId(name: Str)
+
+pub dep Doc =
+  text: fn() -> Str
+  set: fn(t: Str)
+  add: fn(s: Str)
+
+pub handler doc(id: DocId) for Doc =
+  var text = ""
+  text() => text
+  set(t) => text = t
+  add(s) => text = text.concat(s)
+
+pub dep Docs = Actors<DocId, Doc>
+
+// the bug: another session's operation can run between the read and
+// the write
+pub fn append(id: DocId, s: Str) uses Docs =
+  Docs.at(id) fn() =>
+    let t = Doc.text()
+    Doc.set(t.concat(s))
+
+test "two sessions' edits both land" =
+  with actors(doc) as Docs in
+    Async.scope fn(s) =>
+      s.spawn fn() => append(DocId("a"), "x")
+      s.spawn fn() => append(DocId("a"), "y")
+    Docs.at(DocId("a")) fn() =>
+      assert Doc.text().bytes().len() == 2

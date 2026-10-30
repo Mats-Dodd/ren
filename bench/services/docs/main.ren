@@ -1,0 +1,170 @@
+// The document server (language.md §11), the services stage's milestone
+// (compiler.md, "Services stage"): each document is an actor, one per
+// key, made on demand and evicted under a cap; a session is a connection
+// over `sim.net()` that opens a document, joins it, sends its edits and
+// leaves; every edit is written through to the store and sent to every
+// subscriber, so each sees one order. The protocol is a stand-in for the
+// framed reader a real server would have: one message, a document's
+// name on the first line and an edit on each line after it, each
+// `+text`, answered with `done` once they're all applied. An `Op`
+// appends.
+//
+// THE CHECKS run its tests under a thousand seeds with chaos eviction,
+// `ren test --seeds 1000 --chaos`: nothing it needs lives only in
+// memory, since the store has every edit before the next one starts.
+
+import sim.{SimNet}
+
+pub type DocId = | DocId(name: Str)
+pub type Op = | Append(text: Str)
+
+// ---- the services ----
+
+pub dep Store =
+  load: fn(id: DocId) -> Str ! StoreDown
+  save: fn(id: DocId, text: Str) ! StoreDown
+
+// what a document sends its subscribers: one line each
+pub dep Conns =
+  send: fn(c: Conn, line: Str)
+
+pub dep Doc =
+  edit: fn(op: Op) -> Int ! StoreDown
+  join: fn(c: Conn)
+  leave: fn(c: Conn)
+
+// a document: made when a session first opens it, from what the store
+// holds; each edit is saved before it's sent, so the store holds what's
+// durable and every subscriber sees one order
+pub handler doc(id: DocId) for Doc uses Store, Conns =
+  var text = try Store.load(id)
+  var version = 0
+  var subs: Array<Conn> = []
+  edit(op) =>
+    let Append(s) = op
+    text = text.concat(s)
+    try Store.save(id, text)
+    version += 1
+    for c in subs
+      Conns.send(c, s)
+    version
+  join(c) => &subs.push(c)
+  leave(c) => subs = subs.reject(fn(x) => x == c)
+
+pub dep Docs = Actors<DocId, Doc> ! StoreDown
+
+// what sends a line to a connection, over the network
+pub handler net_conns() for Conns uses Net =
+  send(c, line) =>
+    match attempt Net.write(c, line.concat("\n").bytes())
+      _ => ()
+
+// the composition root: the store, the connections, and the documents,
+// at most `max` of them live at once
+pub wiring live(max: Int) provides Docs uses Net, Store = net_conns(), actors(doc, max: max) as Docs
+
+// ---- a session ----
+
+// a session's message: the document's name, then its edits
+pub fn parse(msg: Str) -> (DocId, Array<Op>) ! BadRequest =
+  let lines = msg.trim().split("\n")
+  if lines == [] then fail BadRequest
+  var ops: Array<Op> = []
+  for l in lines.drop(1)
+    if not l.starts_with("+") then fail BadRequest
+    &ops.push(Append(Str.from_utf8(l.bytes()[1..l.bytes().len()]) orelse fail BadRequest))
+  (DocId(lines[0]), ops)
+
+pub fn session(conn: Conn) ! StoreDown | BadRequest | NetError uses Docs, Net =
+  let msg = Str.from_utf8(try Net.read(conn, 10_000)) orelse fail BadRequest
+  let (id, ops) = try parse(msg)
+  try Docs.at(id) fn() =>
+    Doc.join(conn)
+    for op in ops
+      let _ = try Doc.edit(op)
+    Doc.leave(conn)
+  try Net.write(conn, "done\n".bytes())
+
+pub fn serve(addr: Addr) ! NetError uses Docs, Net, Console, Async =
+  let listener = try Net.listen(addr)
+  try Async.scope(max: 10_000) fn(s) =>
+    var open = true
+    while open
+      match try Net.accept_until(listener, Signal.term)
+        Some(conn) =>
+          s.spawn fn() =>
+            match attempt session(conn)
+              Ok(_) => Net.close(conn)
+              Err(_) =>
+                Console.error("session failed")
+                Net.close(conn)
+        None => open = false
+
+pub fn main() ! NetError uses Net, Console, Async =
+  with mem_store(), live(50_000) in
+    try serve(Addr { host: "127.0.0.1", port: 8080 })
+
+// ---- tests: a store in memory, sessions over `sim.net()` ----
+
+// a store that keeps the last text saved for each document
+pub handler mem_store() for Store =
+  var saved: Map<Str, Str> = Map.empty
+  load(id) =>
+    let DocId(name) = id
+    saved.get(name) orelse ""
+  save(id, text) =>
+    let DocId(name) = id
+    &saved.set(name, text)
+
+pub dep Seen =
+  lines: fn(c: Conn) -> Array<Str>
+  conns: fn() -> Array<Conn>
+
+// connections that keep what each was sent, for a test to read
+test handler seen_conns() for Conns, Seen =
+  var sent: Array<(Conn, Str)> = []
+  send(c, line) => &sent.push((c, line))
+  lines(c) => sent.select(fn((d, _)) => d == c).map(fn((_, l)) => l)
+  conns() => sent.map(fn((d, _)) => d).uniq()
+
+test fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
+
+test fn run_server() uses Docs, Net, Console, Async =
+  match attempt serve(here())
+    Ok(_) => ()
+    Err(_) => Console.error("serve failed")
+
+// a client: connects, sends its message, and waits for `done`
+test fn client(msg: Str) ! NetError uses Net, SimNet =
+  let c = try SimNet.connect(here())
+  try Net.write(c, msg.bytes())
+  let _ = try Net.read(c, 100)
+  Net.close(c)
+
+// what [a] and [b] both saw, in [a]'s order and in [b]'s, are the same
+test fn one_order(a: Array<Str>, b: Array<Str>) -> Bool =
+  a.select(fn(x) => b.includes(x)) == b.select(fn(x) => a.includes(x))
+
+test "every subscriber sees one order of edits" =
+  with sim.net(), mem_store(), seen_conns(), actors(doc, max: 2) as Docs in
+    try Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      Async.each(["a\n+1\n+2", "a\n+3\n+4", "a\n+5\n+6", "b\n+7"]) fn(m) =>
+        match attempt client(m)
+          _ => ()
+      SimNet.signal(Signal.term)
+    let conns = Seen.conns()
+    for c in conns
+      for d in conns
+        assert one_order(Seen.lines(c), Seen.lines(d))
+
+test "the store holds the final text" =
+  with sim.net(), mem_store(), seen_conns(), actors(doc, max: 1) as Docs in
+    try Async.scope fn(s) =>
+      s.spawn fn() => run_server()
+      Async.each(["a\n+1\n+2", "b\n+3", "a\n+4", "c\n+5"]) fn(m) =>
+        match attempt client(m)
+          _ => ()
+      SimNet.signal(Signal.term)
+    assert try Store.load(DocId("a")).bytes().len() == 3
+    assert try Store.load(DocId("b")) == "3"
