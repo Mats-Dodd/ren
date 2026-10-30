@@ -1,0 +1,10 @@
+/* Reset only, in the lowest-priority layer so StyleX's layered output always wins.
+   (Unlayered CSS would beat every @layer rule, including all token-driven margins.) */
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body, h1, h2, h3, p, figure, dl, dd, ol, ul, pre { margin: 0; }
+  ol, ul { padding: 0; }
+  img, svg { display: block; max-width: 100%; }
+  button { font: inherit; color: inherit; }
+}

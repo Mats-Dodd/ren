@@ -1,0 +1,7 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { type } from './styles';
+interface Props { tone?: 'muted' | 'ink' | 'signal'; as?: string }
+const { tone = 'muted', as: Tag = 'span' } = Astro.props;
+---
+<Tag {...stylex.attrs(type.label, tone === 'ink' && type.labelInk, tone === 'signal' && type.labelSignal)}><slot /></Tag>

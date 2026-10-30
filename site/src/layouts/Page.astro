@@ -1,0 +1,65 @@
+---
+import '@fontsource/ibm-plex-sans/latin-400.css';
+import '@fontsource/ibm-plex-sans/latin-400-italic.css';
+import '@fontsource/ibm-plex-sans/latin-500.css';
+import '@fontsource/ibm-plex-sans/latin-600.css';
+import '@fontsource/ibm-plex-mono/latin-400.css';
+import '@fontsource/ibm-plex-mono/latin-400-italic.css';
+import '@fontsource/ibm-plex-mono/latin-500.css';
+import '@fontsource/ibm-plex-mono/latin-600.css';
+import '@fontsource-variable/archivo/wdth.css';
+import '../styles/global.css';
+import * as stylex from '@stylexjs/stylex';
+import { base, layout } from '../system/primitives/styles';
+import { darkTheme } from '../system/tokens.stylex';
+import RunningHeader from '../system/chrome/RunningHeader.astro';
+import RunningFooter from '../system/chrome/RunningFooter.astro';
+import { DOC } from '../lib/doc';
+
+interface Props {
+  title: string; section?: string; description?: string;
+  prev?: { href: string; label: string }; next?: { href: string; label: string };
+  frontmatter?: Props;
+}
+const p = Astro.props.frontmatter ?? Astro.props;
+const depth = Astro.url.pathname.split('/').filter(Boolean).length - 1;
+const root = depth > 0 ? '../'.repeat(depth) : './';
+const darkClass = stylex.attrs(darkTheme).class ?? '';
+---
+<!doctype html>
+<html lang="en" {...stylex.attrs(base.html)}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{p.title} · Ren</title>
+  {p.description && <meta name="description" content={p.description} />}
+  <script is:inline define:vars={{ darkClass }}>
+    (() => {
+      const root = document.documentElement;
+      const apply = (mode) => {
+        darkClass.split(' ').forEach((c) => c && root.classList.toggle(c, mode === 'dark'));
+        root.style.colorScheme = mode;
+        document.querySelectorAll('[data-theme-switch]').forEach((b) => (b.textContent = mode === 'dark' ? 'Dark' : 'Light'));
+      };
+      let mode = 'light';
+      try { mode = localStorage.getItem('ren-theme') === 'dark' ? 'dark' : 'light'; } catch {}
+      apply(mode);
+      document.addEventListener('DOMContentLoaded', () => {
+        apply(mode);
+        document.querySelectorAll('[data-theme-switch]').forEach((b) => b.addEventListener('click', () => {
+          mode = mode === 'dark' ? 'light' : 'dark';
+          try { localStorage.setItem('ren-theme', mode); } catch {}
+          apply(mode);
+        }));
+      });
+    })();
+  </script>
+</head>
+<body {...stylex.attrs(base.body)}>
+  <div {...stylex.attrs(base.page)}>
+    <RunningHeader section={p.section} root={root} />
+    <main {...stylex.attrs(layout.article)}><slot /><div {...stylex.attrs(layout.clear)} /></main>
+    <RunningFooter prev={p.prev} next={p.next} />
+  </div>
+</body>
+</html>

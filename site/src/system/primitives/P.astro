@@ -1,0 +1,6 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { type } from './styles';
+interface Props { lede?: boolean }
+---
+<p {...stylex.attrs(Astro.props.lede ? type.lede : type.p)}><slot /></p>

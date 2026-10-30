@@ -1,0 +1,13 @@
+---
+// A drawing frame: hairline box with a label tab set into the top rule.
+import * as stylex from '@stylexjs/stylex';
+import { frame, layout, type } from './styles';
+interface Props { tab: string; tabRight?: string; caption?: string; panel?: boolean; wide?: boolean; scroll?: boolean }
+const { tab, tabRight, caption, panel = false, wide = false, scroll = false } = Astro.props;
+---
+<figure {...stylex.attrs(frame.figure, panel && frame.panel, wide ? layout.wide : layout.measure)}>
+  <span {...stylex.attrs(type.label, frame.tab)}>{tab}</span>
+  {tabRight && <span {...stylex.attrs(frame.tabRight, type.label)}>{tabRight}</span>}
+  <div {...stylex.attrs(scroll && frame.scroll)}><slot /></div>
+  {caption && <figcaption {...stylex.attrs(frame.caption)}>{caption}</figcaption>}
+</figure>

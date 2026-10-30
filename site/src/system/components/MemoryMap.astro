@@ -1,0 +1,34 @@
+---
+// One 64-byte cache line per row. Field widths are to scale.
+import * as stylex from '@stylexjs/stylex';
+import { memmap as s } from './styles';
+import { type } from '../primitives/styles';
+import Frame from '../primitives/Frame.astro';
+import type { MemoryRow } from '../../lib/schema';
+interface Props { rows: MemoryRow[]; fig: string; title?: string; caption?: string }
+const { rows, fig, title, caption } = Astro.props;
+const ticks = [0, 8, 16, 24, 32, 40, 48, 56, 64];
+---
+<Frame tab={`FIG ${fig} · MEMORY MAP${title ? ' · ' + title.toUpperCase() : ''}`} tabRight="64 B / LINE" caption={caption} wide scroll>
+  <div {...stylex.attrs(s.root)}>
+    <div {...stylex.attrs(s.ruler)} aria-hidden="true">
+      {ticks.map((t) => <>
+        <span {...stylex.attrs(s.tick)} style={`left:${(t / 64) * 100}%`} />
+        <span {...stylex.attrs(type.label, s.tickLabel, t === 64 && s.tickLabelEnd)} style={`left:${(t / 64) * 100}%`}>{t}</span>
+      </>)}
+    </div>
+    {rows.map((r) => (
+      <div {...stylex.attrs(s.row)}>
+        <span {...stylex.attrs(type.label, type.labelInk, s.rowLabel)}>{r.label}</span>
+        <div {...stylex.attrs(s.line)} role="list" aria-label={r.label}>
+          {r.fields.map((f, i) => (
+            <span role="listitem" style={`grid-column: span ${f.bytes}`} title={`${f.name}: ${f.bytes} B`}
+              {...stylex.attrs(s.cell, s[f.kind ?? 'data'], i === r.fields.length - 1 && s.last)}>
+              {f.bytes >= 4 && <>{f.name}<span {...stylex.attrs(s.bytes)}>{f.bytes}B</span></>}
+            </span>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+</Frame>

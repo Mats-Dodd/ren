@@ -1,0 +1,40 @@
+---
+// Deterministic-simulation trace drawn as a logic-analyzer capture.
+import * as stylex from '@stylexjs/stylex';
+import { timing as s } from './styles';
+import Frame from '../primitives/Frame.astro';
+import type { Trace } from '../../lib/schema';
+interface Props { trace: Trace; fig: string; title?: string; caption?: string; seed?: string }
+const { trace, fig, title, caption, seed } = Astro.props;
+const W = 760, x0 = 110, x1 = 740, laneH = 58, top = 34;
+const x = (t: number) => x0 + (t / trace.ticks) * (x1 - x0);
+const y = (l: number) => top + l * laneH;
+const axisY = y(trace.lanes.length - 1) + 40;
+const H = axisY + 26;
+const ticks = Array.from({ length: Math.floor(trace.ticks / trace.step) + 1 }, (_, i) => i * trace.step);
+---
+<Frame tab={`FIG ${fig} · TRACE${title ? ' · ' + title.toUpperCase() : ''}`} tabRight={seed ? `SEED ${seed}` : undefined} caption={caption} wide scroll>
+  <svg viewBox={`0 0 ${W} ${H}`} {...stylex.attrs(s.svg)} role="img" aria-label={`Simulation trace across ${trace.lanes.join(', ')}`}>
+    <defs>
+      <marker id={`ah-${fig}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L8,4 L0,8 Z" {...stylex.attrs(s.head)} />
+      </marker>
+    </defs>
+    {trace.lanes.map((name, i) => <g>
+      <text x="0" y={y(i) + 4} {...stylex.attrs(s.laneLabel)}>{name.toUpperCase()}</text>
+      <line x1={x0} x2={x1} y1={y(i)} y2={y(i)} {...stylex.attrs(s.lane)} />
+    </g>)}
+    {trace.messages.map((m) => <line x1={x(m.t0)} y1={y(m.from)} x2={x(m.t1)} y2={y(m.to)} marker-end={`url(#ah-${fig})`} {...stylex.attrs(s.msg)} />)}
+    {trace.messages.map((m) => <circle cx={x(m.t0)} cy={y(m.from)} r="2.5" {...stylex.attrs(s.dot)} />)}
+    {trace.events.map((e) => e.fault ? <g>
+      <line x1={x(e.t) - 6} x2={x(e.t) + 6} y1={y(e.lane) - 6} y2={y(e.lane) + 6} {...stylex.attrs(s.fault)} />
+      <line x1={x(e.t) - 6} x2={x(e.t) + 6} y1={y(e.lane) + 6} y2={y(e.lane) - 6} {...stylex.attrs(s.fault)} />
+      <text x={x(e.t) + 10} y={y(e.lane) - 10} {...stylex.attrs(s.faultLabel)}>{e.label}</text>
+    </g> : <text x={x(e.t)} y={y(e.lane) - 10} text-anchor="middle" {...stylex.attrs(s.evLabel)}>{e.label}</text>)}
+    <line x1={x0} x2={x1} y1={axisY} y2={axisY} {...stylex.attrs(s.axis)} />
+    {ticks.map((t) => <g>
+      <line x1={x(t)} x2={x(t)} y1={axisY} y2={axisY + 5} {...stylex.attrs(s.axis)} />
+      <text x={x(t)} y={axisY + 18} text-anchor="middle" {...stylex.attrs(s.tickLabel)}>T+{t}</text>
+    </g>)}
+  </svg>
+</Frame>

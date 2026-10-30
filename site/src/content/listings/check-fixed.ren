@@ -1,0 +1,6 @@
+// check.ren
+fn check(n: Int) -> Int =
+  if n < 0 then fail Negative(n) else n
+
+fn main() =
+  print(try check(4))

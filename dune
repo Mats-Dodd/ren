@@ -1,3 +1,4 @@
 ; editors/ holds the editor support, not OCaml, and Zed clones this whole
 ; repository under editors/zed/grammars to build the grammar from it.
-(dirs :standard \ editors)
+; site/ is the manual's website, an Astro project with its own node_modules.
+(dirs :standard \ editors site)

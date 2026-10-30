@@ -1,0 +1,19 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { chrome } from './styles';
+import { type } from '../primitives/styles';
+import { DOC } from '../../lib/doc';
+interface Props { section?: string; root: string }
+const { section, root } = Astro.props;
+---
+<header {...stylex.attrs(chrome.header)}>
+  <span {...stylex.attrs(chrome.group)}>
+    <a href={`${root}index.html`} {...stylex.attrs(type.label, type.labelInk, chrome.home)}>{DOC.id}</a>
+    <span {...stylex.attrs(type.label, chrome.hideNarrow)}>{DOC.title}</span>
+  </span>
+  <span {...stylex.attrs(chrome.group)}>
+    {section && <span {...stylex.attrs(type.label, type.labelInk)}>{section}</span>}
+    <span {...stylex.attrs(type.label)}>REV {DOC.rev}</span>
+    <button type="button" data-theme-switch {...stylex.attrs(type.label, chrome.switch)} aria-label="Switch theme">Light</button>
+  </span>
+</header>

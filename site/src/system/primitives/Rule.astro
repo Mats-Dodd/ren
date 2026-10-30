@@ -1,0 +1,6 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { rule } from './styles';
+interface Props { weight?: 'hair' | 'heavy' }
+---
+<hr {...stylex.attrs(rule.base, rule[Astro.props.weight ?? 'hair'])} />

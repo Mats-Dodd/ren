@@ -1,0 +1,17 @@
+---
+// Effect row as an indicator panel. Lit = the function performs this effect.
+import * as stylex from '@stylexjs/stylex';
+import { lamp } from './styles';
+import { type } from '../primitives/styles';
+import { EFFECTS, type Effect } from '../../lib/schema';
+interface Props { on: Effect[]; all?: readonly Effect[] }
+const { on, all = EFFECTS } = Astro.props;
+---
+<span {...stylex.attrs(lamp.panel)} role="list" aria-label={`Effects: ${on.join(', ') || 'none'}`}>
+  {all.map((e) => (
+    <span role="listitem" {...stylex.attrs(lamp.item)}>
+      <span aria-hidden="true" {...stylex.attrs(lamp.dot, on.includes(e) ? lamp.on : lamp.off)} />
+      <span {...stylex.attrs(type.label, on.includes(e) && type.labelInk)}>{e}</span>
+    </span>
+  ))}
+</span>

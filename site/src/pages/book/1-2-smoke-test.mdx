@@ -1,0 +1,123 @@
+---
+layout: ../../layouts/Page.astro
+title: "§1.2 Smoke test"
+section: "§1.2 SMOKE TEST"
+description: "Build and run the first Ren program."
+prev: { href: "../index.html", label: "§1.1 Installation" }
+next: { href: "../standards.html", label: "§2 Guessing game" }
+---
+import H from '../../system/primitives/H.astro';
+import P from '../../system/primitives/P.astro';
+import Code from '../../system/primitives/Code.astro';
+import A from '../../system/primitives/A.astro';
+import Aside from '../../system/primitives/Aside.astro';
+import SpecBlock from '../../system/components/SpecBlock.astro';
+import Listing from '../../system/components/Listing.astro';
+import Pinout from '../../system/components/Pinout.astro';
+import LampPanel from '../../system/components/LampPanel.astro';
+import FaultTable from '../../system/components/FaultTable.astro';
+import Callout from '../../system/components/Callout.astro';
+import hello from '../../content/listings/hello.ren?raw';
+import check from '../../content/listings/check.ren?raw';
+import fixed from '../../content/listings/check-fixed.ren?raw';
+import checkError from '../../content/listings/check-error.txt?raw';
+import types from '../../content/listings/types.txt?raw';
+
+export const components = { p: P, code: Code, a: A };
+
+export const main = {
+  name: 'main', module: 'hello',
+  params: [], uses: ['Console'], returns: 'Unit', errors: [],
+  effects: ['IO'],
+};
+
+export const checkSig = {
+  name: 'check', module: 'check',
+  params: [{ name: 'n', type: 'Int' }], uses: [], returns: 'Int', errors: ['Negative(Int)'],
+  effects: ['FAIL'],
+};
+
+<H level={1} n="1.2">Smoke test</H>
+
+<P lede>Before anything else, confirm the toolchain builds and runs a program. Then break it once, on purpose, and read what the compiler says.</P>
+
+<SpecBlock
+  section="1.2"
+  rows={[
+    ['Requires', '§1.1 Installation. A terminal.'],
+    ['Introduces', '`fn`, `print`, `fail`, `try`, `ren run`, `ren types`'],
+    ['Time', '10 minutes'],
+  ]}
+  effects={['IO', 'FAIL']}
+/>
+
+<H n="1.2.1">The program</H>
+
+Create a file named `hello.ren` and enter Listing 1-1.
+
+<Listing
+  n="1-1"
+  title="Hello, world"
+  file="hello.ren"
+  code={hello}
+  notes={[
+    { line: 2, text: 'Every program starts at main. A body follows the =, indented.' },
+    { line: 3, text: 'print writes a value on a line of its own, through the Console dependency.' },
+  ]}
+/>
+
+<H n="1.2.2">Running it</H>
+
+<Listing n="1-2" title="Run" lang="shell" code={"$ ren run hello.ren\nHello, world."} />
+
+If the output matches, the toolchain works. `ren run` checks the program and runs it in one step. §1.3 covers `ren build`, which compiles through C to a binary that prints the same thing.
+
+<H n="1.2.3">Reading the signature</H>
+
+<Aside>Pins are numbered counter-clockwise from the notch, as on a real part. Inputs enter on the left; results and faults leave on the right.</Aside>
+
+`main` writes nothing about what it touches, yet it touches the terminal. A private function's dependencies and errors are inferred; a `pub` one writes them out in full. Either way the compiler knows them, and the manual draws them as a pinout. Effects show as lamps along the base: <LampPanel on={['IO']} />
+
+<Pinout sig={main} fig="1-1" caption="main takes nothing, uses Console, returns Unit and cannot fail. The uses pin was inferred from the call to print." />
+
+<Callout>
+  <span>`uses` is not an import. A dependency is installed by whoever runs the code. In a test, `Console` is a test implementation that records what was written; under `ren run`, it is the terminal.</span>
+</Callout>
+
+<H n="1.2.4">The first fault</H>
+
+Listing 1-3 adds a function that can fail. `fail` stops it with an error, here a tag named `Negative` carrying the number.
+
+<Listing n="1-3" title="A function that can fail" file="check.ren" code={check} faultLines={[6]} notes={[
+  { line: 3, text: 'fail stops check with Negative(n). Since check is private, its errors are inferred.' },
+  { line: 6, text: 'This call can fail, and nothing says what happens if it does.' },
+]} />
+
+<Listing n="1-4" title="Compiler output" lang="shell" code={checkError} faultLines={[2]} />
+
+Every call that can fail is marked. An unmarked one is an error, so the places a function can stop are visible when you skim it.
+
+<FaultTable
+  message="`check` can fail, and nothing handles it"
+  meaning="A call can fail and has no marker. `try` passes its errors on, `match` handles them, `attempt` turns them into a `Result`."
+  help="print(try check(4))"
+  see="§9.1 Marking"
+/>
+
+<Listing n="1-5" title="Fixed" file="check.ren" code={fixed} notes={[
+  { line: 6, text: 'try passes Negative on to main’s caller. main can now fail with it.' },
+]} />
+
+`try` moved the error up one level, so `main` can fail too. Ask the compiler what it inferred:
+
+<Listing n="1-6" title="Inferred signatures" lang="shell" code={types} />
+
+<Pinout sig={checkSig} fig="1-2" caption="check: one input, one result, one fault output. The FAIL lamp is lit." />
+
+Change the call to `check(-1)` and run it again. `main` fails, so the program prints the error and exits with status 1:
+
+<Listing n="1-7" title="main fails" lang="shell" code={"$ ren run check.ren\nerror: Negative(-1)"} faultLines={[2]} />
+
+<Callout kind="design">
+  <span>Why can't a call that might fail go unmarked? Because the signature is the contract and the body is read quickly. A reviewer skimming `main` should see every place it can stop without opening `check`. The marker costs four characters; a hidden exit costs an incident.</span>
+</Callout>

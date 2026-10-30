@@ -1,0 +1,6 @@
+---
+import * as stylex from '@stylexjs/stylex';
+import { type } from './styles';
+const { href } = Astro.props;
+---
+<a href={href} {...stylex.attrs(type.a)}><slot /></a>
