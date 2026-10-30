@@ -1,0 +1,52 @@
+Benchmark 1: null (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time      9.9 ms  ±     0.3 ms       9.7 ms  …    11.2 ms
+  Memory         4.8 MiB ±     0.0 MiB      4.8 MiB …     4.8 MiB
+ 
+  Warning: The first benchmarking run for this command was significantly slower than the rest (11.2 ms). This could be caused by (filesystem) caches that were not filled until after the first run. You are already using the '--warmup' option which helps to fill these caches before the actual benchmark. You can either try to increase the warmup count further or re-run this benchmark on a quiet system in case it was a random outlier. Alternatively, consider using the '--prepare' option to clear the caches before each timing run.
+ 
+Benchmark 2: chain (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    184.5 ms  ±     3.6 ms     180.5 ms  …   194.4 ms         +1772.7%  (18.7x slower)
+  Memory         4.9 MiB ±     0.0 MiB      4.8 MiB …     4.9 MiB           +0.9%
+ 
+Benchmark 3: lenswitch (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    180.8 ms  ±     2.1 ms     178.1 ms  …   187.0 ms         +1735.0%  (18.4x slower)
+  Memory         4.9 MiB ±     0.0 MiB      4.9 MiB …     4.9 MiB           +1.0%
+ 
+Benchmark 4: ph_memcmp (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    170.8 ms  ±     3.8 ms     162.4 ms  …   180.0 ms         +1633.1%  (17.3x slower)
+  Memory         4.9 MiB ±     0.0 MiB      4.8 MiB …     4.9 MiB           +0.9%
+ 
+Benchmark 5: ph_neon (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     45.6 ms  ±     0.3 ms      44.9 ms  …    46.3 ms          +362.7%  (4.6x slower)
+  Memory         4.8 MiB ±     0.0 MiB      4.8 MiB …     4.9 MiB            0.0%
+ 
+Benchmark 6: ph_pad (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     45.2 ms  ±     0.3 ms      44.7 ms  …    45.8 ms          +358.4%  (4.6x slower)
+  Memory         4.8 MiB ±     0.0 MiB      4.8 MiB …     4.8 MiB            0.0%
+ 
+Benchmark 7: ph_word (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     45.1 ms  ±     0.8 ms      44.3 ms  …    47.8 ms          +357.5%  (4.6x slower)
+  Memory         4.8 MiB ±     0.0 MiB      4.8 MiB …     4.9 MiB           +0.2%
+ 
+Benchmark 8: hmap (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    229.1 ms  ±     4.6 ms     222.1 ms  …   242.4 ms         +2225.4%  (23.3x slower)
+  Memory         4.9 MiB ±     0.0 MiB      4.9 MiB …     4.9 MiB           +1.0%
+ 
+Benchmark 9: gperf (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    185.7 ms  ±     3.5 ms     180.8 ms  …   195.4 ms         +1785.0%  (18.9x slower)
+  Memory         4.9 MiB ±     0.0 MiB      4.8 MiB …     4.9 MiB           +0.9%
+ 
+Benchmark 10: rust (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    122.2 ms  ±     7.7 ms     114.4 ms  …   144.8 ms         +1140.7%  (12.4x slower)
+  Memory         6.4 MiB ±     0.0 MiB      6.4 MiB …     6.4 MiB          +32.9%  (1.3x more)
+ 

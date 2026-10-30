@@ -1,0 +1,5 @@
+let LIMIT = 3 + 4
+let NAMES = ["a", "b"]
+
+fn main() =
+  print(LIMIT.show())

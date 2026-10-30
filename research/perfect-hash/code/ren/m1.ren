@@ -1,0 +1,8 @@
+fn code(m: Str) -> Int =
+  match m
+    "GET" => 1
+    "POST" => 2
+    _ => 0
+
+fn main() uses Console =
+  print(code("POST"))

@@ -1,0 +1,12 @@
+log load-before { 3.89 6.34 6.70 }
+log load-after { 6.69 6.27 6.58 }
+sql load-before { 4.27 5.62 6.43 }
+sql load-after { 4.75 5.61 6.39 }
+html load-before { 3.57 5.01 6.08 }
+html load-after { 6.58 5.54 6.07 }
+base load-before { 3.85 6.14 6.85 }
+base load-after { 3.85 6.14 6.85 }
+instr load-before { 3.85 6.14 6.85 }
+instr load-after { 4.50 6.20 6.86 }
+log2 load-before { 3.76 5.75 6.65 }
+log2 load-after { 4.83 5.37 6.36 }

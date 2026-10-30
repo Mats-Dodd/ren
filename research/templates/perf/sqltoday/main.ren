@@ -1,0 +1,12 @@
+type P = PInt(Int) | PStr(Str)
+
+fn params(owner: Int, state: Str, since: Int, n: Int) -> Array<P> =
+  [PInt(owner), PStr(state), PInt(since), PInt(n)]
+
+fn main() uses Console =
+  var t = 0
+  let states = ["queued", "running"]
+  for i in 0..10_000_000
+    let ps = params(i % 977, states[i % 2], 1700000000 + i, 50 + i % 16)
+    t += ps.len()
+  print(t)

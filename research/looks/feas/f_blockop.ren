@@ -1,0 +1,5 @@
+dep Tx =
+  run: fn(body: fn() -> Int) -> Int
+
+fn main() =
+  print("hi")

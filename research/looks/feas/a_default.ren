@@ -1,0 +1,5 @@
+dep Keys =
+  list: fn(prefix: Str = "", limit: Int = 100) -> Int
+
+fn main() =
+  print("hi")

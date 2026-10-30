@@ -1,0 +1,4 @@
+type P = { x: Int, y: Int }
+fn main() =
+  let s = P.shape
+  print("hi")

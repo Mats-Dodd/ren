@@ -1,0 +1,6 @@
+dep Keys =
+  get: fn(key: Str) -> Int
+handler mem() for Keys =
+  get(key) => key.len()
+fn main() uses Console =
+  with mem() in print(Keys.get(key: "abc"))

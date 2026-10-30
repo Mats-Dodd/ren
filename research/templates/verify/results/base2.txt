@@ -1,0 +1,10 @@
+Benchmark 1: c-n0 (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time      2.4 ms  ±     0.1 ms       2.3 ms  …     2.7 ms
+  Memory         1.4 MiB ±     0.0 MiB      1.4 MiB …     1.4 MiB
+ 
+Benchmark 2: rust-n0 (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time      2.2 ms  ±     0.1 ms       2.1 ms  …     2.3 ms            -9.9%
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           +3.3%
+ 

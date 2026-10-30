@@ -1,0 +1,36 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name utf8_ghash
+%define lookup-function-name utf8_gperf_find
+%compare-strncmp
+struct utf8_g { const char *name; int idx; };
+%%
+café, 0
+cafe, 1
+cafè, 2
+naïve, 3
+naive, 4
+日本, 5
+日本語, 6
+日本人, 7
+😀, 8
+😁, 9
+Ünïcödé, 10
+é, 11
+è, 12
+ß, 13
+ss, 14
+Straße, 15
+Strasse, 16
+Привет, 17
+привет, 18
+ﬁ, 19
+fi, 20
+ , 21
+ , 22
+á, 23
+á, 24
+αβγδεζηθικλμνξο, 25
+%%

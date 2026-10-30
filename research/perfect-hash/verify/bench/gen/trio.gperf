@@ -1,0 +1,13 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name trio_ghash
+%define lookup-function-name trio_gperf_find
+%compare-strncmp
+struct trio_g { const char *name; int idx; };
+%%
+GET, 0
+PUT, 1
+DELETE, 2
+%%

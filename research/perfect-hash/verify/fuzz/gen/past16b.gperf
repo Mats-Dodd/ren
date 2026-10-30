@@ -1,0 +1,21 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name past16b_ghash
+%define lookup-function-name past16b_gperf_find
+%compare-strncmp
+struct past16b_g { const char *name; int idx; };
+%%
+kkkkkkkkkkkkkkkk, 0
+kkkkkkkkkkkkkkkka, 1
+kkkkkkkkkkkkkkkkb, 2
+kkkkkkkkkkkkkkkkaa, 3
+kkkkkkkkkkkkkkkkab, 4
+kkkkkkkkkkkkkkkkba, 5
+kkkkkkkkkkkkkkkkbb, 6
+kkkkkkkkkkkkkkkkaaa, 7
+kkkkkkkkkkkkkkkkzzz, 8
+kkkkkkkkkkkkkkkkaaaaaaaaaa, 9
+kkkkkkkkkkkkkkkkbbbbbbbbbb, 10
+%%

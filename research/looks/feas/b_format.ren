@@ -1,0 +1,5 @@
+type Time = { secs: Int }
+format unix for Time = Int via (Time.from_unix, fn(t) => t.secs)
+
+fn main() =
+  print("hi")

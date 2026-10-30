@@ -1,0 +1,8 @@
+id
+name
+email
+created_at
+updated_at
+status
+owner_id
+tags

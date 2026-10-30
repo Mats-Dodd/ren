@@ -1,0 +1,7 @@
+dep Keys =
+  get: fn(key: Str) -> Int ! NotFound(key: Str)
+handler mem() for Keys =
+  get(key) => 1
+fn main() =
+  with mem() in
+    print(Keys.get(key: "a").show())

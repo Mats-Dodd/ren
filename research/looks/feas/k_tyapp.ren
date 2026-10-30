@@ -1,0 +1,3 @@
+fn size_of<T>(xs: Array<T>) -> Int = xs.len()
+fn main() =
+  print(size_of<Int>([1]).show())

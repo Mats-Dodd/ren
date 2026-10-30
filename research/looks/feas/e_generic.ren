@@ -1,0 +1,6 @@
+dep Chan<T> =
+  send: fn(x: T)
+  recv: fn() -> T
+
+fn main() =
+  print("hi")

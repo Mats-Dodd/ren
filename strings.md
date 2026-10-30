@@ -28,6 +28,7 @@ equality is by bytes, and `trim` and `lower` are ASCII. Items marked
 - [Equality, hashing and order](#equality-hashing-and-order)
 - [The `unicode` module](#the-unicode-module)
 - [Building strings](#building-strings)
+  - [Templates](#templates)
 - [The boundary](#the-boundary)
 - [Characters](#characters)
 - [Retention](#retention)
@@ -273,9 +274,133 @@ let csv = cells.join(",")
   that copied because its string was shared, the one way appending goes
   quadratic again.
 - **`xs.join(sep)`** on an `Array<Str>`.
-- **Libraries that intercept interpolation,** `sql"... \{plan}"`, are
-  stdlib.md's open question (stage 12), not this document's. The hole
-  syntax is the same.
+- **`\{x=}` is `x=\{x}`,** in `"..."` and `t"..."` alike. Only a name
+  or a path may come before `=`. Python's `f"{x=}"` is the model.
+- **A library that wants the holes,** for SQL, HTML or a log line,
+  takes a template, below.
+
+### Templates
+
+A plain string is for text. A template is for a library that needs to
+see the holes before they become text: SQL that must not splice values
+into the query, HTML that must escape, a log line that wants fields.
+Decided on 2026-10-29 from the templates experiment
+(research/templates/).
+
+```ren
+log.info(t"user \{user} paid \{amount}")
+let users = DB.rows<User>(t"select * from \{sql.table(kind)} where id = \{id}")
+let row = html.of(t"<td>\{name}</td><td>\{html.raw_trusted(badge)}</td>")
+```
+
+Six rules:
+
+1. **`"...\{x}"` is a `Str`.** Each hole goes through `show`, as above.
+   The plain case stays the cheapest case.
+2. **`t"...\{x}"` is a `Template<H>`, never a `Str`.** It has a static
+   half, the site, made while building: the parts, the raw parts, and
+   each hole's source text and static type. It has a dynamic half, the
+   holes, evaluated eagerly left to right, as the tuple `H`. Nothing
+   converts between `Str` and a template implicitly. `t.render()` is
+   the only way to a `Str`. A `Str` passed where a template is expected
+   is a type error, the mistake JS can't catch when a tag is missing.
+3. **A template follows the block rule.** It's passed down as an
+   argument, or bound with `let` and passed on. It can't be stored,
+   returned, chosen with `if`, or captured by a block that outlives the
+   call. To keep one, convert it to the consumer's data: `t.render()`,
+   `sql.frag(DB, t)`, `html.of(t)`. A template is two words, the site
+   and a pointer to the holes in the caller's frame, so nothing
+   allocates, at any number of holes, in either build.
+4. **A `let` between a signature and its `=` runs while building, once
+   per call site.** This is the signature `let`. It reads only what's
+   known while building: a template's site, a type's shape, literals,
+   top-level values. A `try` that fails there fails the build, at the
+   call. The body reads the result as a constant, a plan rather than a
+   pass or fail.
+
+   ```ren
+   pub fn rows<T, H>(self: Schema, q: Template<H>) -> Array<T> uses Sql ! DbDown
+     let plan = try sql.plan(self, q.site(), T.shape)   // while building, per call site
+   =
+     Sql.rows(plan.bind(q.holes())) |> try sql.decode_all<T>
+   ```
+
+   It's general, not for templates only: `regex.compile`,
+   `Duration.parse` and json codecs with a literal argument use it too.
+   It's [decision 20](foundations.md#20-what-the-language-owns-and-what-std-owns)
+   rule 3's one mechanism for build-time checks. Two limits, each an
+   error with help: a signature `let` that depends on a type parameter
+   of the caller is refused, because debug builds never specialize
+   (decision 13); and forwarding a template through a wrapper to a
+   signature `let` is refused, so the wrapper takes the consumer's own
+   type (`sql.Query`). It may read only the build's world (`Fs` inside
+   the package, `Git`), never a database.
+5. **A hole's kind or format is a value:** `\{sql.table(k)}`,
+   `\{html.raw_trusted(s)}`, `\{fmt.pad(n, 6)}`. There's no format
+   language. The consumer's plan decides what each hole's type means and
+   refuses the ones it can't handle.
+6. **`\{x=}` is `x=\{x}`,** in templates as in strings.
+
+**The site's identity.** `site.id` is one `Int` per literal, a cache key
+inside one process. It never crosses a journaled dependency call,
+because a rebuilt binary renumbers sites. Where a dependency needs a
+key, a prepared statement or a log message id, the consumer passes
+`site.hash`, a hash of the parts.
+
+**Decisions that came with it:**
+
+- **Passed down, not kept.** A keepable template costs one allocation
+  and loses its call site, so its check is gone. No program in the
+  experiment needed to keep one; each that kept something wanted the
+  consumer's data.
+- **The signature `let` is the build-time mechanism,** for templates
+  and everything else, not a reserved `check` member on the consumer.
+  It's explicit in the callee's signature, and its position (before
+  `=`) says when it runs, the rule top-level `let` already uses.
+- **A lazy log line uses a guard,**
+  `if log.on(Debug) then log.debug(t"tree \{dump(tree)}")`. A block may
+  not return a template (rule 3), so this revises stage 12's G2. Under
+  `log.off()` in a closed world the line compiles out.
+- **Log field names come from the hole's source text.** The log plan
+  refuses a hole that isn't a name or a path.
+- **SQL across a dependency** makes one params array per call, today's
+  cost. Templates make SQL safe and checked, not faster.
+- **No prefix like `DB"..."`.** A prefix is a second spelling of a
+  method call: Java withdrew its template processors (JEP 465) for that
+  reason. In SQL it loses the verb and the row type, and in logs it has
+  nowhere to put the level.
+- **Open:** raw and multi-line literals (`"""..."""`), `b"..."` and
+  `t"..."` are decided together, later. The JSON and HTML programs were
+  full of `\"`.
+
+**Measured,** on an M4 Max, hand-written C as release should emit it,
+against Rust's `write!` (research/templates/verify.md):
+
+- **A log line,** four fields into a reused buffer: 0.39x of Rust's
+  time, 15.2 ns, with 0 allocations. Specialized per `H` only, not per
+  site, it's 0.51x; debug's unspecialized shape is 0.56x.
+- **An HTML row,** five holes, four escaped: 0.63x of Rust's time, 0
+  allocations.
+- **SQL** is safety, not speed. The cost is the params array, as today.
+  What goes away is interpolating into the query text, 82 ns and unsafe.
+- **Today's log line** is 3.3x Rust's time, mostly `snprintf` in
+  `show_int`. A digit-pair `show_int` alone takes it to 2.0x.
+
+**Prior art:**
+
+- **Python's PEP 750:** a template is its own type, and `Template + str`
+  is an error.
+- **Java after JEP 465:** the template is the value, and plain methods
+  process it.
+- **JS tagged templates:** one site per literal, its strings array
+  cached.
+- **C#'s interpolated string handlers:** a `ref struct`, so zero
+  allocation; Ren's lowering measured within noise of it.
+- **Rust's `fmt::Arguments`:** can't outlive its statement, the same
+  rule as rule 3.
+- **C++20's `format_string` and Zig's `std.fmt`:** the check lives in
+  the callee and runs at compile time, as a signature `let` does.
+- **postgres.js and doobie:** a hole's kind is a value, `sql(ident)`.
 
 ## The boundary
 
@@ -500,7 +625,8 @@ error: `'é'` isn't a byte: it's 2 bytes in UTF-8
 - **`s.get(a..b) -> Option<Str>`,** a checked slice for offsets that
   come from input, added only with the same form on `Array` and `Bytes`.
 - **`b"…"` literals** for `Bytes` needles, `b.index(b"\r\n")`, decided
-  with stdlib.md's tagged-template question.
+  together with raw and multi-line literals and `t"…"`
+  ([Templates](#templates)).
 - **Short strings inline,** measured again once the 16-byte layout is
   real, and under contended counts on a hot root (decision 10).
 - **Copying a slice when the compiler proves its root dies first,** an

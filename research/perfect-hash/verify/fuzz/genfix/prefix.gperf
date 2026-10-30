@@ -1,0 +1,37 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name prefix_ghash
+%define lookup-function-name prefix_gperf_find
+%compare-strncmp
+struct prefix_g { const char *name; int idx; };
+%%
+application/vnd.ren.a, 0
+application/vnd.ren.b, 1
+application/vnd.ren.ab, 2
+application/vnd.ren.ba, 3
+application/vnd.ren.abc, 4
+application/vnd.ren.json, 5
+application/vnd.ren.jsonl, 6
+application/vnd.ren.xml, 7
+application/vnd.ren.x, 8
+application/vnd.ren.y, 9
+application/vnd.ren.z, 10
+application/vnd.ren.zz, 11
+application/vnd.ren.zzz, 12
+application/vnd.ren.csv, 13
+application/vnd.ren.tsv, 14
+application/vnd.ren.proto, 15
+application/vnd.ren.protob, 16
+application/vnd.ren.msgpack, 17
+application/vnd.ren.cbor, 18
+application/vnd.ren.bson, 19
+a, 20
+ap, 21
+appli, 22
+applicat, 23
+application/vnd, 24
+application/vnd., 25
+application/vnd.r, 26
+%%

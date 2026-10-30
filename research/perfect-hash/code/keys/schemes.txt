@@ -1,0 +1,6 @@
+http
+https
+ftp
+ws
+wss
+file

@@ -1,0 +1,11 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name emptyonly_ghash
+%define lookup-function-name emptyonly_gperf_find
+%compare-strncmp
+struct emptyonly_g { const char *name; int idx; };
+%%
+, 0
+%%

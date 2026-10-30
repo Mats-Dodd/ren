@@ -1,0 +1,16 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name orig_schemes_ghash
+%define lookup-function-name orig_schemes_gperf_find
+%compare-strncmp
+struct orig_schemes_g { const char *name; int idx; };
+%%
+http, 0
+https, 1
+ftp, 2
+ws, 3
+wss, 4
+file, 5
+%%

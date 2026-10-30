@@ -1,0 +1,5 @@
+{"log-today": "10", "log-today-snp": "10", "log-boxed": "1", "log-passed": "0", "log-passed-site": "0", "log-walk": "0", "log-handler": "0",
+ "rust-log-write": "0", "rust-log-format": "1", "ren-today-binary": "10",
+ "sql-today": "1 (2 mallocs)", "sql-inline": "10", "sql-handler": "0", "sql-boxed": "1", "sql-plan": "0",
+ "rust-sql-static": "1 (elided by LLVM)", "rust-sql-reuse": "0", "rust-sql-build": "0",
+ "html-today": "15", "html-boxed": "1", "html-plan": "0", "html-handler": "0", "rust-html-write": "0", "rust-html-format": "2"}

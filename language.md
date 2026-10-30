@@ -275,6 +275,7 @@ Tested against the compiler on 2026-10-29, after the data stage:
 | Nested patterns and guards | work: `Some(Active(Pro(n))) if n > 3 =>` |
 | Or-patterns | anywhere a pattern goes, nested, `Some(Pro(_) \| Team(_))`, each alternative binding the same names at the same types, and one that matches nothing new an error |
 | `as` | `Pro(n) as old`, binding the whole of what's matched, looser than `\|` |
+| String and list patterns | none: code writes an `==` chain; decided in [List patterns and string patterns](#list-patterns-and-string-patterns) |
 | `if let` | an error whose help writes the `match` or the `let ... else` |
 | `let Some(n) = o else ...` | works, its `else` leaving with `fail`, `break` or `todo`; a `let`, a `for` and a block's parameter take apart anything that always matches, `let Meters(n) = m` too; `o orelse 0` works |
 | Methods on a sum type | work |
@@ -380,6 +381,66 @@ let Pro(seats) = plan else fail NotPro
   to leave".
 - **No `if let`.** A two-arm `match` is barely longer, and `if let` would
   be a second way.
+
+### List patterns and string patterns
+
+```ren
+match (t.method, t.segments())
+  (Get, ["v1", "keys", k]) => get(k)
+  (Put, ["v1", "keys", k]) => put(k, t.body)
+  (Get, ["v1", "stats", ..]) => stats()
+  _ => not_found()
+
+match arg
+  "-h" | "--help" => Help
+  "--out=" ..path => Out(path)
+  "--" ..flag => Unknown(flag)
+  _ => File(arg)
+
+match header
+  "Bearer " ..token => check(token)
+  _ => fail NoToken
+```
+
+Five rules:
+
+1. **A sequence pattern is fixed pieces in front, at most one `..` in
+   the middle, and fixed pieces at the back.** On `Array<T>` a piece is
+   an element pattern: `[]`, `["v1", "keys", k]`, `[first, ..rest]`,
+   `[..init, last]`. On `Str` a piece is a string literal: `"GET"`,
+   `"Bearer " ..token`, `..stem ".json"`, `"<" ..inner ">"`. One rest
+   keeps patterns from becoming a parser: `..k "=" ..v` can't be
+   written; that's `split`'s job. No `Bytes` patterns, no case folding,
+   no regex.
+2. **`..name` binds the middle as a slice of the same type, and `..`
+   alone ignores it.** It copies nothing (decision 17). On `Str` the
+   pieces are valid UTF-8, so the cuts fall on character boundaries and
+   binding never checks or panics. `..x` or `[..xs]` alone is an error
+   whose help writes `x`.
+3. **String literals are patterns wherever a pattern goes,** inside
+   or-patterns and `as` too: `"GET" | "HEAD" =>`, `["v1" | "v2", ..]`.
+   Each alternative binds the same names at the same types.
+4. **Exhaustiveness: array lengths are constructors, and strings are an
+   infinite family.** `[]`, `[_]` and `[_, _, ..]` cover every array
+   with no `_`, as rustc's slice patterns do. A `Str` literal or prefix
+   never covers `Str`, so a string match needs `_` or a binding.
+5. **The first arm that matches wins, and an arm an earlier arm covers
+   is an error.** One arm covers another when its prefix is a prefix of
+   the other's, its suffix a suffix, and its minimum length no longer.
+   A guarded arm that fails falls through to the next arm that can
+   match.
+
+**A string match compiles to a perfect hash.** The literal arms of a
+column become one lookup and a jump, an invisible optimization
+([decision 20](foundations.md#20-what-the-language-owns-and-what-std-owns)
+rule 4): about 1 ns from 2 to 45 keys, against 5.8–8.5 ns for today's
+`==` chain and 3.5–9 ns for Rust's `match` (research/perfect-hash/).
+Rule 5 is what allows it: no literal can be covered, so all of a
+column's literals are looked up at once before any prefix arm, with the
+same result. A library gets the same hash for field names it only knows
+from a shape: `keys.index(s)` on a build-time constant `Array<Str>`
+lowers to it. `http` lowercases header names itself; the language has
+no case-folding pattern.
 
 ### Variant types: narrowing you can see
 
@@ -1292,7 +1353,7 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   operation does (foundations.md decision 10), and the `at` block keeps
   it from being evicted. So a read and a write in two operations race,
   as in every actor system: a read-modify-write is one operation.
-- **`post` is Erlang's cast.** `try Docs.post(k).edit(op)` puts one
+- **`post` is Erlang's cast.** `try Docs.post(k, Doc.Call.Edit { op })` puts one
   operation, with its arguments evaluated now, in k's mailbox and
   returns: a message, which is data, a `Doc.Call`, the call value the
   compiler writes for every dependency. `post` takes a call whose

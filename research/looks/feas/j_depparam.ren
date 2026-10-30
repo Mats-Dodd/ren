@@ -1,0 +1,5 @@
+dep Keys =
+  get: fn(key: Str) -> Int
+fn name_of<D>() -> Str = "x"
+fn main() =
+  print(name_of<Keys>())

@@ -1,0 +1,12 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name emptypair_ghash
+%define lookup-function-name emptypair_gperf_find
+%compare-strncmp
+struct emptypair_g { const char *name; int idx; };
+%%
+, 0
+z, 1
+%%

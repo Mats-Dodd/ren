@@ -1,0 +1,50 @@
+Benchmark 1: log-today (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    763.7 ms  ±     9.4 ms     751.1 ms  …   789.5 ms
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB
+ 
+Benchmark 2: log-today-snp (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time   1254.2 ms  ±    20.3 ms    1219.4 ms  …  1298.1 ms           +64.2%  (1.6x slower)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           +1.8%
+ 
+Benchmark 3: log-boxed (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    169.0 ms  ±     2.1 ms     164.3 ms  …   174.4 ms           -77.9%  (4.5x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           +0.9%
+ 
+Benchmark 4: log-passed (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    199.9 ms  ±     2.0 ms     197.1 ms  …   206.5 ms           -73.8%  (3.8x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB            0.0%
+ 
+Benchmark 5: log-passed-site (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    153.4 ms  ±     1.3 ms     151.3 ms  …   156.7 ms           -79.9%  (5.0x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -0.9%
+ 
+Benchmark 6: log-walk (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    218.9 ms  ±     2.4 ms     214.7 ms  …   224.2 ms           -71.3%  (3.5x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB            0.0%
+ 
+Benchmark 7: log-handler (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    156.7 ms  ±     1.3 ms     153.7 ms  …   158.7 ms           -79.5%  (4.9x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -0.2%
+ 
+Benchmark 8: rust-log-write (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    386.6 ms  ±     3.2 ms     378.2 ms  …   394.7 ms           -49.4%  (2.0x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.7 MiB           +3.5%
+ 
+Benchmark 9: rust-log-format (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    595.3 ms  ±     7.2 ms     581.2 ms  …   609.8 ms           -22.0%
+  Memory         1.6 MiB ±     0.0 MiB      1.5 MiB …     1.6 MiB           +7.9%
+ 
+Benchmark 10: ren-today-binary (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time   1211.1 ms  ±    14.7 ms    1183.9 ms  …  1242.6 ms           +58.6%  (1.6x slower)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -0.2%
+ 

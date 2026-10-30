@@ -1030,7 +1030,7 @@ try Docs.at(id) fn() => Doc.edit(op)
   actors posting to each other in a cycle safe, and an actor made for
   a post never waits for a slot.
 - **`post` is Erlang's cast: a message, and messages are data.**
-  `Docs.post(k).edit(op)` puts one call of `D`, with its arguments,
+  `Docs.post(k, Doc.Call.Edit { op })` puts one call of `D`, with its arguments,
   in k's mailbox and returns. The arguments are evaluated when it's
   posted and are data, copied as an Erlang message is; no block is kept.
   A mailbox is the family's queue of `D.Call`s, and the journal records
@@ -1042,7 +1042,7 @@ try Docs.at(id) fn() => Doc.edit(op)
     anything else is a type error whose help says to handle it inside
     the actor, or to use `at`.
   - **`post` makes its actor, as `at` does,** so setup's errors are
-    `post`'s, `try Docs.post(k).edit(op)`, the only errors a post has; a
+    `post`'s, `try Docs.post(k, Doc.Call.Edit { op })`, the only errors a post has; a
     sibling's post handles them in the operation that posts. Queued
     posts count as waiting for the actor, so an actor with mail is never
     evicted, and a delivery never runs setup. An actor made for a post
@@ -1231,8 +1231,9 @@ builds abstractions out of them. Every feature is placed by five rules:
    - **Build-time checks have one general mechanism:** top-level `let`
      and `assert`, and the checks a generic function makes on its
      constant arguments at build time. Any library uses it; none gets a
-     check written for it alone. Stage 12 spells it; a "signature
-     `let`" is the proposal from the templates experiment.
+     check written for it alone. It's spelled as a signature `let`, a
+     `let` between a signature and its `=` that runs at build time once
+     per call site ([strings.md, Templates](strings.md#templates)).
    - **The reserved names are one closed list:** the derived walk's
      `show`, `repr`, `parse`, `key` and `arbitrary` (the walk's
      generating direction, [testing.md](testing.md)); the operator
@@ -1572,8 +1573,10 @@ and 32-bit references as the default.
    ([language.md §9](language.md#9-collections-array-table-and-pool));
    and `Fs`, `Os`, `Proc` and `Console` natively for a program with no
    tasks, with `Path` as `opaque Bytes` and `Os`'s `ArgNotUtf8` and
-   `EnvNotUtf8` ([strings.md](strings.md#the-boundary)). All of it in
-   the interpreter and natively. **Done when** two programs build
+   `EnvNotUtf8` ([strings.md](strings.md#the-boundary)); list patterns
+   and string literal patterns, with a string `match` lowered to a
+   perfect hash ([language.md](language.md#list-patterns-and-string-patterns)).
+   All of it in the interpreter and natively. **Done when** two programs build
    natively and agree with `ren run`: a log reader (a new example) that
    reads a file of records through a format view, groups them in a
    `Table` and a `Map`, and prints a report, measured in release against
@@ -1582,7 +1585,8 @@ and 32-bit references as the default.
    `main.ren` that shares its modules and runs a level with `for`),
    running examples/just/justfile as `ren run` does; and `Pool`, which
    neither program needs, with a kernel of its own measured against
-   Rust. `ren review` with
+   Rust; and the `just`'s lexer and a keyword kernel run at least as
+   fast as Rust's `match`. `ren review` with
    its "this is data" hint, and `ren profile`'s suggestions, come
    after.
 8. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the

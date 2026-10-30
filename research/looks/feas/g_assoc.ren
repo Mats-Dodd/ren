@@ -1,0 +1,5 @@
+type Cfg = { n: Int, name: Str }
+  pub let default: Cfg = Cfg { n: 3, name: "x" }
+
+fn main() =
+  print(Cfg.default.name)

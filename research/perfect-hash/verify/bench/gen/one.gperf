@@ -1,0 +1,11 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name one_ghash
+%define lookup-function-name one_gperf_find
+%compare-strncmp
+struct one_g { const char *name; int idx; };
+%%
+v1, 0
+%%

@@ -1,0 +1,17 @@
+// What "level=\{level} path=\{path} status=\{status} ms=\{ms}\n" means
+// per strings.md: each hole through `show`, the parts concatenated.
+// The compiler has no `\{` yet, nor `+` on Str, so this is written out
+// with `show` and `concat`, which is what the lowering would produce.
+fn line(level: Str, path: Str, status: Int, ms: Int) -> Str =
+  "level=".concat(show(level)).concat(" path=").concat(show(path)).concat(" status=").concat(show(status)).concat(" ms=").concat(show(ms)).concat("\n")
+
+fn main() uses Console =
+  var total = 0
+  var chk = 0
+  let levels = ["info", "warn"]
+  for i in 0..10_000_000
+    let s = line(levels[i % 2], "/api/jobs", 200 + i % 7, i % 1000)
+    total += s.len()
+    chk += s.bytes().at(s.len() - 2)
+  print(total)
+  print(chk)

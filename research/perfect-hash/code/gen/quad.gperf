@@ -1,0 +1,14 @@
+%{
+#include <string.h>
+%}
+%struct-type
+%define hash-function-name quad_ghash
+%define lookup-function-name quad_gperf_find
+%compare-strncmp
+struct quad_g { const char *name; int idx; };
+%%
+GET, 0
+HEAD, 1
+POST, 2
+PUT, 3
+%%

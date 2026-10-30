@@ -1,0 +1,40 @@
+Benchmark 1: sql-today (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    185.4 ms  ±    11.6 ms     174.8 ms  …   223.2 ms
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.7 MiB
+ 
+Benchmark 2: sql-inline (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    829.3 ms  ±    12.4 ms     806.0 ms  …   859.1 ms          +347.2%  (4.5x slower)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           -3.3%
+ 
+Benchmark 3: sql-handler (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    130.6 ms  ±     1.0 ms     128.0 ms  …   132.4 ms           -29.6%
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -3.3%
+ 
+Benchmark 4: sql-boxed (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     51.8 ms  ±     0.7 ms      49.4 ms  …    53.0 ms           -72.1%  (3.6x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           -4.9%
+ 
+Benchmark 5: sql-plan (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     14.6 ms  ±     0.3 ms      14.4 ms  …    15.5 ms           -92.1%  (12.7x faster)
+  Memory         1.4 MiB ±     0.0 MiB      1.4 MiB …     1.4 MiB           -6.2%
+ 
+Benchmark 6: rust-sql-static (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     16.8 ms  ±     0.1 ms      16.7 ms  …    17.1 ms           -90.9%  (11.0x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           -3.0%
+ 
+Benchmark 7: rust-sql-reuse (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time     22.1 ms  ±     0.5 ms      21.5 ms  …    23.4 ms           -88.1%  (8.4x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           -3.1%
+ 
+Benchmark 8: rust-sql-build (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    370.0 ms  ±     2.5 ms     364.3 ms  …   372.9 ms           +99.5%  (2.0x slower)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.5 MiB           -0.1%
+ 

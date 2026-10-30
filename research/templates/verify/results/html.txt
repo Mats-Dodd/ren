@@ -1,0 +1,30 @@
+Benchmark 1: html-today (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    1.909 s   ±   0.030 s      1.868 s   …   1.993 s
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB
+ 
+Benchmark 2: html-boxed (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    0.745 s   ±   0.018 s      0.718 s   …   0.792 s            -61.0%  (2.6x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -0.1%
+ 
+Benchmark 3: html-plan (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    0.638 s   ±   0.010 s      0.624 s   …   0.662 s            -66.6%  (3.0x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -1.6%
+ 
+Benchmark 4: html-handler (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    0.614 s   ±   0.009 s      0.600 s   …   0.635 s            -67.8%  (3.1x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.4 MiB …     1.5 MiB           -1.2%
+ 
+Benchmark 5: rust-html-write (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    1.021 s   ±   0.022 s      0.989 s   …   1.063 s            -46.5%  (1.9x faster)
+  Memory         1.5 MiB ±     0.0 MiB      1.5 MiB …     1.7 MiB           +2.2%
+ 
+Benchmark 6: rust-html-format (25 runs)
+                mean     ±       σ          min     …     max
+  Wall Time    1.413 s   ±   0.013 s      1.388 s   …   1.443 s            -26.0%
+  Memory         1.7 MiB ±     0.1 MiB      1.6 MiB …     1.9 MiB          +15.4%
+ 

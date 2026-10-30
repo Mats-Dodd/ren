@@ -1,0 +1,30 @@
+#[inline]
+pub fn orig_json24(s: &str) -> i64 {
+    match s {
+        "id" => 0,
+        "name" => 1,
+        "email" => 2,
+        "created_at" => 3,
+        "updated_at" => 4,
+        "deleted_at" => 5,
+        "status" => 6,
+        "owner_id" => 7,
+        "org_id" => 8,
+        "tags" => 9,
+        "title" => 10,
+        "description" => 11,
+        "priority" => 12,
+        "due_date" => 13,
+        "assignee_id" => 14,
+        "labels" => 15,
+        "version" => 16,
+        "etag" => 17,
+        "parent_id" => 18,
+        "metadata" => 19,
+        "visibility" => 20,
+        "archived" => 21,
+        "last_modified_by" => 22,
+        "notification_settings" => 23,
+        _ => -1,
+    }
+}
