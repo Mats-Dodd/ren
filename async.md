@@ -90,7 +90,7 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
   finish is `race`, and cancelling the last one inside a call, search
   as you type, is `race(query, next_input)` in a loop. Work other calls
   must reach by name, one refresh per user, is a family's, keyed by the
-  name ([structured-actors.md](structured-actors.md)). A scope that has
+  name ([concurrency.md](concurrency.md)). A scope that has
   ended starts nothing: a task of an outer scope
   that captured it and spawns into it panics, since the new task would
   outlive it.

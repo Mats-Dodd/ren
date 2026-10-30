@@ -6,7 +6,7 @@ line says it:
 
 > **The language owns meaning; the runtime owns time, order and place.**
 
-> **Status:** proposed. It builds on [structured-actors.md](structured-actors.md)
+> **Status:** proposed. It builds on [concurrency.md](concurrency.md)
 > and the prior-art research in [research/runtime/SYNTHESIS.md](research/runtime/SYNTHESIS.md),
 > and it frames foundations.md decision 9 and the runtime core stage. Lock
 > mechanics, memory and the record layout are
@@ -59,7 +59,7 @@ through their verbs.
 ## One way to talk: a queue
 
 **The world is the outermost family.** Every wait in a family points
-outward ([structured-actors.md](structured-actors.md#no-deadlock-by-one-rule)),
+outward ([concurrency.md](concurrency.md#no-deadlock-by-one-rule)),
 and the world is where every chain of waits ends. So the core has one
 way for work to cross an owner: a `D.Call` pushed to a bounded queue.
 

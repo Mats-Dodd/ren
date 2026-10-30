@@ -13175,7 +13175,7 @@ seeds).
 
 ### Step 10: structured actors
 
-structured-actors.md (the owner's afed5a1) rewrites what steps 7a and 7b
+concurrency.md (the owner's afed5a1) rewrites what steps 7a and 7b
 built: there's no mail inside a family, a post waits for room in its
 key's mailbox and only there, an `at` block holds its family, and a
 `with` drains when its body returns and cancels when it's cancelled
@@ -13266,7 +13266,7 @@ making past `max:`, this step took them out. Step 10 is two halves:
   ends the same way: its stripes' `finally`s see `Err(Cancelled)` when
   it's cancelled, as any handler's do.
 
-**Chosen in step 10a** (where structured-actors.md is silent):
+**Chosen in step 10a** (where concurrency.md is silent):
 
 - **Rule 3's run-time check covers pins for a block and posts, not a
   call of one operation** (`Instances.call`, `make`, `striped`'s): the

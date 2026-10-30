@@ -1482,7 +1482,7 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   So a test that wants posted work finished ends the family's `with`
   and asserts after it. Work outlives its call only this way, as data
   posted to a family reached by name; a task never does
-  ([structured-actors.md](structured-actors.md)).
+  ([concurrency.md](concurrency.md)).
 - **`Docs.at_all([a, b]) fn() => ...` holds several keys,** in sorted
   order, and `Docs.at(a)` inside it names which one `Doc` means: moving
   text between two documents is one block.

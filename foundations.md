@@ -15,7 +15,7 @@ record, [language.md](language.md): decision 18 is new, 3 is reframed,
 longer open; then decision 20, what the language owns and what std
 owns, which moved `actors` and `striped` into std over a runtime
 primitive, the keyed instance family (decision 18). On 2026-10-30 it
-took [structured-actors.md](structured-actors.md), which changed the bet
+took [concurrency.md](concurrency.md), which changed the bet
 and decisions 7, 9 and 18, and [runtime.md](runtime.md), which states
 the runtime decision 9 installs; [Staging](#staging) gained the runtime
 core. language.md is the
@@ -60,7 +60,7 @@ outlives its call only as data, a `D.Call` posted to a family reached by
 name. Every queue has a bound and every wait points outward, so the
 tree composes: cancellation goes down it, errors go up it, a call that
 returns is done, and a run of it replays exactly
-([structured-actors.md](structured-actors.md)).
+([concurrency.md](concurrency.md)).
 
 It's aimed at three things Rust gets wrong for the programs Ren is for:
 compile time, the split between `dyn` and generics, and colored functions
