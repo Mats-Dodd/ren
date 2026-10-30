@@ -1,0 +1,124 @@
+== OPS=1, DISJOINT=1 REQS=3000:
+ref 1x128              strategy=unfair chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=park chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=ship chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=park chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=ship chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=ship chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=ship chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=300 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=100 try_spin_ns=300 reorders=0 
+8x16 unfair            strategy=unfair chk=b2fe7be776fa798c table=3d0d300a5732c424 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 HY_BAD=1 POST=1   strategy=hy chk=b2fe7be776fa798c table=3d0d300a5732c424 check=FAIL sticky_us=0 try_spin_ns=0 reorders=54 (HY_BAD: FAIL expected wherever a post was in flight at an in-place take)
+== OPS=4, DISJOINT=1 REQS=3000:
+ref 1x128              strategy=unfair chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=park chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=ship chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=park chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=ship chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=ship chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=ship chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=300 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=100 try_spin_ns=300 reorders=0 
+8x16 unfair            strategy=unfair chk=14234dfe46 table=4f6ea782c17cf078 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 HY_BAD=1 POST=1   strategy=hy chk=14234dfe46 table=4f6ea782c17cf078 check=FAIL sticky_us=0 try_spin_ns=0 reorders=48 (HY_BAD: FAIL expected wherever a post was in flight at an in-place take)
+== SHARE_PCT=1, DISJOINT=1 REQS=3000:
+ref 1x128              strategy=unfair chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=park chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=ship chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=park chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=ship chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=ship chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=ship chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=300 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=100 try_spin_ns=300 reorders=0 
+8x16 unfair            strategy=unfair chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 HY_BAD=1 POST=1   strategy=hy chk=865277fb02a66b4b table=7769a010c4352c59 check=ok sticky_us=0 try_spin_ns=0 reorders=0 (HY_BAD: FAIL expected wherever a post was in flight at an in-place take)
+== SHARE_PCT=10, DISJOINT=1 REQS=3000:
+ref 1x128              strategy=unfair chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=park chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=ship chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=park chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=ship chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=ship chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=ship chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=300 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=100 try_spin_ns=300 reorders=0 
+8x16 unfair            strategy=unfair chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 HY_BAD=1 POST=1   strategy=hy chk=4f76a9a2a76e4934 table=16211686f2e5ed21 check=FAIL sticky_us=0 try_spin_ns=0 reorders=189 (HY_BAD: FAIL expected wherever a post was in flight at an in-place take)
+== SHARE_PCT=50, DISJOINT=1 REQS=3000:
+ref 1x128              strategy=unfair chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=park chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=ship chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16                   strategy=hy chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=park chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=ship chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1            strategy=hy chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=ship chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 POST=1            strategy=hy chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=ship chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1     strategy=hy chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300strategy=hy chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=300 reorders=0 
+8x16 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100strategy=hy chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=100 try_spin_ns=300 reorders=0 
+8x16 unfair            strategy=unfair chk=6cde28c2a26c193d table=b34c71c4d69cea99 check=ok sticky_us=0 try_spin_ns=0 reorders=0 
+8x16 HY_BAD=1 POST=1   strategy=hy chk=6eae1b37e5dac320 table=8f57c2ea707a9143 check=FAIL sticky_us=0 try_spin_ns=0 reorders=4122 (HY_BAD: FAIL expected wherever a post was in flight at an in-place take)
+asan ship 8 16 0 0 OPS=1: reqs=64000 check=ok reorders=0 
+asan ship 8 16 0 0 SHARE_PCT=10 FAST=1: reqs=64000 check=ok reorders=0 
+asan ship 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=64000 check=ok reorders=0 
+asan ship 8 16 0 0 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=64000 check=ok reorders=0 
+asan ship 8 16 0 0 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=64000 check=ok reorders=0 
+asan ship 8 8 20 1 OPS=1: reqs=32000 check=ok reorders=0 
+asan ship 8 8 20 1 SHARE_PCT=10 FAST=1: reqs=32000 check=ok reorders=0 
+asan ship 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=32000 check=ok reorders=0 
+asan ship 8 8 20 1 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=32000 check=ok reorders=0 
+asan ship 8 8 20 1 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=32000 check=ok reorders=0 
+asan hy 8 16 0 0 OPS=1: reqs=64000 check=ok reorders=0 
+asan hy 8 16 0 0 SHARE_PCT=10 FAST=1: reqs=64000 check=ok reorders=0 
+asan hy 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=64000 check=ok reorders=0 
+asan hy 8 16 0 0 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=64000 check=ok reorders=0 
+asan hy 8 16 0 0 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=64000 check=ok reorders=0 
+asan hy 8 8 20 1 OPS=1: reqs=32000 check=ok reorders=0 
+asan hy 8 8 20 1 SHARE_PCT=10 FAST=1: reqs=32000 check=ok reorders=0 
+asan hy 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=32000 check=ok reorders=0 
+asan hy 8 8 20 1 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=32000 check=ok reorders=0 
+asan hy 8 8 20 1 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=32000 check=ok reorders=0 
+asan park: reqs=64000 check=ok reorders=0 
+asan unfair: reqs=64000 check=ok reorders=0 
+tsan ship 8 16 0 0 OPS=1: reqs=64000 check=ok reorders=0 
+tsan ship 8 16 0 0 SHARE_PCT=10 FAST=1: reqs=64000 check=ok reorders=0 
+tsan ship 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=64000 check=ok reorders=0 
+tsan ship 8 16 0 0 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=64000 check=ok reorders=0 
+tsan ship 8 16 0 0 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=64000 check=ok reorders=0 
+tsan ship 8 8 20 1 OPS=1: reqs=32000 check=ok reorders=0 
+tsan ship 8 8 20 1 SHARE_PCT=10 FAST=1: reqs=32000 check=ok reorders=0 
+tsan ship 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=32000 check=ok reorders=0 
+tsan ship 8 8 20 1 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=32000 check=ok reorders=0 
+tsan ship 8 8 20 1 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=32000 check=ok reorders=0 
+tsan hy 8 16 0 0 OPS=1: reqs=64000 check=ok reorders=0 
+tsan hy 8 16 0 0 SHARE_PCT=10 FAST=1: reqs=64000 check=ok reorders=0 
+tsan hy 8 16 0 0 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=64000 check=ok reorders=0 
+tsan hy 8 16 0 0 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=64000 check=ok reorders=0 
+tsan hy 8 16 0 0 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=64000 check=ok reorders=0 
+tsan hy 8 8 20 1 OPS=1: reqs=32000 check=ok reorders=0 
+tsan hy 8 8 20 1 SHARE_PCT=10 FAST=1: reqs=32000 check=ok reorders=0 
+tsan hy 8 8 20 1 OPS=4 SHARE_PCT=50 FAST=1 POST=1: reqs=32000 check=ok reorders=0 
+tsan hy 8 8 20 1 SHARE_PCT=50 FAST=1 POST=1 TRY_SPIN_NS=300: reqs=32000 check=ok reorders=0 
+tsan hy 8 8 20 1 SHARE_PCT=10 FAST=1 POST=1 TRY_SPIN_NS=300 STICKY_US=100 HOLDSTAT=1: reqs=32000 check=ok reorders=0 
+tsan park: reqs=64000 check=ok reorders=0 
+tsan unfair: reqs=64000 check=ok reorders=0 

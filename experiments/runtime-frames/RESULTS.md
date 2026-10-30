@@ -1,9 +1,9 @@
-# Runtime-frames experiments X1, X3, X3b and X5: results
+# Runtime-frames experiments X1, X3, X3b, X3c and X5: results
 
 X1, X3 and X5 are the first three experiments from
 [research/runtime-frames/SYNTHESIS.md](../../research/runtime-frames/SYNTHESIS.md) §7.
 X3b follows up X3 under `per_core`, against runtime.md and concurrency.md
-("Many cores").
+("Many cores"). X3c tests the hybrid take that X3b proposed.
 
 **Machine.** All runs were on the owner's Apple M4 Max: 16 cores (12P + 4E),
 macOS 15.1, Apple clang 16.0.0, and tcc 0.9.28rc (mob e23dabe). The machine is
@@ -15,6 +15,7 @@ shared with other agents. The 1-minute load average before each round was:
 | X5 | 3.3 to 5.7 |
 | X3 | 5.5 to 8.1 |
 | X3b | 7.2 to 20.9 |
+| X3c | 7.4 to 17.0 |
 
 Each variant ran interleaved with the others, in 5 to 7 rounds. Figures are
 the median over rounds, with [min..max] across rounds after them. Raw lines
@@ -28,6 +29,7 @@ README.
 | **X1** register convention | nested round trip from about 31 ns to within 20% of the inlined `pingpong` | 32.5 → **19.2 ns** [19.1..19.6]. That is 1.21× the inlined 15.9 ns. With the bounds check dropped: 18.9 ns (1.19×). With put and get kept out of line: 21.0 ns (1.32×). | **Borderline.** It hits only with release's bounds-check elimination. The nested cost fell 41%. |
 | **X3** shared takes as suspending | under 3% throughput and under 10% code growth uncontended. With a 100 µs hold, parking keeps wasted CPU under 10% where spinning burns it, and without a hand-off a waiter starves for ms. | Throughput: **+0.3%** ns a request against `os_unfair_lock`. Code: the path's text grew **3.6×** (424 → 1,524 B), and the model's whole text grew 17.6%. Long hold: wasted CPU **1.7%** parked against **87.5%** spinning. A waiter's p50 is **35 ms** without a hand-off and **6.5 ms** with one. | **Throughput, wasted CPU and starvation: hit. Code size: miss.** Not predicted: with short holds at 8 workers, parking runs at **4.4× below** `os_unfair_lock`. |
 | **X3b** a contended shared instance under `per_core` | home-core shipping beats parking by over 2× on C, within 1.5× of `os_unfair_lock`, with near-zero waste, background work flowing under long holds, and the mixed scenario within 10% of the best. Adaptive parking recovers half the gap with under 20% waste. | Shipping: **2.7×** `os_unfair_lock` and **5.9×** parking on C. Background work flows under a 100 µs hold. Mixed: **−6%**, but a shared operation waits **130 µs** (10.5 µs with FAST) against 0.2 µs. P2: **0.7 to 1.5×** parking, with 46 to 75% wasted. `at`: moving the task runs **0.16×** shipping at 1 operation a block, 0.51× at 4 and **1.70×** at 16. | **(H): hit, the C ones exceeded. The home-core cap is real (about 30M ops/s) but wasn't what bound C.** Its costs are latency when lightly contended, and preemption of the home. **(P2): miss.** |
+| **X3c** hybrid take under `per_core` | HY within 2× of the lock's shared-op p50 at SHARE_PCT 1 and 10, within 15% of H's throughput on C, background work flowing on the 100 µs hold, no reordering | p50 **0.21 µs = the lock's** at 1% and 10% (H: 16.6, 10.4 µs). C: **1.00 to 1.06× H** at the median, but 0.26 to 0.56× in 3 of 7 rounds at load ≥ 13. L: background 3.10M ops/s against H's 2.87M. 0 reorders; the in-flight rule is necessary (`HY_BAD` reorders). SHARE_PCT 50: 0.95× H, 1.32× the lock, 0.09 migrations an op. | **Hit on latency, ordering and L; C hit on medians, miss on spread.** Adopt HY with a 300 ns retry and the in-flight rule. Its new risk is a preempted in-place holder. |
 | **X5** static frame-stack sizing | about 4,200 B against about 290 B a parked task | **4,208 B** against **240 B** (malloc accounting), or 4,230 against 252 B (footprint). The chunk boundary goes from 22.3 ns to **4.2 ns** with a spare, against 1.2 ns in the segment. | **Bytes: hit**, and smaller than predicted. **Spare within 1 ns: miss** (+1.4 to +3.1 ns), though the 4× cliff is gone. |
 
 What this means for SYNTHESIS §6:
@@ -538,6 +540,233 @@ Absolute medians: `shipded` 15.5M, 6.08M and 1.37M req/s. `moveded` 1.99M,
 - **Both beat a thread lock once blocks are long.** At 16 operations,
   moving ran 1.47× `os_unfair_lock`, which takes the lock once an
   operation.
+
+## X3c: the hybrid take under `per_core`
+
+### Verdict
+
+- **Ren's `per_core` should use the hybrid (HY) for a shared, exclusive
+  instance, not pure home shipping (H).**
+  - Under HY, an operation that finds the instance free takes it with one
+    CAS and runs in place on its own core.
+  - One that finds it held ships to the home as under H.
+  - Under contention HY turns into H by itself: on C, 97 to 98% of
+    operations shipped and the table never left the home (0.000 migrations
+    an operation).
+  - Under light contention it keeps a lock's latency. At SHARE_PCT 1 and
+    10, a shared operation's p50 was **0.21 µs, the same as
+    `os_unfair_lock`** in every round, against H's 16.6 and 10.4 µs.
+  - Ship the version that **retries the CAS for up to 300 ns while a
+    single in-place taker holds the instance** (`hy+spin300`).
+    - Shipping at the first lost CAS gave M10 a p99 of 23.5 µs, 16× the
+      lock's.
+    - The 300 ns retry cut it to 3.1 µs, and to **0.71 µs** in the second
+      session, against the lock's 1.04 µs.
+    - It cost nothing measurable on C: 1.02× H per round.
+- **The ordering rule (contract 1):** *a task runs an operation in place
+  only when it has no call or post to that instance in flight. Otherwise it
+  ships it, behind the earlier ones, on the FIFO queue from its core. The
+  home runs no queued record until it holds the instance, and never runs
+  one ahead of an earlier record.*
+  - Why that's sound: an in-place operation finishes before its call
+    returns. An in-place operation after a shipped one waits for that
+    one's reply. Two shipped ones share one FIFO ring.
+  - With synchronous calls the rule is trivially kept. So the model adds
+    posted puts (`POST=1`, up to 3 in flight), where it isn't trivial.
+  - Dropping the in-flight clause (`HY_BAD=1`) reordered one task's calls
+    in 4 of 5 check configurations, from 48 to 4,122 times, and changed
+    the checksums. With the rule there were 0 reorders, in every check and
+    every timed run.
+- **The no-starvation rule:** *a home that fails to take the instance sets
+  a pending bit that closes the in-place path, and an in-place taker that
+  loses ships.*
+  - So the queue waits at most one in-place operation, and an in-place
+    taker never waits on the queue.
+  - The 300 ns retry applies only while the word shows a lone in-place
+    holder with no pending bit.
+- **What HY adds over H: an in-place holder the OS deschedules stalls the
+  instance.** This is the thread lock's preemption problem, bounded to one
+  operation.
+  - Holds over 20 µs, up to 4.2 ms, showed up in most C runs.
+  - At load 13 to 17, three of seven C rounds of plain `hy` fell to
+    **0.26 to 0.56× H**.
+    - Those were the only rounds where in-place operations rose to 6 to
+      9%, with workers 36 to 51% idle and the home's take failing 3k to
+      122k times.
+    - It's a feedback loop: stalls empty the rings, so the home releases,
+      so more operations go in place.
+  - At load 7 to 11 the spread narrowed to 0.75 to 1.39×.
+  - Keeping the instance at the home for 100 µs after a failed take
+    (`STICKY_US=100`) raised C's worst round to 0.96× H, but pushed M10's
+    p99 to 14.5 µs. 20 µs didn't help C.
+  - So stickiness is a knob to tune once Ren's runtime exists. A low-load
+    box can't decide it: the collapse wasn't reproduced below load 13.
+- If adopted, runtime.md's "A shared take under `per_core`" paragraph
+  should read: "an operation that finds the instance free runs in place by
+  CAS; one that finds it held, or whose task has a call to it in flight, is
+  a `D.Call` to the home's queue". The ordering rule then joins the
+  contract's commentary.
+
+| prediction | measured | verdict |
+|---|---|---|
+| HY within 2× of the lock's p50 shared-op wait at SHARE_PCT 1 | 0.21 µs against 0.21 (1.00× in 7 of 7 rounds). H: 16.6 µs | **hit** |
+| … at SHARE_PCT 10 | 0.21 µs against 0.21 (1.00× in 7 of 7). p99: 23.5 µs (plain), 3.1 / 0.71 µs (spin300), against the lock's 1.4 / 1.04 | **hit** on p50; the tail needs the 300 ns retry |
+| HY within 15% of H's throughput on C | median 1.00× [0.26..1.22] (session 1, load 12 to 17); 1.06× [0.76..1.39] (load 7.5 to 11); spin300 0.90× [0.66..1.18] and 1.02× [0.75..1.22] | **hit on medians, miss on spread**: preempted in-place holders collapse some rounds at high load |
+| HY keeps background work flowing on the 100 µs hold, like H | background ops/s 3.10M against H's 2.87M (1.00× per round [0.83..1.70]), park 3.29M, `os_unfair_lock` 152 | **hit** |
+| HY never reorders one task's calls | 0 reorders in all checks (65 checksum runs, 44 sanitizer runs) and every timed run; `HY_BAD` reorders | **hit**, and the in-flight rule is necessary |
+| In-place ping-pong hurts at SHARE_PCT 50 | 14% of operations in place, 0.088 migrations an operation (lock 0.75, park 0.83). Throughput 0.95× H [0.87..2.07] and 1.32× the lock. Op p50 4.5 µs against H's 4.8 and the lock's 0.50 | **doesn't hurt**: once contended, HY ships |
+
+### What was built
+
+`x3c/` is X3b's model, with `hy` added to build (a). See `x3c/README.md`
+for the word, the rules and the proofs.
+
+- **The word** is X3b's lock word:
+  - LOCKED;
+  - HOME, set while the home holds it;
+  - PENDING, meaning the home has records and wants it.
+- **An in-place taker** CASes 0 → LOCKED, runs the operation, and clears
+  LOCKED.
+- **The home** takes the instance before it runs any record, and holds it
+  while records arrive. Its own tasks then call operations directly.
+  - It releases when a pass finds its rings empty (`LINGER_US`, default 0;
+    2, 5, 10 and 50 µs were no better), and before it sleeps.
+  - The home's own tasks, when they lose, push on a self ring.
+- **Posts (`POST=1`):** a shipped put doesn't wait for its reply, and the
+  home acks it. A task with posts in flight waits for their acks before it
+  ends (contract 3).
+- **New measurements:**
+  - a shared operation's wait, from the call to its result;
+  - how each operation reached the instance: directly on the home, in
+    place, or shipped;
+  - how often the instance changed cores between operations, the
+    cache-line transfer estimate;
+  - lock-word RMWs from a new core;
+  - a per-task sequence number checked under the instance;
+  - in-place hold times (`HOLDSTAT=1`).
+- **The variants** in every session: `park`, `ship` (H) with FAST, `hy`
+  with FAST, `hy+spin300` with FAST, and `os_unfair_lock`. The shipping
+  variants keep X3b's 5 µs spin before sleeping.
+
+**Correctness** (`x3c/results/check-*.txt`).
+
+- With `DISJOINT=1`, park, ship and hy at 8 workers matched
+  `os_unfair_lock` at 1 worker on checksum and final table. That held for
+  plain requests, `at` blocks of 4, and SHARE_PCT 1, 10 and 50, with and
+  without FAST, posts, the 300 ns retry and STICKY_US=100: 65 runs.
+- ASan+UBSan and TSan builds of ship, hy, park and unfair finished every
+  request with the word and every ring clean: 44 runs, with and without a
+  20 µs hold, posts, the retry and stickiness. Neither sanitizer reported
+  anything.
+
+**Sessions.** The machine was shared throughout.
+
+| session | file | load | used for |
+|---|---|---|---|
+| 1 | `raw-20261030-161730` | 11.5 → 17.0 | every scenario, 7 rounds |
+| C | `c-20261030-163143` | 7.5 → 11.1 | C, 10 rounds, hold timing |
+| sticky | `sticky-20261030-163502` | 7.4 → 11.2 | C and M10, 8 rounds, STICKY_US |
+
+Session 1's absolute numbers are unreliable: load was above 11 in every
+round. The ratios are taken within a round, and the C and sticky sessions
+repeat the decisive comparisons at load 7 to 11.
+
+### Shared-operation wait and throughput (session 1, medians over 7 rounds)
+
+| | | req/s | shared op wait p50 / p99 / max (µs) | in place / shipped | migrations / op |
+|---|---|---|---|---|---|
+| **M1** | H | 3.70M | 16.6 / 3,331 / 13,191 | 0 / 0.875 | 0 |
+| | HY | 3.60M | **0.21** / 0.5 / 6,463 | 0.993 / 0.007 | 0.86 |
+| | HY spin300 | 3.77M | **0.21** / 0.4 / 51 | 1.000 / 0.000 | 0.87 |
+| | `os_unfair_lock` | 3.39M | 0.21 / 0.5 / 87 | | 0.85 |
+| **M10** | H | 3.82M | 10.4 / 62.7 / 16,003 | 0 / 0.882 | 0 |
+| | HY | 3.67M | **0.21** / 23.5 / 18,410 | 0.865 / 0.127 | 0.75 |
+| | HY spin300 | 3.81M | **0.21** / 3.1 / 12,348 | 0.989 / 0.010 | 0.83 |
+| | `os_unfair_lock` | 3.96M | 0.21 / 1.4 / 7,709 | | 0.84 |
+| **M50** | H | 5.44M | 4.79 / 55.4 / 16,262 | 0 / 0.903 | 0 |
+| | HY | 5.69M | 4.54 / 50.6 / 14,756 | 0.143 / 0.792 | 0.088 |
+| | HY spin300 | 5.76M | 3.54 / 50.3 / 16,787 | 0.238 / 0.705 | 0.18 |
+| | park | 1.94M | 1.54 / 489 / 29,476 | | 0.83 |
+| | `os_unfair_lock` | 4.33M | 0.50 / 8.7 / 27,015 | | 0.75 |
+| **C** | H | 13.6M | 3.96 / 23.3 / 8,532 | 0 / 0.972 | 0 |
+| | HY | 13.0M | 3.62 / 23.5 / 17,450 | 0.004 / 0.973 | 0.000 |
+| | HY spin300 | 14.2M | 3.92 / 22.0 / 4,470 | 0.002 / 0.975 | 0.001 |
+| | park | 1.20M | 1.54 / 554 / 31,774 | | 0.80 |
+| | `os_unfair_lock` | 3.70M | 0.17 / 24.9 / 25,163 | | 0.47 |
+
+The rest of each row lies on H's: direct on the home, 2 to 12%.
+
+How to read it:
+
+- **M1 and M10: HY is a lock.** About 99% of operations ran in place
+  (spin300). Their wait is the lock's, and so is their cache-line traffic:
+  0.83 to 0.87 migrations an operation, the same as `os_unfair_lock` and
+  park. Throughput matched every strategy within noise (per round, HY/H
+  0.99 to 1.01, HY/lock 0.99 to 1.06).
+  - Plain HY's M10 tail is its shipped 13%. A collision with a
+    100 to 200 ns in-place hold sends the loser to the home, which answers
+    at its next scheduling point, about 10 µs away. The 300 ns retry
+    outwaits the hold instead.
+- **M50: the hand-over works, and the ping-pong doesn't hurt.**
+  - HY ran 14 to 24% of operations in place and shipped the rest. The
+    instance moved cores on 0.09 to 0.18 operations, against 0.75 for the
+    lock.
+  - Throughput was 0.95 to 1.07× H's per round and 1.32× the lock's.
+  - The lock still has the lowest latency (0.5 µs) at 0.75× the
+    throughput. Neither shipping variant gets below H's queue latency
+    once most operations are queued.
+- **C: HY is H.** 97 to 98% shipped, the table stayed at the home, and the
+  medians match. The per-round ratio is the story:
+  - Session 1 (load 12 to 17): HY/H 1.00 1.21 1.04 **0.56 0.38** 1.22
+    **0.26**.
+  - C session (load 7.5 to 11): 0.76 0.95 1.16 1.16 1.13 1.19 0.96 1.39
+    0.99 1.00, median 1.06.
+  - Sticky session, spin300 (load 7.4 to 11): 1.00 1.03 1.02 1.22 1.10
+    1.01 0.75 0.94; with STICKY_US=100, 0.96 to 1.17.
+  - Every slow round had in-place operations at 1 to 9% (others under
+    0.5%), home-take failures in the thousands, and in-place holds of
+    100 µs to 4.2 ms.
+  - At 12 and 16 workers both H and HY were bound by the home (5 to 6.5M,
+    workers 60 to 74% idle), with no HY-specific loss.
+
+### L: 100 µs hold in put, plus one background task a worker (session 1)
+
+| | req/s | background ops/s | shared op wait p50 / max | home busy % |
+|---|---|---|---|---|
+| park | 19,325 | 3.29M | 100 µs / 42 ms | |
+| H | 17,594 | 2.87M | 5.8 ms / 47 ms | 98 |
+| **HY** | 18,369 | **3.10M** | 5.7 ms / **315 ms** | 98 |
+| HY spin300 | 18,784 | 3.13M | 5.8 ms / 181 ms | 98 |
+| `os_unfair_lock` | 19,475 | 152 | 100 µs / 1.04 s | |
+
+- Background work flows under HY as under H. The home is the only worker
+  that loses its own: it's 98% busy.
+- 98.6% of operations shipped, and the waits are the home's queue, as in
+  X3b.
+- **HY's 0.2 to 0.4 s max is the home's own connections.**
+  - In a diagnostic run, about 40% of the home's own operations shipped:
+    334 shipped, 282 direct and 238 in place. They ship when a remote
+    in-place taker holds the instance, and go to the home's self ring.
+  - A shipped one then waits behind whichever home task is running, and
+    that task's every recv is a FAST drain pass of up to 16 records a ring
+    × 100 µs.
+  - Under H the same connections are just as starved: about 650 requests
+    in 2 s, against 5,400 to 6,000 on each other worker, and 740 to 860
+    under HY.
+  - But under H their wait falls between requests, which the request
+    latency doesn't count, so it doesn't show.
+  - The fix is the one X3b named: keep long-hold instances off a home that
+    serves connections, or give the home's drain at a point a budget.
+
+### U: one worker
+
+ns a request: park 103, `os_unfair_lock` 103, H 135, HY 140 (HY/H 0.97×
+per round).
+
+- The 30 ns that H and HY pay is FAST. Draining at every recv walks the
+  rings even when there are none: with FAST off, ship ran at 10.3M req/s
+  against 7.7M with it. A runtime would skip the drain with no sources.
+- HY's CAS and release cost about 3% against H's direct call.
 
 ## X5: static frame-stack sizing, and the spare chunk
 
