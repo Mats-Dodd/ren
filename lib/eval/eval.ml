@@ -306,6 +306,42 @@ let rec match_pattern types p v env =
       (* the whole is the value itself *)
       Option.map (Env.add x.id (ref v)) (match_pattern types p v env)
   | PTuple ps, VTuple xs -> match_all types ps xs env
+  | PStr s, VStr w -> if s = w then Some env else None
+  | PStr_rest { prefix; rest; suffix }, VStr w ->
+      (* the pieces are valid UTF-8, matched in place, so the cuts are on
+         character boundaries: the slice never panics *)
+      let n = String.length w in
+      let a = String.length prefix and b = String.length suffix in
+      if
+        n >= a + b
+        && String.starts_with ~prefix w
+        && String.ends_with ~suffix w
+      then
+        match rest with
+        | None -> Some env
+        | Some x ->
+            let mid = Builtins.slice_value v (Int64.of_int a) (Int64.of_int (n - b)) in
+            Some (Env.add x.id (ref mid) env)
+      else None
+  | PArray { front; rest; back }, VArray xs ->
+      (* the pieces in front, the rest, then the pieces at the back, a
+         slice of the array for a named rest *)
+      let xs = items xs in
+      let n = Array.length xs in
+      let f = List.length front and b = List.length back in
+      let fits = match rest with No_rest -> n = f + b | Rest _ -> n >= f + b in
+      if not fits then None
+      else
+        let part i j = Array.to_list (Array.sub xs i (j - i)) in
+        Option.bind (match_all types front (part 0 f) env) (fun env ->
+            let env =
+              match rest with
+              | Rest (Some x) ->
+                  let mid = Builtins.slice_value v (Int64.of_int f) (Int64.of_int (n - b)) in
+                  Env.add x.id (ref mid) env
+              | Rest None | No_rest -> env
+            in
+            match_all types back (part (n - b) n) env)
   | PRecord (path, ps), VRecord fields -> (
       match Hashtbl.find_opt types path with
       | Some ({ body = Record decl; _ } : Iface.type_decl) ->

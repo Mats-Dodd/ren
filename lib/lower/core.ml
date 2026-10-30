@@ -455,6 +455,20 @@ and pattern_kind =
   | PAs of pattern * var
       (** [p as x]: what [p] matches, the whole bound to [x] too (compiler.md,
           "Data stage", "`as`") *)
+  | PStr of string  (** ["GET"]: a `Str` equal to it *)
+  | PStr_rest of { prefix : string; rest : var option; suffix : string }
+      (** ["Bearer " ..token]: a `Str` that starts with [prefix] and ends
+          with [suffix], at least as long as the two, [rest] bound to the
+          slice between them, if it's named (compiler.md, "Patterns
+          stage") *)
+  | PArray of { front : pattern list; rest : rest; back : pattern list }
+      (** [[first, ..rest]]: an `Array` of the length [front] and [back]
+          have between them, or with a [rest], at least that long, its
+          middle bound to a slice of it if it's named *)
+
+(* An array pattern's rest: none, a fixed length; or `..`, bound or
+   not. *)
+and rest = No_rest | Rest of var option
 
 (* Where a function came from. The specializer makes the others, each
    from what the program wrote (specialize.ml). *)
@@ -909,6 +923,29 @@ let dict_sexp t d =
   in
   List [ Atom req; Atom (Ty.show t.pr ty) ]
 
+(* A string or array pattern's kind with each of its pieces mapped by
+   [pat] and its rest's variable by [var], left to right; any other kind
+   as it is. For the passes that walk patterns. *)
+let map_seq ~pat ~var (k : pattern_kind) : pattern_kind =
+  match k with
+  | PStr_rest r -> PStr_rest { r with rest = Option.map var r.rest }
+  | PArray { front; rest; back } ->
+      let front = List.map pat front in
+      let rest = match rest with Rest (Some v) -> Rest (Some (var v)) | r -> r in
+      let back = List.map pat back in
+      PArray { front; rest; back }
+  | k -> k
+
+(* The pieces of an array pattern, in order; none of any other. *)
+let seq_pieces (k : pattern_kind) =
+  match k with PArray { front; back; _ } -> front @ back | _ -> []
+
+(* The variable a string or array pattern's rest is bound to. *)
+let seq_rest (k : pattern_kind) =
+  match k with
+  | PStr_rest { rest = Some v; _ } | PArray { rest = Rest (Some v); _ } -> [ v ]
+  | _ -> []
+
 let rec pattern_sexp p =
   match p.pkind with
   | PWild -> Atom "_"
@@ -924,6 +961,23 @@ let rec pattern_sexp p =
       List (atom "record" :: Atom (Path.local p) :: List.map pattern_sexp ps)
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
   | PAs (q, v) -> List [ atom "as"; pattern_sexp q; var v ]
+  | PStr s -> Atom (Token.show_str s)
+  | PStr_rest { prefix; rest; suffix } ->
+      List
+        [
+          atom "str";
+          Atom (Token.show_str prefix);
+          (match rest with Some v -> var v | None -> Atom "..");
+          Atom (Token.show_str suffix);
+        ]
+  | PArray { front; rest; back } ->
+      List
+        ((atom "array" :: List.map pattern_sexp front)
+        @ (match rest with
+          | No_rest -> []
+          | Rest (Some v) -> [ List [ atom ".."; var v ] ]
+          | Rest None -> [ atom ".." ])
+        @ List.map pattern_sexp back)
 
 (* A descriptor, as a print shows it: a type, or a hidden type
    parameter. *)

@@ -1632,7 +1632,12 @@ let console_spec ~load ~dir ~home ~file ~src ~name lines =
           List.concat_map names ps
       | PRecord (_, fs) | PCon_named (_, fs) ->
           List.concat_map (fun (_, q) -> names q) fs.fpats
-      | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
+      | PSeq q ->
+          List.concat_map names q.front
+          @ Option.to_list
+              (Option.map (fun (x : Ast.ident) -> x.name) (Option.bind q.middle (fun r -> r.rname)))
+          @ List.concat_map names q.back
+      | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> []
     in
     match parsed text with
     | Some (_, Let { name; _ }) -> [ name.name ]

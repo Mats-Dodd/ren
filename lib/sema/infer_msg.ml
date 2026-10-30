@@ -1405,6 +1405,8 @@ let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
     | PRecord (_, fs) -> Ast.show_fields shown fs
     | PCon_named (c, fs) -> c.name.name ^ " " ^ Ast.show_fields shown fs
     | PAs (q, b) -> shown q ^ " as " ^ b.ident.name
+    | PStr s -> Ast.show_str s
+    | PSeq q -> Ast.show_seq shown (fun (b : Ast.binder) -> b.ident.name) q
     | PWild | PFail _ | PFail_any | PFail_in _ | POr _ -> "_"
   in
   let parts =

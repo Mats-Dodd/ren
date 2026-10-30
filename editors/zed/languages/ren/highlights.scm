@@ -178,6 +178,8 @@
 (record_expression ".." @operator)
 (constructor_expression ".." @operator)
 (rest_pattern) @operator
+; a sequence pattern's rest, `[first, ..rest]`, `"Bearer " ..token`
+(sequence_rest ".." @operator)
 ["=" "=>" "->" "|" "|>"] @operator
 
 ["." "," ":"] @punctuation.delimiter

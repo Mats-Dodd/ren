@@ -3,7 +3,8 @@
 to parse here too, without an error.
 
 The programs are every example under examples/, the data and services
-stages' programs under bench/data/ and bench/services/, and every Ren
+stages' programs under bench/data/ and bench/services/, the patterns
+stage's under bench/patterns/, and every Ren
 snippet in the compiler's tests (test/*.ml), the `{|...|}` strings that
 aren't an expected output. Each is parsed by the compiler (`ren ast`) and
 by tree-sitter.
@@ -41,7 +42,7 @@ def snippets():
     # kept as they are, as the compiler reads them
     for f in sorted((ROOT / "examples").rglob("*.ren")):
         yield str(f.relative_to(ROOT)), f.read_text(errors="surrogateescape")
-    for d in ("data", "services"):
+    for d in ("data", "services", "patterns"):
         for f in sorted((ROOT / "bench" / d).glob("*.ren")):
             yield str(f.relative_to(ROOT)), f.read_text(errors="surrogateescape")
     for f in sorted((ROOT / "test").glob("*.ml")):

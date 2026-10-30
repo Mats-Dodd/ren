@@ -482,7 +482,11 @@ let rec max_id (e : expr) =
           | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps)
             ->
               List.fold_left (fun m p -> max m (pat p)) 0 ps
-          | PWild | PInt _ | PBool _ -> 0
+          | (PStr_rest _ | PArray _) as k ->
+              List.fold_left (fun m p -> max m (pat p))
+                (List.fold_left (fun m (v : var) -> max m v.id) 0 (seq_rest k))
+                (seq_pieces k)
+          | PWild | PInt _ | PBool _ | PStr _ -> 0
         in
         List.fold_left (fun m (a : arm) -> max m (pat a.pat)) 0 arms
     | _ -> 0
@@ -515,7 +519,8 @@ let rename fresh (e : expr) =
           (* each alternative binds the same variables *)
           let first = pat first in
           POr (first :: List.map pat_again rest)
-      | (PWild | PInt _ | PBool _ | POr []) as k -> k
+      | (PStr_rest _ | PArray _) as k -> map_seq ~pat ~var:bind k
+      | (PWild | PInt _ | PBool _ | PStr _ | POr []) as k -> k
     in
     { p with pkind }
   and pat_again (p : pattern) =
@@ -528,7 +533,8 @@ let rename fresh (e : expr) =
       | PRecord (t, ps) -> PRecord (t, List.map pat_again ps)
       | PAs (q, v) -> PAs (pat_again q, use v)
       | POr ps -> POr (List.map pat_again ps)
-      | (PWild | PInt _ | PBool _) as k -> k
+      | (PStr_rest _ | PArray _) as k -> map_seq ~pat:pat_again ~var:use k
+      | (PWild | PInt _ | PBool _ | PStr _) as k -> k
     in
     { p with pkind }
   in

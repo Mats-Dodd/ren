@@ -395,3 +395,14 @@ pub wiring live(url: Str) provides Users uses Console =
 //                        ^ keyword
 //                                 ^ type.dependency
   pg_db(url), console_audit(), db_users()
+
+// string and list patterns: literals are strings, a rest's `..` an
+// operator
+fn route(segs: Array<Str>) -> Str =
+  match segs
+    ["v1", ..rest] => "v1"
+//   ^ string
+//         ^ operator
+    ["--out=" ..path] => path
+//            ^ operator
+    _ => ""

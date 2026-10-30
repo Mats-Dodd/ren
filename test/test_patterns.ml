@@ -12,30 +12,17 @@
      p3  the perfect hash (bench/patterns.t, test_phash.ml)
      p4  `keys.index(s)` on a constant (bench/patterns.t)
 
-   A test still to land runs through [until] (helpers.ml): [want] is the
-   whole output of a program that runs, [says] the lines an error has to
-   hold, its headline and its help. Its [%expect] holds today's output
-   after `(until pN)`. When the program prints what's wanted, the test
-   fails until the step turns it on: written plainly, with the target in
-   its [%expect]. *)
+   Step 1 turned every test here on: each is written plainly, with what
+   it prints in its [%expect], the whole message for an error. Steps 2
+   to 4 change no output in `ren run`: theirs are bench/patterns.t's
+   lines, which say what each native build prints and what's hashed. *)
 
 open Helpers
-
-let p1 ~want src = until "p1" ~want (fun () -> run src)
-let p1_refused ~says src = until "p1" ~says (fun () -> check_error src)
 
 (* ---- p1: string literal patterns ---- *)
 
 let%expect_test "[p1 accept] string literals as arms, with `|`" =
-  p1
-    ~want:{|
-GET
-read
-write
-other
-other
-()
-|}
+  run
     {|
 fn kind(m: Str) -> Str =
   match m
@@ -52,22 +39,16 @@ fn main() uses Console =
   print(kind("GETS"))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"GET"`
-      ┌─ test.ren:3:5
-    3 │     "GET" | "HEAD" => "read"
-      │     ^^^^^
+    GET
+    read
+    write
+    other
+    other
+    ()
     |}]
 
 let%expect_test "[p1 accept] the empty string, as a key and as a subject" =
-  p1
-    ~want:{|
-empty
-one
-other
-empty
-()
-|}
+  run
     {|
 fn f(s: Str) -> Str =
   match s
@@ -83,26 +64,16 @@ fn main() uses Console =
   print(f(s[1..1]))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `""`
-      ┌─ test.ren:3:5
-    3 │     "" => "empty"
-      │     ^^
+    empty
+    one
+    other
+    empty
+    ()
     |}]
 
 let%expect_test "[p1 accept] keys of 1, 16, 17 and 255 bytes" =
   let k n c = String.make n c in
-  p1
-    ~want:{|
-1
-16
-17
-255
-0
-0
-()
-|}
-    (Printf.sprintf
+  run (Printf.sprintf
        {|
 fn f(s: Str) -> Int =
   match s
@@ -123,11 +94,13 @@ fn main() uses Console =
        (k 1 'a') (k 16 'b') (k 17 'c') (k 255 'd') (k 1 'a') (k 16 'b')
        (k 17 'c') (k 255 'd') (k 254 'd') (k 15 'b'));
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
-    3 │     "a" => 1
-      │     ^^^
+    1
+    16
+    17
+    255
+    0
+    0
+    ()
     |}]
 
 (* 200 arms, each a key [k<i>]: the value table is wider than a byte,
@@ -154,38 +127,27 @@ fn main() uses Console =
     arms n n
 
 let%expect_test "[p1 accept] 128 arms" =
-  p1 ~want:"8128\n-1\n-1\n()\n" (many_arms 128);
+  run (many_arms 128);
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"k0"`
-      ┌─ test.ren:3:5
-    3 │     "k0" => 0
-      │     ^^^^
+    8128
+    -1
+    -1
+    ()
     |}]
 
 let%expect_test "[p1 accept] 200 arms" =
-  p1 ~want:"19900\n-1\n-1\n()\n" (many_arms 200);
+  run (many_arms 200);
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"k0"`
-      ┌─ test.ren:3:5
-    3 │     "k0" => 0
-      │     ^^^^
+    19900
+    -1
+    -1
+    ()
     |}]
 
 (* ---- p1: `Str` sequences ---- *)
 
 let%expect_test "[p1 accept] a prefix, a suffix, both, and `..` ignored" =
-  p1
-    ~want:{|
-token abc
-stem main
-inner b
-flag
-plain x
-token
-()
-|}
+  run
     {|
 fn f(s: Str) -> Str =
   match s
@@ -204,21 +166,17 @@ fn main() uses Console =
   print(f("Bearer "))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"Bearer "`
-      ┌─ test.ren:3:5
-    3 │     "Bearer " ..token => "token " + token
-      │     ^^^^^^^^^
+    token abc
+    stem main
+    inner b
+    flag
+    plain x
+    token
+    ()
     |}]
 
 let%expect_test "[p1 accept] the minimum length: `\"a\" ..x \"a\"` needs two bytes" =
-  p1
-    ~want:{|
-one
-both
-both b
-()
-|}
+  run
     {|
 fn f(s: Str) -> Str =
   match s
@@ -232,15 +190,14 @@ fn main() uses Console =
   print(f("aba"))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
-    3 │     "a" ..x "a" => "both " + x
-      │     ^^^
+    one
+    both
+    both b
+    ()
     |}]
 
 let%expect_test "[p1 accept] adjacent literals are one" =
-  p1 ~want:"yes\nno\n()\n"
+  run
     {|
 fn f(s: Str) -> Str =
   match s
@@ -252,22 +209,13 @@ fn main() uses Console =
   print(f("ab"))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"ab"`
-      ┌─ test.ren:3:5
-    3 │     "ab" "c" => "yes"
-      │     ^^^^
+    yes
+    no
+    ()
     |}]
 
 let%expect_test "[p1 accept] cuts beside multi-byte characters" =
-  p1
-    ~want:{|
-té
-5
-caf
-€ 3
-()
-|}
+  run
     {|
 fn main() uses Console =
   let s = "été"
@@ -283,15 +231,15 @@ fn main() uses Console =
     _ => print("no")
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"é"`
-      ┌─ test.ren:4:5
-    4 │     "é" ..rest => print(rest)
-      │     ^^^^
+    té
+    5
+    caf
+    € 3
+    ()
     |}]
 
 let%expect_test "[p1 accept] a slice bound outlives its subject" =
-  p1 ~want:"secret\n7\n()\n"
+  run
     {|
 fn token(h: Str) -> Str =
   match h
@@ -306,25 +254,15 @@ fn main() uses Console =
   print(header().byte_len() - t.byte_len())
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"Bearer "`
-      ┌─ test.ren:3:5
-    3 │     "Bearer " ..t => t
-      │     ^^^^^^^^^
+    secret
+    7
+    ()
     |}]
 
 (* ---- p1: guards ---- *)
 
 let%expect_test "[p1 accept] a guard that fails falls through past literals to prefixes and `_`" =
-  p1
-    ~want:{|
-short ab
-literal ab
-prefix abc
-any b
-literal-x
-()
-|}
+  run
     {|
 fn f(s: Str, short: Bool) -> Str =
   match s
@@ -342,15 +280,16 @@ fn main() uses Console =
   print(f("x", true))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
-    3 │     "a" ..x if short && x.byte_len() < 2 => "short a" + x
-      │     ^^^
+    short ab
+    literal ab
+    prefix abc
+    any b
+    literal-x
+    ()
     |}]
 
 let%expect_test "[p1 accept] a guarded literal falls through to the prefix after it" =
-  p1 ~want:"lit\nprefix v1\nother\n()\n"
+  run
     {|
 fn f(s: Str, ok: Bool) -> Str =
   match s
@@ -364,26 +303,16 @@ fn main() uses Console =
   print(f("w", false))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"v1"`
-      ┌─ test.ren:3:5
-    3 │     "v1" if ok => "lit"
-      │     ^^^^
+    lit
+    prefix v1
+    other
+    ()
     |}]
 
 (* ---- p1: `Array` sequences ---- *)
 
 let%expect_test "[p1 accept] every form on `Array`" =
-  p1
-    ~want:{|
-empty
-two 1 2
-first 1 rest 2
-init 3 last 4
-ends 1 5
-one 7
-()
-|}
+  run
     {|
 fn f(xs: Array<Int>) -> Str =
   match xs
@@ -403,23 +332,17 @@ fn main() uses Console =
   print(f([7]))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
-    3 │     [] => "empty"
-      │     ^
+    empty
+    two 1 2
+    first 1 rest 2
+    init 3 last 4
+    ends 1 5
+    one 7
+    ()
     |}]
 
 let%expect_test "[p1 accept] element patterns of any kind, and a slice kept" =
-  p1
-    ~want:{|
-get k1
-put k2
-stats
-none
-[3, 4]
-()
-|}
+  run
     {|
 type Method = Get | Put
 
@@ -443,31 +366,20 @@ fn main() uses Console =
   print(tail([1, 2, 3, 4]))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:5:11
-    5 │     (Get, ["v1", "keys", k]) => "get " + k
-      │           ^
-
-    error: expected a pattern, found `[`
-       ┌─ test.ren:12:5
-    12 │     [_, _, ..rest] => rest
-       │     ^
+    get k1
+    put k2
+    stats
+    none
+    [3, 4]
+    ()
     |}]
 
 let%expect_test "[p1 accept] string patterns inside records, constructors, `as` and arrays" =
-  p1
-    ~want:{|
-json main
-ver 2 of ["v2", "x"]
-some bearer
-none
-()
-|}
+  run
     {|
-type File = { name: Str, size: Int }
+type Doc = { name: Str, size: Int }
 
-fn f(x: File) -> Str =
+fn f(x: Doc) -> Str =
   match x
     { name: ..stem ".json", .. } => "json " + stem
     _ => "other"
@@ -489,27 +401,17 @@ fn main() uses Console =
   print(h(None))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `..`
-      ┌─ test.ren:5:13
-    5 │     { name: ..stem ".json", .. } => "json " + stem
-      │             ^^
-
-    error: expected a pattern, found `[`
-       ┌─ test.ren:10:5
-    10 │     ["v" ..n, ..] as all => "ver " + n + " of " + show(all)
-       │     ^
-
-    error: expected a pattern, found the string `"Bearer "`
-       ┌─ test.ren:15:10
-    15 │     Some("Bearer " ..) => "some bearer"
-       │          ^^^^^^^^^
+    json main
+    ver 2 of ["v2", "x"]
+    some bearer
+    none
+    ()
     |}]
 
 (* ---- p1: exhaustiveness and covered arms ---- *)
 
 let%expect_test "[p1 accept] `[]`, `[_]` and `[_, _, ..]` cover every array" =
-  p1 ~want:"0\n1\n2\n()\n"
+  run
     {|
 fn n(xs: Array<Int>) -> Int =
   match xs
@@ -523,15 +425,14 @@ fn main() uses Console =
   print(n([5, 6, 7]))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
-    3 │     [] => 0
-      │     ^
+    0
+    1
+    2
+    ()
     |}]
 
 let%expect_test "[p1 accept] `[..init, last]` and `[]` cover every array" =
-  p1 ~want:"0\n3\n()\n"
+  run
     {|
 fn n(xs: Array<Int>) -> Int =
   match xs
@@ -543,20 +444,13 @@ fn main() uses Console =
   print(n([1, 2, 3]))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
-    3 │     [..init, last] => last
-      │     ^
+    0
+    3
+    ()
     |}]
 
 let%expect_test "[p1 reject] an array match that misses a length" =
-  p1_refused
-    ~says:
-      [
-        "error: this `match` doesn't handle every `Array`";
-        "[_, _, ..] => todo";
-      ]
+  check_error
     {|
 fn n(xs: Array<Int>) -> Int =
   match xs
@@ -566,20 +460,17 @@ fn n(xs: Array<Int>) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
-    3 │     [] => 0
-      │     ^
+    error: this `match` doesn't handle every `Array`
+      ┌─ test.ren:2:3
+    2 │   match xs
+      │   ^^^^^
+      = missing: [_, _, ..]
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        [_, _, ..] => todo
     |}]
 
 let%expect_test "[p1 reject] a string match needs `_` or a binding" =
-  p1_refused
-    ~says:
-      [
-        "error: this `match` doesn't handle every `Str`";
-        "help: add a `_ =>` arm to cover the remaining values:";
-      ]
+  check_error
     {|
 fn n(s: Str) -> Int =
   match s
@@ -589,20 +480,17 @@ fn n(s: Str) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
-    3 │     "a" => 0
-      │     ^^^
+    error: this `match` doesn't handle every `Str`
+      ┌─ test.ren:2:3
+    2 │   match s
+      │   ^^^^^
+      = missing: _
+      help: add a `_ =>` arm to cover the remaining values:
+        _ => todo
     |}]
 
 let%expect_test "[p1 reject] a literal a prefix above covers" =
-  p1_refused
-    ~says:
-      [
-        "error: this arm can never match";
-        "help: the arms above already match everything this one does";
-      ]
+  check_error
     {|
 fn n(s: Str) -> Int =
   match s
@@ -613,16 +501,15 @@ fn n(s: Str) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
-    3 │     "a" .. => 1
-      │     ^^^
+    error: this arm can never match
+      ┌─ test.ren:4:5
+    4 │     "ab" => 0
+      │     ^^^^
+      help: the arms above already match everything this one does
     |}]
 
 let%expect_test "[p1 reject] a prefix a shorter prefix above covers" =
-  p1_refused
-    ~says:[ "error: this arm can never match" ]
+  check_error
     {|
 fn n(s: Str) -> Int =
   match s
@@ -633,16 +520,15 @@ fn n(s: Str) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"--"`
-      ┌─ test.ren:3:5
-    3 │     "--" .. => 1
-      │     ^^^^
+    error: this arm can never match
+      ┌─ test.ren:4:5
+    4 │     "--out=" ..path => 0
+      │     ^^^^^^^^^^^^^^^
+      help: the arms above already match everything this one does
     |}]
 
 let%expect_test "[p1 reject] a suffix a shorter suffix above covers, and a repeated literal" =
-  p1_refused
-    ~says:[ "error: this arm can never match" ]
+  check_error
     {|
 fn n(s: Str) -> Int =
   match s
@@ -653,14 +539,13 @@ fn n(s: Str) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `..`
-      ┌─ test.ren:3:5
-    3 │     .. "s" => 1
-      │     ^^
+    error: this arm can never match
+      ┌─ test.ren:4:5
+    4 │     "is" => 0
+      │     ^^^^
+      help: the arms above already match everything this one does
     |}];
-  p1_refused
-    ~says:[ "error: this arm can never match" ]
+  check_error
     {|
 fn n(s: Str) -> Int =
   match s
@@ -671,15 +556,15 @@ fn n(s: Str) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
-    3 │     "a" => 1
+    error: this arm can never match
+      ┌─ test.ren:4:5
+    4 │     "a" => 0
       │     ^^^
+      help: the arms above already match everything this one does
     |}]
 
 let%expect_test "[p1 accept] what doesn't cover: longer prefixes, the minimum length, guards" =
-  p1 ~want:"1\n0\n2\n3\n()\n"
+  run
     {|
 fn n(s: Str, g: Bool) -> Int =
   match s
@@ -697,16 +582,15 @@ fn main() uses Console =
   print(n("ac", false))
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"ab"`
-      ┌─ test.ren:3:5
-    3 │     "ab" .. => 1
-      │     ^^^^
+    1
+    0
+    2
+    3
+    ()
     |}]
 
 let%expect_test "[p1 reject] an array arm the lengths above cover" =
-  p1_refused
-    ~says:[ "error: this arm can never match" ]
+  check_error
     {|
 fn n(xs: Array<Int>) -> Int =
   match xs
@@ -717,19 +601,17 @@ fn n(xs: Array<Int>) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
-    3 │     [] => 0
-      │     ^
+    error: this arm can never match
+      ┌─ test.ren:5:5
+    5 │     [_, _] => 2
+      │     ^^^^^^
+      help: the arms above already match everything this one does
     |}]
 
 (* ---- p1: the errors ---- *)
 
 let%expect_test "[p1 reject] `..x` alone" =
-  p1_refused
-    ~says:
-      [ "error: `..rest` alone is the whole value"; "help: bind it with a name: `rest`" ]
+  check_error
     {|
 fn n(s: Str) -> Str =
   match s
@@ -738,17 +620,15 @@ fn n(s: Str) -> Str =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `..`
+    error: `..rest` alone is the whole value
       ┌─ test.ren:3:5
     3 │     ..rest => rest
-      │     ^^
+      │     ^^^^^^
+      help: bind it with a name: `rest`
     |}]
 
 let%expect_test "[p1 reject] `[..xs]` alone" =
-  p1_refused
-    ~says:
-      [ "error: `[..xs]` alone is the whole array"; "help: bind it with a name: `xs`" ]
+  check_error
     {|
 fn n(xs: Array<Int>) -> Int =
   match xs
@@ -757,20 +637,15 @@ fn n(xs: Array<Int>) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
+    error: `[..xs]` alone is the whole array
+      ┌─ test.ren:3:6
     3 │     [..xs] => xs.len()
-      │     ^
+      │      ^^^^
+      help: bind it with a name: `xs`
     |}]
 
 let%expect_test "[p1 reject] two rests" =
-  p1_refused
-    ~says:
-      [
-        "error: a pattern has one `..` at most";
-        "help: to cut at a separator, use `split` or `split_once` on the value";
-      ]
+  check_error
     {|
 fn n(s: Str) -> Str =
   match s
@@ -780,14 +655,13 @@ fn n(s: Str) -> Str =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `..`
-      ┌─ test.ren:3:5
+    error: a pattern has one `..` at most
+      ┌─ test.ren:3:13
     3 │     ..k "=" ..v => k
-      │     ^^
+      │             ^^^
+      help: to cut at a separator, use `split` or `split_once` on the value
     |}];
-  p1_refused
-    ~says:[ "error: a pattern has one `..` at most" ]
+  check_error
     {|
 fn n(xs: Array<Int>) -> Int =
   match xs
@@ -797,20 +671,15 @@ fn n(xs: Array<Int>) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
-      ┌─ test.ren:3:5
+    error: a pattern has one `..` at most
+      ┌─ test.ren:3:16
     3 │     [a, .., b, ..] => a
-      │     ^
+      │                ^^
+      help: to cut at a separator, use `split` or `split_once` on the value
     |}]
 
 let%expect_test "[p1 reject] a `Bytes` subject with a string pattern" =
-  p1_refused
-    ~says:
-      [
-        "error: a string pattern matches a `Str`, but this is `Bytes`";
-        "help: read it with a format, or match `Str.from_utf8(b)` first";
-      ]
+  check_error
     {|
 fn n(b: Bytes) -> Int =
   match b
@@ -820,16 +689,15 @@ fn n(b: Bytes) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"GET"`
+    error: a string pattern matches a `Str`, but this is `Bytes`
       ┌─ test.ren:3:5
     3 │     "GET" => 1
       │     ^^^^^
+      help: read it with a format, or match `Str.from_utf8(b)` first
     |}]
 
 let%expect_test "[p1 reject] a piece that isn't a literal" =
-  p1_refused
-    ~says:[ "error: the pieces of a string pattern are string literals" ]
+  check_error
     {|
 fn n(s: Str) -> Int =
   match s
@@ -839,16 +707,15 @@ fn n(s: Str) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
+    error: the pieces of a string pattern are string literals
+      ┌─ test.ren:3:13
     3 │     "a" ..x y => 1
-      │     ^^^
+      │             ^
+      help: bind the middle with `..name`, and test the rest in the arm
     |}]
 
 let%expect_test "[p1 reject] alternatives that bind different names" =
-  p1_refused
-    ~says:[ "error: `x` is bound in `\"a\" ..x` but not in `\"b\"`" ]
+  check_error
     {|
 fn n(s: Str) -> Str =
   match s
@@ -858,16 +725,15 @@ fn n(s: Str) -> Str =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found the string `"a"`
-      ┌─ test.ren:3:5
+    error: `x` is bound in `"a" ..x` but not in `"b"`
+      ┌─ test.ren:3:15
     3 │     "a" ..x | "b" => x
-      │     ^^^
+      │               ^^^
+      help: bind the same names in every alternative
     |}]
 
 let%expect_test "[p1 reject] a list pattern on something that isn't an array" =
-  p1_refused
-    ~says:[ "error: a list pattern matches an `Array`, but this is `Int`" ]
+  check_error
     {|
 fn n(x: Int) -> Int =
   match x
@@ -877,9 +743,51 @@ fn n(x: Int) -> Int =
 fn main() = ()
 |};
   [%expect {|
-    (until p1)
-    error: expected a pattern, found `[`
+    error: a list pattern matches an `Array`, but this is `Int`
       ┌─ test.ren:3:5
     3 │     [a] => a
-      │     ^
+      │     ^^^
+      help: take it apart as what it is, or bind it to a name
+    |}]
+
+let%expect_test "[p1 accept] `let ... else` takes a list or a string apart" =
+  run
+    {|
+fn first_two(xs: Array<Int>) -> Int ! Short =
+  let [a, b, ..] = xs else fail Short
+  a + b
+
+fn token(h: Str) -> Str ! NoToken =
+  let "Bearer " ..t = h else fail NoToken
+  t
+
+fn main() uses Console =
+  print(attempt first_two([1, 2, 3]))
+  print(attempt first_two([1]))
+  print(attempt token("Bearer abc"))
+  print(attempt token("Basic x"))
+|};
+  [%expect {|
+    Ok(3)
+    Err(Short)
+    Ok("abc")
+    Err(NoToken)
+    ()
+    |}]
+
+let%expect_test "[p1 reject] a list pattern in a `let` might not match" =
+  check_error
+    {|
+fn f(xs: Array<Int>) -> Int =
+  let [a, ..] = xs
+  a
+
+fn main() = ()
+|};
+  [%expect {|
+    error: `[a, ..]` might not match, so this `let` needs an `else`
+      ┌─ test.ren:2:7
+    2 │   let [a, ..] = xs
+      │       ^^^^^^^
+      help: add one that leaves, `let [a, ..] = xs else fail ...`, or use a `match`
     |}]

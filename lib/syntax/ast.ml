@@ -191,6 +191,26 @@ and ('b, 't) pattern_kind =
           tag is one of those it was given, binding nothing (compiler.md,
           "`over any` and `retry`"). The parser reads it as a [PFail] of no
           payload, which Resolve makes this when [on] is such a parameter *)
+  | PStr of string
+      (** ["GET"]: a string literal, its escapes undone (compiler.md,
+          "Patterns stage") *)
+  | PSeq of ('b, 't) seq
+      (** a sequence: [[first, ..rest]] on an `Array`, in brackets, its
+          pieces element patterns; ["Bearer " ..token] on a `Str`, its
+          pieces [PStr]s, always with a rest (one without is a [PStr]) *)
+
+(* A sequence pattern's pieces before its rest, the rest, if it has one,
+   and the pieces after it; [bracketed] for an `Array`'s. *)
+and ('b, 't) seq = {
+  front : ('b, 't) pattern list;
+  middle : 'b rest option;
+  back : ('b, 't) pattern list;
+  bracketed : bool;
+}
+
+(* A sequence's rest: `..name`, which binds the middle as a slice of the
+   same type, or `..`, which ignores it. *)
+and 'b rest = { rname : 'b option; rloc : Loc.t }
 
 (* A record pattern's fields, in the order written: each a name and its
    pattern, a punned one, `{ id }`, a [PVar] of its name; and whether it
@@ -973,6 +993,21 @@ let parens words = "(" ^ String.concat " " words ^ ")"
 
 (* A string as it's written, in quotes, with its escapes (token.ml). *)
 let show_str = Token.show_str
+
+(* A sequence pattern as it's written, [show] writing each piece and
+   [name] the rest's name: `[first, ..rest]`, `"Bearer " ..token`. *)
+let show_seq show name (s : ('b, 't) seq) =
+  let rest =
+    match s.middle with
+    | Some r -> [ ".." ^ Option.fold ~none:"" ~some:name r.rname ]
+    | None -> []
+  in
+  let parts = List.map show s.front @ rest @ List.map show s.back in
+  if s.bracketed then "[" ^ String.concat ", " parts ^ "]"
+  else String.concat " " parts
+
+(* The pieces of a sequence pattern, in order. *)
+let seq_pieces (s : ('b, 't) seq) = s.front @ s.back
 let show_float = Token.show_float
 
 open Parsed
@@ -1096,6 +1131,8 @@ let rec show_pattern (p : pattern) =
       let name = match name with Some t -> show_tyname t ^ " " | None -> "" in
       name ^ show_fields show_pattern fs
   | PCon_named (c, fs) -> show_ctor_ref c ^ " " ^ show_fields show_pattern fs
+  | PStr s -> show_str s
+  | PSeq q -> show_seq show_pattern (fun (x : ident) -> x.name) q
 
 let rec show_expr (e : expr) =
   match e.kind with
@@ -1440,7 +1477,10 @@ let bound_in (e : Resolved.expr) =
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
     | PRecord (_, fs) | PCon_named (_, fs) ->
         List.iter (fun (_, q) -> pat q) fs.fpats
-    | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
+    | PSeq q ->
+        List.iter pat (seq_pieces q);
+        Option.iter (fun r -> Option.iter see r.rname) q.middle
+    | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> ()
   in
   let rec go (e : Resolved.expr) =
     (match e.kind with
@@ -1646,3 +1686,5 @@ let rec pattern_source ~type_name (p : Resolved.pattern) =
       | Some { tref = Param _; _ } | None -> "")
       ^ show_fields go fs
   | PCon_named (c, fs) -> ctor c ^ " " ^ show_fields go fs
+  | PStr s -> show_str s
+  | PSeq q -> show_seq go (fun (b : binder) -> b.ident.name) q

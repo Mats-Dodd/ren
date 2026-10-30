@@ -61,8 +61,26 @@ and owner =
   | Tuple of int
   | Record of Path.t * string list
   | Of_variant of Path.t * string
+  | Lengths of { split : int; front : int; back : int }
+      (** an array's lengths at a column whose patterns are sequences
+          (compiler.md, "Patterns stage", "Coverage"): `[n]` for each [n]
+          below [split], with [n] fields, and `[split..]`, with [front +
+          back], its first [front] elements and its last [back] *)
 
-type space = Any | Ctor of head * space list | Or of space list
+(* [Seq] is an array's sequence pattern, its pieces in front, whether it
+   has a rest, and its pieces at the back, which [lengths] makes
+   constructors of [Lengths] at its column. [Str] is a string's pattern,
+   a member of a family too big to list, as an Int is: a literal, [exact],
+   is its [prefix] and its [suffix]; a sequence matches any string with
+   both, at least as long as the two. *)
+type space =
+  | Any
+  | Ctor of head * space list
+  | Or of space list
+  | Seq of space list * bool * space list
+  | Str of str_pat
+
+and str_pat = { prefix : string; suffix : string; exact : bool }
 
 let bool_path = Path.prelude "Bool"
 let result_path = Path.prelude "Result"
@@ -101,6 +119,20 @@ let rec simplify ?(swap = []) env (p : pattern) =
   match p.pkind with
   | PWild | PVar _ -> Any
   | PInt n -> Ctor ({ name = Int64.to_string n; owner = No_list }, [])
+  | PStr s -> Str { prefix = s; suffix = s; exact = true }
+  | PSeq q when q.bracketed ->
+      Seq
+        ( List.map (simplify env) q.front,
+          q.middle <> None,
+          List.map (simplify env) q.back )
+  | PSeq q ->
+      let text ps =
+        String.concat ""
+          (List.map
+             (fun (p : pattern) -> match p.pkind with PStr s -> s | _ -> "")
+             ps)
+      in
+      Str { prefix = text q.front; suffix = text q.back; exact = false }
   | PBool b -> Ctor ({ name = string_of_bool b; owner = Of_type bool_path }, [])
   | PCon (c, ps) ->
       let node = Infer.Nodes.find p.pnode env.nodes in
@@ -224,6 +256,25 @@ let rec show_space env = function
       "(" ^ String.concat ", " (List.map (show_space env) args) ^ ")"
   | Ctor ({ owner = Record (_, names); _ }, args) ->
       show_named env "{ " names args ~all:false
+  | Ctor ({ owner = Lengths { split; front; back }; name }, args)
+    when name = sprintf "[%d..]" split ->
+      (* as many elements as the shortest it stands for, `[_, _, ..]` *)
+      let shown = List.map (show_space env) args in
+      let a = List.filteri (fun i _ -> i < front) shown in
+      let z = List.filteri (fun i _ -> i >= front) shown in
+      let more = List.init (split - front - back) (fun _ -> "_") in
+      "[" ^ String.concat ", " (a @ more @ [ ".." ] @ z) ^ "]"
+  | Ctor ({ owner = Lengths _; _ }, args) ->
+      "[" ^ String.concat ", " (List.map (show_space env) args) ^ "]"
+  | Seq (a, rest, z) ->
+      let shown = List.map (show_space env) in
+      "[" ^ String.concat ", " (shown a @ (if rest then [ ".." ] else []) @ shown z) ^ "]"
+  | Str { prefix; exact = true; _ } -> Ast.show_str prefix
+  | Str { prefix; suffix; _ } ->
+      String.concat " "
+        ((if prefix = "" then [] else [ Ast.show_str prefix ])
+        @ [ ".." ]
+        @ if suffix = "" then [] else [ Ast.show_str suffix ])
   | Ctor ({ name; owner = Of_type p | Of_variant (p, _) }, args)
     when match ctor_of env p name with Some k -> k.cnamed | None -> false ->
       let k = Option.get (ctor_of env p name) in
@@ -274,6 +325,10 @@ let siblings env c =
       Option.map
         (fun (k : Iface.ctor) -> [ (c, List.length k.cfields) ])
         (ctor_of env p name)
+  | Lengths { split; front; back } ->
+      Some
+        (List.init split (fun n -> ({ name = sprintf "[%d]" n; owner = c.owner }, n))
+        @ [ ({ name = sprintf "[%d..]" split; owner = c.owner }, front + back) ])
   | No_list -> None
 
 (* The rows with an or-pattern first made a row for each alternative,
@@ -285,6 +340,75 @@ let rec expand rows =
       | row -> [ row ])
     rows
 
+(* Whether the string pattern [a] matches every string [b] does (rule
+   5): a literal only itself; else [a]'s prefix is a prefix of [b]'s,
+   its suffix a suffix of [b]'s, and its minimum length no longer. *)
+let covers a b =
+  let least p = if p.exact then String.length p.prefix else String.length p.prefix + String.length p.suffix in
+  if a.exact then b.exact && a.prefix = b.prefix
+  else
+    String.starts_with ~prefix:a.prefix b.prefix
+    && String.ends_with ~suffix:a.suffix b.suffix
+    && least a <= least b
+
+(* The first column of [rows] and of [q], an array's lengths made
+   constructors where its patterns are sequences (rustc's slice
+   patterns): [split] is the larger of the longest fixed length plus one
+   and the most pieces any sequence with a rest has in front ([front])
+   and at the back ([back]); a fixed length [n] is `[n]`, and one with a
+   rest, [f] pieces in front and [b] at the back, each `[n]` from [f +
+   b] up to [split] and `[split..]`, the pieces it doesn't have wild
+   (compiler.md, "Patterns stage", "Coverage"). Done at each column, so
+   the rest of the algorithm is unchanged. *)
+let lengths rows q =
+  let rec seqs = function
+    | Seq (a, rest, z) -> [ (List.length a, rest, List.length z) ]
+    | Or ss -> List.concat_map seqs ss
+    | _ -> []
+  in
+  let firsts = List.filter_map (function s :: _ -> Some s | [] -> None) (q :: rows) in
+  match List.concat_map seqs firsts with
+  | [] -> (rows, q)
+  | found ->
+      let fixed = List.filter_map (fun (a, rest, _) -> if rest then None else Some a) found in
+      let front = List.fold_left (fun m (a, rest, _) -> if rest then max m a else m) 0 found in
+      let back = List.fold_left (fun m (_, rest, z) -> if rest then max m z else m) 0 found in
+      let split = max (List.fold_left (fun m n -> max m (n + 1)) 0 fixed) (front + back) in
+      let owner = Lengths { split; front; back } in
+      let ctor n args = Ctor ({ name = sprintf "[%d]" n; owner }, args) in
+      let rec conv = function
+        | Seq (a, false, z) -> ctor (List.length a + List.length z) (a @ z)
+        | Seq (a, true, z) ->
+            let f = List.length a and b = List.length z in
+            let exact =
+              List.init (max 0 (split - f - b)) (fun k ->
+                  let n = f + b + k in
+                  ctor n (a @ wilds (n - f - b) @ z))
+            in
+            Or
+              (exact
+              @ [
+                  Ctor
+                    ( { name = sprintf "[%d..]" split; owner },
+                      a @ wilds (front - f) @ wilds (back - b) @ z );
+                ])
+        | Or ss -> Or (List.map conv ss)
+        | s -> s
+      in
+      let row = function s :: rest -> conv s :: rest | [] -> [] in
+      (List.map row rows, row q)
+
+(* The rows that still apply once we know the first value is matched by
+   the string pattern [p]: those whose first pattern covers it, and the
+   wild ones. *)
+let specialize_str p rows =
+  List.filter_map
+    (function
+      | Str p' :: rest -> if covers p' p then Some rest else None
+      | Any :: rest -> Some rest
+      | _ -> None)
+    (expand rows)
+
 (* The rows that still apply once we know the first value was built with
    constructor [c]: their first pattern is replaced by its [arity]
    sub-patterns, and rows starting with a different constructor drop out. *)
@@ -293,7 +417,7 @@ let specialize c arity rows =
     (function
       | Ctor (c', args) :: rest -> if c' = c then Some (args @ rest) else None
       | Any :: rest -> Some (wilds arity @ rest)
-      | Or _ :: _ | [] -> None)
+      | (Or _ | Str _ | Seq _) :: _ | [] -> None)
     (expand rows)
 
 (* The rows that apply when the first value is a constructor no row names. *)
@@ -318,9 +442,12 @@ let complete env heads =
       | _ -> None)
 
 let rec useful env rows q =
+  let rows, q = lengths rows q in
   match q with
   | [] -> rows = []
   | Or alts :: rest -> List.exists (fun a -> useful env rows (a :: rest)) alts
+  | Str p :: rest -> useful env (specialize_str p rows) rest
+  | Seq _ :: _ -> assert false (* [lengths] made it constructors *)
   | Ctor (c, args) :: rest ->
       useful env (specialize c (List.length args) rows) (args @ rest)
   | Any :: rest -> (
@@ -336,6 +463,7 @@ let rec useful env rows q =
 let rec missing env rows n =
   if n = 0 then if rows = [] then Some [] else None
   else
+    let rows, _ = lengths rows [] in
     let heads = head_ctors rows in
     match complete env heads with
     | Some all ->
@@ -382,7 +510,8 @@ let rec ors ?(around = []) (p : pattern) =
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map inner ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
       List.concat_map (fun (_, q) -> inner q) fs.fpats
-  | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
+  | PSeq q -> List.concat_map inner (Ast.seq_pieces q)
+  | PWild | PVar _ | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> []
 
 (* Each alternative of each or-pattern in an arm's pattern [p], which
    matches something new, is checked to: against [rows], the arms above,
@@ -637,7 +766,8 @@ let rec no_bound_errors env (p : pattern) =
       List.iter (no_bound_errors env) ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
       List.iter (fun (_, q) -> no_bound_errors env q) fs.fpats
-  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
+  | PSeq q -> List.iter (no_bound_errors env) (Ast.seq_pieces q)
+  | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> ()
 
 (* ---- walking the program ---- *)
 

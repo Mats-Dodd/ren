@@ -792,6 +792,9 @@ module.exports = grammar({
         $.or_pattern,
         $.as_pattern,
         $.parenthesized_pattern,
+        $.string,
+        $.string_pattern,
+        $.list_pattern,
       ),
 
     // for x in xs, for (k, v) in m, for { qty, .. } in lines, for i in
@@ -1378,9 +1381,42 @@ module.exports = grammar({
         $.or_pattern,
         $.as_pattern,
         $.parenthesized_pattern,
+        $.string,
+        $.string_pattern,
+        $.list_pattern,
       ),
 
     wildcard: (_) => '_',
+
+    // "Bearer " ..token, ..stem ".json", "<" ..inner ">", "--" ..: string
+    // literals side by side, at most one rest among them; "a" "b" is one
+    // literal, "ab" (compiler.md, "Patterns stage", "The grammar"). Two
+    // rests, or a rest alone, are the compiler's errors to give
+    string_pattern: ($) =>
+      prec.right(
+        seq(
+          choice($.string, $.sequence_rest),
+          repeat1(choice($.string, $.sequence_rest)),
+        ),
+      ),
+
+    // [], [first, ..rest], [..init, last], [a, .., z]: element patterns
+    // and at most one rest, which binds the middle as a slice
+    list_pattern: ($) =>
+      seq(
+        '[',
+        optional(
+          seq(
+            sep1(choice($._pattern, $.sequence_rest), ','),
+            optional(','),
+          ),
+        ),
+        ']',
+      ),
+
+    // a sequence's rest: `..name` binds the middle, `..` ignores it
+    sequence_rest: ($) =>
+      prec.right(seq('..', optional(field('name', $.identifier)))),
 
     // fail Short(_, by), fail _: an error, which only a whole arm matches;
     // fail on, an error whose tag a parameter of `Tags` was given

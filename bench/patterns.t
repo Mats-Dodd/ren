@@ -22,12 +22,12 @@ step that lands it changes its line here to say so.
 Step 1, in `ren run`; `keys.index` already ran there:
 
   $ for f in strs guards arrays sizes hard lexer index; do spec patterns/$f.ren; done
-  patterns/strs.ren: not yet
-  patterns/guards.ren: not yet
-  patterns/arrays.ren: not yet
-  patterns/sizes.ren: not yet
-  patterns/hard.ren: not yet
-  patterns/lexer.ren: not yet
+  patterns/strs.ren: as specified
+  patterns/guards.ren: as specified
+  patterns/arrays.ren: as specified
+  patterns/sizes.ren: as specified
+  patterns/hard.ren: as specified
+  patterns/lexer.ren: as specified
   patterns/index.ren: as specified
 
 Each program built natively prints what `ren run` prints, to stdout and
@@ -70,12 +70,12 @@ yet says so, with the first line of what `ren build` said (step 2).
   >    rm -f interp.out interp.err interp.code native.bin native.out native.err native.err2 native.code build.err spec.out spec.err spec.code)
   > }
   $ for f in strs guards arrays sizes hard lexer index; do native patterns/$f.ren; done
-  patterns/strs.ren: not native yet: error: expected a pattern, found the string `"-h"`
-  patterns/guards.ren: not native yet: error: expected a pattern, found the string `"a"`
-  patterns/arrays.ren: not native yet: error: expected a pattern, found `[`
-  patterns/sizes.ren: not native yet: error: expected a pattern, found the string `""`
-  patterns/hard.ren: not native yet: error: expected a pattern, found the string `"application/vnd.ren.a"`
-  patterns/lexer.ren: not native yet: error: expected a pattern, found the string `"fn"`
+  patterns/strs.ren: not native yet: error: a string or list pattern isn't in the native slice yet
+  patterns/guards.ren: not native yet: error: a string or list pattern isn't in the native slice yet
+  patterns/arrays.ren: not native yet: error: a string or list pattern isn't in the native slice yet
+  patterns/sizes.ren: not native yet: error: a string or list pattern isn't in the native slice yet
+  patterns/hard.ren: not native yet: error: a string or list pattern isn't in the native slice yet
+  patterns/lexer.ren: not native yet: error: a string or list pattern isn't in the native slice yet
   patterns/index.ren, perceus: the same, exit 0, objects live at exit 0
   patterns/index.ren, naive: the same, exit 0, objects live at exit 0
   patterns/index.ren, release: the same, exit 0, objects live at exit 0

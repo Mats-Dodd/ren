@@ -1538,9 +1538,14 @@ let bind env (v : C.var) m = { env with vars = Vars.add v.id m env.vars }
 (* The variables a pattern binds, each once. *)
 let rec pattern_vars (p : C.pattern) =
   match p.pkind with
-  | PWild | PInt _ | PBool _ -> []
+  | PWild | PInt _ | PBool _ | PStr _ -> []
   | PVar v -> [ v ]
   | PAs (p, v) -> pattern_vars p @ [ v ]
+  | PStr_rest { rest; _ } -> Option.to_list rest
+  | PArray { front; rest; back } ->
+      List.concat_map pattern_vars front
+      @ (match rest with Rest (Some v) -> [ v ] | _ -> [])
+      @ List.concat_map pattern_vars back
   | PCon (_, _, ps) | PTag (_, ps) | PTuple ps | PRecord (_, ps) ->
       List.concat_map pattern_vars ps
   | POr (p :: _) -> pattern_vars p
@@ -4313,6 +4318,8 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
             emit fs (If (c, block fs inner, []))
         in
         match p.pkind with
+        | PStr _ | PStr_rest _ | PArray _ ->
+            unsupported p.ploc "a string or list pattern"
         | PWild -> rest_then ()
         | PVar v -> set (slot vars v) rest_then
         | PAs (q, v) ->

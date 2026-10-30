@@ -166,6 +166,10 @@
         "named": true
       },
       {
+        "type": "list_pattern",
+        "named": true
+      },
+      {
         "type": "negative_number",
         "named": true
       },
@@ -183,6 +187,14 @@
       },
       {
         "type": "record_pattern",
+        "named": true
+      },
+      {
+        "type": "string",
+        "named": true
+      },
+      {
+        "type": "string_pattern",
         "named": true
       },
       {
@@ -2796,6 +2808,10 @@
             "named": true
           },
           {
+            "type": "list_pattern",
+            "named": true
+          },
+          {
             "type": "negative_number",
             "named": true
           },
@@ -2813,6 +2829,14 @@
           },
           {
             "type": "record_pattern",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "string_pattern",
             "named": true
           },
           {
@@ -2856,6 +2880,25 @@
       "types": [
         {
           "type": "let_else",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "list_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "_pattern",
+          "named": true
+        },
+        {
+          "type": "sequence_rest",
           "named": true
         }
       ]
@@ -3816,6 +3859,22 @@
     "fields": {}
   },
   {
+    "type": "sequence_rest",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "source_file",
     "named": true,
     "root": true,
@@ -3903,6 +3962,25 @@
         },
         {
           "type": "interpolation",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "string_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "sequence_rest",
+          "named": true
+        },
+        {
+          "type": "string",
           "named": true
         }
       ]

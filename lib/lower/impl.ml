@@ -97,7 +97,8 @@ let rec unplaced (e : Core.expr) : Core.expr =
 and pattern (p : Core.pattern) : Core.pattern =
   let pkind : Core.pattern_kind =
     match p.pkind with
-    | (PWild | PVar _ | PInt _ | PBool _) as k -> k
+    | (PWild | PVar _ | PInt _ | PBool _ | PStr _) as k -> k
+    | (PStr_rest _ | PArray _) as k -> Core.map_seq ~pat:pattern ~var:Fun.id k
     | PCon (t, c, ps) -> PCon (t, c, List.map pattern ps)
     | PTag (t, ps) -> PTag (t, List.map pattern ps)
     | POr ps -> POr (List.map pattern ps)

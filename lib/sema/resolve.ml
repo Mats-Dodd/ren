@@ -1423,8 +1423,12 @@ let lookup env sc loc ~what x =
    reported: otherwise the second `x` would quietly hide the first. *)
 let rec pattern_vars (p : Parsed.pattern) =
   match p.pkind with
-  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
+  | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> []
   | PVar x -> [ x ]
+  | PSeq q ->
+      List.concat_map pattern_vars q.front
+      @ Option.to_list (Option.bind q.middle (fun r -> r.rname))
+      @ List.concat_map pattern_vars q.back
   | PAs (q, x) -> pattern_vars q @ [ x ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
@@ -1560,6 +1564,21 @@ let rec pattern env ?(how = By_pattern) ?(same = Env.empty) sc
     | PWild -> (PWild, sc)
     | PInt n -> (PInt n, sc)
     | PBool b -> (PBool b, sc)
+    | PStr s -> (PStr s, sc)
+    | PSeq q ->
+        (* the pieces in front, the rest's name, then the pieces after,
+           left to right *)
+        let front, sc = patterns sc q.front in
+        let middle, sc =
+          match q.middle with
+          | Some { rname = Some x; rloc } ->
+              let b, sc = name sc x in
+              (Some { rname = Some b; rloc }, sc)
+          | Some { rname = None; rloc } -> (Some { rname = None; rloc }, sc)
+          | None -> (None, sc)
+        in
+        let back, sc = patterns sc q.back in
+        (PSeq { q with front; middle; back }, sc)
     | PFail_any -> (PFail_any, sc)
     | PFail_in x -> (
         (* `fail on`: [on] is a parameter of type `Tags`, and the pattern
