@@ -2,6 +2,7 @@
 let
   ocaml = import ./nix/ocaml.nix { inherit pkgs; };
   tinycc = pkgs.callPackage ./nix/tinycc.nix { };
+  tree-sitter = pkgs.callPackage ./nix/tree-sitter.nix { };
 
 in {
   # Upstream v2.4.0's module version stamp still says 2.3.1.
@@ -11,7 +12,7 @@ in {
   packages = [
     ocaml.ocaml ocaml.findlib ocaml.ppx_deriving ocaml.ppx_expect
     ocaml.ocaml-lsp pkgs.ocamlformat ocaml.dune_3
-    pkgs.llvmPackages_23.clang (lib.getBin tinycc)
+    pkgs.llvmPackages_23.clang (lib.getBin tinycc) tree-sitter
     pkgs.nodejs_latest pkgs.python315 pkgs.gnumake pkgs.git pkgs.perl pkgs.ps
   ] ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.llvmPackages_23.llvm ];
 
@@ -23,6 +24,7 @@ in {
   env.XDG_CONFIG_HOME = "${config.devenv.state}/config";
   env.LC_ALL = if pkgs.stdenv.hostPlatform.isDarwin then "en_US.UTF-8" else "C.UTF-8";
   env.REN_TCC = "${lib.getBin tinycc}/bin/tcc";
+  env.TREE_SITTER = "${tree-sitter}/bin/tree-sitter";
 
   scripts.ren-check.exec = ''
     exec bash "${config.devenv.root}/tools/check.sh" "$@"
@@ -40,6 +42,7 @@ in {
     "$REN_TCC" -v
     node --version
     python3 --version
+    tree-sitter --version
   '';
 
   profiles.benchmarks.module = {

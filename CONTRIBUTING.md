@@ -60,8 +60,12 @@ As of 2026-10-30, Clang is one patch behind upstream 23.1.4: this is the
 newest stable LLVM package in the locked nixpkgs collection, retaining
 binary-cache support rather than requiring every contributor and CI runner
 to compile LLVM. Advance it with nixpkgs when that package is available.
-Tree-sitter CLI 0.27.1 is pinned separately by the npm lockfile; generation
-explicitly targets ABI 14 for editor compatibility.
+Tree-sitter CLI 0.27.1 uses the upstream release executable, pinned by hash
+in `nix/tree-sitter.nix`. On Linux its loader and library paths are patched
+for Nix, so it also works without a system glibc installation. The shell
+sets `TREE_SITTER` for both grammar commands and differential checks. Outside
+devenv, the npm lockfile supplies the same CLI version. Generation explicitly
+targets ABI 14 for editor compatibility.
 
 `cc` is the Nix Clang wrapper, with the platform's SDK/libc and sanitizer
 libraries. The shell disables Nix’s fortification flags because glibc
@@ -121,7 +125,8 @@ package skips OCaml's own upstream tests during installation; `ren-check`
 still runs the full Ren suite, native comparisons and sanitizers. Update source
 hashes along with versions, and preserve a consistent OCaml package scope.
 
-For a tree-sitter upgrade, update its exact npm version and lockfile,
-regenerate at ABI 14, and review the generated changes. `npm ci` is used for
+For a tree-sitter upgrade, update the release version and platform hashes in
+`nix/tree-sitter.nix`, and its exact npm version and lockfile. Regenerate at
+ABI 14 and review the generated changes. Outside devenv, `npm ci` is used for
 clean installs. Avoid changing formatting across the repository as part of
 a toolchain update.

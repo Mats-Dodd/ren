@@ -17,11 +17,12 @@ by tree-sitter.
                                             import or a misaligned line;
                                             counted, and listed with -v
 
-Run from anywhere, after `dune build` and `npm ci`:
+Run from anywhere after `dune build`, inside devenv or after `npm ci`:
 
   python3 editors/tree-sitter-ren/differential.py [-v]
 """
 
+import os
 import pathlib
 import re
 import subprocess
@@ -31,7 +32,9 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 REN = ROOT / "_build" / "default" / "bin" / "main.exe"
-TREE_SITTER = HERE / "node_modules" / ".bin" / "tree-sitter"
+TREE_SITTER = pathlib.Path(
+    os.environ.get("TREE_SITTER") or HERE / "node_modules" / ".bin" / "tree-sitter"
+)
 
 # {|...|} and {id|...|id}, OCaml's quoted strings
 QUOTED = re.compile(r"\{([a-z_]*)\|(.*?)\|\1\}", re.S)
@@ -81,7 +84,7 @@ def main():
     verbose = "-v" in sys.argv
     for tool in (REN, TREE_SITTER):
         if not tool.exists():
-            sys.exit(f"missing {tool}: run `dune build` and `npm ci` first")
+            sys.exit(f"missing {tool}: run `dune build` inside devenv (or install the CLI with `npm ci`) first")
 
     with tempfile.TemporaryDirectory() as tmp:
         files = []
