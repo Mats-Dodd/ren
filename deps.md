@@ -444,7 +444,9 @@ error: `with` installs only handlers
 `Str` arrives in this stage at its smallest: literals, `==` and `show`.
 Stage 8 adds what `Fs` needs: `Str`'s methods, `Bytes` and `Path`. A
 string is UTF-8, its indices are byte offsets, and `Str.from_utf8(b) !
-InvalidUtf8` is the one way from bytes to a string.
+InvalidUtf8(at: Int, incomplete: Bool)` is the one way from bytes to a
+string that checks them; `Str.from_utf8_lossy(b)` replaces what isn't
+UTF-8 instead.
 
 ## `main`
 

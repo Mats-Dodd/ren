@@ -1453,9 +1453,25 @@ static inline int64_t ren_bytes_set_var(ren_obj **cell, int64_t at, int64_t x,
   return n;
 }
 
-/* Whether [s]'s bytes are UTF-8: no overlong form, no surrogate, nothing
-   past U+10FFFF, as OCaml's `String.is_valid_utf_8` says. */
-bool ren_utf8_valid(ren_obj *s);
+/* UTF-8 (ren_rt.c, "UTF-8"). Whether the [n] bytes at [p] are UTF-8, as
+   OCaml's `String.is_valid_utf_8` says (no overlong form, no surrogate,
+   nothing past U+10FFFF): -1 if they are, else `at`, where the first
+   byte that isn't part of a character is, with [*incomplete] true if the
+   end cut that character off. NEON's block validator where there's NEON
+   and the compiler isn't tcc, else the scalar path, which is
+   [ren_utf8_check_scalar] everywhere, for the differential test
+   (test/utf8/). */
+int64_t ren_utf8_check(const char *p, int64_t n, bool *incomplete);
+int64_t ren_utf8_check_scalar(const char *p, int64_t n, bool *incomplete);
+
+/* `Str.from_utf8(b)`'s test: [ren_utf8_check] of [b]'s bytes, -1 or
+   `at`; and its `incomplete`, of what [ren_utf8_error] said. */
+int64_t ren_utf8_error(ren_obj *b);
+bool ren_utf8_incomplete(ren_obj *b, int64_t at);
+
+/* `Str.from_utf8_lossy(b)`: [b] itself, counted again, if it's UTF-8;
+   else a new owner with U+FFFD for each maximal invalid subpart. */
+ren_obj *ren_utf8_lossy(ren_obj *b);
 
 /* `Bytes.zeros(n)`, panicking if [n] is negative. */
 ren_obj *ren_bytes_zeros(int64_t n, const ren_site *site);

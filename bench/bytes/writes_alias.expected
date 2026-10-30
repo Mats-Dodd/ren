@@ -8,6 +8,6 @@ xyzw
 <bytes ff 42 43 77>
 124716
 564
-Err(InvalidUtf8)
+Err(InvalidUtf8(0, false))
 Ok("€")
 exit 0

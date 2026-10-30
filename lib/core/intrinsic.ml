@@ -119,6 +119,7 @@ type t =
   | Str_concat
   | Str_bytes
   | Str_from_utf8
+  | Str_from_utf8_lossy
   | Bytes_len
   | Bytes_at
   | Bytes_of
@@ -248,6 +249,7 @@ let path x =
   | Str_concat -> member "Str" "concat"
   | Str_bytes -> member "Str" "bytes"
   | Str_from_utf8 -> member "Str" "from_utf8"
+  | Str_from_utf8_lossy -> member "Str" "from_utf8_lossy"
   | Bytes_len -> member "Bytes" "len"
   | Bytes_at -> member "Bytes" "at"
   | Bytes_of -> member "Bytes" "of"

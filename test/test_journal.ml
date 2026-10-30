@@ -81,7 +81,7 @@ let%expect_test "a recording is the calls, what each gave, and how it ended" =
     [
       ( "main.ren",
         {|
-fn main() ! FsError | InvalidUtf8 uses Fs, Os, Console =
+fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Fs, Os, Console =
   let args = Os.args()
   try Fs.write(Path.of("out.txt"), "a\"b\tc\n".bytes())
   let text = try Fs.read_str(Path.of("out.txt"))
@@ -180,7 +180,7 @@ fn main() ! FsError uses Fs, Console =
 let reader ?(second = "b") ?(done_ = "done") () =
   Printf.sprintf
     {|
-pub fn main() ! FsError | InvalidUtf8 uses Fs, Clock, Console =
+pub fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Fs, Clock, Console =
   let a = try Fs.read_str(Path.of("a"))
   let t = Clock.now()
   Console.write(a)

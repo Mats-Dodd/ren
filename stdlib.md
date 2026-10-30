@@ -123,6 +123,10 @@ let fields = line.trim().split(" ")        // slices of `line`, no copies
 
 A function that changes parts of an array in place takes them as places, `&xs.split_at(n) fn(&lo, &hi) => ...`, which is how a sort or a parallel loop divides its work.
 
+### From bytes to a string
+
+`Str.from_utf8(b)` is the one way from `Bytes` to a `Str` that checks them, and fails with `InvalidUtf8(at: Int, incomplete: Bool)`: `at` is where the first byte that isn't part of a character is, and `incomplete` says the end cut that character off, so a decoder fed in chunks keeps the last few bytes for the next chunk instead of failing ([strings.md](strings.md)). It accepts exactly what OCaml's `String.is_valid_utf_8` does, in `ren run` and natively, where it's a block validator, 64 bytes at a time, where there's NEON, and a scalar one elsewhere. `Str.from_utf8_lossy(b)` never fails: it writes U+FFFD for each maximal invalid subpart, as Unicode recommends and Rust's `from_utf8_lossy` does.
+
 ### Bytes at an offset, and a cursor
 
 Below formats ([formats.md](formats.md#layer-3-raw-bytes)), `Bytes` has reads and writes at an offset with the width and byte order in the name, as Go's `binary.LittleEndian` and Zig's `takeInt` do: `b.u8(at)`, `b.i16_be(at)`, `b.u32_le(at)` ... `b.i64_be(at)`, and `&b.set_u32_le(at, x)` and the rest, on a `Bytes` made with `Bytes.zeros(n)` or any other. A read or a write at an offset the program computed panics out of range, as `xs[i]` does: a bad offset is a bug. A write that doesn't fit its width panics as a store into a sized integer does. `u64_le` gives an `Int`, and panics on 2^63 or more; `i64_le` reads the same bits as a signed `Int`, which is how a 64-bit hash or checksum is read. A write copies the bytes first if anything else holds them, a slice's root or a literal included, so `Bytes` stay values. `&b.set_varuint(at, x)` and `&b.set_varint(at, x)` write LEB128 (zigzag for `VarInt`) and return how many bytes they took, which `Bytes.varuint_size(x)` says first.

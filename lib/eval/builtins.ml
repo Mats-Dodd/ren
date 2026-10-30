@@ -689,12 +689,44 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
       pure (function [ VStr a; VStr b ] -> VStr (a ^ b) | _ -> bug x)
   (* its UTF-8 *)
   | Str_bytes -> pure (function [ VStr s ] -> VBytes s | _ -> bug x)
+  (* fails with `at`, where OCaml's decoder first finds an invalid
+     character, and `incomplete`: whether that invalid decode runs to the
+     end from a lead byte, C2 to F4, so the end cut a character off.
+     Native builds find the same by their rescan (ren_rt.c, "UTF-8"). *)
   | Str_from_utf8 ->
       pure (function
         | [ VBytes b ] ->
             if String.is_valid_utf_8 b then VStr b
             else
-              raise (Fail (VTag { name = "InvalidUtf8"; args = []; tys = [] }))
+              let n = String.length b in
+              let rec bad i =
+                let d = String.get_utf_8_uchar b i in
+                if Uchar.utf_decode_is_valid d then bad (i + Uchar.utf_decode_length d)
+                else (i, i + Uchar.utf_decode_length d = n && b.[i] >= '\xc2' && b.[i] <= '\xf4')
+              in
+              let at, incomplete = bad 0 in
+              raise
+                (Fail
+                   (VTag
+                      { name = "InvalidUtf8"; args = [ int at; VBool incomplete ]; tys = [ Ty.int; Ty.bool ] }))
+        | _ -> bug x)
+  (* U+FFFD for each maximal invalid subpart, as OCaml's decoder finds
+     them (Unicode's "best practice") *)
+  | Str_from_utf8_lossy ->
+      pure (function
+        | [ VBytes b ] ->
+            if String.is_valid_utf_8 b then VStr b
+            else
+              let n = String.length b in
+              let out = Buffer.create (n + 8) in
+              let rec go i =
+                if i < n then (
+                  let d = String.get_utf_8_uchar b i in
+                  Buffer.add_utf_8_uchar out (Uchar.utf_decode_uchar d);
+                  go (i + Uchar.utf_decode_length d))
+              in
+              go 0;
+              VStr (Buffer.contents out)
         | _ -> bug x)
   | Bytes_len ->
       pure (function [ VBytes b ] -> int (String.length b) | _ -> bug x)

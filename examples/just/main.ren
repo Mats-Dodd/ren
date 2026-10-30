@@ -11,7 +11,7 @@ import sim.{Run, SimProc}
 
 // `pub`, with its whole contract, since the tests below call it, and a
 // test sees what an importer sees
-pub fn main() ! FsError | InvalidUtf8 | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console, Async =
+pub fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console, Async =
   let j = try Justfile.parse(try Fs.read_str(Path.of("justfile")))
   let args = Os.args()
   let name =

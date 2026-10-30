@@ -939,7 +939,7 @@ let%expect_test "the real Fs" =
   run ~twice:false
     (Printf.sprintf
        {|
-fn main() ! FsError | InvalidUtf8 uses Fs, Console =
+fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Fs, Console =
   let p = Path.of("%s")
   print(Fs.exists(p))
   match attempt Fs.read(p)
@@ -969,7 +969,7 @@ fn main() ! FsError | InvalidUtf8 uses Fs, Console =
   run
     (Printf.sprintf
        {|
-fn main() ! FsError | InvalidUtf8 uses Fs, Console =
+fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Fs, Console =
   let p = Path.of("%s")
   print((try Fs.read(p)).len())
   try Fs.read_str(p)
@@ -978,7 +978,7 @@ fn main() ! FsError | InvalidUtf8 uses Fs, Console =
   Sys.remove file;
   [%expect {|
     1
-    error: InvalidUtf8
+    error: InvalidUtf8(0, false)
     |}]
 
 let%expect_test "the real Fs fails, rather than panics" =
@@ -3807,7 +3807,7 @@ fn main() uses Console =
 let%expect_test "mem_fs, installed by hand" =
   run
     {|
-fn main() ! FsError | InvalidUtf8 uses Console =
+fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Console =
   let notes = Path.of("notes.txt")
   let files = [File { path: notes, data: "hi".bytes() }]
   with mem_fs(files) in

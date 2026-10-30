@@ -9426,11 +9426,134 @@ Choices where strings.md, decision 17 and the brief are silent:
 - The escape's test is in strs_big.t, run only with `REN_BIG_TESTS=1`;
   steps 3 and 4's tests are bench/strs.t's, since no expect test builds
   natively.
+- Step 1's tests are written with today's names (`concat`, `show`,
+  `len`), not step 2's, so they run at step 1. The differential test's C
+  program makes the inputs and OCaml checks them, and its 1 MiB texts are
+  20 prefixes a kind in `dune test`, 3,000 by hand.
+- `Str.from_utf8_lossy` of valid bytes is those bytes, counted again,
+  not a copy.
+
+### Step 1, as built
+
+**The validator** is ren_rt.c's "UTF-8" section. `ren_utf8_check(p, n,
+&incomplete)` gives -1 or `at`. Where `__ARM_NEON` is defined and
+`__TINYC__` isn't, it's b5.c's block validator: its three tables, 64
+bytes a block, an all-ASCII block skipped. Two changes make the failing
+block known without slowing the ASCII path. A block returns its own
+error vector, tested once (`vmaxvq_u8`), and the loop stops at the first
+block that has one. The "left open" vector is a mask (`vcgtq_u8` of the
+last 16 bytes against `maxv`), ORed into the ASCII test, so an ASCII
+block after a block that left a character open costs nothing extra.
+On failure the scalar decoder rescans from `ren_u8_back(p, i)`. That's
+the first byte that isn't a continuation among the 3 before the failing
+block's start `i`, else `i`. It's sound because every byte before `i`
+was checked with no error, so the one thing left over is a character
+that starts in those 3 bytes and that `i` cuts. A run of 3
+continuations before `i` ends a whole 4-byte character. The rescan runs
+to the first error, which is in that block or the 3 bytes before it.
+The end is handled as b5.c handles it: a zero-padded last block, or the
+last full block's open mask.
+
+Elsewhere (tcc, x86_64, this container) `ren_utf8_check` is
+`ren_utf8_check_scalar`, the scalar path, which is also the rescan. A
+run of ASCII is skipped eight bytes at a time (`memcpy` into a
+`uint64_t`, tested against `0x80…80`). A character with 3 bytes after
+it is decoded by the range table with no test of the end. Anything else
+goes to `ren_utf8_char`, which gives a character's length or minus its
+maximal invalid subpart's. The first version tested eight bytes before
+every character and ran CJK at 0.53 GB/s against the old loop's 0.88.
+Trying the eight-byte skip only after an ASCII byte fixed it.
+`incomplete` is `ren_utf8_cut`: the subpart at `at` runs to the end and
+starts with a lead byte C2 to F4.
+
+In Mem, `Utf8_valid` became `Utf8_error` (`[Boxed] -> Int`, -1 or `at`),
+`Utf8_incomplete` (`[Boxed; Int] -> Bool`, only on the failing branch)
+and `Utf8_lossy`. `Str.from_utf8` builds its error the way a Core `Tag`
+is built: `at`, `incomplete`, then their types' descriptors, in a
+shape of the tag's id. Debug, release, sanitizer and tcc builds all run
+the same functions.
+
+**`InvalidUtf8(at: Int, incomplete: Bool)`** is the scheme's label
+`{ name = "InvalidUtf8"; payload = [int; bool] }`. The interpreter
+(builtins.ml) runs `String.is_valid_utf_8`, then on failure walks
+`String.get_utf_8_uchar` to the first invalid decode. Its `at` is
+there, and `incomplete` is that decode reaching the end from a lead
+byte C2 to F4. Moved in the same commit: prelude's `Fs.read_str`,
+examples/just (main.ren and README), test_deps, test_eval and
+test_journal (the signatures, the `fail InvalidUtf8(_, _)` arm and the
+printed payloads, only those lines), bench/bytes/writes_alias.expected's
+`Err(InvalidUtf8(0, false))`, test_strs.ml's member lists (now ending
+`from_utf8_lossy`), deps.md and stdlib.md (a paragraph, "From bytes to
+a string"). The checker's errors were the list. A signature shows the
+tag as `InvalidUtf8(Int, Bool)`, since a label's payload has no names.
+
+**`Str.from_utf8_lossy(b)`**: the interpreter decodes with
+`String.get_utf_8_uchar` and writes `Uchar.rep` for each invalid decode.
+`ren_utf8_lossy` counts the length first, then writes the copy. Both
+return the bytes themselves when they're valid, which keeps a BOM.
+
+**The differential test**, test/utf8/, differs from the spec in one
+way: the C program makes the inputs and OCaml checks them, the other
+way round from the spec. That way one generator, b5.c's own, serves
+both, and so does qemu. diff.c is linked with ren_rt.c itself. It runs
+b5.c's test (2,000,000 texts of 1 to 200 bytes, of five kinds, with up
+to two bytes changed) and b5big.c's sweep (an ASCII run of 0 to 299
+bytes, every prefix of six sequences, then 0 to 63 bytes of ASCII),
+both after ASCII and after 3-byte characters. It also runs b5big.c's
+1 MiB texts, 20 prefixes a kind (b5big.c ran 3,000), for 2,108,100
+inputs, 1,513,311 of them invalid. For each it compares
+`ren_utf8_check` and `ren_utf8_check_scalar` with a reference written
+there. The reference decodes a code point in full and checks its
+range, and `incomplete` comes from a table of every proper prefix of
+every scalar value's encoding. Then it writes each input with the
+runtime's `at`, `incomplete` and lossy length to check.exe. check.exe
+holds them against `String.is_valid_utf_8` and the interpreter's own
+built-ins, called as test_eval calls them. neon.sh builds the same with
+`aarch64-linux-gnu-gcc -O2 -static` and runs it under `qemu-aarch64`,
+or prints `neon: skipped, no <tool>`. Both run in `dune test`, about 6 s
+natively and 25 s under qemu, in parallel. Results: 0 disagreements on
+either path, against the reference and against OCaml. With b5big.c's
+full count (`diff.exe check 3000`, 2,123,000 inputs, 1,521,375 invalid)
+there are also 0 disagreements, natively (30 s) and under qemu
+(`qemu-aarch64 diff_neon.exe check 3000`, 112 s). Planting one bug (C0
+taken as a 2-byte lead) gave 18,244 disagreements on both paths.
+
+**The tests.** bench/strs/invalid_utf8.ren and test_strs.ml's three s1
+tests used step 2's interpolation, `+=`, `is_empty`, `byte_len` and
+`Str.of_code`. They're rewritten with today's names (`concat`, `show`,
+`len`, `== ""`, a literal U+FFFD), with the same outputs, so they run
+at step 1. Step 2 moves them with the rest. invalid_utf8.ren is as
+specified, and the same natively in every build, with no object alive
+at the end. s1 is on, and no `until "s1"` is left.
+
+**Measured** (x86_64 cloud container, 4 cores, shared; the scalar path;
+wall time, since there's no `perf` here). `diff.exe bench K 1048576` is
+b5.c's bench: one 1 MiB text validated until 256 MiB are, by
+`ren_utf8_check` and by the old byte loop copied in as `before`. The
+Rust twin, test/utf8/from_utf8.rs, is std's `str::from_utf8` on the same
+text (`diff.exe dump`).
+Seven runs interleaved, medians and spread, GB/s:
+
+| text | before | step 1 (scalar) | Rust | step 1 / before |
+|---|---|---|---|---|
+| ASCII | 1.01 (0.92-1.04) | 21.4 (13.6-25.3) | 25.7 (20.0-26.8) | 21× |
+| CJK | 0.82 (0.75-0.90) | 1.01 (0.92-1.09) | 0.76 (0.60-0.80) | 1.23× |
+| mixed | 0.88 (0.66-0.94) | 2.01 (1.81-2.10) | 2.08 (1.70-2.24) | 2.3× |
+
+An earlier session on the same build, without the twin, got ASCII 11.2
+(8.5-13.6) against 1.92, CJK 1.03 against 0.83, and mixed 2.28 against
+1.25. Between sessions the machine's speed swings by 2×; within one
+session the ratios hold. **The step's targets** (70 GB/s ASCII, about 9
+CJK and 13.5 mixed) are the NEON path's on the M4 Max, and can't be
+timed here: qemu only checks correctness. They're the owner's to
+confirm with `diff.exe bench` built natively there (bench/native/
+RESULTS.md, "Bytes stage, part two, step 1").
 
 ### Progress log
 
 | step | commit | what's done | what's left |
 |---|---|---|---|
+| 1 | "Bytes stage, part two, step 1: the boundary" | the NEON block validator and its scalar path, the rescan; `InvalidUtf8(at, incomplete)` in every use; `from_utf8_lossy`; test/utf8/'s differential test, natively and under qemu-aarch64, 0 disagreements; invalid_utf8 and s1 on; scalar path 21×, 1.23× and 2.3× the old loop on ASCII, CJK and mixed (x86_64) | the NEON GB/s targets, the owner's to time on the M4 Max |
 
 ## Services stage
 

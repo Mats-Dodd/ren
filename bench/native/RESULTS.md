@@ -524,6 +524,43 @@ the twins. Only names changed: the release build's C is the same but
 for its handlers' names, the checksums are the same, so these numbers
 stand (checked on a Linux cloud container, against ed8f0f8).
 
+## Bytes stage, part two, step 1 (compiler.md, "Bytes stage, part two", "Step 1, as built")
+
+`Str.from_utf8`'s validator, `ren_utf8_check`, on b5.c's texts of 1 MiB,
+GB/s. x86_64 cloud container, 4 cores, shared, so this is the scalar
+path: eight ASCII bytes at a time, then a range-table decoder. Wall
+time, since there's no `perf`. "before" is the byte loop it replaced,
+ren_rt.c's `ren_utf8_valid` at 9ec5fb9, copied into the harness. Rust
+is std's `str::from_utf8` (`rustc -C opt-level=3`) on the same bytes.
+Seven runs interleaved, medians and spread:
+
+| text | before | step 1 | Rust | step 1 / before | step 1 / Rust |
+|---|---|---|---|---|---|
+| ASCII | 1.01 (0.92-1.04) | 21.4 (13.6-25.3) | 25.7 (20.0-26.8) | 21× | 0.83× |
+| CJK | 0.82 (0.75-0.90) | 1.01 (0.92-1.09) | 0.76 (0.60-0.80) | 1.23× | 1.33× |
+| mixed | 0.88 (0.66-0.94) | 2.01 (1.81-2.10) | 2.08 (1.70-2.24) | 2.3× | 0.97× |
+
+An earlier session on the same build got ASCII 11.2 (8.5-13.6) against
+1.92 (1.53-2.19), CJK 1.03 (1.02-1.08) against 0.83 (0.67-0.91), and
+mixed 2.28 (2.10-2.35) against 1.25 (1.22-1.29). The machine's speed
+moves by up to 2× between sessions; the ratios within a session hold.
+
+```sh
+dune build test/utf8/diff.exe
+d=_build/default/test/utf8/diff.exe
+for k in ascii cjk mixed; do $d dump $k 1048576 /tmp/$k.txt; done
+rustc -C opt-level=3 -o /tmp/u8 test/utf8/from_utf8.rs
+for r in 1 2 3 4 5 6 7; do for k in ascii cjk mixed; do $d bench $k 1048576; /tmp/u8 /tmp/$k.txt; done; done
+```
+
+**NEON isn't timed here.** The step's targets are the research's NEON
+numbers on the M4 Max: 70 GB/s or more on ASCII, about 9 on CJK and
+13.5 on mixed (73.1, 9.01, 13.5). The NEON path is checked for
+correctness under qemu-aarch64 (test/utf8/neon.sh: 0 disagreements),
+which can't time it. On the M4, `diff.exe bench K 1048576` built there
+times it against the old loop; bench/native/strs/'s `utf8` kernel times
+`Str.from_utf8` from Ren once it's on main.
+
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 
 Slices are built as representation A: a slice is a header like its

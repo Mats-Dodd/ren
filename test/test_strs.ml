@@ -24,45 +24,31 @@ open Helpers
 
 (* ---- s1: the boundary ---- *)
 
+(* The s1 tests are written with today's names, `concat`, `show` and `len`,
+   not step 2's interpolation and `byte_len`, so that they run at step 1;
+   step 2 moves them with the rest (compiler.md, "Bytes stage, part two",
+   step 1's "As built"). *)
+
 let%expect_test "[s1] `InvalidUtf8` says where the bytes went wrong, and whether the end cut a character" =
-  until "s1"
-    ~want:
-      {|
-Err(InvalidUtf8(1, false))
-Err(InvalidUtf8(1, true))
-Err(InvalidUtf8(1, false))
-Ok("ok")
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   print(attempt Str.from_utf8(Bytes.of([0x61, 0xC0, 0x80])))
   print(attempt Str.from_utf8(Bytes.of([0x61, 0xF0, 0x9F, 0x98])))
   print(attempt Str.from_utf8(Bytes.of([0x61, 0xF0, 0x9F, 0x98, 0x61])))
   print(attempt Str.from_utf8(Bytes.of([0x6F, 0x6B])))
-|});
+|};
   [%expect {|
-    (until s1)
-    Err(InvalidUtf8)
-    Err(InvalidUtf8)
-    Err(InvalidUtf8)
+    Err(InvalidUtf8(1, false))
+    Err(InvalidUtf8(1, true))
+    Err(InvalidUtf8(1, false))
     Ok("ok")
     ()
     |}]
 
 let%expect_test "[s1] a decoder working chunk by chunk tells invalid from not finished, by the payload" =
-  until "s1"
-    ~want:
-      {|
-日本 then 1 bytes kept
-invalid at 2
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn feed(b: Bytes) uses Console =
   match attempt Str.from_utf8(b)
     Ok(s) => print(s)
@@ -70,75 +56,37 @@ fn feed(b: Bytes) uses Console =
       if incomplete then
         let s = attempt Str.from_utf8(b[0..at])
         match s
-          Ok(t) => print("\{t} then \{b.len() - at} bytes kept")
+          Ok(t) => print(t.concat(" then ").concat(show(b.len() - at)).concat(" bytes kept"))
           Err(_) => print("?")
-      else print("invalid at \{at}")
+      else print("invalid at ".concat(show(at)))
 
 fn main() uses Console =
   feed(Bytes.of([0xE6, 0x97, 0xA5, 0xE6, 0x9C, 0xAC, 0xE8]))
   feed(Bytes.of([0x61, 0x62, 0xFF]))
-|});
+|};
   [%expect {|
-    (until s1)
-    error: `\{` isn't an escape
-      ┌─ test.ren:8:27
-    8 │           Ok(t) => print("\{t} then \{b.len() - at} bytes kept")
-      │                           ^^
-      help: the escapes are `\n`, `\t`, `\"` and `\\`, which writes a backslash
+    日本 then 1 bytes kept
+    invalid at 2
+    ()
     |}]
 
 let%expect_test "[s1] `from_utf8_lossy` writes one U+FFFD for each maximal invalid subpart, and keeps a byte order mark" =
-  until "s1"
-    ~want:
-      {|
-a�b
-a���b
-a�
-�
-3
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console =
   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xE2, 0x82, 0x62])))
   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xED, 0xA0, 0x80, 0x62])))
   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xF0, 0x9F, 0x98])))
   print(Str.from_utf8_lossy(Bytes.of([0xFF])))
-  print(Str.from_utf8_lossy(Bytes.of([0xEF, 0xBB, 0xBF])).byte_len())
-|});
+  print(Str.from_utf8_lossy(Bytes.of([0xEF, 0xBB, 0xBF])).len())
+|};
   [%expect {|
-    (until s1)
-    error: `Str` has no member named `from_utf8_lossy`
-      ┌─ test.ren:2:13
-    2 │   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xE2, 0x82, 0x62])))
-      │             ^^^^^^^^^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
-
-    error: `Str` has no member named `from_utf8_lossy`
-      ┌─ test.ren:3:13
-    3 │   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xED, 0xA0, 0x80, 0x62])))
-      │             ^^^^^^^^^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
-
-    error: `Str` has no member named `from_utf8_lossy`
-      ┌─ test.ren:4:13
-    4 │   print(Str.from_utf8_lossy(Bytes.of([0x61, 0xF0, 0x9F, 0x98])))
-      │             ^^^^^^^^^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
-
-    error: `Str` has no member named `from_utf8_lossy`
-      ┌─ test.ren:5:13
-    5 │   print(Str.from_utf8_lossy(Bytes.of([0xFF])))
-      │             ^^^^^^^^^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
-
-    error: `Str` has no member named `from_utf8_lossy`
-      ┌─ test.ren:6:13
-    6 │   print(Str.from_utf8_lossy(Bytes.of([0xEF, 0xBB, 0xBF])).byte_len())
-      │             ^^^^^^^^^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
+    a�b
+    a���b
+    a�
+    �
+    3
+    ()
     |}]
 
 (* ---- s2: the API, and interpolation ---- *)
@@ -539,19 +487,19 @@ fn main() uses Console = print(Str.of_code(-1))
       ┌─ test.ren:1:36
     1 │ fn main() uses Console = print(Str.of_code(0xDFFF))
       │                                    ^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
+      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`, `from_utf8_lossy`
     (until s2)
     error: `Str` has no member named `of_code`
       ┌─ test.ren:1:36
     1 │ fn main() uses Console = print(Str.of_code(0x110000))
       │                                    ^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
+      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`, `from_utf8_lossy`
     (until s2)
     error: `Str` has no member named `of_code`
       ┌─ test.ren:1:36
     1 │ fn main() uses Console = print(Str.of_code(-1))
       │                                    ^^^^^^^
-      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`
+      help: its members: `len`, `index`, `split`, `trim`, `starts_with`, `concat`, `bytes`, `lower`, `copy`, `split_at`, `from_utf8`, `from_utf8_lossy`
     |}]
 
 let%expect_test "[s2] `char_floor` and `char_ceil` outside the string panic, as `split_at` does" =

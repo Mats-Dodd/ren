@@ -1110,45 +1110,303 @@ ren_obj *ren_bytes_unshare(ren_obj *b) {
   return c;
 }
 
-bool ren_utf8_valid(ren_obj *s) {
-  const unsigned char *p = (const unsigned char *)ren_str_data(s);
-  int64_t n = ren_str_len(s), i = 0;
+/* ---- UTF-8 (compiler.md, "Bytes stage, part two", "The validator") ----
+
+   `Str.from_utf8` accepts what OCaml's `String.is_valid_utf_8` does, and
+   nothing else: no overlong form, no surrogate, nothing past U+10FFFF, no
+   byte C0, C1 or F5 to FF. Where there's NEON a block validator finds
+   whether there's an error and in which block; the scalar decoder, which
+   is the whole path elsewhere, says where it is. */
+
+/* The character at [p + i], of [n] bytes: its length if it's UTF-8, else
+   minus the length of its maximal invalid subpart, at least 1 (Unicode's
+   "best practice", what OCaml's `String.get_utf_8_uchar` decodes as one
+   invalid character). The range the second byte is in rules out overlong
+   forms, surrogates and what's past U+10FFFF. */
+static int ren_utf8_char(const unsigned char *p, int64_t i, int64_t n) {
+  unsigned c = p[i];
+  if (c < 0x80)
+    return 1;
+  int more;
+  unsigned lo = 0x80, hi = 0xbf;
+  if (c >= 0xc2 && c <= 0xdf)
+    more = 1;
+  else if (c >= 0xe0 && c <= 0xef) {
+    more = 2;
+    if (c == 0xe0)
+      lo = 0xa0;
+    else if (c == 0xed)
+      hi = 0x9f;
+  } else if (c >= 0xf0 && c <= 0xf4) {
+    more = 3;
+    if (c == 0xf0)
+      lo = 0x90;
+    else if (c == 0xf4)
+      hi = 0x8f;
+  } else
+    return -1;
+  if (i + 1 >= n || p[i + 1] < lo || p[i + 1] > hi)
+    return -1;
+  for (int k = 2; k <= more; k++)
+    if (i + k >= n || (p[i + k] & 0xc0) != 0x80)
+      return -k;
+  return more + 1;
+}
+
+/* Whether the [n - at] bytes from [at] are a proper prefix of a
+   character: the end cut it off. `C3` at the end is; `E0 80` and `F5`
+   aren't. */
+static bool ren_utf8_cut(const unsigned char *p, int64_t at, int64_t n) {
+  int k = ren_utf8_char(p, at, n);
+  return k < 0 && at - k == n && p[at] >= 0xc2 && p[at] <= 0xf4;
+}
+
+/* From [i], where a character starts, to [n]: -1 if the bytes are UTF-8,
+   else where the first that isn't part of a character is, and in
+   [*incomplete] whether the end cut that character off. A run of ASCII
+   eight bytes at a time; a character with 3 bytes after it decoded with
+   no test of the end; else [ren_utf8_char], which says where an error
+   is. */
+static int64_t ren_utf8_from(const unsigned char *p, int64_t i, int64_t n,
+                             bool *incomplete) {
   while (i < n) {
     unsigned c = p[i];
     if (c < 0x80) {
+      uint64_t w;
       i++;
+      while (i + 8 <= n && (memcpy(&w, p + i, 8), (w & 0x8080808080808080ULL) == 0))
+        i += 8;
+      while (i < n && p[i] < 0x80)
+        i++;
       continue;
     }
-    /* how many bytes follow, and the range the second is in, which rules
-       out overlong forms, surrogates and what's past U+10FFFF */
-    int more;
-    unsigned lo = 0x80, hi = 0xbf;
-    if (c >= 0xc2 && c <= 0xdf)
-      more = 1;
-    else if (c >= 0xe0 && c <= 0xef) {
-      more = 2;
-      if (c == 0xe0)
-        lo = 0xa0;
-      else if (c == 0xed)
-        hi = 0x9f;
-    } else if (c >= 0xf0 && c <= 0xf4) {
-      more = 3;
-      if (c == 0xf0)
-        lo = 0x90;
-      else if (c == 0xf4)
-        hi = 0x8f;
-    } else
-      return false;
-    if (n - i <= more)
-      return false;
-    if (p[i + 1] < lo || p[i + 1] > hi)
-      return false;
-    for (int k = 2; k <= more; k++)
-      if ((p[i + k] & 0xc0) != 0x80)
-        return false;
-    i += more + 1;
+    if (i + 4 <= n) {
+      unsigned c1 = p[i + 1];
+      if (c >= 0xc2 && c <= 0xdf) {
+        if ((c1 & 0xc0) == 0x80) {
+          i += 2;
+          continue;
+        }
+      } else if (c >= 0xe0 && c <= 0xef) {
+        unsigned lo = c == 0xe0 ? 0xa0 : 0x80, hi = c == 0xed ? 0x9f : 0xbf;
+        if (c1 >= lo && c1 <= hi && (p[i + 2] & 0xc0) == 0x80) {
+          i += 3;
+          continue;
+        }
+      } else if (c >= 0xf0 && c <= 0xf4) {
+        unsigned lo = c == 0xf0 ? 0x90 : 0x80, hi = c == 0xf4 ? 0x8f : 0xbf;
+        if (c1 >= lo && c1 <= hi && (p[i + 2] & 0xc0) == 0x80 && (p[i + 3] & 0xc0) == 0x80) {
+          i += 4;
+          continue;
+        }
+      }
+    }
+    int k = ren_utf8_char(p, i, n);
+    if (k < 0) {
+      *incomplete = ren_utf8_cut(p, i, n);
+      return i;
+    }
+    i += k;
   }
-  return true;
+  return -1;
+}
+
+int64_t ren_utf8_check_scalar(const char *s, int64_t n, bool *incomplete) {
+  *incomplete = false;
+  return ren_utf8_from((const unsigned char *)s, 0, n, incomplete);
+}
+
+#if defined(__ARM_NEON) && !defined(__TINYC__)
+#include <arm_neon.h>
+
+/* Keiser and Lemire's lookup algorithm ("Validating UTF-8 in less than
+   one instruction per byte", 2021), as simdjson and simdutf build it,
+   in NEON: research/strings/track-b/c/b5.c, whose agreement test
+   test/utf8/ runs. Each byte's error is found from it and the three
+   before it, by three 16-byte tables looked up by the previous byte's
+   nibbles and this byte's high one, and the 3- and 4-byte sequences'
+   continuations checked apart. 64 bytes a block, all-ASCII blocks
+   skipped, the error tested once a block, so that the block an error
+   is found in is known. */
+#define REN_U8_TOO_SHORT (1 << 0)
+#define REN_U8_TOO_LONG (1 << 1)
+#define REN_U8_OVERLONG_3 (1 << 2)
+#define REN_U8_TOO_LARGE (1 << 3)
+#define REN_U8_SURROGATE (1 << 4)
+#define REN_U8_OVERLONG_2 (1 << 5)
+#define REN_U8_TOO_LARGE_1000 (1 << 6)
+#define REN_U8_OVERLONG_4 (1 << 6)
+#define REN_U8_TWO_CONTS (1 << 7)
+#define REN_U8_CARRY (REN_U8_TOO_SHORT | REN_U8_TOO_LONG | REN_U8_TWO_CONTS)
+
+static const uint8_t ren_u8_t1h[16] = {
+    REN_U8_TOO_LONG, REN_U8_TOO_LONG, REN_U8_TOO_LONG, REN_U8_TOO_LONG,
+    REN_U8_TOO_LONG, REN_U8_TOO_LONG, REN_U8_TOO_LONG, REN_U8_TOO_LONG,
+    REN_U8_TWO_CONTS, REN_U8_TWO_CONTS, REN_U8_TWO_CONTS, REN_U8_TWO_CONTS,
+    REN_U8_TOO_SHORT | REN_U8_OVERLONG_2, REN_U8_TOO_SHORT,
+    REN_U8_TOO_SHORT | REN_U8_OVERLONG_3 | REN_U8_SURROGATE,
+    REN_U8_TOO_SHORT | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000 | REN_U8_OVERLONG_4};
+static const uint8_t ren_u8_t1l[16] = {
+    REN_U8_CARRY | REN_U8_OVERLONG_3 | REN_U8_OVERLONG_2 | REN_U8_OVERLONG_4,
+    REN_U8_CARRY | REN_U8_OVERLONG_2,
+    REN_U8_CARRY,
+    REN_U8_CARRY,
+    REN_U8_CARRY | REN_U8_TOO_LARGE,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000 | REN_U8_SURROGATE,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000,
+    REN_U8_CARRY | REN_U8_TOO_LARGE | REN_U8_TOO_LARGE_1000};
+static const uint8_t ren_u8_t2h[16] = {
+    REN_U8_TOO_SHORT, REN_U8_TOO_SHORT, REN_U8_TOO_SHORT, REN_U8_TOO_SHORT,
+    REN_U8_TOO_SHORT, REN_U8_TOO_SHORT, REN_U8_TOO_SHORT, REN_U8_TOO_SHORT,
+    REN_U8_TOO_LONG | REN_U8_OVERLONG_2 | REN_U8_TWO_CONTS | REN_U8_OVERLONG_3 |
+        REN_U8_TOO_LARGE_1000 | REN_U8_OVERLONG_4,
+    REN_U8_TOO_LONG | REN_U8_OVERLONG_2 | REN_U8_TWO_CONTS | REN_U8_OVERLONG_3 |
+        REN_U8_TOO_LARGE,
+    REN_U8_TOO_LONG | REN_U8_OVERLONG_2 | REN_U8_TWO_CONTS | REN_U8_SURROGATE |
+        REN_U8_TOO_LARGE,
+    REN_U8_TOO_LONG | REN_U8_OVERLONG_2 | REN_U8_TWO_CONTS | REN_U8_SURROGATE |
+        REN_U8_TOO_LARGE,
+    REN_U8_TOO_SHORT, REN_U8_TOO_SHORT, REN_U8_TOO_SHORT, REN_U8_TOO_SHORT};
+/* a block's last bytes from which a character is still open: a lead of
+   2 bytes in the last, of 3 in the last two, of 4 in the last three */
+static const uint8_t ren_u8_maxv[16] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+                                        255, 255, 255, 0xf0 - 1, 0xe0 - 1, 0xc0 - 1};
+
+typedef struct {
+  uint8x16_t prev; /* the last 16 bytes checked */
+  uint8x16_t open; /* 0xff where [prev] leaves a character open */
+  uint8x16_t t1h, t1l, t2h, maxv;
+} ren_u8_state;
+
+/* The errors of the 16 bytes [in], after [s->prev]: 0 where none */
+static inline uint8x16_t ren_u8_step(ren_u8_state *s, uint8x16_t in) {
+  uint8x16_t prev1 = vextq_u8(s->prev, in, 15);
+  uint8x16_t b1h = vqtbl1q_u8(s->t1h, vshrq_n_u8(prev1, 4));
+  uint8x16_t b1l = vqtbl1q_u8(s->t1l, vandq_u8(prev1, vdupq_n_u8(0x0f)));
+  uint8x16_t b2h = vqtbl1q_u8(s->t2h, vshrq_n_u8(in, 4));
+  uint8x16_t sc = vandq_u8(vandq_u8(b1h, b1l), b2h);
+  uint8x16_t prev2 = vextq_u8(s->prev, in, 14);
+  uint8x16_t prev3 = vextq_u8(s->prev, in, 13);
+  uint8x16_t third = vqsubq_u8(prev2, vdupq_n_u8(0xe0 - 0x80));
+  uint8x16_t fourth = vqsubq_u8(prev3, vdupq_n_u8(0xf0 - 0x80));
+  uint8x16_t must23 = vandq_u8(vorrq_u8(third, fourth), vdupq_n_u8(0x80));
+  s->prev = in;
+  return veorq_u8(must23, sc);
+}
+
+/* Whether the 64 bytes at [p] are free of errors, given the block
+   before them, which was. An all-ASCII block is one when the block
+   before left nothing open, which one test of both finds. */
+static inline bool ren_u8_block(ren_u8_state *s, const unsigned char *p) {
+  uint8x16_t a = vld1q_u8(p), b = vld1q_u8(p + 16), c = vld1q_u8(p + 32),
+             d = vld1q_u8(p + 48);
+  uint8x16_t any = vorrq_u8(vorrq_u8(a, b), vorrq_u8(c, d));
+  if (vmaxvq_u8(vorrq_u8(any, s->open)) < 0x80) {
+    s->prev = d;
+    return true;
+  }
+  if (vmaxvq_u8(any) < 0x80)
+    return false; /* ASCII after a character left open */
+  uint8x16_t err = vorrq_u8(vorrq_u8(ren_u8_step(s, a), ren_u8_step(s, b)),
+                            vorrq_u8(ren_u8_step(s, c), ren_u8_step(s, d)));
+  s->open = vcgtq_u8(d, s->maxv);
+  return vmaxvq_u8(err) == 0;
+}
+
+/* Where a rescan of a block at [i] starts, when every byte before it was
+   found free of errors but a character [i] cuts may be left open: the
+   start of the character with one of the 3 bytes before [i], if one
+   starts there, which may run past [i]; else [i], since what's before it
+   is whole characters. */
+static int64_t ren_u8_back(const unsigned char *p, int64_t i) {
+  for (int64_t k = i - 1; k >= 0 && k >= i - 3; k--)
+    if ((p[k] & 0xc0) != 0x80)
+      return k;
+  return i;
+}
+
+int64_t ren_utf8_check(const char *str, int64_t n, bool *incomplete) {
+  const unsigned char *p = (const unsigned char *)str;
+  ren_u8_state s;
+  s.prev = s.open = vdupq_n_u8(0);
+  s.t1h = vld1q_u8(ren_u8_t1h);
+  s.t1l = vld1q_u8(ren_u8_t1l);
+  s.t2h = vld1q_u8(ren_u8_t2h);
+  s.maxv = vld1q_u8(ren_u8_maxv);
+  *incomplete = false;
+  int64_t i = 0;
+  for (; i + 64 <= n; i += 64)
+    if (!ren_u8_block(&s, p + i))
+      return ren_utf8_from(p, ren_u8_back(p, i), n, incomplete);
+  if (i < n) {
+    /* the last bytes, padded with zeros, after which a character left
+       open is an error */
+    unsigned char tail[64];
+    memset(tail, 0, 64);
+    memcpy(tail, p + i, (size_t)(n - i));
+    if (!ren_u8_block(&s, tail))
+      return ren_utf8_from(p, ren_u8_back(p, i), n, incomplete);
+  } else if (n > 0 && vmaxvq_u8(s.open) != 0)
+    /* the end cut the last block's last character */
+    return ren_utf8_from(p, ren_u8_back(p, n - 64), n, incomplete);
+  return -1;
+}
+#else
+int64_t ren_utf8_check(const char *s, int64_t n, bool *incomplete) {
+  return ren_utf8_check_scalar(s, n, incomplete);
+}
+#endif
+
+int64_t ren_utf8_error(ren_obj *s) {
+  bool incomplete;
+  return ren_utf8_check(ren_str_data(s), ren_str_len(s), &incomplete);
+}
+
+bool ren_utf8_incomplete(ren_obj *s, int64_t at) {
+  return ren_utf8_cut((const unsigned char *)ren_str_data(s), at, ren_str_len(s));
+}
+
+ren_obj *ren_utf8_lossy(ren_obj *b) {
+  int64_t n = ren_str_len(b);
+  const unsigned char *p = (const unsigned char *)ren_str_data(b);
+  bool incomplete;
+  int64_t at = ren_utf8_check((const char *)p, n, &incomplete);
+  if (at < 0)
+    return ren_str_part(b, 0, n);
+  /* how long it is: each maximal invalid subpart becomes U+FFFD's 3
+     bytes, then the same walk writes it */
+  int64_t len = at;
+  for (int64_t i = at; i < n;) {
+    int k = ren_utf8_char(p, i, n);
+    len += k > 0 ? k : 3;
+    i += k > 0 ? k : -k;
+  }
+  ren_obj *o = ren_alloc_str(len);
+  char *to = ((ren_str *)o)->bytes;
+  memcpy(to, p, (size_t)at);
+  int64_t j = at;
+  for (int64_t i = at; i < n;) {
+    int k = ren_utf8_char(p, i, n);
+    if (k > 0) {
+      memcpy(to + j, p + i, (size_t)k);
+      j += k;
+      i += k;
+    } else {
+      memcpy(to + j, "\xef\xbf\xbd", 3);
+      j += 3;
+      i -= k;
+    }
+  }
+  to[len] = 0;
+  return o;
 }
 
 ren_obj *ren_bytes_zeros(int64_t n, const ren_site *site) {

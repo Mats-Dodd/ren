@@ -27,7 +27,7 @@ to; the report's own test, at the end, doesn't.
 Step 1, the boundary:
 
   $ spec strs/invalid_utf8.ren
-  strs/invalid_utf8.ren: not yet
+  strs/invalid_utf8.ren: as specified
 
 Step 2, the API; and appending, slices kept and their counts, which
 need step 2's `+=` and interpolation, and whose meaning steps 3 and 4
@@ -95,7 +95,12 @@ line of what `ren build` said.
   >    rm -f interp.out interp.err interp.code native.bin native.out native.err native.err2 native.code build.err spec.out spec.err spec.code)
   > }
   $ native strs/invalid_utf8.ren
-  strs/invalid_utf8.ren: not native yet: error: `\{` isn't an escape
+  strs/invalid_utf8.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/invalid_utf8.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 13 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/invalid_utf8.ren, release: the same, exit 0, objects live at exit 0
+  strs/invalid_utf8.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/invalid_utf8.ren, ren run --release: the same
   $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp; do native strs/$f.ren; done
   strs/api.ren: not native yet: error: unexpected character `'`
   strs/api_cut_panic.ren: not native yet: error: `Str` has no method named `char_floor`

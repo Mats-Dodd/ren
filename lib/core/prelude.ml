@@ -696,7 +696,7 @@ pub dep Fs =
   exists: fn(p: Path) -> Bool
 
   // what's in a file, as a string
-  pub fn read_str(p: Path) -> Str ! FsError | InvalidUtf8 uses Fs =
+  pub fn read_str(p: Path) -> Str ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Fs =
     let b = try Fs.read(p)
     try Str.from_utf8(b)
   let real: Fs = real_fs()
@@ -1275,14 +1275,18 @@ let scheme (x : Intrinsic.t) =
   | Str_concat -> fn [ read str; read str ] str
   (* fn(self: Str) -> Bytes: its UTF-8 *)
   | Str_bytes -> fn [ read str ] bytes
-  (* fn(b: Bytes) -> Str ! InvalidUtf8 *)
+  (* fn(b: Bytes) -> Str ! InvalidUtf8(at: Int, incomplete: Bool): where
+     the first byte that isn't part of a character is, and whether the
+     end cut that character off *)
   | Str_from_utf8 ->
       scheme_of
         (Fun
            ( [ read bytes ],
              str,
-             { labels = [ label "InvalidUtf8" ]; tail = None },
+             { labels = [ { name = "InvalidUtf8"; payload = [ int; bool ] } ]; tail = None },
              open_row 0 ))
+  (* fn(b: Bytes) -> Str: U+FFFD for each maximal invalid subpart *)
+  | Str_from_utf8_lossy -> fn [ read bytes ] str
   (* fn(self: Bytes) -> Int *)
   | Bytes_len -> fn [ read bytes ] int
   (* fn(self: Bytes, i: Int) -> Int: byte [i], 0 to 255 *)
@@ -1509,7 +1513,7 @@ let reaches (x : Intrinsic.t) =
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
   | Map_len | Set_of | Set_add | Set_remove | Set_includes | Set_len | Show
   | Array_len | Array_push | Str_len | Str_index | Str_split
-  | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8
+  | Str_trim | Str_starts_with | Str_concat | Str_bytes | Str_from_utf8 | Str_from_utf8_lossy
   | Bytes_len | Bytes_at | Bytes_of | Array_copy | Str_copy | Bytes_copy
   | Bytes_read _ | Bytes_write _ | Bytes_zeros | Bytes_set_var _ | Bytes_var_size _
   | Array_split_at | Str_split_at | Bytes_split_at | Int_wrapping_add | Int_wrapping_sub | Int_wrapping_mul
@@ -1690,7 +1694,7 @@ let types =
           Str_copy;
           Str_split_at;
         ]
-      ~functions:[ Str_from_utf8 ];
+      ~functions:[ Str_from_utf8; Str_from_utf8_lossy ];
     t "Bytes"
       ~methods:
         (Intrinsic.[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at ]

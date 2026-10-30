@@ -52,8 +52,8 @@ slice of the line, which shares its bytes. There's no way to land inside a
 character: `index` gives where a whole match starts, and a slice that cut
 one would panic.
 Bytes come in only at the edge: `Fs.read_str` reads them and turns them
-into a `Str` with `Str.from_utf8`, which fails with `InvalidUtf8`, so
-`main` can.
+into a `Str` with `Str.from_utf8`, which fails with `InvalidUtf8(at,
+incomplete)`, where the bytes stop being UTF-8, so `main` can.
 
 **Every way it can fail is a tag.** No file is `NoSuchFile(path)`, from
 `Fs`, one of the four tags of `FsError`; a recipe that isn't there is `UnknownRecipe(name)`; a line that
@@ -116,7 +116,7 @@ What stage 9c changed, where a test sees what an importer sees:
   tested through `pub fn order`, which is what the tests call.
 - **`main` is `pub`, with its whole contract.** The tests call it, so
   its signature spells out nine errors and four dependencies:
-  `! FsError | InvalidUtf8 | BadLine(number: Int) | ... uses Fs, Os,
+  `! FsError | InvalidUtf8(at: Int, incomplete: Bool) | BadLine(number: Int) | ... uses Fs, Os,
   Proc, Console`. Getting there takes one "can fail with" error per
   error; a help that wrote the whole `!` clause at once would save that.
 - **The helpers are test items,** `test fn sh`, `files` and `diamond`,

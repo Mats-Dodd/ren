@@ -3069,17 +3069,33 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
   | Str_bytes, _, _ -> (
       match values () with [ v ] -> v | _ -> bug "a `bytes` of no string")
   (* the bytes are the `Str`, if they're UTF-8; otherwise the call fails
-     with `InvalidUtf8`, dropping them *)
+     with `InvalidUtf8(at, incomplete)`, dropping them, its payload made as
+     a `Tag`'s is, with its types' descriptors after it *)
   | Str_from_utf8, _, _ -> (
       match values () with
       | [ b ] ->
-          let valid = borrowed fs "$utf8" Bool (Runtime (Utf8_valid, [ b ], None)) in
+          let at = borrowed fs "$utf8" Int (Runtime (Utf8_error, [ b ], None)) in
+          let valid = borrowed fs "$valid" Bool (Compare (Lt, at, Int 0L)) in
           let invalid, () =
-            sub fs (fun () -> raise_error fs env (Scalar_ctor (tag_id cx "InvalidUtf8")))
+            sub fs (fun () ->
+                let cut =
+                  borrowed fs "$cut" Bool (Runtime (Utf8_incomplete, [ b; at ], None))
+                in
+                let xs = [ at; cut ] in
+                let ds = List.map (fun t -> desc fs env (Known t)) [ Ty.int; Ty.bool ] in
+                let err =
+                  alloc fs env
+                    (shape (tag_id cx "InvalidUtf8") (List.map atom_layout (xs @ ds)))
+                    (xs @ ds)
+                in
+                consume env err;
+                raise_error fs env err)
           in
           emit fs (If (valid, [], invalid));
           b
       | _ -> bug "a `from_utf8` of no bytes")
+  (* a new `Str`, or the bytes themselves if they're UTF-8 *)
+  | Str_from_utf8_lossy, _, _ -> runtime Utf8_lossy
   | Bytes_at, _, _ -> runtime ~site:(site ()) Bytes_at
   | Bytes_of, _, _ -> runtime ~site:(site ()) Bytes_of
   (* layer 3 (compiler.md, "Bytes stage", "Layer 3: the API") *)

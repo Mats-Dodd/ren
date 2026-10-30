@@ -1,0 +1,48 @@
+; The validator's differential test (compiler.md, "Bytes stage, part
+; two", "The validator"): diff.c, linked with the runtime's own
+; ren_rt.c, checks `ren_utf8_check` and its scalar path against a plain
+; reference on research/strings/track-b's inputs, and writes each with
+; its answer for check.exe, which holds them against OCaml's decoder and
+; the interpreter's built-ins. neon.sh does the same with diff.c built
+; for aarch64 and run under qemu, so the NEON path is checked here too,
+; where aarch64-linux-gnu-gcc and qemu-aarch64 are installed; elsewhere
+; it says it skipped.
+
+(executable
+ (name check)
+ (libraries ren))
+
+(rule
+ (targets rt.o)
+ (deps
+  %{project_root}/lib/native/runtime/ren_rt.h
+  %{project_root}/lib/native/runtime/ren_rt.c)
+ (action
+  (run cc -O2 -I %{project_root}/lib/native/runtime -include ren_rt.h -c
+   %{project_root}/lib/native/runtime/ren_rt.c -o rt.o)))
+
+(rule
+ (targets diff.exe)
+ (deps diff.c rt.o %{project_root}/lib/native/runtime/ren_rt.h)
+ (action
+  (run cc -O2 -I %{project_root}/lib/native/runtime diff.c rt.o -o diff.exe
+   -lm -lpthread)))
+
+(rule
+ (alias runtest)
+ (deps diff.exe check.exe)
+ (action
+  (pipe-stdout
+   (run ./diff.exe stream 20)
+   (run ./check.exe))))
+
+(rule
+ (alias runtest)
+ (deps
+  neon.sh
+  diff.c
+  check.exe
+  %{project_root}/lib/native/runtime/ren_rt.h
+  %{project_root}/lib/native/runtime/ren_rt.c)
+ (action
+  (run sh neon.sh %{project_root}/lib/native/runtime)))

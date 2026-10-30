@@ -96,6 +96,7 @@ type t =
   | Str_concat
   | Str_bytes
   | Str_from_utf8
+  | Str_from_utf8_lossy
   | Bytes_len
   | Bytes_at
   | Bytes_of

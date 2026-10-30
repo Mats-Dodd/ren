@@ -647,7 +647,7 @@ fn main() =
   print(attempt Str.from_utf8(b))
   match Str.from_utf8("".bytes())
     s => s
-    fail InvalidUtf8 => "not UTF-8"
+    fail InvalidUtf8(_, _) => "not UTF-8"
 |};
   [%expect {|
     <bytes 68 c3 a9>
@@ -674,9 +674,9 @@ let%expect_test "from_utf8 fails with InvalidUtf8" =
   [%expect
     {|
     "café"
-    fails: InvalidUtf8
-    fails: InvalidUtf8
-    fails: InvalidUtf8
+    fails: InvalidUtf8(3, true)
+    fails: InvalidUtf8(0, false)
+    fails: InvalidUtf8(0, false)
     |}]
 
 let%expect_test "from_utf8 is fallible" =
@@ -689,7 +689,7 @@ fn main() = Str.from_utf8("x".bytes())
       ┌─ test.ren:1:13
     1 │ fn main() = Str.from_utf8("x".bytes())
       │             ^^^^^^^^^^^^^^^^^^^^^^^^^^
-      │             ------------- it can fail with `InvalidUtf8`
+      │             ------------- it can fail with `InvalidUtf8(Int, Bool)`
       help: pass the errors on with `try`, or handle them with `match`
     |}];
   types {|
@@ -697,7 +697,7 @@ fn decode(b: Bytes) = try Str.from_utf8(b)
 fn main() = ()
 |};
   [%expect {|
-    fn decode(b: Bytes) -> Str ! InvalidUtf8
+    fn decode(b: Bytes) -> Str ! InvalidUtf8(Int, Bool)
     fn main()
     |}]
 

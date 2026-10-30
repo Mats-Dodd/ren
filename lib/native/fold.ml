@@ -73,7 +73,7 @@ let rt h (r : rt) : rt =
     | Str_concat | Str_eq | Slice _ | Splice _ | Join _ | Copied _ | Str_split | Str_trim | Vacant | Bytes_at
     | Str_data | Bytes_get
     | Bytes_of | Bytes_load _ | Bytes_store _ | Bytes_store_taking _ | Bytes_set_var _
-    | Bytes_set_var_taking _ | Bytes_zeros | U64_read _ | Utf8_valid | Var_size _ | Show_int | Show_float | Show_bool | Float_of_int
+    | Bytes_set_var_taking _ | Bytes_zeros | U64_read _ | Utf8_error | Utf8_incomplete | Utf8_lossy | Var_size _ | Show_int | Show_float | Show_bool | Float_of_int
     | Float_sqrt | Float_round | Float_truncate | Wrapping _ | Wrapping_neg | Count_step
     | Bits _ | Shift _ | Widen | Narrow _ | Wrap_to _
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _

@@ -284,9 +284,16 @@ type rt =
   | Bytes_set_var_taking of bool
       (** [Bytes_set_var], in place if it can be, as [Bytes_store_taking] *)
   | Bytes_zeros  (** `Bytes.zeros(n)`, which panics at its site if [n < 0] *)
-  | Utf8_valid
-      (** whether a `Bytes`' bytes are UTF-8, a [Bool]: `Str.from_utf8`'s
-          test, as OCaml's [String.is_valid_utf_8] makes it *)
+  | Utf8_error
+      (** where a `Bytes`' bytes stop being UTF-8, an [Int], or -1 if they
+          don't: `Str.from_utf8`'s test, as OCaml's [String.is_valid_utf_8]
+          makes it, and its `InvalidUtf8`'s `at` *)
+  | Utf8_incomplete
+      (** whether the bytes from [Utf8_error]'s [Int] are a character the
+          end cut off, a [Bool]: `InvalidUtf8`'s `incomplete` *)
+  | Utf8_lossy
+      (** `Str.from_utf8_lossy(b)`: the bytes as a `Str`, U+FFFD for each
+          maximal invalid subpart *)
   | Var_size of bool
       (** how many bytes a `VarInt` ([true]) or a `VarUInt` takes, which panics
           at its site for a negative `VarUInt` *)
