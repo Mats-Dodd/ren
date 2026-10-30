@@ -28,6 +28,8 @@ type own = Itself of string | Inside | Declared
 let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
   let value = value ~own types in
   let list xs = String.concat ", " xs in
+  (* a variant type is shown as its sum, its `show` too *)
+  let t = Ty.as_sum t in
   let how = match t with Con (p, args) -> own p args v | _ -> Declared in
   match (how, Walk.view types t v) with
   | Itself s, _ -> s
@@ -54,6 +56,11 @@ let rec value ~own (types : types) (t : Ty.ty) (v : Value.t) =
       let fields = List.map (fun (f, t, x) -> f ^ ": " ^ value t x) fields in
       if opaque && how <> Inside then name ^ "(" ^ list fields ^ ")"
       else name ^ " { " ^ list fields ^ " }"
+  | _, Ctor { name; fields; names = Some names; _ } ->
+      (* by name, as it's built: `Rect { w: 2, h: 3 }` *)
+      name ^ " { "
+      ^ list (List.map2 (fun f (t, x) -> f ^ ": " ^ value t x) names fields)
+      ^ " }"
   | _, Ctor { name; fields = _ :: _ as fields; _ } ->
       name ^ "(" ^ list (List.map (fun (t, x) -> value t x) fields) ^ ")"
   | Inside, Opaque (_, rep) -> value rep v
@@ -139,7 +146,7 @@ let sides ~own ~equal types (t : Ty.ty) (a : Value.t) (b : Value.t) =
       in
       (* a value its type's own `show` shows is kept whole *)
       let own_shown =
-        match t with
+        match Ty.as_sum t with
         | Con (p, args) -> (
             match own p args x with
             | Itself _ -> true
@@ -195,13 +202,18 @@ let sides ~own ~equal types (t : Ty.ty) (a : Value.t) (b : Value.t) =
           in
           if opaque then (name ^ "(" ^ l ^ ")", name ^ "(" ^ r ^ ")")
           else (name ^ " { " ^ l ^ " }", name ^ " { " ^ r ^ " }")
-      | Ctor c, Ctor d when c.name = d.name && c.fields <> [] ->
+      | Ctor c, Ctor d when c.name = d.name && c.fields <> [] -> (
+          (* a by-name one's fields after their names, in braces *)
+          let label i s =
+            match c.names with Some names -> List.nth names i ^ ": " ^ s | None -> s
+          in
           let l, r =
-            both (List.map fst c.fields)
-              (fun _ s -> s)
+            both (List.map fst c.fields) label
               (List.map snd c.fields) (List.map snd d.fields)
           in
-          (c.name ^ "(" ^ l ^ ")", c.name ^ "(" ^ r ^ ")")
+          match c.names with
+          | Some _ -> (c.name ^ " { " ^ l ^ " }", c.name ^ " { " ^ r ^ " }")
+          | None -> (c.name ^ "(" ^ l ^ ")", c.name ^ "(" ^ r ^ ")"))
       | Parts xs, Parts ys ->
           let l, r =
             both (List.map fst xs)

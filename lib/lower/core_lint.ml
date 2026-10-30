@@ -94,7 +94,7 @@ let rec has_error (t : Ty.ty) =
   match t with
   | Error -> true
   | Var _ -> false
-  | Con (_, args) -> List.exists has_error args
+  | Con (_, args) | Variant (_, _, args) -> List.exists has_error args
   | Errors e -> row_has_error e
   | Impl i -> row_has_error i.fails
   | Fun (ps, r, e, _) ->
@@ -110,6 +110,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   | Var i -> List.nth args i
   | Error -> Error
   | Con (p, a) -> Con (p, List.map (subst args) a)
+  | Variant (p, c, a) -> Variant (p, c, List.map (subst args) a)
   | Errors e -> Errors (subst_row args e)
   | Impl i ->
       Impl
@@ -153,7 +154,7 @@ let rec reveal env (t : Ty.ty) : Ty.ty =
       match Hashtbl.find_opt env.types p with
       | Some { Iface.body = Opaque (Rep rep); _ } -> reveal env (subst args rep)
       | _ -> t)
-  | Fun _ | Var _ | Errors _ | Impl _ | Error -> t
+  | Variant _ | Fun _ | Var _ | Errors _ | Impl _ | Error -> t
 
 (* An implementation that needs [a] will do where one that needs [b] is
    wanted, if it needs no more (Infer_rows.widen); where it's used, what
@@ -162,12 +163,27 @@ let needs_within (a : Ty.row) (b : Ty.row) =
   List.for_all (fun l -> List.mem l b.labels) a.labels
   && (a.tail = None || b.tail <> None)
 
+(* Whether two types of one form are of one constructor: two variant
+   types of one sum are the same type only if they're of one variant. *)
+let same_ctor (a : Ty.ty) (b : Ty.ty) =
+  match (a, b) with Variant (_, c, _), Variant (_, c', _) -> c = c' | _ -> true
+
+(* Whether two rows have the same labels and tail. Each lists its labels
+   once, sorted, but inference sorts them by its types (Types.sorted_labels)
+   and [Ty.apply] by Ty's, which can differ where a payload is a variant
+   type, `Store<Tree.Node<T>>` and `Store<Tree<T>>`, so the order isn't
+   compared. *)
+let same_row (a : Ty.row) (b : Ty.row) =
+  a.tail = b.tail
+  && List.length a.labels = List.length b.labels
+  && List.for_all (fun l -> List.mem l b.labels) a.labels
+
 (* Are [a] and [b] the same type, once opaque types are revealed where they
    differ? An implementation [a] may need less than [b]. *)
 let rec equal env (a : Ty.ty) (b : Ty.ty) =
   match (a, b) with
-  | Con (p, xs), Con (q, ys)
-    when p = q
+  | Con (p, xs), Con (q, ys) | Variant (p, _, xs), Variant (q, _, ys)
+    when p = q && same_ctor a b
          && List.length xs = List.length ys
          && List.for_all2 (equal env) xs ys ->
       true
@@ -177,7 +193,7 @@ let rec equal env (a : Ty.ty) (b : Ty.ty) =
         (fun (p : Ty.param) (q : Ty.param) ->
           p.mode = q.mode && equal env p.ty q.ty)
         ps qs
-      && equal env r r' && e = e' && u = u'
+      && equal env r r' && same_row e e' && same_row u u'
   | Impl i, Impl j
     when Ty.dep_paths i.deps = Ty.dep_paths j.deps
          && List.for_all2
@@ -212,8 +228,10 @@ let instance_of env (s : Ty.ty) (t : Ty.ty) =
   let rec go (s : Ty.ty) (t : Ty.ty) =
     match (s, t) with
     | Var n, _ -> bound tys (equal env) n t
-    | Con (p, a), Con (q, b)
-      when p = q && List.length a = List.length b && List.for_all2 go a b ->
+    | Con (p, a), Con (q, b) | Variant (p, _, a), Variant (q, _, b)
+      when p = q && same_ctor s t
+           && List.length a = List.length b
+           && List.for_all2 go a b ->
         true
     | Fun (ps, r, e, u), Fun (qs, r', e', u')
       when List.length ps = List.length qs ->
@@ -306,6 +324,25 @@ let ctor_of env loc (td : Iface.type_decl) c =
   | Record _ | Builtin | Opaque _ | Errors _ | Dep _ | Dep_alias _ ->
       fail env loc (sprintf "`%s` isn't a sum type" td.path.name)
 
+(* A variant type, [Variant (s, c, args)]: [s] a sum with a by-name
+   constructor [c], given as many type arguments as it has parameters
+   (compiler.md, "Data stage", "Variant types"). Its declaration, the
+   constructor and the arguments. *)
+let variant_of env loc what (t : Ty.ty) =
+  match t with
+  | Variant (s, c, args) ->
+      let td = decl env loc s in
+      let k = ctor_of env loc td c in
+      if not k.cnamed then
+        fail env loc
+          (sprintf "%s has the variant type `%s`, of a constructor not by name"
+             what (show t));
+      if List.length args <> List.length td.params then
+        fail env loc (sprintf "%s has the wrong number of type arguments" what);
+      (td, k, args)
+  | _ ->
+      fail env loc (sprintf "%s has type `%s`, but should be a variant type" what (show t))
+
 let fields_of env loc (td : Iface.type_decl) =
   match td.body with
   | Record fs | Dep fs -> fs
@@ -321,6 +358,13 @@ let dep_fields env loc (d : Ty.dep) =
       fail env loc
         (sprintf "`%s` isn't a dependency that takes %d type arguments"
            (Path.full d.dpath) (List.length d.dargs))
+
+(* The type of the field [f] of the constructor [k], given its sum's type
+   arguments. *)
+let ctor_field_ty env loc (k : Iface.ctor) args f =
+  match List.find_opt (fun (d : Iface.field) -> d.fname = f) k.cfields with
+  | Some d -> subst args d.fty
+  | None -> fail env loc (sprintf "`%s` has no field `%s`" k.cname f)
 
 let field_ty env loc (td : Iface.type_decl) args f =
   match
@@ -419,12 +463,15 @@ let rec described env sc loc (d : desc) : Ty.ty =
              v.name v.id env.fn);
       Var n
   | Applied (p, ds) -> Con (p, List.map (described env sc loc) ds)
+  | Applied_variant (p, c, ds) ->
+      Variant (p, c, List.map (described env sc loc) ds)
   | Errs e -> Errors (row e)
 
 (* [d] describes [t], which [what] has. *)
 and describes env sc loc what d (t : Ty.ty) =
   let found = described env sc loc d in
-  if found <> t then
+  (* a variant type is described as its sum, whose value it is *)
+  if Ty.erase_variants found <> Ty.erase_variants t then
     fail env loc
       (sprintf "%s is described as `%s`, but is `%s`" what (show found) (show t))
 
@@ -474,6 +521,9 @@ and has_eq env seen (t : Ty.ty) =
   | Var _ | Error -> true
   | Impl _ -> false
   | Errors r -> row r
+  | Variant _ ->
+      (* borrowed: a variant type's `==` is its sum's *)
+      has_eq env seen (Ty.as_sum t)
   | Con (p, args) -> (
       match key_ty env p args with
       | Some k -> has_eq env seen k
@@ -514,6 +564,7 @@ and has_ord env (t : Ty.ty) =
       | None, Some { body = Opaque (Rep rep); _ } ->
           has_req env "ord" (subst args rep)
       | _ -> false)
+  | Variant _ -> has_ord env (Ty.as_sum t)
   | _ -> false
 
 (* An operator or an associated value: a number's, a member that gives
@@ -1041,8 +1092,20 @@ let rec expr env sc (e : expr) =
           same env body.loc "a lambda's body" body.ty ret
       | t -> fail env loc (sprintf "a lambda has type `%s`" (show t)))
   | Con (p, c, args) ->
-      let td, targs = args_of env loc "a constructor" p e.ty in
-      let k = ctor_of env loc td c in
+      let _, targs, k =
+        match e.ty with
+        | Variant (s, c', _) ->
+            (* what `{ ..p, total: x }` builds: a value of its own variant
+               type, the constructor's *)
+            let td, k, targs = variant_of env loc "a constructor" e.ty in
+            if s <> p || c' <> c then
+              fail env loc
+                (sprintf "`%s` builds a `%s`" c (show e.ty));
+            (td, targs, k)
+        | _ ->
+            let td, targs = args_of env loc "a constructor" p e.ty in
+            (td, targs, ctor_of env loc td c)
+      in
       if List.length k.cfields <> List.length args then
         fail env loc (sprintf "`%s` is given the wrong number of fields" c);
       List.iter2
@@ -1075,14 +1138,33 @@ let rec expr env sc (e : expr) =
             v.ty
             (field_ty env loc td targs f))
         fields
-  | Field (r, p, f) ->
+  | Field (r, p, f) -> (
       expr env sc r;
-      let td, targs = args_of env loc "a field's record" p r.ty in
-      is ("the field `" ^ f ^ "`") (field_ty env loc td targs f)
+      match r.ty with
+      | Variant (s, _, _) ->
+          (* a field read at a known constructor *)
+          let _, k, targs = variant_of env loc "a field's record" r.ty in
+          if s <> p then fail env loc "a field of a variant type of another sum";
+          is ("the field `" ^ f ^ "`") (ctor_field_ty env loc k targs f)
+      | _ ->
+          let td, targs = args_of env loc "a field's record" p r.ty in
+          is ("the field `" ^ f ^ "`") (field_ty env loc td targs f))
+  | Of_variant r ->
+      (* back to the sum, the same value *)
+      expr env sc r;
+      let td, _, targs = variant_of env loc "what `Of_variant` converts" r.ty in
+      is "a variant type's value as its sum" (Con (td.path, targs))
   | Update (r, f, v) -> (
       expr env sc r;
       expr env sc v;
       match reveal env r.ty with
+      | Variant _ ->
+          let _, k, targs = variant_of env loc "an updated variant" r.ty in
+          same env loc
+            ("the field `" ^ f ^ "`")
+            v.ty
+            (ctor_field_ty env loc k targs f);
+          is "an update" r.ty
       | Con (p, _) ->
           let td, targs = args_of env loc "an updated record" p r.ty in
           same env loc
@@ -1370,8 +1452,20 @@ and pattern env sc (p : pattern) t =
       same env loc "a `Bool` pattern" t Ty.bool;
       sc
   | PCon (path, c, ps) ->
-      let td, targs = args_of env loc "a constructor pattern" path t in
-      let k = ctor_of env loc td c in
+      let targs, k =
+        match t with
+        | Variant (s, c', _) ->
+            (* a value of a variant type: its own constructor's pattern,
+               which always matches *)
+            let _, k, targs = variant_of env loc "a constructor pattern" t in
+            if s <> path || c' <> c then
+              fail env loc
+                (sprintf "`%s` is matched against a `%s`" c (show t));
+            (targs, k)
+        | _ ->
+            let td, targs = args_of env loc "a constructor pattern" path t in
+            (targs, ctor_of env loc td c)
+      in
       if List.length k.cfields <> List.length ps then
         fail env loc (sprintf "`%s` has the wrong number of subpatterns" c);
       List.fold_left2
@@ -1401,6 +1495,28 @@ and pattern env sc (p : pattern) t =
           fail env loc
             (sprintf "a tuple pattern of %d matches a `%s`" (List.length ps)
                (show t')))
+  | PRecord (path, ps) ->
+      (* a pattern for each of its fields, in declaration order *)
+      let td, targs = args_of env loc "a record pattern" path t in
+      let fs = fields_of env loc td in
+      if List.length fs <> List.length ps then
+        fail env loc "a record pattern doesn't have a pattern for each field";
+      List.fold_left2
+        (fun sc (f : Iface.field) sub ->
+          pattern env sc sub (field_ty env loc td targs f.fname))
+        sc fs ps
+  | PAs (q, v) ->
+      (* the whole of what [q] matched; of a by-name constructor's pattern,
+         its variant type, the same value *)
+      (match (v.ty, q.pkind, t) with
+      | Variant (s, c, args), PCon (s', c', _), Con (s'', args')
+        when s = s' && s = s'' && c = c' ->
+          ignore (variant_of env loc ("the `as` variable `" ^ v.name ^ "`") v.ty);
+          List.iter2
+            (fun a b -> same env loc ("the `as` variable `" ^ v.name ^ "`") a b)
+            args args'
+      | _ -> same env loc ("the `as` variable `" ^ v.name ^ "`") v.ty t);
+      add v (pattern env sc q t)
   | POr [] -> fail env loc "an or-pattern of nothing"
   | POr (first :: rest) ->
       let first_sc = pattern env sc first t in
@@ -1480,6 +1596,15 @@ and handler_end env (e : expr) =
   | Instance { impls; finally; _ } ->
       List.iter (fun (_, i) -> instances env i) impls;
       Option.iter (instances env) finally
+  | Match (s, arms) when ends_in_instance e ->
+      (* the state's `let PATTERN = value`: the arm that binds it is the
+         rest of the state, and the other, of a `let ... else`, leaves *)
+      instances env s;
+      List.iter
+        (fun (a : arm) ->
+          if ends_in_instance a.body then handler_end env a.body
+          else instances env a.body)
+        arms
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
 
 (* Blocks are second-class (foundations.md): inference checked that a
@@ -1522,7 +1647,7 @@ let rec blocks env allowed (e : expr) =
 let rec has_fun (t : Ty.ty) =
   match t with
   | Fun _ -> true
-  | Con (_, ts) -> List.exists has_fun ts
+  | Con (_, ts) | Variant (_, _, ts) -> List.exists has_fun ts
   | Errors r -> row_has_fun r
   | Var _ | Impl _ | Error -> false
 
@@ -1534,7 +1659,7 @@ and row_has_fun (r : Ty.row) =
    type's own parameters are where blocks are passed. *)
 let rec fun_inside (t : Ty.ty) =
   match t with
-  | Con (_, ts) -> List.exists has_fun ts
+  | Con (_, ts) | Variant (_, _, ts) -> List.exists has_fun ts
   | Errors r -> row_has_fun r
   | Fun (ps, ret, errs, _) ->
       List.exists (fun (p : Ty.param) -> fun_inside p.ty) ps
@@ -1573,7 +1698,7 @@ let rec has_handle (t : Ty.ty) =
   is_handle t
   ||
   match t with
-  | Con (_, ts) -> List.exists has_handle ts
+  | Con (_, ts) | Variant (_, _, ts) -> List.exists has_handle ts
   | Fun (ps, ret, _, _) ->
       List.exists (fun (p : Ty.param) -> has_handle p.ty) ps || has_handle ret
   | Errors _ | Var _ | Impl _ | Error -> false
@@ -1582,7 +1707,7 @@ let rec has_handle (t : Ty.ty) =
    parameter, or what it gives, which [fn_def] checks *)
 let rec handle_inside (t : Ty.ty) =
   match t with
-  | Con (_, ts) -> List.exists has_handle ts
+  | Con (_, ts) | Variant (_, _, ts) -> List.exists has_handle ts
   | Fun (ps, ret, _, _) ->
       List.exists (fun (p : Ty.param) -> handle_inside p.ty) ps || handle_inside ret
   | Errors _ | Var _ | Impl _ | Error -> false
@@ -1723,6 +1848,7 @@ let rec globals (e : expr) =
       globals a @ globals b
   | Assign (_, a)
   | Field (a, _, _)
+  | Of_variant a
   | Lambda { body = a; _ }
   | Fail a
   | Narrowed (_, a)

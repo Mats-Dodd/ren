@@ -12,14 +12,20 @@
    program by its path. *)
 type request = Any_for of Path.t * Path.t | Tags_for of Path.t * string list list
 
-val program : Resolve.t -> Infer.t -> Core.program * request list
+(* [types] finds each type the module can see, by its path: a record
+   pattern's and an update's fields are its declaration's. *)
+val program :
+  types:(Path.t -> Iface.type_decl option) ->
+  Resolve.t ->
+  Infer.t ->
+  Core.program * request list
 
 val made :
   types:(Path.t -> Iface.type_decl option) ->
   Resolve.t ->
   Infer.t ->
   request ->
-  Core.fn_def * request list
+  Core.fn_def * request list * Core.method_call list
 
 (* The path of the function made for a request: `recorder$Clock`. *)
 val made_path : request -> Path.t

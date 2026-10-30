@@ -108,6 +108,10 @@
         "named": true
       },
       {
+        "type": "todo",
+        "named": true
+      },
+      {
         "type": "try_expression",
         "named": true
       },
@@ -134,6 +138,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "as_pattern",
+        "named": true
+      },
+      {
         "type": "boolean",
         "named": true
       },
@@ -151,6 +159,18 @@
       },
       {
         "type": "number",
+        "named": true
+      },
+      {
+        "type": "or_pattern",
+        "named": true
+      },
+      {
+        "type": "parenthesized_pattern",
+        "named": true
+      },
+      {
+        "type": "record_pattern",
         "named": true
       },
       {
@@ -189,6 +209,10 @@
       },
       {
         "type": "tuple_type",
+        "named": true
+      },
+      {
+        "type": "variant_type",
         "named": true
       }
     ]
@@ -259,6 +283,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "as_pattern",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_pattern",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -659,6 +709,10 @@
             "named": true
           },
           {
+            "type": "todo",
+            "named": true
+          },
+          {
             "type": "tuple_expression",
             "named": true
           },
@@ -752,7 +806,27 @@
             "named": true
           }
         ]
+      },
+      "spread": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
       }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field_initializer",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -776,6 +850,14 @@
       "types": [
         {
           "type": "_pattern",
+          "named": true
+        },
+        {
+          "type": "field_pattern",
+          "named": true
+        },
+        {
+          "type": "rest_pattern",
           "named": true
         }
       ]
@@ -1186,6 +1268,10 @@
             "named": true
           },
           {
+            "type": "todo",
+            "named": true
+          },
+          {
             "type": "tuple_expression",
             "named": true
           },
@@ -1221,6 +1307,32 @@
         "types": [
           {
             "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "field_pattern",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_pattern",
             "named": true
           }
         ]
@@ -1308,15 +1420,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "tuple_pattern",
-            "named": true
-          },
-          {
-            "type": "wildcard",
+            "type": "_pattern",
             "named": true
           }
         ]
@@ -1401,6 +1505,10 @@
           },
           {
             "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "variant_type",
             "named": true
           }
         ]
@@ -1487,6 +1595,10 @@
           },
           {
             "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "variant_type",
             "named": true
           }
         ]
@@ -2064,6 +2176,10 @@
             "named": true
           },
           {
+            "type": "todo",
+            "named": true
+          },
+          {
             "type": "tuple_expression",
             "named": true
           },
@@ -2182,6 +2298,30 @@
     }
   },
   {
+    "type": "let_else",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "assignment",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "let_statement",
     "named": true,
     "fields": {
@@ -2192,6 +2332,10 @@
           {
             "type": "identifier",
             "named": true
+          },
+          {
+            "type": "wildcard",
+            "named": true
           }
         ]
       },
@@ -2199,6 +2343,38 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "as_pattern",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "constructor_pattern",
+            "named": true
+          },
+          {
+            "type": "negative_number",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "or_pattern",
+            "named": true
+          },
+          {
+            "type": "parenthesized_pattern",
+            "named": true
+          },
+          {
+            "type": "record_pattern",
+            "named": true
+          },
           {
             "type": "tuple_pattern",
             "named": true
@@ -2233,6 +2409,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "let_else",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -2277,10 +2463,6 @@
           },
           {
             "type": "fail_pattern",
-            "named": true
-          },
-          {
-            "type": "or_pattern",
             "named": true
           }
         ]
@@ -2423,6 +2605,10 @@
           },
           {
             "type": "string",
+            "named": true
+          },
+          {
+            "type": "todo",
             "named": true
           },
           {
@@ -2643,6 +2829,10 @@
       "required": true,
       "types": [
         {
+          "type": "_pattern",
+          "named": true
+        },
+        {
           "type": "fail_pattern",
           "named": true
         }
@@ -2786,6 +2976,21 @@
     }
   },
   {
+    "type": "parenthesized_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "_pattern",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "parenthesized_type",
     "named": true,
     "fields": {},
@@ -2856,6 +3061,16 @@
     "type": "record_expression",
     "named": true,
     "fields": {
+      "spread": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
       "type": {
         "multiple": false,
         "required": false,
@@ -2873,6 +3088,36 @@
       "types": [
         {
           "type": "field_initializer",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_pattern",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_name",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "field_pattern",
+          "named": true
+        },
+        {
+          "type": "rest_pattern",
           "named": true
         }
       ]
@@ -2908,6 +3153,11 @@
         ]
       }
     }
+  },
+  {
+    "type": "rest_pattern",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "source_file",
@@ -3086,6 +3336,18 @@
         "required": true,
         "types": [
           {
+            "type": "constructor_pattern",
+            "named": true
+          },
+          {
+            "type": "parenthesized_pattern",
+            "named": true
+          },
+          {
+            "type": "record_pattern",
+            "named": true
+          },
+          {
             "type": "tuple_pattern",
             "named": true
           }
@@ -3163,6 +3425,10 @@
         },
         {
           "type": "tuple_type",
+          "named": true
+        },
+        {
+          "type": "variant_type",
           "named": true
         }
       ]
@@ -3351,6 +3617,16 @@
     "type": "variant",
     "named": true,
     "fields": {
+      "fields": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "record_type",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
@@ -3360,10 +3636,20 @@
             "named": true
           }
         ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_type",
+            "named": true
+          }
+        ]
       }
     },
     "children": {
-      "multiple": true,
+      "multiple": false,
       "required": false,
       "types": [
         {
@@ -3371,6 +3657,42 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "variant_type",
+    "named": true,
+    "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_arguments",
+            "named": true
+          }
+        ]
+      },
+      "sum": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_name",
+            "named": true
+          }
+        ]
+      },
+      "variant": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -3786,6 +4108,10 @@
   {
     "type": "then",
     "named": false
+  },
+  {
+    "type": "todo",
+    "named": true
   },
   {
     "type": "true",

@@ -15,7 +15,10 @@
    that aren't kept are dropped, and its memory is a token, a variable
    of layout [Token] the build takes, `kk_block_alloc_at` in
    kklib.h:628. A plain drop of an object whose size is known, because
-   the function reads its fields, is made the same way.
+   the function reads its fields, is made the same way. An object's size
+   is known where a read of one of its fields, or its build, comes before
+   on the same path ([learn]): a read in another arm of a `match` may be
+   of another constructor.
 
    Which build takes a token: on each path, of the builds of as many
    fields before the path branches, the one that has the most fields
@@ -47,18 +50,32 @@ let roots (f : fn) =
     f.body;
   fun (v : var) -> Option.value (Hashtbl.find_opt root v.id) ~default:v.id
 
-(* How many fields each object has, by its root, where the function knows:
-   it reads a field of it, or builds it. *)
-let sizes root (f : fn) =
-  let size = Hashtbl.create 16 in
+module Sizes = Map.Make (Int)
+
+(* How many fields each object has, by its root, on the path that goes on
+   after [s], if [s] says: it reads a field of the object, which runs only
+   if it's a constructor of that many, or it builds it; and a variable
+   [s] sets holds another ([forget]). Only what's said before a reset on
+   its path, in its block or one around it, is known there: a read on
+   another path, another arm of a `match`, may be of another
+   constructor, of another size. *)
+let rec learn root sizes (s : stmt) =
+  match s with
+  | Let (_, Field (Var x, _, n)) -> Sizes.add (root x) n sizes
+  | Let (v, Alloc { fields; _ }) ->
+      Sizes.add (root v) (List.length fields) sizes
+  | _ -> forget root sizes s
+
+(* [sizes] without the objects of the variables a [Set] in [s] changes:
+   after it, or in a block of it, which a loop runs again after the
+   [Set] and a join is reached from after it, the variable may hold
+   another. *)
+and forget root sizes (s : stmt) =
+  let set = ref sizes in
   Rc.iter_stmts
-    (function
-      | Let (_, Field (Var x, _, n)) -> Hashtbl.replace size (root x) n
-      | Let (v, Alloc { fields; _ }) ->
-          Hashtbl.replace size (root v) (List.length fields)
-      | _ -> ())
-    f.body;
-  size
+    (function Set (v, _) -> set := Sizes.remove (root v) !set | _ -> ())
+    [ s ];
+  !set
 
 (* Each variable that's a field of an object, by its id: the object's
    root and the slot. Not of a variable that changes, which may hold
@@ -173,7 +190,6 @@ let guard tok (s : stmt) =
 type cx = {
   next : int ref;
   root : var -> int;
-  size : (int, int) Hashtbl.t;
   field : (int, int * int) Hashtbl.t;
 }
 
@@ -303,10 +319,10 @@ and take_open cx t (b : block) : block =
    the rest of the block, taking a token for each object in it that's
    freed where one as big is built after. The tokens are declared before
    it, null on the paths where nothing was reset. *)
-let tree cx (u : var) (x : var) kept inner shared rest =
+let tree cx sizes (u : var) (x : var) kept inner shared rest =
   let toks = ref [] and rest = ref rest in
   let reset_or (x : var) kept ~otherwise =
-    match Hashtbl.find_opt cx.size (cx.root x) with
+    match Sizes.find_opt (cx.root x) sizes with
     | Some n when builds n !rest
       -> (
         let tok = fresh cx "$reuse" Token in
@@ -349,7 +365,9 @@ let tree cx (u : var) (x : var) kept inner shared rest =
   @ [ Let (u, Is_unique (Var x)); If (Var u, unique, shared) ]
   @ !rest
 
-let rec block cx (b : block) : block =
+(* [b], each object that dies in it reset where one as big is built after,
+   [sizes] the sizes known where it starts ([learn]). *)
+let rec block cx sizes (b : block) : block =
   match b with
   | [] -> []
   (* a drop rc.ml specialized: the object freed if it's unique, and the
@@ -358,24 +376,24 @@ let rec block cx (b : block) : block =
     :: If (Var u', Free (Var x', kept) :: inner, shared)
     :: rest
     when u.id = u'.id && x.id = x'.id ->
-      tree cx u x kept inner shared (block cx rest)
+      tree cx sizes u x kept inner shared (block cx sizes rest)
   | (Drop (Var x) as s) :: rest
     when x.layout = Boxed -> (
-      let rest = block cx rest in
-      match Hashtbl.find_opt cx.size (cx.root x) with
+      let rest = block cx sizes rest in
+      match Sizes.find_opt (cx.root x) sizes with
       | Some n when builds n rest ->
           let u = fresh cx "$unique" Bool in
-          tree cx u x [] [] [ s ] rest
+          tree cx sizes u x [] [] [ s ] rest
       | _ -> s :: rest)
   | s :: rest ->
-      let s = Rc.map_blocks (block cx) s in
-      s :: block cx rest
+      let s = Rc.map_blocks (block cx (forget cx.root sizes s)) s in
+      s :: block cx (learn cx.root sizes s) rest
 
 let fn (f : fn) : fn =
   let next, _ = Rc.fresh_counters f in
   let root = roots f in
-  let cx = { next; root; size = sizes root f; field = fields_of root f } in
-  { f with body = block cx f.body }
+  let cx = { next; root; field = fields_of root f } in
+  { f with body = block cx Sizes.empty f.body }
 
 (* The program with each object that dies where one as big is built
    reused for it. *)
@@ -385,18 +403,23 @@ let program (p : program) : program = { p with fns = List.map fn p.fns }
    token's id: what inline.ml looks for a build of. *)
 let token_sizes (f : fn) =
   let root = roots f in
-  let size = sizes root f in
   let resets = Hashtbl.create 8 and toks = Hashtbl.create 8 in
-  Rc.iter_stmts
-    (function
-      | Let (r, Reset (Var x, _)) -> (
-          match Hashtbl.find_opt size (root x) with
-          | Some n -> Hashtbl.replace resets r.id n
-          | None -> ())
-      | Set (t, Var r) when t.layout = Token -> (
-          match Hashtbl.find_opt resets r.id with
-          | Some n -> Hashtbl.replace toks t.id n
-          | None -> ())
-      | _ -> ())
-    f.body;
+  let rec go sizes (b : block) =
+    match b with
+    | [] -> ()
+    | s :: rest ->
+        (match s with
+        | Let (r, Reset (Var x, _)) -> (
+            match Sizes.find_opt (root x) sizes with
+            | Some n -> Hashtbl.replace resets r.id n
+            | None -> ())
+        | Set (t, Var r) when t.layout = Token -> (
+            match Hashtbl.find_opt resets r.id with
+            | Some n -> Hashtbl.replace toks t.id n
+            | None -> ())
+        | _ -> ());
+        List.iter (go (forget root sizes s)) (Rc.blocks s);
+        go (learn root sizes s) rest
+  in
+  go Sizes.empty f.body;
   toks

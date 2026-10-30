@@ -1,0 +1,206 @@
+================================================================================
+record update: the rest taken from another
+================================================================================
+
+fn f(o: Order) =
+  print({ ..o, paid: true })
+  print(Shipped { ..o, carrier })
+  print({ ..orders[i] })
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (call_expression
+        (identifier)
+        (arguments
+          (record_expression
+            (identifier)
+            (field_initializer
+              (identifier)
+              (boolean)))))
+      (call_expression
+        (identifier)
+        (arguments
+          (record_expression
+            (type_name
+              (type_identifier))
+            (identifier)
+            (field_initializer
+              (identifier)))))
+      (call_expression
+        (identifier)
+        (arguments
+          (record_expression
+            (index_expression
+              (identifier)
+              (identifier))))))))
+
+================================================================================
+record patterns in a match, a let, a for and a block's parameter
+================================================================================
+
+fn f(o: Order) =
+  let { id, lines: ls } = o
+  for { qty, .. } in ls
+    print(qty)
+  print(ls.map(fn({ qty, .. }) => qty))
+  match o
+    { paid: true, total, .. } => total
+    Order { id: 0, .. } => 0
+    Seg { from: Pt { y: 0, .. }, .. } => 1
+    { .. } => 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (let_statement
+        (record_pattern
+          (field_pattern
+            (identifier))
+          (field_pattern
+            (identifier)
+            (identifier)))
+        (identifier))
+      (for_statement
+        (record_pattern
+          (field_pattern
+            (identifier))
+          (rest_pattern))
+        (identifier)
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (call_expression
+        (identifier)
+        (arguments
+          (method_call_expression
+            (identifier)
+            (identifier)
+            (arguments
+              (lambda
+                (parameters
+                  (tuple_parameter
+                    (record_pattern
+                      (field_pattern
+                        (identifier))
+                      (rest_pattern))))
+                (identifier))))))
+      (match_expression
+        (identifier)
+        (match_arm
+          (record_pattern
+            (field_pattern
+              (identifier)
+              (boolean))
+            (field_pattern
+              (identifier))
+            (rest_pattern))
+          (identifier))
+        (match_arm
+          (record_pattern
+            (type_name
+              (type_identifier))
+            (field_pattern
+              (identifier)
+              (number))
+            (rest_pattern))
+          (number))
+        (match_arm
+          (record_pattern
+            (type_name
+              (type_identifier))
+            (field_pattern
+              (identifier)
+              (record_pattern
+                (type_name
+                  (type_identifier))
+                (field_pattern
+                  (identifier)
+                  (number))
+                (rest_pattern)))
+            (rest_pattern))
+          (number))
+        (match_arm
+          (record_pattern
+            (rest_pattern))
+          (number))))))
+
+================================================================================
+named record patterns in a let, a for and a block's parameter
+================================================================================
+
+fn f(r: Row) =
+  let rows.Row { name, .. } = r
+  for Row { id, .. } in rs
+    print(id)
+  rs.map(fn(Row { name: n, .. }) => n)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (let_statement
+        (record_pattern
+          (type_name
+            (identifier)
+            (type_identifier))
+          (field_pattern
+            (identifier))
+          (rest_pattern))
+        (identifier))
+      (for_statement
+        (record_pattern
+          (type_name
+            (type_identifier))
+          (field_pattern
+            (identifier))
+          (rest_pattern))
+        (identifier)
+        (block
+          (call_expression
+            (identifier)
+            (arguments
+              (identifier)))))
+      (method_call_expression
+        (identifier)
+        (identifier)
+        (arguments
+          (lambda
+            (parameters
+              (tuple_parameter
+                (record_pattern
+                  (type_name
+                    (type_identifier))
+                  (field_pattern
+                    (identifier)
+                    (identifier))
+                  (rest_pattern))))
+            (identifier)))))))

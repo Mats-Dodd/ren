@@ -1,0 +1,20 @@
+// Data stage, step 4: a variant type costs nothing when its value is
+// unique. Each turn of the loop binds the placed order with `as`,
+// updates it as an `Order.Placed`, `{ ..p, total }`, and makes it the sum
+// again, `Placed { ..q }`: Perceus reuse builds each update over the
+// value it replaces, and `Placed { ..q }` is no code, so the loop
+// allocates nothing.
+
+type Order =
+  | Draft { lines: Array<Int> }
+  | Placed { id: Int, lines: Array<Int>, total: Int }
+
+fn bump(p: Order.Placed, by: Int) -> Order.Placed = { ..p, total: p.total + by }
+
+fn main() uses Console =
+  var o: Order = Placed { id: 1, lines: [1, 2, 3], total: 0 }
+  for i in 0..1000
+    o = match o
+      Placed { .. } as p => Placed { ..bump(p, i) }
+      Draft { .. } => o
+  print(o)

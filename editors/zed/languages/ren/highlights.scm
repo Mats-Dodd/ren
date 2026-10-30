@@ -63,6 +63,7 @@
 (any) @keyword
 (numeric) @keyword
 (break) @keyword
+(todo) @keyword
 ; how a block parameter's block runs: `concurrent`, `spawned`
 (block_mode) @keyword
 
@@ -106,6 +107,9 @@
 (tuple_parameter (tuple_pattern (identifier) @variable.parameter))
 (tuple_parameter
   (tuple_pattern (tuple_pattern (identifier) @variable.parameter)))
+(tuple_parameter (constructor_pattern (identifier) @variable.parameter))
+(tuple_parameter
+  (parenthesized_pattern (as_pattern name: (identifier) @variable.parameter)))
 (function_type_parameter name: (identifier) @variable.parameter)
 
 ; ---- modules ----
@@ -119,6 +123,8 @@
 
 (type_name name: (type_identifier) @type)
 (constructor_ref name: (type_identifier) @constructor)
+; a variant type, `Order.Placed`, is a type: its variant's name too
+(variant_type variant: (type_identifier) @type)
 
 ; ---- errors ----
 
@@ -141,6 +147,8 @@
 (item_expression name: (identifier) @function)
 (field_expression field: (identifier) @property)
 (field_initializer name: (identifier) @property)
+; a record pattern's field, `{ id, lines: ls, .. }`
+(field_pattern name: (identifier) @property)
 (labeled_argument label: (identifier) @property)
 (named_argument name: (identifier) @variable.parameter)
 
@@ -152,6 +160,10 @@
 (negative_number "-" @operator)
 (negative "-" @operator)
 (range ".." @operator)
+; "the rest": an update's, `{ ..order, paid: true }`, and a pattern's
+(record_expression ".." @operator)
+(constructor_expression ".." @operator)
+(rest_pattern) @operator
 ["=" "=>" "->" "|"] @operator
 
 ["." "," ":"] @punctuation.delimiter

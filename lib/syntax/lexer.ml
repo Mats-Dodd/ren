@@ -51,6 +51,7 @@ let keywords =
     ("for", FOR);
     ("while", WHILE);
     ("break", BREAK);
+    ("todo", TODO);
     ("in", IN);
     ("if", IF);
     ("then", THEN);

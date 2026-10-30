@@ -70,6 +70,7 @@ type t =
   | FOR
   | WHILE
   | BREAK
+  | TODO
   | IN
   | IF
   | THEN
@@ -172,6 +173,7 @@ let to_string = function
   | FOR -> "for"
   | WHILE -> "while"
   | BREAK -> "break"
+  | TODO -> "todo"
   | IN -> "in"
   | IF -> "if"
   | THEN -> "then"

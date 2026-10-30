@@ -219,19 +219,25 @@ error: this implementation can fail with `Timeout`, and `Rates.usd_to` can't
 
 A handler's description is the code Ren keeps (foundations.md, decision
 3): records, arrays, maps and generic types hold them, and a block never.
+They're for kinds others add: a library's routes, codecs, middleware,
+whose users each declare a handler and touch nothing else. A program's
+own kinds, a shape or an expression, are an ADT and a `match`, which
+can be compared, shown and stored as data (language.md §6, and
+[bench/data/shapes.ren](bench/data/shapes.ren)).
 
 ```ren
-dep Shape =
-  area: fn() -> Float
+// a web library's routes, each a kind its users add
+dep Route =
+  handle: fn(path: Str) -> Str
 
-handler circle(r: Float) for Shape =
-  area() => 3.0 * r * r
+handler health() for Route =
+  handle(_) => "ok"
 
-fn total(shapes: Array<Shape>) -> Float =
-  var t = 0.0
-  for s in shapes
-    t = t + s.area()
-  t
+handler greet(name: Str) for Route =
+  handle(path) => "hello ".concat(name).concat(" at ").concat(path)
+
+fn answers(routes: Array<Route>, path: Str) -> Array<Str> =
+  routes.map(fn(r) => r.handle(path))
 ```
 
 - **A stored description's `uses` is the most it may need.** One whose
@@ -252,17 +258,50 @@ error: expected `Api uses Db`, found `Api uses Clock, Db`
 
   Only `uses` is a bound: what a description can fail to start with,
   its `!`, is exact.
-- **An operation is called on a description as a method,** `s.area()`,
-  which means `with s in Shape.area()`, the arguments evaluated first,
-  outside: the call needs what `s`'s type says it needs, and fails with
-  what `Shape.area` declares. For a stateless handler, with no `var`,
-  `finally` or `next`, it makes no instance: it's a call of the arm with
-  what the description holds. A handler with state, called as a method,
-  starts fresh at each call, its `finally` run when the call ends. One
-  whose type can fail to start (`!`), or that goes `over` another, isn't
-  called this way: each is an error whose help installs it, `with s in
-  Store.get()`. `s.area`, not called, is an error, "an operation is
-  called, not read".
+- **An operation is called on a description as a method,** `r.handle(path)`,
+  which means `with r in Route.handle(path)`, the arguments evaluated
+  first, outside: the call needs what `r`'s type says it needs, and
+  fails with what `Route.handle` declares. **Only a stateless handler is
+  called this way,** one with no `var` and no `finally` (foundations.md,
+  decision 3), so method syntax on a description always means a pure
+  dispatch: a call of the arm with what the description holds, making no
+  instance. A call that may reach a handler with state would start it
+  fresh each time, a counter that says 1 at every call, so it's an
+  error whose help writes the `with` that keeps one instance for as
+  long as it's wanted:
+
+```ren
+handler hits() for Route =        // counts the paths it's handled
+  var n = 0
+  handle(path) =>
+    n += 1
+    path
+
+fn main() =
+  let r = hits()
+  print(r.handle("/"))
+```
+
+```
+error: `r` may be a description of `hits`, which keeps state, so it isn't called as a method
+   ┌─ main.ren:15:11
+15 │   print(r.handle("/"))
+   │           ^^^^^^
+   = a call as a method makes a fresh instance, so its state would start again at each call
+   help: install it: `with r in Route.handle("/")`
+```
+
+  Which handlers a description may be is the whole program's to say, so
+  `ren run`, `ren test` and `ren build` check it on the program linked;
+  **`ren check` of one module doesn't report it.** A description a
+  `with` installs where it's made, or a local only ever installed, is
+  that one handler's; any other, stored, passed or returned, may be any
+  handler of its dependency whose description the program keeps
+  anywhere but a `with` (compiler.md, "Data stage", "Descriptions (step
+  6)"). One whose type can fail to start (`!`), or that goes `over`
+  another, isn't called as a method either: each is an error whose help
+  installs it, `with s in Store.get()`. `r.handle`, not called, is an
+  error, "an operation is called, not read".
 - **How a method call runs depends on how many handlers can be behind
   it** (foundations.md, decision 4): every handler `for` its dependency
   in the program, the world being closed. A release build makes a call
@@ -272,7 +311,7 @@ error: expected `Api uses Db`, found `Api uses Clock, Db`
   of one operation, through the tag itself, the arm's code. A loop over
   a description it doesn't change is copied for each of two to four
   handlers, so each copy's calls are direct. `ren build --release
-  --explain-dispatch Shape main.ren` lists every call on a `Shape`, how
+  --explain-dispatch Route main.ren` lists every call on a `Route`, how
   it's lowered and why ([compiler.md](compiler.md#dispatch-step-4)).
 - **An inline handler,** `handler fn(req) => respond(req, body)`, is a
   handler for a dependency of one operation, written where a description

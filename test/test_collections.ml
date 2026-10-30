@@ -162,7 +162,8 @@ fn main() =
     2 │   match (1, Some(2))
       │   ^^^^^
       = missing: (_, Some(_))
-      help: add an arm for `(_, Some(_))`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        (_, Some(_)) => todo
     |}];
   check_error
     {|
@@ -212,11 +213,11 @@ fn main() =
 |};
   [%expect
     {|
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(x)` might not
+    error: `Some(x)` might not match, so this `let` needs an `else`
       ┌─ test.ren:3:7
     3 │   let Some(x) = o
       │       ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+      help: add one that leaves, `let Some(x) = o else fail ...`, or use a `match`
     |}];
   check_error {|
 fn main() =
@@ -225,11 +226,11 @@ fn main() =
 |};
   [%expect
     {|
-    error: a `let` takes apart only a tuple, of names and `_`, which always matches, but `Some(b)` might not
-      ┌─ test.ren:2:11
+    error: `(a, Some(b))` might not match, so this `let` needs an `else`
+      ┌─ test.ren:2:7
     2 │   let (a, Some(b)) = (1, Some(2))
-      │           ^^^^^^^
-      help: take it apart with a `match`, which says what happens when it doesn't match
+      │       ^^^^^^^^^^^^
+      help: add one that leaves, `let (a, Some(b)) = (1, Some(2)) else fail ...`, or use a `match`
     |}];
   check_error {|
 fn main() =
@@ -359,10 +360,10 @@ fn main() =
 |};
   [%expect
     {|
-    error: a lambda's parameter takes apart only a tuple, of names and `_`, which always matches, but `Some(v)` might not
-      ┌─ test.ren:2:18
+    error: a block's parameter takes apart only what always matches, but `(k, Some(v))` might not
+      ┌─ test.ren:2:14
     2 │   let f = fn((k, Some(v))) => v
-      │                  ^^^^^^^
+      │              ^^^^^^^^^^^^
       help: take it apart with a `match`, which says what happens when it doesn't match
     |}];
   check_error {|

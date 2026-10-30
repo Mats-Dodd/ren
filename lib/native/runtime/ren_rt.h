@@ -123,16 +123,20 @@ enum {
    code couldn't find without reading the header. The order stays the
    declaration's, and the mask goes in the byte the count would.
 
-   An array keeps whether its elements are counted in [objs], and in
-   [nfields] whether they're of a sized type (sized.ml), kept at its
-   width, and which ([REN_ELEM_U8] and the rest), or words, 0. A string
-   and a descriptor use neither byte. */
+   An array keeps which of its elements' words hold objects in [objs]:
+   1 if its elements are words that are counted, and for an array of
+   structs (a release build's small values, Mem's [Struct]) the
+   struct's mask, bit [i] set if slot [i] holds an object, which fits,
+   since a struct that holds one has at most four slots (to_mem.ml,
+   [small]). In [nfields] it keeps whether they're of a sized type
+   (sized.ml), kept at its width, and which ([REN_ELEM_U8] and the
+   rest), or words, 0. A string and a descriptor use neither byte. */
 typedef struct ren_obj {
   int32_t rc;      /* > 0: counted; 0: never freed; < 0: kept, shared */
   uint16_t tag;    /* a constructor's, or REN_TAG_ARRAY, _STR or _DESC */
   uint8_t nfields; /* a constructor's fields; an array's [REN_ELEM_*] */
-  uint8_t objs;    /* its first eight that hold objects; an array's: 1 if
-                      its elements are counted */
+  uint8_t objs;    /* its first eight that hold objects; an array's: which
+                      words of an element hold objects */
 } ren_obj;
 
 /* A field or an array element: eight bytes, whatever it holds. A `Bool`,
@@ -337,6 +341,18 @@ static inline ren_obj *ren_box(uint32_t tag) {
    `lean_obj_tag`). */
 static inline int64_t ren_tag(ren_obj *o) {
   return ren_is_scalar(o) ? (int64_t)((uintptr_t)o >> 1) : (int64_t)o->tag;
+}
+
+/* The tag of a small value kept with a pointer niche (mem.mli, `Niche`),
+   from its object slot `o`: constructor `t` without fields is
+   `ren_box(UINT32_MAX - t)`, for each `t` up to `most`, and anything
+   else, an object or a boxed sum's constructor without fields, a scalar
+   of a small tag, is the constructor `obj` with fields. */
+static inline int64_t ren_niche_tag(ren_obj *o, int64_t obj, uint32_t most) {
+  uintptr_t w = (uintptr_t)o;
+  return (w & 1) && (w >> 1) >= (uintptr_t)(UINT32_MAX - most)
+             ? (int64_t)(UINT32_MAX - (w >> 1))
+             : obj;
 }
 
 void ren_free(ren_obj *o);
@@ -642,8 +658,9 @@ ren_obj *ren_alloc_array(int64_t len, bool boxed_elems);
 static inline ren_val *ren_elems(ren_obj *o) { return ((ren_array *)o)->data; }
 
 /* An empty array with room for [cap] elements of [stride] words each,
-   0 meaning 1: what `map` makes when it can't reuse its input. */
-ren_obj *ren_array_reserve(int64_t cap, bool boxed_elems, uint32_t stride);
+   0 meaning 1, [objs] the words of each that hold objects ([ren_obj]):
+   what `map` makes when it can't reuse its input. */
+ren_obj *ren_array_reserve(int64_t cap, uint8_t objs, uint32_t stride);
 
 /* The same, of a sized type's elements, of the kind [REN_ELEM_U8] and
    the rest. */
@@ -652,9 +669,11 @@ ren_obj *ren_array_reserve_k(int64_t cap, uint8_t kind);
 
 /* An array of [len] elements of [stride] words each, a release build's
    structs (a copied record's fields, Mem's [Struct]), kept in the
-   elements: never counted, and never walked, since nothing that walks a
-   value is given one. */
-ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride);
+   elements, the slots in [objs]'s mask holding objects, which the array
+   counts, as it counts an array of objects' elements (the data stage's
+   second layout fix, compiler.md, "The layout fixes (step 7)"). Never
+   walked, since nothing that walks a value is given a struct. */
+ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride, uint8_t objs);
 static inline int64_t ren_stride(ren_obj *a) { return ((ren_array *)a)->stride; }
 
 /* ---- arrays ----
@@ -954,9 +973,44 @@ static inline void ren_array_push_slots_taking_k(ren_obj **cell, const ren_val *
   ren_array_push_slots_taking(cell, v);
 }
 
+/* The same for an array of structs that hold objects, those in the
+   slots [objs]'s mask says, which the compiler knows, so each loop over
+   it unrolls: element [i] counted again where it is, for the caller to
+   copy, as [ren_array_get] counts an object again; and changed in
+   place, the old element's objects dropped, as [ren_array_set_taking]
+   drops the old object. A copy of the array, and a push, count the
+   elements by the array's own [objs], the same mask. */
+static inline void ren_slots_dup(ren_val *e, uint8_t objs) {
+  for (unsigned m = objs; m != 0; m &= m - 1)
+    ren_dup(e[__builtin_ctz(m)].o);
+}
+static inline void ren_slots_drop(ren_val *e, uint8_t objs) {
+  for (unsigned m = objs; m != 0; m &= m - 1)
+    ren_drop(e[__builtin_ctz(m)].o);
+}
+static inline ren_val *ren_array_slots_dup_k(ren_obj *a, int64_t i, int64_t k,
+                                             uint8_t objs,
+                                             const ren_site *site) {
+  ren_val *e = ren_array_slots_k(a, i, k, site);
+  ren_slots_dup(e, objs);
+  return e;
+}
+static inline ren_obj *ren_array_set_slots_taking_ko(ren_obj *a, int64_t i,
+                                                     const ren_val *v,
+                                                     int64_t k, uint8_t objs,
+                                                     const ren_site *site) {
+  ren_array_check(a, i, site);
+  a = ren_array_own(a);
+  ren_val *e = &ren_elems(a)[i * k];
+  ren_slots_drop(e, objs);
+  memcpy(e, v, (size_t)k * sizeof(ren_val));
+  return a;
+}
+
 /* Field [off] of element [i] of an array of structs of [k] words
    changed to [v], the rest of the element as it was: a copy, which
-   takes neither, and in place, which takes the array. */
+   takes neither, and in place, which takes the array; [_o] for a field
+   that holds an object, the old one dropped. */
 ren_obj *ren_array_set_field(ren_obj *a, int64_t i, int64_t off, int64_t k,
                              ren_val v, const ren_site *site);
 static inline ren_obj *ren_array_set_field_taking(ren_obj *a, int64_t i,
@@ -966,6 +1020,17 @@ static inline ren_obj *ren_array_set_field_taking(ren_obj *a, int64_t i,
   ren_array_check(a, i, site);
   a = ren_array_own(a);
   ren_elems(a)[i * k + off] = v;
+  return a;
+}
+static inline ren_obj *ren_array_set_field_taking_o(ren_obj *a, int64_t i,
+                                                    int64_t off, int64_t k,
+                                                    ren_val v,
+                                                    const ren_site *site) {
+  ren_array_check(a, i, site);
+  a = ren_array_own(a);
+  ren_val *at = &ren_elems(a)[i * k + off];
+  ren_drop(at->o);
+  *at = v;
   return a;
 }
 
@@ -1021,6 +1086,30 @@ static inline ren_val ren_dup_elem(ren_val v) {
    (void)memcpy(&(p)[(i) * (k)], (v), (size_t)(k) * sizeof(ren_val)))
 #define ren_buf_set_field(p, len, i, off, k, v, site)                          \
   (ren_buf_check(len, i, site), (void)((p)[(i) * (k) + (off)] = (v)))
+/* of structs that hold objects, in the slots of the mask [objs]: an
+   element counted again, and one, or a field that's an object, changed,
+   the old one's objects dropped */
+#define ren_buf_slots_dup(p, len, i, k, objs, site)                            \
+  ({                                                                           \
+    ren_buf_check(len, i, site);                                               \
+    ren_val *ren_at_ = &(p)[(i) * (k)];                                        \
+    ren_slots_dup(ren_at_, objs);                                              \
+    ren_at_;                                                                   \
+  })
+#define ren_buf_set_slots_o(p, len, i, v, k, objs, site)                       \
+  ({                                                                           \
+    ren_buf_check(len, i, site);                                               \
+    ren_val *ren_at_ = &(p)[(i) * (k)];                                        \
+    ren_slots_drop(ren_at_, objs);                                             \
+    (void)memcpy(ren_at_, (v), (size_t)(k) * sizeof(ren_val));                 \
+  })
+#define ren_buf_set_field_o(p, len, i, off, k, v, site)                        \
+  ({                                                                           \
+    ren_buf_check(len, i, site);                                               \
+    ren_obj *ren_old_ = (p)[(i) * (k) + (off)].o;                              \
+    (p)[(i) * (k) + (off)] = (v);                                              \
+    ren_drop(ren_old_);                                                        \
+  })
 
 /* ---- strings ---- */
 
@@ -1606,7 +1695,8 @@ typedef struct ren_desc {
 typedef struct {
   const char *name;
   int32_t nfields;
-  const char *const *fields; /* a record's field names; NULL for a sum */
+  const char *const *fields; /* a record's field names, or a by-name
+                                constructor's; NULL for a positional one */
   ren_desc *const *types;
   const uint32_t *at;
 } ren_ctor_info;

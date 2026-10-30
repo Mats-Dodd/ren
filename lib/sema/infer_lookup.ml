@@ -54,6 +54,14 @@ let known_decl env t =
       Hashtbl.find_opt env.types p
   | _ -> None
 
+(* The sum and constructor a variant type [Order.Placed] is one of:
+   Resolve made sure there's one, by name. *)
+let variant_ctor env p c =
+  let td = Hashtbl.find env.types p in
+  match td.body with
+  | Sum cs -> (td, List.find (fun (k : Iface.ctor) -> k.cname = c) cs)
+  | _ -> invalid_arg "Infer_lookup.variant_ctor: not a sum"
+
 let ctor_in (c : ident) (td : Iface.type_decl) =
   match td.body with
   | Sum cs -> List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs
@@ -64,6 +72,14 @@ let ctor_in (c : ident) (td : Iface.type_decl) =
    else; that's how two types that share a constructor's name are told
    apart when nothing else says which. *)
 let find_ctor env (c : ctor_ref) ~expected =
+  (* a variant type's constructors are its sum's: one is found through it
+     as through the sum, and a construction, which builds the sum, is then
+     a mismatch the caller reports *)
+  let expected =
+    match repr expected with
+    | TVariant (p, _, args) -> TCon (p, args)
+    | t -> t
+  in
   match c.qual with
   | Some { tref = Named p; tloc } -> (
       let td = Hashtbl.find env.types p in
@@ -130,27 +146,16 @@ let find_ctor env (c : ctor_ref) ~expected =
               report env (ambiguous_ctor ~names:env.names c owners);
               None))
 
-(* Is [c] given as many arguments as it has fields, labelled correctly?
-   Each problem is reported. *)
-let ctor_shape env loc (c : ident) (ctor : Iface.ctor) labels =
-  let given = List.length labels in
+(* Is [c], a constructor whose fields are positional, given as many
+   arguments as it has fields? It's reported if it isn't. A label on its
+   one field, and a by-name constructor written in parentheses, are
+   refused by the caller, whose help writes it the one way it's written
+   (compiler.md, "Data stage", "By-name variants"). *)
+let ctor_shape env loc (c : ident) (ctor : Iface.ctor) given =
   if List.length ctor.cfields <> given then (
     report env (ctor_arity loc c ctor given);
     false)
-  else
-    let named = List.filter_map Fun.id labels in
-    if named = [] then true
-    else if List.length named <> given then (
-      report env (some_labels loc c);
-      false)
-    else
-      List.fold_left2
-        (fun ok (l : ident) (f : Iface.field) ->
-          if l.name <> f.fname then (
-            report env (wrong_label l f);
-            false)
-          else ok)
-        true named ctor.cfields
+  else true
 
 (* The fields a value of [td] can be read with, `r.f`: a record's. *)
 let record_fields (td : Iface.type_decl) =
@@ -359,7 +364,31 @@ let rec field_access ?(assigned = false) env cx (e : expr) r tr (f : ident) =
               | Dep ops ->
                   report env (op_of_value ~names:env.names ?recv:(env.source r) f p ops);
                   TError
+              | Sum _ -> (
+                  (* the variants that have it, and the `match` that takes
+                     it from them *)
+                  let recv = Option.value (env.source r) ~default:"..." in
+                  match
+                    field_of_sum ~types:env.types ~names:env.names f ~recv td
+                  with
+                  | Some d ->
+                      report env d;
+                      TError
+                  | None -> needs_record t)
               | _ -> needs_record t))
+      | TVariant (p, c, args) -> (
+          (* a variant type is a record of its constructor's fields: a
+             field read at a known constructor (compiler.md, "Data
+             stage", "Variant types"), recorded as the sum's *)
+          let td, k = variant_ctor env p c in
+          match List.find_opt (fun (d : Iface.field) -> d.fname = f.name) k.cfields with
+          | Some fd -> found td fd args
+          | None ->
+              report env
+                (no_such_field ~names:env.names f p
+                   ~owner:(type_name env p ^ "." ^ c)
+                   k.cfields);
+              TError)
       | TVar _ -> (
           let what =
             match r.kind with

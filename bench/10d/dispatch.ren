@@ -3,9 +3,11 @@
 // here once, and `ren build --release --explain-dispatch D` lists them:
 // a dependency with one handler (`Seed`: a direct call, no tag), a site
 // two to four handlers reach (`Step`: inline arms, and the loop in
-// `run` cloned per handler), one more than four reach (`Shape`: a call
+// `run` cloned per handler), one more than four reach (`Codec`: a call
 // through the set's table), and dispatch that recurses through its own
-// dependency (`Expr`: through the table, its descriptions boxed).
+// dependency (`Pipe`: through the table, its descriptions boxed). Each is
+// something a library would keep and its users add kinds to, codecs and
+// the stages of a pipeline: a domain's data is an ADT (language.md §6).
 
 dep Seed =
   next: fn(x: Int) -> Int
@@ -32,65 +34,67 @@ fn run(s: Step, n: Int) -> Int =
     x = s.apply(x)
   x
 
-dep Shape =
-  area: fn() -> Int
+// what each codec costs a block
+dep Codec =
+  cost: fn() -> Int
 
-handler sq_shape(s: Int) for Shape =
-  area() => s * s
-handler rect(w: Int, h: Int) for Shape =
-  area() => w * h
-handler tri(b: Int, h: Int) for Shape =
-  area() => b * h / 2
-handler ring(r: Int) for Shape =
-  area() => 3 * r * r
-handler frame(w: Int, h: Int, t: Int) for Shape =
-  area() => w * h - (w - 2 * t) * (h - 2 * t)
+handler rle(s: Int) for Codec =
+  cost() => s * s
+handler lz(w: Int, h: Int) for Codec =
+  cost() => w * h
+handler huff(b: Int, h: Int) for Codec =
+  cost() => b * h / 2
+handler delta(r: Int) for Codec =
+  cost() => 3 * r * r
+handler zstd(w: Int, h: Int, t: Int) for Codec =
+  cost() => w * h - (w - 2 * t) * (h - 2 * t)
 
-fn shapes(n: Int) -> Array<Shape> =
-  var out: Array<Shape> = []
+fn codecs(n: Int) -> Array<Codec> =
+  var out: Array<Codec> = []
   var x = 7
   for i in 0..n
     let s = lcg()
     x = s.next(x)
     let k = x % 6
     let d = x % 13 + 3
-    let shape: Shape =
-      if k == 0 then sq_shape(d)
-      else if k == 1 then rect(d, d + 1)
-      else if k == 2 then tri(d, d + 2)
-      else if k == 3 then ring(d)
-      else if k == 4 then frame(d + 4, d + 4, 1)
+    let codec: Codec =
+      if k == 0 then rle(d)
+      else if k == 1 then lz(d, d + 1)
+      else if k == 2 then huff(d, d + 2)
+      else if k == 3 then delta(d)
+      else if k == 4 then zstd(d + 4, d + 4, 1)
       else handler fn() => d + i
-    &out.push(shape)
+    &out.push(codec)
   out
 
-dep Expr =
-  eval: fn() -> Int
+// a stage of a pipeline, which pulls from the stages that feed it
+dep Pipe =
+  pull: fn() -> Int
 
-handler num(n: Int) for Expr =
-  eval() => n
-handler add(a: Expr, b: Expr) for Expr =
-  eval() => a.eval() + b.eval()
-handler mul(a: Expr, b: Expr) for Expr =
-  eval() => a.eval() * b.eval() % 1000003
-handler neg(a: Expr) for Expr =
-  eval() => 0 - a.eval()
+handler source(n: Int) for Pipe =
+  pull() => n
+handler merge(a: Pipe, b: Pipe) for Pipe =
+  pull() => a.pull() + b.pull()
+handler scale(a: Pipe, b: Pipe) for Pipe =
+  pull() => a.pull() * b.pull() % 1000003
+handler invert(a: Pipe) for Pipe =
+  pull() => 0 - a.pull()
 
-// a tree of depth `d`, its kinds chosen by `seed`
-fn tree(d: Int, seed: Int) -> Expr =
-  if d == 0 then num(seed % 10)
+// a pipeline `d` stages deep, its kinds chosen by `seed`
+fn pipeline(d: Int, seed: Int) -> Pipe =
+  if d == 0 then source(seed % 10)
   else
     let k = seed % 3
-    if k == 0 then add(tree(d - 1, seed * 7 % 1009), tree(d - 1, seed * 11 % 1013))
-    else if k == 1 then mul(tree(d - 1, seed * 13 % 1019), num(seed % 5 + 1))
-    else neg(tree(d - 1, seed * 17 % 1021))
+    if k == 0 then merge(pipeline(d - 1, seed * 7 % 1009), pipeline(d - 1, seed * 11 % 1013))
+    else if k == 1 then scale(pipeline(d - 1, seed * 13 % 1019), source(seed % 5 + 1))
+    else invert(pipeline(d - 1, seed * 17 % 1021))
 
 fn main() uses Console =
   print(run(inc(3), 1000))
   print(run(dbl(), 1000))
   print(run(sq(), 1000))
   var t = 0
-  for s in shapes(1000)
-    t += s.area()
+  for c in codecs(1000)
+    t += c.cost()
   print(t)
-  print(tree(12, 5).eval())
+  print(pipeline(12, 5).pull())

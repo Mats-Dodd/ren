@@ -16,8 +16,14 @@ pub type Refusal = ! Short(account: AccountId, by: Money) | Frozen(account: Acco
 // what moved money in or out
 pub type Movement =
   | Deposited(amount: Money)
-  | Sent(amount: Money, to: AccountId)
-  | Received(amount: Money, from: AccountId)
+  | Sent { amount: Money, to: AccountId }
+  | Received { amount: Money, from: AccountId }
+
+  // what it did to the balance: what came in, or less what went out
+  pub fn change(self) -> Money =
+    match self
+      Deposited(m) | Received { amount: m, .. } => m
+      Sent { amount, .. } => -amount
 
 // a line of a statement: a movement, and when it happened, by whichever
 // clock is installed
@@ -75,7 +81,7 @@ test "a frozen account takes nothing in" =
 test "a debit can't go below zero" =
   var a = Account.open(AccountId.of(1))
   try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
-  let out = Sent(Money.dollars(7), AccountId.of(2))
+  let out = Sent { amount: Money.dollars(7), to: AccountId.of(2) }
   assert attempt &a.debit(Money.dollars(7), out) == Err(Short(AccountId.of(1), Money.dollars(2)))
   assert a.balance() == Money.dollars(5)
 
@@ -84,3 +90,10 @@ test "each change is stamped with the time" =
   TestClock.advance(Duration.seconds(3))
   try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
   assert a.statement() == [Entry { at: Time.epoch + Duration.seconds(3), what: Deposited(Money.dollars(5)) }]
+
+test "a statement adds up to the balance" =
+  var a = Account.open(AccountId.of(1))
+  try &a.credit(Money.dollars(5), Deposited(Money.dollars(5)))
+  try &a.debit(Money.dollars(2), Sent { amount: Money.dollars(2), to: AccountId.of(2) })
+  try &a.credit(Money.dollars(1), Received { amount: Money.dollars(1), from: AccountId.of(3) })
+  assert a.statement().map(fn({ what, .. }) => what.change()).sum() == a.balance()

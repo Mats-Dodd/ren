@@ -299,6 +299,47 @@ let op_block env (e : expr) ~listed ~expected ~calls =
 
 (* [e]'s type, from [e] alone, as it's used: a sized type's value is read
    as its wide type ([read_wide]). *)
+(* ---- by-name variants (compiler.md, "Data stage", "By-name variants") ---- *)
+
+(* A constructor as it's written: `Rect`, or after its type,
+   `Shape.Rect`. *)
+let ctor_written env (c : ctor_ref) =
+  match c.qual with
+  | Some { tref = Named p; _ } -> type_name env p ^ "." ^ c.name.name
+  | Some { tref = Param _; _ } | None -> c.name.name
+
+(* [c] written by name, `Rect { w: 2, h: 3 }`: each of [fields] given the
+   value written in its place, [shown], or `...` for one there's none for;
+   a value that's the field's name is punned, `Rect { w, h }`. *)
+let by_name c (fields : Iface.field list) shown =
+  let field i (f : Iface.field) =
+    match List.nth_opt shown i with
+    | Some v when v = f.fname -> v
+    | Some v -> f.fname ^ ": " ^ v
+    | None -> f.fname ^ ": ..."
+  in
+  c ^ " { " ^ String.concat ", " (List.mapi field fields) ^ " }"
+
+(* The pattern [c] of a by-name variant, written by name from its
+   positional subpatterns, [ps]: a name that's its field's is punned, a
+   `_` left out, with `..` at the end for the rest, and any other `f: p`.
+   `Rect(w, tall)` is `Rect { w, h: tall }`; `Rect(w, _)` is `Rect { w,
+   .. }`. *)
+let pattern_by_name env c (fields : Iface.field list) (ps : pattern list) =
+  let written = Ast.pattern_source ~type_name:(type_name env) in
+  let named =
+    List.filteri (fun i _ -> i < List.length ps) fields
+    |> List.mapi (fun i (f : Iface.field) ->
+           let q = List.nth ps i in
+           match q.pkind with
+           | PWild -> None
+           | PVar b when b.ident.name = f.fname -> Some f.fname
+           | _ -> Some (f.fname ^ ": " ^ written q))
+  in
+  let given = List.filter_map Fun.id named in
+  let rest = List.length given < List.length fields in
+  c ^ " { " ^ String.concat ", " (given @ if rest then [ ".." ] else []) ^ " }"
+
 let rec infer env cx (e : expr) : ty = read_wide cx e (infer_raw env cx e)
 
 (* [e]'s type, from [e] alone, as it's written: a place's, which a sized
@@ -328,6 +369,15 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
           widen env ~loc:e.loc (narrow env cx e t w)
       | Some w -> narrow env cx e t w
       | None -> t
+    in
+    (* a variant type where its sum is wanted: the help writes the
+       conversion of this value *)
+    let why =
+      match (repr t, repr expected) with
+      | TVariant (p, c, _), TCon (q, _) when p = q && why.help = None ->
+          let value = Option.value (env.source e) ~default:"p" in
+          { why with help = Some (fun _ _ -> make_the_sum ~ctor:c ~value) }
+      | _ -> why
     in
     match (sized_of t, sized_of expected) with
     | a, b when exact ->
@@ -376,15 +426,31 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
              ~want:(Some (expected, why, written)))
     | _ -> assert false
   in
+  (* a constructor builds its sum, where its variant type is expected too
+     (compiler.md, "Data stage", "Variant types") *)
+  let built t =
+    match (repr t, repr expected) with
+    | TCon (p, _), TVariant (q, _, _) when p = q ->
+        { why with notes = why.notes @ [ builds_the_sum ] }
+    | _ -> why
+  in
   match (e.kind, reveal env.st expected) with
   | Con (c, args), _ ->
       let t = infer_con env cx e c args ~written ~expected in
       Hashtbl.replace cx.nodes e.node t;
-      ignore (unifies env why e.loc ~found:t ~expected)
+      ignore (unifies env (built t) e.loc ~found:t ~expected)
+  | Con_named (c, fields), _ ->
+      let t = infer_con_named env cx e c fields ~written ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env (built t) e.loc ~found:t ~expected)
   | Record (name, fields), _ ->
       let t = infer_record env cx e name fields ~written ~expected in
       Hashtbl.replace cx.nodes e.node t;
       ignore (unifies env why e.loc ~found:t ~expected)
+  | Update { target; base; fields }, _ ->
+      let t = infer_update env cx e target base fields ~expected in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env (built t) e.loc ~found:t ~expected)
   (* a block, an `if` or a `match` passes a written type on to where its
      value is made, even where what's expected is still a variable, the
      payload of a constructor `Option<Rates>` is written for *)
@@ -655,9 +721,14 @@ and synth env cx (e : expr) : ty =
   | Block (stmts, last) -> block env cx stmts (fun cx -> infer env cx last)
   | Con (c, args) ->
       infer_con env cx e c args ~written:None ~expected:(fresh_var env.st)
+  | Con_named (c, fields) ->
+      infer_con_named env cx e c fields ~written:None
+        ~expected:(fresh_var env.st)
   | Record (name, fields) ->
       infer_record env cx e name fields ~written:None
         ~expected:(fresh_var env.st)
+  | Update { target; base; fields } ->
+      infer_update env cx e target base fields ~expected:(fresh_var env.st)
   | Field (r, f) -> infer_field env cx e r f
   | Match (subject, arms) -> infer_match env cx e.node subject arms ~want:None
   | Array xs -> infer_array env cx xs
@@ -799,7 +870,7 @@ and synth env cx (e : expr) : ty =
                     (result_loc array_of) ~found:ta ~expected:(array elem)
                 in
                 match (pat.pkind, iter.kind) with
-                | PTuple _, Ref _ when ok ->
+                | (PTuple _ | PRecord _), Ref _ when ok ->
                     (* here, not in the parser, so that a map's own
                        message comes first, above *)
                     report env
@@ -807,11 +878,11 @@ and synth env cx (e : expr) : ty =
                     TError
                 | _ -> if ok then elem else TError))
       in
-      bind_pattern env cx elem pat;
+      bind_pattern ~binding:true env cx elem pat;
       (* the index is an `Int`, where the element is; a cursor has none *)
       Option.iter
         (fun (i : pattern) ->
-          bind_pattern env cx int i;
+          bind_pattern ~binding:true env cx int i;
           match over with
           | Each _
             when match Hashtbl.find_opt cx.found e.node with
@@ -843,6 +914,9 @@ and synth env cx (e : expr) : ty =
       unit
   | Break ->
       (* it never produces a value, as `fail` doesn't *)
+      fresh_var env.st
+  | Todo ->
+      (* it panics, so it's of whatever type is wanted where it's written *)
       fresh_var env.st
   | Fail ({ name = "Cancelled"; _ }, []) when env.in_finally > 0 ->
       (* in a `finally`: the cancel goes on, which no row has *)
@@ -1011,8 +1085,11 @@ and cursor env cx ~at (iter : expr) tc =
 and pattern_binders (p : pattern) =
   match p.pkind with
   | PVar b -> [ b ]
+  | PAs (q, b) -> pattern_binders q @ [ b ]
   | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps ->
       List.concat_map pattern_binders ps
+  | PRecord (_, fs) | PCon_named (_, fs) ->
+      List.concat_map (fun (_, q) -> pattern_binders q) fs.fpats
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* Where [e] first changes one of [bs], and which: an assignment to it, or
@@ -1110,7 +1187,11 @@ and stmt env cx = function
             (Hashtbl.replace cx.let_blocks name.id)
             (Hashtbl.find_opt lambda_calls value.node)
       | _ -> ())
-  | Let_tuple { pat; value } -> bind_pattern env cx (infer env cx value) pat
+  | Let_pattern { pat; value; else_ = None } ->
+      bind_pattern ~binding:true env cx (infer env cx value) pat
+  | Let_pattern { pat; value; else_ = Some _ } ->
+      (* a test, as an arm's is; [block] checks the `else` *)
+      bind_pattern env cx (infer env cx value) pat
   | Expr e -> dropped env cx e (infer env cx e)
   | Finally f ->
       (* only among a handler's state ([Infer_handlers.handler]) or an
@@ -1125,6 +1206,13 @@ and block env cx stmts (last : ctx -> ty) =
   | [] -> last cx
   | Finally f :: rest ->
       finally_stmt env cx f (fun cx -> block env cx rest last)
+  | (Let_pattern { else_ = Some e; _ } as s) :: rest ->
+      (* the `else` leaves (Resolve), so it's of any type: the rest's,
+         which a `match` of the two lowers to *)
+      stmt env cx s;
+      let t = block env cx rest last in
+      check env cx e t;
+      t
   | s :: rest ->
       stmt env cx s;
       block env cx rest last
@@ -1693,6 +1781,21 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
              | _ -> Option.bind (known_decl env t) (field_in m.name) = None
         ->
           derived_hash env cx f r tr
+      | None, TVariant (p, c, args')
+        when op_of env (TCon (p, args')) m.name <> None
+             && not
+                  (List.exists
+                     (fun (d : Iface.field) -> d.fname = m.name)
+                     (snd (variant_ctor env p c)).cfields) ->
+          (* the sum's method: a variant type has none of its own, and
+             calling the sum's would be a conversion no one wrote
+             (compiler.md, "Data stage", "Variant types") *)
+          let recv = Option.value (env.source r) ~default:"p" in
+          let recv = if String.contains recv ' ' then "(" ^ recv ^ ")" else recv in
+          report env
+            (variant_no_methods m.loc ~shown:(show (printer env) tr) ~ctor:c
+               ~recv ~name:m.name);
+          nothing ()
       | None, (TCon (p, _) as t)
         when Option.bind (known_decl env t) (field_in m.name) = None ->
           let td = Hashtbl.find env.types p in
@@ -1835,7 +1938,11 @@ and desc_method env cx (e : expr) (f : expr) (r : expr) (m : ident) (i : impl)
     (d : dep) args =
   let recv = Option.value (env.source r) ~default:"it" in
   let shown = shown_deps env [ d ] in
-  let call = sprintf "%s.%s(%s)" shown m.name (if args = [] then "" else "...") in
+  (* an operation is called through its dependency's name alone *)
+  let call =
+    sprintf "%s.%s(%s)" (env.names d.dpath) m.name
+      (if args = [] then "" else "...")
+  in
   let refuse diag =
     report env diag;
     unknown_call cx;
@@ -1850,13 +1957,44 @@ and desc_method env cx (e : expr) (f : expr) (r : expr) (m : ident) (i : impl)
        that, as a dependency's call does, for lowering *)
     match lookup env cx ~node:f.node m.loc (Dep_op (d.dpath, m.name)) with
     | TFun (ps, ret, errs, (RExtend (l, _) as uses)) ->
+        (* whether its arguments fix the dependency's type arguments, as
+           they do a call written `Chan.send(x)`'s *)
+        let fixed =
+          List.for_all
+            (fun a ->
+              match repr a with
+              | TVar { contents = Unbound _ } ->
+                  List.exists (fun (q : param) -> mentions a q.ty) ps
+              | _ -> true)
+            l.payload
+        in
         if List.length l.payload = List.length d.dargs then
           List.iter2
             (fun t a -> unify_at env r.loc ~found:a ~expected:t)
             l.payload d.dargs;
         Hashtbl.replace cx.nodes f.node (TFun (ps, ret, errs, uses));
+        (* the `with` that would make the call, for Stateless's help: the
+           operation through the dependency's name, without its type
+           arguments, which is how one's called (compiler.md, "Found by
+           its full type"), its arguments as written if each can be shown;
+           when they don't fix the type arguments, its type is written
+           where its value goes *)
+        let op_call =
+          match List.map env.source args with
+          | written when List.for_all Option.is_some written ->
+              sprintf "%s.%s(%s)" (env.names d.dpath) m.name
+                (String.concat ", " (List.filter_map Fun.id written))
+          | _ -> call
+        in
+        let call =
+          if fixed then sprintf "with %s in %s" recv op_call
+          else
+            sprintf "let %s: %s = with %s in %s" m.name
+              (show (printer env) ret) recv op_call
+        in
         Hashtbl.replace cx.found f.node
-          (Calls_op { key = dep_of d; from = d.dpath; op = m.name });
+          (Calls_op
+             { key = dep_of d; from = d.dpath; op = m.name; recv; call });
         let needs = copy_needs env ~loc:e.loc ~what:Installing i.needs in
         apply env cx e ~name:(Some m.name) f (TFun (ps, ret, errs, needs)) args
     | _ -> refuse (op_of_value ~names:env.names ~recv m d.dpath [])
@@ -2579,16 +2717,100 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
       Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
       let t, tvars = instance env td in
       let written = written_args td written in
-      if ctor_shape env e.loc c ctor (List.map fst args) then
+      let shown = ctor_written env cref in
+      let source (a : expr) = Option.value (env.source a) ~default:"..." in
+      (* still check the arguments, for errors of their own *)
+      let unchecked () = List.iter (fun (_, a) -> ignore (infer env cx a)) args in
+      if ctor.cnamed then (
+        (* by name, in braces (compiler.md, "Data stage", "By-name
+           variants") *)
+        report env
+          (built_by_name e.loc shown
+             ~written:
+               (by_name shown ctor.cfields
+                  (List.map (fun (_, a) -> source a) args)));
+        unchecked ())
+      else if ctor_shape env e.loc c ctor (List.length args) then (
+        (match args with
+        | [ (Some _, a) ] ->
+            (* a label on one field only documents it *)
+            report env
+              (by_position e.loc shown ~fields:1 ~pattern:false
+                 ~written:(sprintf "%s(%s)" shown (source a)))
+        | _ -> ());
         List.iter2
           (fun (f : Iface.field) (_, (a : expr)) ->
             check env cx a (field_type ~tvars f)
               ?written:(written_field ~tvars written f)
               ~why:(explain ~notes:[ part_of c.name "field" f.fname ] ()))
-          ctor.cfields args
-      else
-        (* still check the arguments, for errors of their own *)
-        List.iter (fun (_, a) -> ignore (infer env cx a)) args;
+          ctor.cfields args)
+      else unchecked ();
+      t
+
+(* `Rect { w: 2, h: 3 }`, a by-name constructor, where a value of type
+   [expected] is wanted: found as [infer_con] finds one, then its fields
+   checked as a record literal's are, each the constructor's, once, and
+   every one given. A constructor whose fields are positional is
+   refused, its help writing it that way. *)
+and infer_con_named env cx (e : expr) (cref : ctor_ref) fields ~written
+    ~expected =
+  let c = cref.name in
+  let unchecked () = List.iter (fun (_, v) -> ignore (infer env cx v)) fields in
+  match find_ctor env cref ~expected with
+  | None ->
+      unchecked ();
+      TError
+  | Some (td, ctor) ->
+      Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
+      let t, tvars = instance env td in
+      let written = written_args td written in
+      let shown = ctor_written env cref in
+      (if not ctor.cnamed then (
+         let value =
+           match (ctor.cfields, fields) with
+           | [ f ], [ (g, v) ] when g.name = f.fname || f.fname = "" ->
+               Option.value (env.source v) ~default:"..."
+           | _ -> "..."
+         in
+         report env
+           (by_position e.loc shown ~fields:(List.length ctor.cfields)
+              ~pattern:false
+              ~written:
+                (if ctor.cfields = [] then shown
+                 else sprintf "%s(%s)" shown value));
+         unchecked ())
+       else
+         let seen = Hashtbl.create 8 in
+         (* a misspelled field is also a missing one; once it's reported,
+            the missing ones aren't, as they're likely the same mistake *)
+         let unknown = ref false in
+         List.iter
+           (fun ((f : ident), v) ->
+             (match Hashtbl.find_opt seen f.name with
+             | Some first -> report env (two_fields f first)
+             | None -> Hashtbl.replace seen f.name f.loc);
+             match
+               List.find_opt (fun (d : Iface.field) -> d.fname = f.name) ctor.cfields
+             with
+             | Some fd ->
+                 check env cx v (field_type ~tvars fd)
+                   ?written:(written_field ~tvars written fd)
+                   ~why:(explain ~notes:[ part_of c.name "field" f.name ] ())
+             | None ->
+                 report env
+                   (no_such_field ~names:env.names
+                      ~owner:(type_name env td.path ^ "." ^ c.name)
+                      f td.path ctor.cfields);
+                 unknown := true;
+                 ignore (infer env cx v))
+           fields;
+         let missing =
+           List.filter
+             (fun n -> not (Hashtbl.mem seen n))
+             (field_names ctor.cfields)
+         in
+         if missing <> [] && not !unknown then
+           report env (missing_fields e.loc c.name missing));
       t
 
 (* What [td]'s parameters are where the type written for a value of it,
@@ -2691,7 +2913,205 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
         List.filter (fun d -> not (List.mem d given)) (field_names decl)
       in
       if missing <> [] && not !unknown then
-        report env (missing_fields ~names:env.names e.loc td.path missing);
+        report env (missing_fields e.loc (env.names td.path) missing);
+      t
+
+(* `{ ..base, f: v, ... }`, an update (compiler.md, "Data stage", "Record
+   update"): a record of the type [target] names, or else of [base]'s,
+   which has to be known here, as a field read's does, or else be
+   [expected]. The fields given are the target's, each once; every other
+   field of the target is [base]'s, of the same type; and every field of
+   [base] is the target's, so nothing is dropped unseen. [base] is
+   checked first, then the fields, as they're evaluated. *)
+and infer_update env cx (e : expr) target base fields ~expected =
+  let seen = Hashtbl.create 8 in
+  List.iter
+    (fun ((f : ident), _) ->
+      match Hashtbl.find_opt seen f.name with
+      | Some first -> report env (two_fields f first)
+      | None -> Hashtbl.replace seen f.name f.loc)
+    fields;
+  let tb = infer env cx base in
+  let shown = ".." ^ Option.value (env.source base) ~default:"it" in
+  let pr = printer env in
+  (* a record type's declaration and its fields, if [t] is one, and the
+     constructor, if it's a variant type, whose fields those are
+     (compiler.md, "Data stage", "Variant types"); reported if it isn't,
+     at [loc] *)
+  let record_of t =
+    match reveal env.st t with
+    | TError -> None
+    | TVariant (p, c, args) ->
+        let td, k = variant_ctor env p c in
+        Some (td, k.cfields, args, Some c)
+    | TCon (p, args) as t -> (
+        let td = Hashtbl.find env.types p in
+        match (td.body, record_fields td) with
+        | _, Some fs -> Some (td, fs, args, None)
+        | Opaque (Hidden _), None ->
+            report_rep env td
+              (opaque_private ~test:(tested env td) base.loc td);
+            None
+        | Sum cs, None ->
+            (* a sum has no fields to take: its variant's type has, which
+               a pattern's `as` binds; the help names the target's
+               variant, or one with the fields given *)
+            let named = List.filter (fun (k : Iface.ctor) -> k.cnamed) cs in
+            let has (k : Iface.ctor) =
+              List.for_all
+                (fun ((f : ident), _) ->
+                  List.exists (fun (d : Iface.field) -> d.fname = f.name) k.cfields)
+                fields
+            in
+            let variant =
+              match target with
+              | Some (Into_ctor c) -> Some c.name.name
+              | _ -> (
+                  match List.find_opt has named with
+                  | Some k -> Some k.cname
+                  | None -> (
+                      match named with k :: _ -> Some k.cname | [] -> None))
+            in
+            report env
+              (update_from_sum base.loc ~base:shown (show pr t) ~variant);
+            None
+        | _ -> 
+            report env (update_not_record base.loc ~base:shown (show pr t));
+            None)
+    | t ->
+        report env (update_not_record base.loc ~base:shown (show pr t));
+        None
+  in
+  (* the target, if it's written: its type's declaration, its fields, and
+     its name, which is a by-name constructor's, `Placed`, when it's one,
+     building its sum *)
+  let target_decl =
+    match target with
+    | Some (Into_type { tref = Named p; tloc }) -> (
+        let td = Hashtbl.find env.types p in
+        match record_fields td with
+        | Some fs -> Some (Some (td, fs, None))
+        | None ->
+            report_rep env td
+              (not_a_record ~names:env.names ~test:(tested env td) tloc td);
+            None)
+    | Some (Into_type { tref = Param _; _ }) ->
+        (* resolve.ml only resolves a record's name to a declared type *)
+        assert false
+    | Some (Into_ctor cref) -> (
+        match find_ctor env cref ~expected with
+        | None -> None
+        | Some (td, ctor) when ctor.cnamed ->
+            Hashtbl.replace cx.found e.node (Ctor_of (td.path, ctor.cname));
+            Some (Some (td, ctor.cfields, Some ctor.cname))
+        | Some (_, ctor) ->
+            let shown = ctor_written env cref in
+            report env
+              (by_position e.loc shown ~fields:(List.length ctor.cfields)
+                 ~pattern:false
+                 ~written:
+                   (if ctor.cfields = [] then shown else shown ^ "(...)"));
+            None)
+    | None -> Some None
+  in
+  (* the base, whose type is the target's when it isn't known yet and the
+     target is a record type named, or expected *)
+  let based =
+    match (reveal env.st tb, target_decl) with
+    | TVar _, Some (Some (_, _, Some _)) ->
+        report env (no_record_fits e.loc);
+        None
+    | TVar _, Some (Some (td, _, None)) ->
+        let t, _ = instance env td in
+        unify_at env base.loc ~found:tb ~expected:t;
+        record_of tb
+    | TVar _, Some None -> (
+        match known_decl env expected with
+        | Some td when record_fields td <> None ->
+            let t, _ = instance env td in
+            unify_at env base.loc ~found:tb ~expected:t;
+            record_of tb
+        | _ ->
+            report env (no_record_fits e.loc);
+            None)
+    | _, Some _ -> record_of tb
+    | _, None -> None
+  in
+  let based =
+    Option.map (fun (td, fs, args, _) -> (td, fs, args)) based
+  and base_variant =
+    match based with Some (_, _, _, v) -> v | None -> None
+  in
+  let unknown () =
+    List.iter (fun (_, v) -> ignore (infer env cx v)) fields;
+    TError
+  in
+  match (based, target_decl) with
+  | None, _ | _, None -> unknown ()
+  | Some (btd, bfs, bargs), Some tgt ->
+      let td, decl, ctor =
+        match tgt with Some t -> t | None -> (btd, bfs, None)
+      in
+      let t, tvars = instance env td in
+      (* with no target, an update of a variant type is that variant
+         type: `{ ..p, total: x }` is an `Order.Placed` *)
+      let t, target_name =
+        match (tgt, base_variant) with
+        | None, Some c -> (TVariant (td.path, c, tvars), c)
+        | _ -> (
+            ( t,
+              match ctor with Some c -> c | None -> type_name env td.path ))
+      in
+      (* the fields given, at the target's types *)
+      List.iter
+        (fun ((f : ident), v) ->
+          match
+            List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl
+          with
+          | Some fd ->
+              check env cx v (field_type ~tvars fd)
+                ~why:
+                  (explain
+                     ~notes:[ part_of target_name "field" f.name ]
+                     ())
+          | None ->
+              report env (no_such_field ~names:env.names f td.path decl);
+              ignore (infer env cx v))
+        fields;
+      let given (d : Iface.field) =
+        List.exists (fun ((f : ident), _) -> f.name = d.fname) fields
+      in
+      (* the rest, from the base *)
+      List.iter
+        (fun (d : Iface.field) ->
+          if not (given d) then
+            match
+              List.find_opt (fun (b : Iface.field) -> b.fname = d.fname) bfs
+            with
+            | None ->
+                report env
+                  (update_needs base.loc ~target:target_name ~base:shown
+                     d.fname)
+            | Some b -> (
+                let found = field_type ~tvars:bargs b in
+                let wanted = field_type ~tvars d in
+                match Unify.unify env.st found wanted with
+                | () -> ()
+                | exception (Unify.Mismatch | Unify.Two_shapes _ | Unify.Infinite)
+                  ->
+                    report env
+                      (update_field_type base.loc ~target:target_name
+                         ~base:shown d.fname ~found:(show pr found)
+                         ~expected:(show pr wanted))))
+        decl;
+      (* nothing of the base is dropped *)
+      List.iter
+        (fun (b : Iface.field) ->
+          if not (List.exists (fun (d : Iface.field) -> d.fname = b.fname) decl)
+          then
+            report env
+              (update_drops base.loc ~target:target_name ~base:shown b.fname))
+        bfs;
       t
 
 (* `Clock { now: fn() => t, ... }`, a record literal of the dependency
@@ -2800,9 +3220,21 @@ and bind_fail env cx errs (p : pattern) =
   match p.pkind with
   | PFail (c, ps) -> tag_pattern env cx ~arm:true p c ps errs
   | PFail_any | PFail_in _ -> ()
-  | POr [] -> ()
-  | POr (first :: rest) ->
-      bind_fail env cx errs first;
+  | POr ps -> alternatives env cx ps (bind_fail env cx errs)
+  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PCon_named _ | PTuple _
+  | PRecord _ | PAs _ ->
+      (* the parser combines only `fail` patterns *)
+      bind_pattern env cx TError p
+
+(* The alternatives [ps] of an or-pattern, each bound by [bind]: each
+   binds the same names (Resolve), which have to have one type, the
+   first's. *)
+and alternatives env cx ps bind =
+  match ps with
+  | [] -> ()
+  | first :: rest ->
+      bind first;
+      let shown = Ast.pattern_source ~type_name:(type_name env) in
       List.iter
         (fun alt ->
           let before =
@@ -2810,25 +3242,28 @@ and bind_fail env cx errs (p : pattern) =
               (fun (b, loc) -> (b, loc, Hashtbl.find_opt cx.locals b.id))
               (binders alt)
           in
-          bind_fail env cx errs alt;
+          bind alt;
           List.iter
             (fun ((b : binder), loc, t) ->
               match (t, Hashtbl.find_opt cx.locals b.id) with
-              | Some first, Some here ->
-                  unify_at env loc ~found:here ~expected:first
-                    ~msg:(alternative b.ident.name);
-                  Hashtbl.replace cx.locals b.id first
+              | Some t1, Some here ->
+                  unify_at env loc ~found:here ~expected:t1
+                    ~msg:
+                      (alternative b.ident.name ~first:(shown first)
+                         ~here:(shown alt))
+                    ~help:"bind it to one type in every alternative";
+                  Hashtbl.replace cx.locals b.id t1
               | _ -> ())
             before)
         rest
-  | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PTuple _ ->
-      (* the parser combines only `fail` patterns *)
-      bind_pattern env cx TError p
 
 (* Check a pattern against the type of the value it matches, and give the
    variables it binds their types. A constructor is found through that
-   type. *)
-and bind_pattern env cx t (p : pattern) =
+   type. With [binding], it's a `let`'s, a `for`'s or a block parameter's,
+   which only takes apart, so a record pattern there may leave fields out
+   without `..` (compiler.md, "Data stage", "Record patterns"). *)
+and bind_pattern ?(binding = false) env cx t (p : pattern) =
+  let bind_pattern = bind_pattern ~binding in
   Hashtbl.replace cx.nodes p.pnode t;
   let check found = unify_at env p.ploc ~found ~expected:t ~msg:pattern_for in
   match (p.pkind, repr t) with
@@ -2878,11 +3313,23 @@ and bind_pattern env cx t (p : pattern) =
               Hashtbl.replace cx.found p.pnode (Ctor_of (td.path, ctor.cname));
               let tc, tvars = instance env td in
               check tc;
-              if ctor_shape env p.ploc c ctor (List.map (fun _ -> None) ps) then
+              let bind () =
                 List.iter2
                   (fun fd sub -> bind_pattern env cx (field_type ~tvars fd) sub)
                   ctor.cfields ps
+              in
+              if ctor.cnamed then (
+                (* by name, in braces; its names are still bound, so what
+                   uses them isn't reported too *)
+                let shown = ctor_written env cref in
+                report env
+                  (matched_by_name p.ploc shown
+                     ~written:(pattern_by_name env shown ctor.cfields ps));
+                if List.length ps = List.length ctor.cfields then bind ()
+                else unknown ())
+              else if ctor_shape env p.ploc c ctor (List.length ps) then bind ()
               else unknown ())
+      | PCon_named (cref, fs) -> con_pattern env cx t p cref fs
       | PTuple ps ->
           let n = List.length ps in
           let parts = List.map (fun _ -> fresh_var env.st) ps in
@@ -2898,10 +3345,254 @@ and bind_pattern env cx t (p : pattern) =
             ~found:(TCon (Ty.tuple_path n, parts))
             ~expected:t ~msg:pattern_for ?help;
           List.iter2 (bind_pattern env cx) parts ps
-      | PFail _ | PFail_any | PFail_in _ | POr _ ->
+      | PRecord (name, fs) -> record_pattern ~binding env cx t p name fs
+      | POr ps -> alternatives env cx ps (bind_pattern env cx t)
+      | PAs (q, b) ->
+          (* the whole of what's matched, which of a by-name constructor's
+             pattern is its variant type, `Placed { .. } as p` an
+             `Order.Placed` (compiler.md, "Data stage", "Variant types");
+             of anything else, an or-pattern's too, what's matched *)
+          bind_pattern env cx t q;
+          let whole =
+            match (q.pkind, Hashtbl.find_opt cx.found q.pnode, reveal env.st t) with
+            | PCon_named _, Some (Ctor_of (path, c)), TCon (s, args)
+              when s = path ->
+                let _, k = variant_ctor env path c in
+                if k.cnamed then TVariant (path, c, args) else t
+            | _ -> t
+          in
+          Hashtbl.replace cx.locals b.id whole
+      | PFail _ | PFail_any | PFail_in _ ->
           (* a `fail` pattern is a whole arm's (the parser says so), and
              [infer_match] binds it with [bind_fail] *)
           ())
+
+(* `Rect { w, h: tall }`, `Rect { w, .. }`, a by-name constructor's
+   pattern matched against [t]: the constructor found as a positional
+   one's is, then its fields as a record pattern's are, each the
+   constructor's, once, and every one named unless it ends in `..`. A
+   constructor whose fields are positional is refused, its help writing
+   it that way. A binding position never has one (resolve.ml). *)
+and con_pattern env cx t (p : pattern) (cref : ctor_ref) (fs : fields) =
+  let unknown () =
+    List.iter (fun (_, q) -> bind_pattern env cx TError q) fs.fpats
+  in
+  let c = cref.name in
+  match find_ctor env cref ~expected:t with
+  | None -> unknown ()
+  | Some (td, ctor) when of_variant t td ctor <> None -> (
+      (* matched against a value of a variant type: its own constructor,
+         which always matches, its fields at the variant type's arguments *)
+      match of_variant t td ctor with
+      | Some (Ok tvars) ->
+          Hashtbl.replace cx.found p.pnode (Ctor_of (td.path, ctor.cname));
+          named_fields env cx p ~owner:(type_name env td.path ^ "." ^ c.name)
+            td ctor tvars fs
+            ~written:(fun fs -> PCon_named (cref, fs))
+      | _ ->
+          let own = match repr t with TVariant (_, c, _) -> c | _ -> c.name in
+          report env
+            (other_variant p.ploc (show (printer env) t) ctor.cname ~own);
+          unknown ())
+  | Some (td, ctor) when not ctor.cnamed -> (
+      Hashtbl.replace cx.found p.pnode (Ctor_of (td.path, ctor.cname));
+      let tc, tvars = instance env td in
+      unify_at env p.ploc ~found:tc ~expected:t ~msg:pattern_for;
+      let shown = ctor_written env cref in
+      match ctor.cfields with
+      | [] ->
+          report env
+            (by_position p.ploc shown ~fields:0 ~pattern:true ~written:shown);
+          unknown ()
+      | f :: _ ->
+          (* its one field's pattern, if it's named, by its name or by the
+             one it would have *)
+          let sub =
+            List.find_map
+              (fun ((g : ident), q) ->
+                if g.name = f.fname || (f.fname = "" && List.length fs.fpats = 1)
+                then Some q
+                else None)
+              fs.fpats
+          in
+          report env
+            (by_position p.ploc shown ~fields:1 ~pattern:true
+               ~written:
+                 (sprintf "%s(%s)" shown
+                    (match sub with
+                    | Some q -> Ast.pattern_source ~type_name:(type_name env) q
+                    | None -> "_")));
+          List.iter
+            (fun (_, q) ->
+              bind_pattern env cx
+                (if Some q == sub then field_type ~tvars f else TError)
+                q)
+            fs.fpats)
+  | Some (td, ctor) ->
+      Hashtbl.replace cx.found p.pnode (Ctor_of (td.path, ctor.cname));
+      let tc, tvars = instance env td in
+      unify_at env p.ploc ~found:tc ~expected:t ~msg:pattern_for;
+      named_fields env cx p ~owner:(type_name env td.path ^ "." ^ c.name) td
+        ctor tvars fs
+        ~written:(fun fs -> PCon_named (cref, fs))
+
+(* Whether [t], what a pattern of the constructor [ctor] of [td] is
+   matched against, is a variant type of [td]: [Ok] its type arguments if
+   it's [ctor]'s, [Error] if it's another constructor's, [None] if it
+   isn't one. *)
+and of_variant t (td : Iface.type_decl) (ctor : Iface.ctor) =
+  match repr t with
+  | TVariant (p, c, args) when p = td.path ->
+      Some (if c = ctor.cname then Ok args else Error c)
+  | _ -> None
+
+(* The fields [fs] of a by-name pattern of [ctor], of [td] at [tvars]: each
+   [ctor]'s, once, and every one named unless it ends in `..`. [owner] names
+   it in a message, and [written] makes the pattern again for the help. *)
+and named_fields ?(binding = false) env cx (p : pattern) ~owner
+    (td : Iface.type_decl) (ctor : Iface.ctor) tvars (fs : fields) ~written =
+  let seen = Hashtbl.create 8 in
+  let unknown_field = ref false in
+  List.iter
+    (fun ((f : ident), q) ->
+      (match Hashtbl.find_opt seen f.name with
+      | Some first -> report env (two_fields f first)
+      | None -> Hashtbl.replace seen f.name f.loc);
+      match
+        List.find_opt (fun (d : Iface.field) -> d.fname = f.name) ctor.cfields
+      with
+      | Some fd -> bind_pattern env cx (field_type ~tvars fd) q
+      | None ->
+          report env
+            (no_such_field ~names:env.names ~owner f td.path ctor.cfields);
+          unknown_field := true;
+          bind_pattern env cx TError q)
+    fs.fpats;
+  let missing =
+    List.filter (fun n -> not (Hashtbl.mem seen n)) (field_names ctor.cfields)
+  in
+  if missing <> [] && (not fs.rest) && (not binding) && not !unknown_field then
+    let written =
+      Ast.pattern_source ~type_name:(type_name env)
+        { p with pkind = written { fs with rest = true } }
+    in
+    report env (pattern_misses p.ploc missing ~written)
+
+(* `{ f: q, .. }` or `User { f: q, .. }`, matched against [t]: a record
+   of the type named, or of [t]'s, or else the one visible record type
+   that has the fields named (as a literal's is found, [infer_record]).
+   Each field is the record's, once; one in a `match` names every field
+   or ends in `..`, unless it's [binding]. *)
+and record_pattern ~binding env cx t (p : pattern) name (fs : fields) =
+  match (name, reveal env.st t) with
+  | None, TVariant (path, c, args) ->
+      (* a variant type is a record of its constructor's fields: matched
+         as that constructor's pattern is, which always matches *)
+      let td, ctor = variant_ctor env path c in
+      Hashtbl.replace cx.found p.pnode (Ctor_of (path, c));
+      named_fields ~binding env cx p
+        ~owner:(type_name env path ^ "." ^ c)
+        td ctor args fs
+        ~written:(fun fs -> PRecord (None, fs))
+  | _ -> plain_record_pattern ~binding env cx t p name fs
+
+and plain_record_pattern ~binding env cx t (p : pattern) name (fs : fields) =
+  let unknown () = List.iter (fun (_, q) -> bind_pattern env cx TError q) fs.fpats in
+  let named = List.map (fun ((f : ident), _) -> f.name) fs.fpats in
+  let has_all decl =
+    List.for_all (fun n -> List.mem n (field_names decl)) named
+    && (fs.rest || binding || List.length (field_names decl) = List.length named)
+  in
+  let decl =
+    match name with
+    | Some { tref = Named path; tloc } -> (
+        let td = Hashtbl.find env.types path in
+        match record_fields td with
+        | Some decl -> Some (td, decl)
+        | None ->
+            report_rep env td
+              (not_a_record ~names:env.names ~test:(tested env td) tloc td);
+            None)
+    | Some { tref = Param _; _ } -> assert false
+    | None -> (
+        match reveal env.st t with
+        | TError -> None
+        | TCon (path, _) as shown -> (
+            let td = Hashtbl.find env.types path in
+            match (td.body, record_fields td) with
+            | _, Some decl -> Some (td, decl)
+            | Opaque (Hidden _), None ->
+                report_rep env td
+                  (opaque_private ~test:(tested env td) p.ploc td);
+                None
+            | Sum cs, None ->
+                (* the variant it could be: the first by name with every
+                   field it names *)
+                let fits (k : Iface.ctor) =
+                  k.cnamed
+                  && List.for_all (fun n -> List.mem n (field_names k.cfields)) named
+                in
+                let written =
+                  Option.map
+                    (fun (k : Iface.ctor) ->
+                      k.cname ^ " "
+                      ^ Ast.show_fields
+                          (Ast.pattern_source ~type_name:(type_name env))
+                          fs)
+                    (List.find_opt fits cs)
+                in
+                report env
+                  (record_pattern_of_sum p.ploc (show (printer env) shown)
+                     ~written);
+                None
+            | _ ->
+                report env (pattern_not_record p.ploc (show (printer env) shown));
+                None)
+        | TVar _ -> (
+            let fits td =
+              match record_fields td with
+              | Some decl when has_all decl -> Some decl
+              | _ -> None
+            in
+            match through_type env ~known:None ~fits with
+            | Found found -> Some found
+            | Nowhere ->
+                report env (no_record_fits p.ploc);
+                None
+            | Several paths ->
+                report env (several_records_fit ~names:env.names p.ploc paths);
+                None)
+        | shown ->
+            report env (pattern_not_record p.ploc (show (printer env) shown));
+            None)
+  in
+  match decl with
+  | None -> unknown ()
+  | Some (td, decl) ->
+      let tr, tvars = instance env td in
+      unify_at env p.ploc ~found:tr ~expected:t ~msg:pattern_for;
+      Hashtbl.replace cx.nodes p.pnode tr;
+      let seen = Hashtbl.create 8 in
+      let unknown_field = ref false in
+      List.iter
+        (fun ((f : ident), q) ->
+          (match Hashtbl.find_opt seen f.name with
+          | Some first -> report env (two_fields f first)
+          | None -> Hashtbl.replace seen f.name f.loc);
+          match List.find_opt (fun (d : Iface.field) -> d.fname = f.name) decl with
+          | Some fd -> bind_pattern env cx (field_type ~tvars fd) q
+          | None ->
+              report env (no_such_field ~names:env.names f td.path decl);
+              unknown_field := true;
+              bind_pattern env cx TError q)
+        fs.fpats;
+      let missing = List.filter (fun n -> not (List.mem n named)) (field_names decl) in
+      if missing <> [] && (not fs.rest) && (not binding) && not !unknown_field then
+        let written =
+          Ast.pattern_source ~type_name:(type_name env)
+            { p with pkind = PRecord (name, { fs with rest = true }) }
+        in
+        report env (pattern_misses p.ploc missing ~written)
 
 (* The tag [c] of the error set [errs], destructured by [ps]. A misspelled
    tag is caught here: it isn't one of the errors (errors.md, "Tags are

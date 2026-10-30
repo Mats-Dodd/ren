@@ -3,18 +3,18 @@
 
 type List<T> =
   | Nil
-  | Cons(head: T, rest: List<T>)
+  | Cons { head: T, rest: List<T> }
 
 pub type Stack<T> = opaque List<T>
   pub let empty: Stack<T> = Nil
 
-  pub fn push(inout self, x: T) = self = Cons(x, self)
+  pub fn push(inout self, x: T) = self = Cons { head: x, rest: self }
 
   // the top value, taken off
   pub fn pop(inout self) -> Option<T> =
     match self
       Nil => None
-      Cons(x, rest) =>
+      Cons { head: x, rest } =>
         self = rest
         Some(x)
 
@@ -22,4 +22,4 @@ pub type Stack<T> = opaque List<T>
   pub fn peek(self) -> Option<T> =
     match self
       Nil => None
-      Cons(x, _) => Some(x)
+      Cons { head: x, .. } => Some(x)

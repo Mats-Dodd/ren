@@ -560,6 +560,7 @@ let%expect_test "Core Lint refuses the world reached from anywhere else" =
           shows = [];
           keys = [];
           ops = [];
+          method_calls = [];
         };
       print_endline "fine"
     with Failure msg -> print_endline msg

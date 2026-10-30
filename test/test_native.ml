@@ -79,15 +79,16 @@ let%expect_test
   mem ~rc:Naive
     {|
 type Tree =
-  | Node(left: Tree, key: Int, right: Tree)
+  | Node { left: Tree, key: Int, right: Tree }
   | Leaf
 
 fn size(t: Tree) -> Int =
   match t
-    Node(l, _, r) => size(l) + 1 + size(r)
+    Node { left: l, right: r, .. } => size(l) + 1 + size(r)
     Leaf => 0
 
-fn main() -> Int = size(Node(Leaf, 1, Node(Leaf, 2, Leaf)))
+fn main() -> Int =
+  size(Node { left: Leaf, key: 1, right: Node { left: Leaf, key: 2, right: Leaf } })
 |};
   [%expect
     {|
@@ -132,15 +133,16 @@ let%expect_test
   mem
     {|
 type Tree =
-  | Node(left: Tree, key: Int, right: Tree)
+  | Node { left: Tree, key: Int, right: Tree }
   | Leaf
 
 fn size(t: Tree) -> Int =
   match t
-    Node(l, _, r) => size(l) + 1 + size(r)
+    Node { left: l, right: r, .. } => size(l) + 1 + size(r)
     Leaf => 0
 
-fn main() -> Int = size(Node(Leaf, 1, Node(Leaf, 2, Leaf)))
+fn main() -> Int =
+  size(Node { left: Leaf, key: 1, right: Node { left: Leaf, key: 2, right: Leaf } })
 |};
   [%expect
     {|
@@ -176,7 +178,7 @@ type Color =
   | Black
 
 type Tree =
-  | Node(color: Color, left: Tree, key: Int, value: Bool, right: Tree)
+  | Node { color: Color, left: Tree, key: Int, value: Bool, right: Tree }
   | Leaf
 |}
 
@@ -187,13 +189,13 @@ let%expect_test "Perceus: rbtree's lookup borrows the tree, and counts nothing"
    ^ {|
 fn lookup(t: Tree, k: Int) -> Bool =
   match t
-    Node(_, l, kx, v, r) =>
+    Node { left: l, key: kx, value: v, right: r, .. } =>
       if k < kx then lookup(l, k)
       else if k > kx then lookup(r, k)
       else v
     Leaf => false
 
-fn main() -> Bool = lookup(Node(Black, Leaf, 1, true, Leaf), 1)
+fn main() -> Bool = lookup(Node { color: Black, left: Leaf, key: 1, value: true, right: Leaf }, 1)
 |}
     );
   [%expect
@@ -244,11 +246,42 @@ let rbtree_balance_right =
   {|
 fn balance_right(l: Tree, k: Int, v: Bool, r: Tree) -> Tree =
   match r
-    Node(_, Node(Red, lx, kx, vx, rx), ky, vy, ry) =>
-      Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, rx, ky, vy, ry))
-    Node(_, lx, kx, vx, Node(Red, ly, ky, vy, ry)) =>
-      Node(Red, Node(Black, l, k, v, lx), kx, vx, Node(Black, ly, ky, vy, ry))
-    Node(_, lx, kx, vx, rx) => Node(Black, l, k, v, Node(Red, lx, kx, vx, rx))
+    Node {
+      left: Node { color: Red, left: lx, key: kx, value: vx, right: rx },
+      key: ky,
+      value: vy,
+      right: ry,
+      ..
+    } =>
+      Node {
+        color: Red,
+        left: Node { color: Black, left: l, key: k, value: v, right: lx },
+        key: kx,
+        value: vx,
+        right: Node { color: Black, left: rx, key: ky, value: vy, right: ry },
+      }
+    Node {
+      left: lx,
+      key: kx,
+      value: vx,
+      right: Node { color: Red, left: ly, key: ky, value: vy, right: ry },
+      ..
+    } =>
+      Node {
+        color: Red,
+        left: Node { color: Black, left: l, key: k, value: v, right: lx },
+        key: kx,
+        value: vx,
+        right: Node { color: Black, left: ly, key: ky, value: vy, right: ry },
+      }
+    Node { left: lx, key: kx, value: vx, right: rx, .. } =>
+      Node {
+        color: Black,
+        left: l,
+        key: k,
+        value: v,
+        right: Node { color: Red, left: lx, key: kx, value: vx, right: rx },
+      }
     Leaf => Leaf
 |}
 
@@ -261,8 +294,8 @@ let%expect_test
     (rbtree_types ^ rbtree_balance_right
    ^ {|
 fn main() -> Bool =
-  match balance_right(Leaf, 1, true, Node(Red, Leaf, 2, true, Leaf))
-    Node(_, _, _, v, _) => v
+  match balance_right(Leaf, 1, true, Node { color: Red, left: Leaf, key: 2, value: true, right: Leaf })
+    Node { value: v, .. } => v
     Leaf => false
 |}
     );
@@ -304,24 +337,24 @@ let%expect_test
    ^ {|
 fn ins(t: Tree, k: Int, v: Bool) -> Tree =
   match t
-    Node(Black, l, kx, vx, r) =>
+    Node { color: Black, left: l, key: kx, value: vx, right: r } =>
       if k > kx then
         if is_red(r) then balance_right(l, kx, vx, ins(r, k, v))
-        else Node(Black, l, kx, vx, ins(r, k, v))
-      else Node(Black, l, k, v, r)
-    Node(Red, l, kx, vx, r) =>
-      if k > kx then Node(Red, l, kx, vx, ins(r, k, v))
-      else Node(Red, l, k, v, r)
-    Leaf => Node(Red, Leaf, k, v, Leaf)
+        else Node { color: Black, left: l, key: kx, value: vx, right: ins(r, k, v) }
+      else Node { color: Black, left: l, key: k, value: v, right: r }
+    Node { color: Red, left: l, key: kx, value: vx, right: r } =>
+      if k > kx then Node { color: Red, left: l, key: kx, value: vx, right: ins(r, k, v) }
+      else Node { color: Red, left: l, key: k, value: v, right: r }
+    Leaf => Node { color: Red, left: Leaf, key: k, value: v, right: Leaf }
 
 fn is_red(t: Tree) -> Bool =
   match t
-    Node(Red, _, _, _, _) => true
+    Node { color: Red, .. } => true
     _ => false
 
 fn main() -> Bool =
   match ins(ins(Leaf, 1, true), 2, false)
-    Node(_, _, _, v, _) => v
+    Node { value: v, .. } => v
     Leaf => false
 |}
     );
@@ -606,7 +639,7 @@ fn main() -> Int =
         (let $eq/5:Bool (== $len/4 0))
         (decl $if/6:Struct1c)
         (if $eq/5
-          (do (let $struct/7:Struct1c (struct #none*)) (set $if/6 $struct/7))
+          (do (let $struct/7:Struct1c (struct #niche1*)) (set $if/6 $struct/7))
           (do (let xs/8:Boxed xs/2) (let $elem/9:Boxed (array-get:Boxed xs/8 0))
             (let $struct/10:Struct1c (struct $elem/9))
             (set $if/6 $struct/10)))
@@ -766,6 +799,53 @@ let%expect_test "Mem Lint: a reference dropped on one path only" =
   [%expect
     {| Mem Lint, in f: x/1 holds 0 and 1 references on different paths |}]
 
+(* `if c then None else p`, boxed: the constant stands for the reference
+   the other path moves from the parameter it dropped here *)
+let%expect_test "Mem Lint: a constructor without fields where paths meet" =
+  let p = v 1 "p" Boxed and r = v 2 "r" Boxed in
+  lint
+    [
+      fn ~params:[ v 9 "ev" Ev ] ~modes:[ Owned ] [ Return (Int 0L) ];
+      {
+        (fn ~result:Boxed ~params:[ p ] ~modes:[ Owned ]
+        [
+          Decl r;
+          If
+            ( Bool true,
+              [ Drop (Var p); Set (r, Scalar_ctor 0) ],
+              [ Set (r, Var p) ] );
+          Return (Var r);
+        ])
+        with
+        name = "g";
+      };
+    ];
+  [%expect {| ok |}]
+
+(* but it stands for one reference at most *)
+let%expect_test "Mem Lint: a constant where paths meet, two references short" =
+  let p = v 1 "p" Boxed and r = v 2 "r" Boxed in
+  lint
+    [
+      fn ~params:[ v 9 "ev" Ev ] ~modes:[ Owned ] [ Return (Int 0L) ];
+      {
+        (fn ~result:Boxed ~params:[ p ] ~modes:[ Owned ]
+        [
+          Decl r;
+          If
+            ( Bool true,
+              [ Drop (Var p); Set (r, Scalar_ctor 0) ],
+              [ Dup (Var p); Set (r, Var p) ] );
+          Drop (Var p);
+          Return (Var r);
+        ])
+        with
+        name = "g";
+      };
+    ];
+  [%expect
+    {| Mem Lint, in g: r/2 holds 0 and 2 references on different paths |}]
+
 let%expect_test "Mem Lint: a reuse token never used" =
   let t = v 1 "t" Token in
   lint [ fn [ Decl t; Return (Int 0L) ] ];
@@ -820,13 +900,16 @@ let%expect_test "Mem Lint: a struct's slot kept, the rest dropped" =
     ];
   [%expect {| ok |}]
 
+(* the data stage's second layout fix: an array keeps structs that hold
+   objects inline, counted by the mask of their slots that do, which its
+   header has a byte for *)
 let%expect_test "Mem Lint: an array of structs that hold objects" =
   let s = v 1 "s" (Struct (0, true))
   and x = v 2 "x" Boxed
   and a = v 3 "a" Boxed in
   lint ~structs:[ line ]
     [
-      fn
+      fn ~params:[ v 9 "ev" Ev ]
         [
           Let (x, alloc);
           Let (s, Make_struct [ Var x; Int 1L ]);
@@ -835,7 +918,40 @@ let%expect_test "Mem Lint: an array of structs that hold objects" =
           Return (Int 0L);
         ];
     ];
+  [%expect {| ok |}]
+
+let%expect_test "Mem Lint: an array of structs of more slots than its mask has" =
+  let wide : Mem.strukt =
+    { sfields = Boxed :: List.init 8 (fun _ : Mem.layout -> Int); skind = Product }
+  in
+  let s = v 1 "s" (Struct (0, true))
+  and x = v 2 "x" Boxed
+  and a = v 3 "a" Boxed in
+  lint ~structs:[ wide ]
+    [
+      fn
+        [
+          Let (x, alloc);
+          Let (s, Make_struct (Var x :: List.init 8 (fun _ : Mem.atom -> Int 1L)));
+          Let (a, Alloc_array { elem = Struct (0, true); elems = [ Var s ]; desc = None });
+          Drop (Var a);
+          Return (Int 0L);
+        ];
+    ];
   [%expect {| Mem Lint, in f: an array of Struct0c |}]
+
+let%expect_test "Mem Lint: a field of an array's struct written as another layout" =
+  let a = v 1 "a" Boxed and r = v 2 "r" Boxed in
+  lint ~structs:[ line ]
+    [
+      fn ~params:[ a ] ~modes:[ Owned ]
+        [
+          Let (r, Runtime (Array_set_field_taking (0, 0, Int), [ Var a; Int 0L; Int 5L ], None));
+          Drop (Var r);
+          Return (Int 0L);
+        ];
+    ];
+  [%expect {| Mem Lint, in f: slot 0 of struct 0 written as Int |}]
 
 let%expect_test "Mem Lint: a struct counted that holds no object" =
   let s = v 1 "s" (Struct (0, false)) and x = v 2 "x" Boxed in
@@ -894,13 +1010,13 @@ let%expect_test
   mem ~only:[ "ren_test_build" ]
     {|
 type List =
-  | Cons(head: Int, tail: List)
+  | Cons { head: Int, tail: List }
   | Nil
 fn build(i: Int, n: Int) -> List =
-  if i == n then Nil else Cons(i, build(i + 1, n))
+  if i == n then Nil else Cons { head: i, tail: build(i + 1, n) }
 fn main() -> Int =
   match build(0, 3)
-    Cons(h, _) => h
+    Cons { head: h, .. } => h
     Nil => 0
 |};
   [%expect {|

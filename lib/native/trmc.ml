@@ -315,6 +315,7 @@ let rename ~next ~label (also : var list) (b : block) : block * var list =
     | Compare (c, x, y) -> Compare (c, atom x, atom y)
     | Not x -> Not (atom x)
     | Tag_of x -> Tag_of (atom x)
+    | Obj_tag x -> Obj_tag (atom x)
     | Field (x, i, n) -> Field (atom x, i, n)
     | Alloc a ->
         Alloc

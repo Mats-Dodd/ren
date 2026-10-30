@@ -6,45 +6,45 @@
 // the sanitizers, in both builds and both countings, and checks each
 // prints what `ren run` prints.
 
-type L<T> = | Cons(h: T, t: L<T>) | Nil
+type L<T> = | Cons { h: T, t: L<T> } | Nil
 type P = { a: Str, n: Int }
-type Tr = | Lf | Nd(l: Tr, v: Int, r: Tr)
+type Tr = | Lf | Nd { l: Tr, v: Int, r: Tr }
 
 fn map<T, U>(l: L<T>, f: fn(T) -> U) -> L<U> =
   match l
     Nil => Nil
-    Cons(h, t) => Cons(try f(h), try map(t, f))
+    Cons { h, t } => Cons { h: try f(h), t: try map(t, f) }
 fn filter<T>(l: L<T>, f: fn(T) -> Bool) -> L<T> =
   match l
     Nil => Nil
-    Cons(h, t) => if try f(h) then Cons(h, try filter(t, f)) else try filter(t, f)
+    Cons { h, t } => if try f(h) then Cons { h, t: try filter(t, f) } else try filter(t, f)
 fn append<T>(a: L<T>, b: L<T>) -> L<T> =
   match a
     Nil => b
-    Cons(h, t) => Cons(h, append(t, b))
+    Cons { h, t } => Cons { h, t: append(t, b) }
 fn len<T>(l: L<T>) -> Int =
   match l
     Nil => 0
-    Cons(_, t) => 1 + len(t)
-fn up(n: Int) -> L<Int> = if n == 0 then Nil else Cons(n, up(n - 1))
+    Cons { t, .. } => 1 + len(t)
+fn up(n: Int) -> L<Int> = if n == 0 then Nil else Cons { h: n, t: up(n - 1) }
 fn strs(l: L<P>) -> Str =
   match l
     Nil => ""
-    Cons(p, t) => p.a.concat(show(p.n)).concat(strs(t))
+    Cons { h: p, t } => p.a.concat(show(p.n)).concat(strs(t))
 fn grow(t: Tr, k: Int) -> Tr =
   match t
-    Lf => Nd(Lf, k, Lf)
-    Nd(l, v, r) => if k < v then Nd(grow(l, k), v, r) else Nd(l, v, grow(r, k))
+    Lf => Nd { l: Lf, v: k, r: Lf }
+    Nd { l, v, r } => if k < v then Nd { l: grow(l, k), v, r } else Nd { l, v, r: grow(r, k) }
 fn sz(t: Tr) -> Int =
   match t
     Lf => 0
-    Nd(l, _, r) => sz(l) + 1 + sz(r)
+    Nd { l, r, .. } => sz(l) + 1 + sz(r)
 fn dup(l: L<Int>) -> L<Int> =
   match l
     Nil => Nil
-    Cons(h, t) =>
+    Cons { h, t } =>
       let r = dup(t)
-      Cons(h, r)
+      Cons { h, t: r }
 
 fn main() uses Console =
   let l = up(50)

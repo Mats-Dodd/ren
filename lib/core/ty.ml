@@ -22,6 +22,11 @@ type block_mode = Ast.block_mode = Ordinary | Concurrent | Spawned
 
 type ty =
   | Con of Path.t * ty list  (** [Int], [Option<Int>], [User] *)
+  | Variant of Path.t * string * ty list
+      (** a variant type, [Order.Placed]: one by-name constructor of the sum at
+          the path, at the sum's type arguments, [Tree.Node<Int>] (compiler.md,
+          "Data stage", "Variant types"). A record of exactly that
+          constructor's fields; its value is the sum's own *)
   | Fun of param list * ty * row * row  (** params, result, errors, uses *)
   | Var of int
       (** a type variable. In a scheme, a generic one, numbered by first
@@ -129,6 +134,46 @@ let tuple_path n =
 
 let tuple ts = Con (tuple_path (List.length ts), ts)
 
+(* A variant type's sum, [Order] for [Order.Placed], whose value it is;
+   any other type is itself. *)
+let as_sum = function Variant (p, _, args) -> Con (p, args) | t -> t
+
+(* [t] with every variant type in it made its sum: what a value of it is
+   made of, which a layout or a descriptor needs, and nothing else. *)
+let rec erase_variants t =
+  match t with
+  | Con (p, args) | Variant (p, _, args) ->
+      Con (p, List.map erase_variants args)
+  | Fun (ps, r, e, u) ->
+      Fun
+        ( List.map (fun (p : param) -> { p with ty = erase_variants p.ty }) ps,
+          erase_variants r,
+          erase_row e,
+          erase_row u )
+  | Errors e -> Errors (erase_row e)
+  | Impl i ->
+      Impl
+        {
+          i with
+          deps =
+            List.map
+              (fun (d : dep) -> { d with dargs = List.map erase_variants d.dargs })
+              i.deps;
+          needs = erase_row i.needs;
+          fails = erase_row i.fails;
+        }
+  | Var _ | Error -> t
+
+and erase_row (r : row) =
+  {
+    r with
+    labels =
+      List.map
+        (fun (l : label) ->
+          { l with payload = List.map erase_variants l.payload })
+        r.labels;
+  }
+
 let is_tuple (p : Path.t) =
   p.home = Path.prelude_home
   && p.member = None
@@ -209,7 +254,7 @@ let sort_labels ls =
 let rec tails t =
   match t with
   | Var _ | Error -> []
-  | Con (_, args) -> List.concat_map tails args
+  | Con (_, args) | Variant (_, _, args) -> List.concat_map tails args
   | Errors e -> row_tails e
   | Impl i ->
       List.concat_map (fun d -> List.concat_map tails d.dargs) i.deps
@@ -232,7 +277,7 @@ let own_args t =
   let rec vars = function
     | Var n -> [ n ]
     | Error -> []
-    | Con (_, args) -> List.concat_map vars args
+    | Con (_, args) | Variant (_, _, args) -> List.concat_map vars args
     | Errors e -> row_vars e
     | Impl i ->
         List.concat_map (fun d -> List.concat_map vars d.dargs) i.deps
@@ -259,6 +304,7 @@ let rec apply (a : args) (s : ty) : ty =
   | Var n -> List.nth a.tys n
   | Error -> Error
   | Con (p, args) -> Con (p, List.map (apply a) args)
+  | Variant (p, c, args) -> Variant (p, c, List.map (apply a) args)
   | Errors e -> Errors (apply_row a e)
   | Impl i ->
       let deps =
@@ -309,6 +355,7 @@ let canonical (s : scheme) =
     | Var n -> Var (number tys n)
     | Error -> Error
     | Con (p, args) -> Con (p, List.map go args)
+    | Variant (p, c, args) -> Variant (p, c, List.map go args)
     | Errors e -> Errors (row e)
     | Impl i ->
         let deps =
@@ -425,7 +472,7 @@ let rec reserve pr t =
         (fun h -> pr.reserved <- h :: pr.reserved)
         (List.assoc_opt id pr.hints)
   | Error -> ()
-  | Con (_, args) -> List.iter (reserve pr) args
+  | Con (_, args) | Variant (_, _, args) -> List.iter (reserve pr) args
   | Errors e -> List.iter (reserve_label pr) e.labels
   | Impl _ -> ()
   | Fun (ps, r, e, _) ->
@@ -492,6 +539,9 @@ and show pr t =
   | Con (p, args) when is_tuple p -> "(" ^ show_list pr args ^ ")"
   | Con (p, []) -> pr.type_name p
   | Con (p, args) -> pr.type_name p ^ "<" ^ show_list pr args ^ ">"
+  | Variant (p, c, []) -> pr.type_name p ^ "." ^ c
+  | Variant (p, c, args) ->
+      pr.type_name p ^ "." ^ c ^ "<" ^ show_list pr args ^ ">"
   | Errors e -> (
       (* an empty set, which nothing fails with, is just the `!` *)
       match show_row pr ~prefix:"! " ~sep:" | " ~kind:"e" e with
@@ -672,7 +722,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
       let rec needs t =
         match t with
         | Impl i -> Option.to_list i.needs.tail @ Option.to_list i.fails.tail
-        | Con (_, args) -> List.concat_map needs args
+        | Con (_, args) | Variant (_, _, args) -> List.concat_map needs args
         | Var _ | Error | Errors _ | Fun _ -> []
       in
       let kept = kept @ needs ret in

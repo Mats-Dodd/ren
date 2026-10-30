@@ -110,14 +110,23 @@ for part in $parts; do
         stat "nested-$k-debug-stats"
         stat "nested-$k-perceus-stats"
       done
+      # the data stage's milestone, `Expr` boxed: the tree and the envs
+      stat interp-perceus-stats
       ;;
 
     memory)
       # peak resident memory, once each: H4 and H7
       : >"$res/memory.tsv"
+      # BSD time's -l counts bytes, first on its line; GNU time's -v,
+      # on Linux, kilobytes, last
       rss() {
-        kb=$(/usr/bin/time -l "$bin/$1" 2>&1 >/dev/null |
-          awk '/maximum resident set size/ { print $1 }')
+        if [ "$(uname)" = Darwin ]; then
+          kb=$(/usr/bin/time -l "$bin/$1" 2>&1 >/dev/null |
+            awk '/maximum resident set size/ { print $1 }')
+        else
+          kb=$(/usr/bin/time -v "$bin/$1" 2>&1 >/dev/null |
+            awk '/Maximum resident set size/ { print $NF * 1024 }')
+        fi
         printf '%s\t%s\n' "$1" "$kb" | tee -a "$res/memory.tsv"
       }
       for p in $programs; do
@@ -156,6 +165,12 @@ for part in $parts; do
           -n rust-enum "$bin/dispatch-rust 100 $k enum" \
           -n go "$bin/dispatch-go 100 $k"
       done
+      # the data stage's milestone: dispatch's interp written ADT-first,
+      # against the Rust twin's enum and dyn, and dispatch's descriptions
+      hf interp -n ren-adt "$bin/interp-perceus" \
+        -n rust-enum "$bin/dispatch-rust 100 interp enum" \
+        -n rust-dyn "$bin/dispatch-rust 100 interp dyn" \
+        -n ren-descriptions "$bin/dispatch-interp-perceus"
       ;;
 
     compile)

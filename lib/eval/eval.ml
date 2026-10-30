@@ -279,24 +279,38 @@ let prim loc op args (at : expr list) =
 let truth = function VBool b -> b | _ -> bug "a non-Bool condition"
 
 (* Match a value against a pattern. On success, return the environment
-   extended with the variables the pattern binds. *)
-let rec match_pattern p v env =
+   extended with the variables the pattern binds. [types] are the
+   program's, where a record pattern's fields are found by name: it has
+   one for each, in declaration order. *)
+let rec match_pattern types p v env =
   match (p.pkind, v) with
   | PWild, _ -> Some env
   | PVar x, _ -> Some (Env.add x.id (ref v) env)
   | PInt n, VInt m -> if n = m then Some env else None
   | PBool b, VBool c -> if b = c then Some env else None
   | PCon (_, c, ps), VCon { name; args; _ } when c = name ->
-      match_all ps args env
-  | PTag (t, ps), VTag { name; args; _ } when t = name -> match_all ps args env
-  | POr ps, _ -> List.find_map (fun p -> match_pattern p v env) ps
-  | PTuple ps, VTuple xs -> match_all ps xs env
+      match_all types ps args env
+  | PTag (t, ps), VTag { name; args; _ } when t = name ->
+      match_all types ps args env
+  | POr ps, _ -> List.find_map (fun p -> match_pattern types p v env) ps
+  | PAs (p, x), _ ->
+      (* the whole is the value itself *)
+      Option.map (Env.add x.id (ref v)) (match_pattern types p v env)
+  | PTuple ps, VTuple xs -> match_all types ps xs env
+  | PRecord (path, ps), VRecord fields -> (
+      match Hashtbl.find_opt types path with
+      | Some ({ body = Record decl; _ } : Iface.type_decl) ->
+          match_all types ps
+            (List.map (fun (d : Iface.field) -> List.assoc d.fname fields) decl)
+            env
+      | _ -> bug "a record pattern of a type that isn't a record")
   | _ -> None
 
-and match_all ps vs env =
+and match_all types ps vs env =
   match (ps, vs) with
   | [], [] -> Some env
-  | p :: ps, v :: vs -> Option.bind (match_pattern p v env) (match_all ps vs)
+  | p :: ps, v :: vs ->
+      Option.bind (match_pattern types p v env) (match_all types ps vs)
   | _ -> None
 
 let cell env (v : var) =
@@ -391,6 +405,7 @@ let rec type_of env (d : desc) : Ty.ty =
       | VType t -> t
       | _ -> bug ("a descriptor built from `" ^ v.name ^ "`, which isn't one"))
   | Applied (p, ds) -> Con (p, List.map (type_of env) ds)
+  | Applied_variant (p, c, ds) -> Variant (p, c, List.map (type_of env) ds)
   | Errs e -> Errors (row e)
 
 (* The dictionary the hidden dictionary parameter [v] holds. *)
@@ -569,6 +584,20 @@ let failed_too cx path err =
   flush stderr;
   (* a journal being recorded keeps it as a comment *)
   Sched.note line
+
+(* The place of the field [f] among the fields of the constructor [c] of
+   the sum type [p]. *)
+let ctor_field cx p c f =
+  match Hashtbl.find_opt cx.types p with
+  | Some { Iface.body = Sum cs; _ } -> (
+      let k = List.find (fun (k : Iface.ctor) -> k.cname = c) cs in
+      let rec find i = function
+        | [] -> bug "a field its constructor doesn't have"
+        | (d : Iface.field) :: _ when d.fname = f -> i
+        | _ :: rest -> find (i + 1) rest
+      in
+      find 0 k.cfields)
+  | _ -> bug "a field of a constructor of what isn't a sum"
 
 let rec eval cx env (e : expr) =
   match e.kind with
@@ -938,9 +967,13 @@ let rec eval cx env (e : expr) =
       let values = eval_all cx env (List.map snd fields) in
       let fields = List.combine (List.map fst fields) values in
       VRecord (List.sort (fun (a, _) (b, _) -> String.compare a b) fields)
-  | Field (r, _, f) -> (
+  | Field (r, p, f) -> (
       match eval cx env r with
       | VRecord fields -> List.assoc f fields
+      | VCon c ->
+          (* a value of a variant type is its sum's: the field at its place
+             among its constructor's *)
+          List.nth c.args (ctor_field cx p c.name f)
       | _ -> bug "a field of a non-record")
   | Update (r, f, v) -> (
       let r = eval cx env r in
@@ -949,7 +982,11 @@ let rec eval cx env (e : expr) =
       | VRecord fields ->
           VRecord
             (List.map (fun (g, w) -> if g = f then (g, v) else (g, w)) fields)
+      | VCon c ->
+          let i = ctor_field cx c.ty c.name f in
+          VCon { c with args = List.mapi (fun j w -> if j = i then v else w) c.args }
       | _ -> bug "an update of a non-record")
+  | Of_variant r -> eval cx env r
   | Array xs -> array_of_list (eval_all cx env xs)
   | Tuple xs -> VTuple (eval_all cx env xs)
   | Match (subject, arms) ->
@@ -1083,7 +1120,7 @@ and arm_for cx env loc v arms =
   let rec first = function
     | [] -> panic loc "no arm of this `match` matched"
     | a :: rest -> (
-        match match_pattern a.pat v env with
+        match match_pattern cx.types a.pat v env with
         | Some env when guard_passes env a.guard -> (env, a.body)
         | _ -> first rest)
   in

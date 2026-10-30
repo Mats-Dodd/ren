@@ -1,0 +1,28 @@
+// Data stage, step 7: a panic while small values that keep a record of
+// a `Str` flattened in their slots are alive, in a variable, in a match
+// and in an array (compiler.md, "The layout fixes (step 7)"). A panic
+// leaves what's alive as it is.
+
+type Line = { sku: Str, qty: Int }
+
+type Item =
+  | Draft(l: Line)
+  | Void
+
+fn main() uses Console =
+  let names = ["tea", "jam"]
+  let kept = Draft(Line { sku: "kept".concat("!"), qty: 1 })
+  var n = 0
+  for i in 0..5
+    let it = if i == 4 then Void else Draft(Line { sku: names[i % 2].concat("?"), qty: i })
+    match it
+      Draft(l) =>
+        n += l.qty
+        print(l.sku)
+        // reads past the end on the fourth
+        print(names[l.qty / 3 * 5])
+      Void => n += 100
+  match kept
+    Draft(l) => print(l.sku)
+    Void => ()
+  print(n)

@@ -24,6 +24,14 @@ type t = {
   says : string option;  (** text beside the error's own `^`s *)
   notes : string list;
   help : string option;
+  code : string list;
+      (** code the help writes, printed under it a line each: the `match`
+          that takes a field from a sum's variants *)
+  code_at : int option;
+      (** the column [code] is to be pasted at, if it's lines to add to the
+          source as they are: the arms a `match` misses, `Some(Closed) =>
+          todo`, start at its arms' column, so a whole line copied from the
+          terminal pastes in place *)
   labels : (Loc.t * string) list;  (** other code worth pointing at *)
 }
 
@@ -31,13 +39,15 @@ exception Error of t
 exception Errors of t list
 
 (* [says] is printed beside the error's own underline; [notes] are extra
-   facts printed as `= ...` lines; [help] suggests a fix; [labels] point at
-   other code. *)
-let make ?says ?help ?(notes = []) ?(labels = []) loc msg =
-  { loc; msg; says; notes; help; labels }
+   facts printed as `= ...` lines; [help] suggests a fix, and [code] is
+   code it writes, each line printed under it; [labels] point at other
+   code. *)
+let make ?says ?help ?(code = []) ?code_at ?(notes = []) ?(labels = []) loc
+    msg =
+  { loc; msg; says; notes; help; code; code_at; labels }
 
-let error ?says ?help ?notes ?labels loc msg =
-  raise (Error (make ?says ?help ?notes ?labels loc msg))
+let error ?says ?help ?code ?code_at ?notes ?labels loc msg =
+  raise (Error (make ?says ?help ?code ?code_at ?notes ?labels loc msg))
 
 (* "a `Bool`", "an `Int`", and by the sound: "a `Unit`", "a `User`", but
    "an `Undo`", "an `Update`" *)
@@ -276,6 +286,16 @@ let pieces_indexed ~(lines_of : string -> string array option) (d : t) =
       pad ();
       add (Text (" help: " ^ h ^ "\n")))
     d.help;
+  (* the help's code, four spaces in from `help:`, or at the column it's
+     to be pasted at *)
+  List.iter
+    (fun l ->
+      match d.code_at with
+      | Some col -> add (Text (String.make (max 0 (col - 1)) ' ' ^ l ^ "\n"))
+      | None ->
+          pad ();
+          add (Text ("     " ^ l ^ "\n")))
+    d.code;
   List.rev !out
 
 let render_indexed ~lines_of d = expand (pieces_indexed ~lines_of d)

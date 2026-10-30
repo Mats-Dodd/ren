@@ -92,7 +92,9 @@ pub handler cached(ttl: Duration) over Users uses Clock =
       Some((u, at)) if Clock.now() - at < ttl => Some(u)
       _ =>
         let found = try next.get(id)
-        if found is Some(u) then &cache.set(id, (u, Clock.now()))
+        match found
+          Some(u) => &cache.set(id, (u, Clock.now()))
+          None => ()
         found
   save(u) =>
     try next.save(u)
@@ -296,12 +298,18 @@ call sent to one by its first argument's key.
 ### Called as a method
 
 A description called as a method, `d.op(x)`, is `with d in D.op(x)`,
-its arguments evaluated first ([deps.md](deps.md#descriptions-the-only-stored-code)).
-A handler with state starts fresh at each such call, and its `finally`
-runs when the call ends, as that `with`'s would. One that goes `over`
-another isn't called this way, since the call would install it over
-whatever is outside: the error's help installs it over one, `with c over
-Users in Users.get(...)`.
+its arguments evaluated first ([deps.md](deps.md#descriptions-the-only-stored-code)),
+and only a stateless handler is called this way, so it's a pure
+dispatch. A handler with state would start fresh at each such call, and
+its `finally` run when the call ended, as that `with`'s would: a call
+that may reach one, a `var` or a `finally` among its state, is an error
+whose help writes the `with`, `with c in Counter.bump()`, which keeps
+one instance for its body. It's the linked program's check, since which
+handlers a description may be is a closed-world fact: `ren run`, `ren
+test` and `ren build` make it, and `ren check` of one module doesn't. One
+that goes `over` another isn't called this way either, since the call
+would install it over whatever is outside: the error's help installs it
+over one, `with c over Users in Users.get(...)`.
 
 ## When a `with` ends: `finally`
 
@@ -638,8 +646,9 @@ submission and its completion:
   size, and a release build's is a number indexing the program's table of
   them. A stateless handler's record has a method for each operation,
   which a method call runs with the caller's evidence and the
-  description, making no instance; one with state has none, and the call
-  installs it. An inline handler is a handler like any other there. A
+  description, making no instance; one with state has none, and a `with`
+  of one call, `with d in D.op(x)`, the same site, installs it (a method
+  call can't reach one since the data stage's step 6). An inline handler is a handler like any other there. A
   release build reads the record only for a call it can't decide: one
   that one handler reaches is a direct call, two to four a compare of
   the tag, more a table of each operation's methods, and a loop over an

@@ -37,6 +37,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   match t with
   | Var i -> ( match List.nth_opt args i with Some a -> a | None -> t)
   | Con (p, ts) -> Con (p, List.map (subst args) ts)
+  | Variant (p, c, ts) -> Variant (p, c, List.map (subst args) ts)
   | Fun (ps, r, e, u) ->
       Fun
         ( List.map (fun (p : Ty.param) -> { p with ty = subst args p.ty }) ps,
@@ -57,9 +58,16 @@ type view =
     }
       (** a record: its type's name, and its fields in the order they're
           declared, each with its type *)
-  | Ctor of { name : string; index : int; fields : (Ty.ty * Value.t) list }
+  | Ctor of {
+      name : string;
+      index : int;
+      fields : (Ty.ty * Value.t) list;
+      names : string list option;
+    }
       (** a constructor: its name, its place among its type's, which is the
-          order a sum type with no fields has, and its fields *)
+          order a sum type with no fields has, and its fields, with their
+          names if it's by name (compiler.md, "Data stage", "By-name
+          variants") *)
   | Opaque of string * Ty.ty
       (** an opaque value: its type's name, and what it's represented as, which
           the value is *)
@@ -77,6 +85,9 @@ type view =
 
 (* What [v], of type [t], is made of. *)
 let view (types : types) (t : Ty.ty) (v : Value.t) =
+  (* a variant type's value is its sum's, and so is how it's shown,
+     compared and hashed (compiler.md, "Data stage", "Variant types") *)
+  let t = Ty.as_sum t in
   let body =
     match t with
     | Con (p, _) ->
@@ -129,6 +140,10 @@ let view (types : types) (t : Ty.ty) (v : Value.t) =
                       name = c.name;
                       index = i;
                       fields = List.combine (List.map field k.cfields) c.args;
+                      names =
+                        (if k.cnamed then
+                           Some (List.map (fun (f : Iface.field) -> f.fname) k.cfields)
+                         else None);
                     }
                 else Shape
             | _ :: rest -> find (i + 1) rest
@@ -147,7 +162,8 @@ type cx = {
 
 (* [v]'s key, if its type has one. *)
 let keyed cx (t : Ty.ty) v =
-  match t with Con (p, args) -> cx.key p args v | _ -> None
+  (* a variant type's key is its sum's, borrowed *)
+  match Ty.as_sum t with Con (p, args) -> cx.key p args v | _ -> None
 
 (* ---- `hash` ---- *)
 

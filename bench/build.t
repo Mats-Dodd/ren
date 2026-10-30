@@ -51,7 +51,7 @@ checked, and `loops_short` in the checked one of a loop bounds.ml made
 twice. `review_shrink` panics indexing an array a call
 shrank under its loop's count, which bounds.ml leaves checked.
 
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic; do same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs data/variants data/variants_small data/variants_escape data/variants_reuse data/todo_panic data/shapes data/nested data/rows data/optional data/layout data/layout_walks data/layout_panic data/reuse_arms data/rows_objs data/rows_panic data/niche data/niche_walks data/niche_panic data/niche_reuse data/niche_join data/interp data/review_keys data/review_state data/review_state_panic data/review_todo_panic; do same $f.ren; done
   fib.ren, perceus: the same, exit 0, objects live at exit 0
   fib.ren, naive: the same, exit 0, objects live at exit 0
   deep.ren, perceus: the same, exit 0, objects live at exit 0
@@ -142,6 +142,64 @@ shrank under its loop's count, which bounds.ml leaves checked.
   11a/limit.ren, naive: the same, exit 0, objects live at exit 0
   11a/limit_panic.ren, perceus: the same, exit 1, objects live at exit 5
   11a/limit_panic.ren, naive: the same, exit 1, objects live at exit 5
+  data/update.ren, perceus: the same, exit 0, objects live at exit 0
+  data/update.ren, naive: the same, exit 0, objects live at exit 0
+  data/byname.ren, perceus: the same, exit 0, objects live at exit 0
+  data/byname.ren, naive: the same, exit 0, objects live at exit 0
+  data/orpat.ren, perceus: the same, exit 0, objects live at exit 0
+  data/orpat.ren, naive: the same, exit 0, objects live at exit 0
+  data/orpat_strs.ren, perceus: the same, exit 0, objects live at exit 0
+  data/orpat_strs.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, naive: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, perceus: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, naive: the same, exit 0, objects live at exit 0
+  data/todo_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  data/todo_panic.ren, naive: the same, exit 1, objects live at exit 1
+  data/shapes.ren, perceus: the same, exit 0, objects live at exit 0
+  data/shapes.ren, naive: the same, exit 0, objects live at exit 0
+  data/nested.ren, perceus: the same, exit 0, objects live at exit 0
+  data/nested.ren, naive: the same, exit 0, objects live at exit 0
+  data/rows.ren, perceus: the same, exit 0, objects live at exit 0
+  data/rows.ren, naive: the same, exit 0, objects live at exit 0
+  data/optional.ren, perceus: the same, exit 0, objects live at exit 0
+  data/optional.ren, naive: the same, exit 0, objects live at exit 0
+  data/layout.ren, perceus: the same, exit 0, objects live at exit 0
+  data/layout.ren, naive: the same, exit 0, objects live at exit 0
+  data/layout_walks.ren, perceus: the same, exit 0, objects live at exit 0
+  data/layout_walks.ren, naive: the same, exit 0, objects live at exit 0
+  data/layout_panic.ren, perceus: the same, exit 1, objects live at exit 5
+  data/layout_panic.ren, naive: the same, exit 1, objects live at exit 8
+  data/reuse_arms.ren, perceus: the same, exit 0, objects live at exit 0
+  data/reuse_arms.ren, naive: the same, exit 0, objects live at exit 0
+  data/rows_objs.ren, perceus: the same, exit 0, objects live at exit 0
+  data/rows_objs.ren, naive: the same, exit 0, objects live at exit 0
+  data/rows_panic.ren, perceus: the same, exit 1, objects live at exit 45
+  data/rows_panic.ren, naive: the same, exit 1, objects live at exit 45
+  data/niche.ren, perceus: the same, exit 0, objects live at exit 0
+  data/niche.ren, naive: the same, exit 0, objects live at exit 0
+  data/niche_walks.ren, perceus: the same, exit 0, objects live at exit 0
+  data/niche_walks.ren, naive: the same, exit 0, objects live at exit 0
+  data/niche_panic.ren, perceus: the same, exit 1, objects live at exit 12
+  data/niche_panic.ren, naive: the same, exit 1, objects live at exit 14
+  data/niche_reuse.ren, perceus: the same, exit 0, objects live at exit 0
+  data/niche_reuse.ren, naive: the same, exit 0, objects live at exit 0
+  data/niche_join.ren, perceus: the same, exit 0, objects live at exit 0
+  data/niche_join.ren, naive: the same, exit 0, objects live at exit 0
+  data/interp.ren, perceus: the same, exit 0, objects live at exit 0
+  data/interp.ren, naive: the same, exit 0, objects live at exit 0
+  data/review_keys.ren, perceus: the same, exit 0, objects live at exit 0
+  data/review_keys.ren, naive: the same, exit 0, objects live at exit 0
+  data/review_state.ren, perceus: the same, exit 0, objects live at exit 0
+  data/review_state.ren, naive: the same, exit 0, objects live at exit 0
+  data/review_state_panic.ren, perceus: the same, exit 1, objects live at exit 2
+  data/review_state_panic.ren, naive: the same, exit 1, objects live at exit 2
+  data/review_todo_panic.ren, perceus: the same, exit 1, objects live at exit 1
+  data/review_todo_panic.ren, naive: the same, exit 1, objects live at exit 1
 
 Every native benchmark, at its small size:
 
@@ -164,6 +222,8 @@ Every native benchmark, at its small size:
   native/handlers/small.ren, naive: the same, exit 0, objects live at exit 0
   native/inout/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/inout/small.ren, naive: the same, exit 0, objects live at exit 0
+  native/interp/small.ren, perceus: the same, exit 0, objects live at exit 0
+  native/interp/small.ren, naive: the same, exit 0, objects live at exit 0
   native/maps/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/maps/small.ren, naive: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, perceus: the same, exit 0, objects live at exit 0
@@ -296,7 +356,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   >    else echo "$1, release: different"; diff native.out interp.out; diff native.err2 interp.err; diff spec.out interp.out
   >    fi)
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic; do release $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs data/variants data/variants_small data/variants_escape data/variants_reuse data/todo_panic data/shapes data/nested data/rows data/optional data/layout data/layout_walks data/layout_panic data/reuse_arms data/rows_objs data/rows_panic data/niche data/niche_walks data/niche_panic data/niche_reuse data/niche_join data/interp data/review_keys data/review_state data/review_state_panic data/review_todo_panic; do release $f.ren; done
   fib.ren, release: the same, exit 0, objects live at exit 0
   deep.ren, release: the same, exit 0, objects live at exit 0
   loop.ren, release: the same, exit 0, objects live at exit 0
@@ -342,6 +402,35 @@ prints what `ren run` prints, and ends with no object alive; so does
   11a/alone_panic.ren, release: the same, exit 1, objects live at exit 3
   11a/limit.ren, release: the same, exit 0, objects live at exit 0
   11a/limit_panic.ren, release: the same, exit 1, objects live at exit 5
+  data/update.ren, release: the same, exit 0, objects live at exit 0
+  data/byname.ren, release: the same, exit 0, objects live at exit 0
+  data/orpat.ren, release: the same, exit 0, objects live at exit 0
+  data/orpat_strs.ren, release: the same, exit 0, objects live at exit 0
+  data/variants.ren, release: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, release: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, release: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, release: the same, exit 0, objects live at exit 0
+  data/todo_panic.ren, release: the same, exit 1, objects live at exit 1
+  data/shapes.ren, release: the same, exit 0, objects live at exit 0
+  data/nested.ren, release: the same, exit 0, objects live at exit 0
+  data/rows.ren, release: the same, exit 0, objects live at exit 0
+  data/optional.ren, release: the same, exit 0, objects live at exit 0
+  data/layout.ren, release: the same, exit 0, objects live at exit 0
+  data/layout_walks.ren, release: the same, exit 0, objects live at exit 0
+  data/layout_panic.ren, release: the same, exit 1, objects live at exit 3
+  data/reuse_arms.ren, release: the same, exit 0, objects live at exit 0
+  data/rows_objs.ren, release: the same, exit 0, objects live at exit 0
+  data/rows_panic.ren, release: the same, exit 1, objects live at exit 26
+  data/niche.ren, release: the same, exit 0, objects live at exit 0
+  data/niche_walks.ren, release: the same, exit 0, objects live at exit 0
+  data/niche_panic.ren, release: the same, exit 1, objects live at exit 5
+  data/niche_reuse.ren, release: the same, exit 0, objects live at exit 0
+  data/niche_join.ren, release: the same, exit 0, objects live at exit 0
+  data/interp.ren, release: the same, exit 0, objects live at exit 0
+  data/review_keys.ren, release: the same, exit 0, objects live at exit 0
+  data/review_state.ren, release: the same, exit 0, objects live at exit 0
+  data/review_state_panic.ren, release: the same, exit 1, objects live at exit 2
+  data/review_todo_panic.ren, release: the same, exit 1, objects live at exit 1
   $ for f in native/*/small.ren; do release $f; done
   native/binary-trees/small.ren, release: the same, exit 0, objects live at exit 0
   native/blocks/small.ren, release: the same, exit 0, objects live at exit 0
@@ -352,6 +441,7 @@ prints what `ren run` prints, and ends with no object alive; so does
   native/frames/small.ren, release: the same, exit 0, objects live at exit 0
   native/handlers/small.ren, release: the same, exit 0, objects live at exit 0
   native/inout/small.ren, release: the same, exit 0, objects live at exit 0
+  native/interp/small.ren, release: the same, exit 0, objects live at exit 0
   native/maps/small.ren, release: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, release: the same, exit 0, objects live at exit 0
   native/nested/small.ren, release: the same, exit 0, objects live at exit 0
@@ -677,8 +767,8 @@ holds next is the one reference the old value gave up, counted once,
 and a constant where the loop goes round holds none.
 
   $ cat > walks.ren <<'EOF'
-  > type List = Nil | Cons(h: Int, t: List)
-  > type T = Leaf | Node(l: T, r: T)
+  > type List = Nil | Cons { h: Int, t: List }
+  > type T = Leaf | Node { l: T, r: T }
   > 
   > fn count(xs: List) -> Int =
   >   var n = 0
@@ -686,7 +776,7 @@ and a constant where the loop goes round holds none.
   >   while true
   >     match cur
   >       Nil => break
-  >       Cons(_, t) =>
+  >       Cons { t, .. } =>
   >         n += 1
   >         cur = t
   >   n
@@ -698,7 +788,7 @@ and a constant where the loop goes round holds none.
   >   while go
   >     match cur
   >       Nil => go = false
-  >       Cons(_, t) =>
+  >       Cons { t, .. } =>
   >         n += 1
   >         cur = t
   >   n
@@ -709,7 +799,7 @@ and a constant where the loop goes round holds none.
   >   while true
   >     match cur
   >       Nil => break
-  >       Cons(h, _) =>
+  >       Cons { h, .. } =>
   >         n = h
   >         cur = Nil
   >   n
@@ -720,21 +810,21 @@ and a constant where the loop goes round holds none.
   >   for i in 0..100
   >     match cur
   >       Nil => out = out + 0
-  >       Cons(h, t) =>
+  >       Cons { h, t } =>
   >         out = h
   >         cur = t
   >   out
   > 
   > fn main() uses Console =
-  >   let xs = Cons(1, Cons(2, Cons(3, Nil)))
+  >   let xs = Cons { h: 1, t: Cons { h: 2, t: Cons { h: 3, t: Nil } } }
   >   print(count(xs) + count_go(xs) * 10 + first(xs) * 100 + last(xs) * 1000)
-  >   var t = Node(Node(Leaf, Leaf), Leaf)
+  >   var t = Node { l: Node { l: Leaf, r: Leaf }, r: Leaf }
   >   var n = 0
   >   var go = true
   >   while go
   >     match t
   >       Leaf => go = false
-  >       Node(l, _) =>
+  >       Node { l, .. } =>
   >         n += 1
   >         t = l
   >   print(n)
@@ -927,6 +1017,33 @@ past the budget, where the call isn't specialized.
   [([1], Some(1), (1, 1))]
   [([true], Some(true), (true, 1))]
   [(["s"], Some("s"), ("s", 1))]
+
+A walk reads an array's elements as words, so a small type that's an
+array's element in a walked value is boxed, though an array keeps
+small values inline (compiler.md, "Data stage", step 7's choices, part
+2): here `Pt` and `Tag` are walked only as elements of a generic
+record's arrays, whose descriptor is built at run time past the budget,
+and are kept inline in the arrays `main` changes.
+
+  $ cat > walked_arrays.ren <<'EOF'
+  > type Pt = { x: Int, y: Int }
+  > type Tag = { name: Str, n: Int }
+  > type Wrap<T> = { v: T, pts: Array<Pt>, tags: Array<Tag> }
+  > fn c0<T>(x: T) -> Str = show(Wrap { v: x, pts: [Pt { x: 1, y: 2 }], tags: [Tag { name: "t", n: 3 }] })
+  > fn main() uses Console =
+  >   print(c0(1))
+  >   print(c0("s"))
+  >   var ps = [Pt { x: 5, y: 6 }]
+  >   &ps.push(Pt { x: 7, y: 8 })
+  >   var ts = [Tag { name: "a", n: 1 }]
+  >   &ts.push(Tag { name: "b", n: 2 })
+  >   print(ps[1].y + ts[1].n)
+  > EOF
+  $ same walked_arrays.ren; release walked_arrays.ren; REN_SPEC_BUDGET=1 release walked_arrays.ren
+  walked_arrays.ren, perceus: the same, exit 0, objects live at exit 0
+  walked_arrays.ren, naive: the same, exit 0, objects live at exit 0
+  walked_arrays.ren, release: the same, exit 0, objects live at exit 0
+  walked_arrays.ren, release: the same, exit 0, objects live at exit 0
 
 A NaN (foundations.md, decision 15; nan.ml) is carried by arithmetic
 and stores, and panics where it's observed: a comparison, `==`, `show`,
@@ -1352,7 +1469,7 @@ same objects alive at the end as clang's build above.
   >    fi)
   >   done
   > }
-  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic; do tcc_same $f.ren; done
+  $ for f in fib deep loop overflow frames tokens packed values values_panic swap swap_panic swap_order trmc trmc_panic sized sized_panic loops loops_panic loops_short review_arrays review_values review_lists review_shrink walks p_sum p_paren p_far p_div p_index p_assert derived nan_cmp nan_show nan_eq nan_round nan_sum nan_dep nan_ctor nan_shape nan_len nan_order nan_left late_sum late_index late_print late_spin late_inner late_two late_break late_hoisted late_call float_sum 10d/bits 10d/bits_panic 10d/generic 10d/cache 10d/aliases 10d/shapes 10d/router 10d/methods 10d/dispatch 10d/dispatch_mix 10d/dispatch_panic 10d/overany 10d/slices 10d/slices_panic 10d/slices_lent 10d/review_slices 10d/review_deps 11a/trywith 11a/alone 11a/alone_panic 11a/limit 11a/limit_panic data/update data/byname data/orpat data/orpat_strs data/variants data/variants_small data/variants_escape data/variants_reuse data/todo_panic data/shapes data/nested data/rows data/optional data/layout data/layout_walks data/layout_panic data/reuse_arms data/rows_objs data/rows_panic data/niche data/niche_walks data/niche_panic data/niche_reuse data/niche_join data/interp data/review_keys data/review_state data/review_state_panic data/review_todo_panic; do tcc_same $f.ren; done
   fib.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   fib.ren, naive, tcc: the same, exit 0, objects live at exit 0
   deep.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1501,6 +1618,64 @@ same objects alive at the end as clang's build above.
   11a/limit.ren, naive, tcc: the same, exit 0, objects live at exit 0
   11a/limit_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 5
   11a/limit_panic.ren, naive, tcc: the same, exit 1, objects live at exit 5
+  data/update.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/update.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/byname.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/byname.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/orpat.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/orpat.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/orpat_strs.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/orpat_strs.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants_small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants_escape.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/variants_reuse.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/todo_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  data/todo_panic.ren, naive, tcc: the same, exit 1, objects live at exit 1
+  data/shapes.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/shapes.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/nested.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/nested.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/rows.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/rows.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/optional.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/optional.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/layout.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/layout.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/layout_walks.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/layout_walks.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/layout_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 5
+  data/layout_panic.ren, naive, tcc: the same, exit 1, objects live at exit 8
+  data/reuse_arms.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/reuse_arms.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/rows_objs.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/rows_objs.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/rows_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 45
+  data/rows_panic.ren, naive, tcc: the same, exit 1, objects live at exit 45
+  data/niche.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/niche.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/niche_walks.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/niche_walks.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/niche_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 12
+  data/niche_panic.ren, naive, tcc: the same, exit 1, objects live at exit 14
+  data/niche_reuse.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/niche_reuse.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/niche_join.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/niche_join.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/interp.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/interp.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/review_keys.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/review_keys.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/review_state.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  data/review_state.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  data/review_state_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 2
+  data/review_state_panic.ren, naive, tcc: the same, exit 1, objects live at exit 2
+  data/review_todo_panic.ren, perceus, tcc: the same, exit 1, objects live at exit 1
+  data/review_todo_panic.ren, naive, tcc: the same, exit 1, objects live at exit 1
   $ for f in native/*/small.ren ../examples/*.ren ../examples/shop/main.ren ../examples/two/main.ren; do tcc_same $f; done
   native/binary-trees/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/binary-trees/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
@@ -1520,6 +1695,8 @@ same objects alive at the end as clang's build above.
   native/handlers/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/inout/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/inout/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
+  native/interp/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
+  native/interp/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/maps/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
   native/maps/small.ren, naive, tcc: the same, exit 0, objects live at exit 0
   native/nbody/small.ren, perceus, tcc: the same, exit 0, objects live at exit 0
@@ -1582,58 +1759,60 @@ builds against `ren run` under the sanitizers.
 Step 4's listing of how each dispatch site is lowered, for each
 dependency of 10d/dispatch.ren (compiler.md, "Stage 10d", "Dispatch"):
 `Seed` a direct call; `Step` the loop in `run` copied per handler;
-`Shape` a call through the tag, which is the arm's code; `Expr`, which
+`Codec` a call through the tag, which is the arm's code; `Pipe`, which
 recurses, a call through the table in its arms, and `main`'s call
 compare-and-branch.
 
-  $ for d in Seed Step Shape Expr; do (cd 10d && ren build --release --explain-dispatch $d dispatch.ren -o ./dispatch.bin 2>&1); done
-  Seed: 1 handler (lcg dispatch.ren:13), 1 operation (next)
+  $ for d in Seed Step Codec Pipe; do (cd 10d && ren build --release --explain-dispatch $d dispatch.ren -o ./dispatch.bin 2>&1); done
+  Seed: 1 handler (lcg dispatch.ren:15), 1 operation (next)
     description: one handler, so no site reads its tag; boxed, the tag then 0 words at most
-    dispatch.ren:54  shapes(): s.next(x)  1 handler reaches → direct call  [one handler]
-  Step: 3 handlers (inc dispatch.ren:19, dbl :22, sq :25), 1 operation (apply)
+    dispatch.ren:57  codecs(): s.next(x)  1 handler reaches → direct call  [one handler]
+  Step: 3 handlers (inc dispatch.ren:21, dbl :24, sq :27), 1 operation (apply)
     description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
-    dispatch.ren:32  run(): s.apply(x)  3 handlers reach → loop copied per handler (inc, dbl, sq; 20 statements a copy), a direct call in each  [the description doesn't change in the loop]
-  Shape: 6 handlers (sq_shape dispatch.ren:38, rect :40, tri :42, ring :44, frame :46, shapes$handler1 :63), 1 operation (area)
+    dispatch.ren:34  run(): s.apply(x)  3 handlers reach → loop copied per handler (inc, dbl, sq; 20 statements a copy), a direct call in each  [the description doesn't change in the loop]
+  Codec: 6 handlers (rle dispatch.ren:41, lz :43, huff :45, delta :47, zstd :49, codecs$handler1 :66), 1 operation (cost)
     description: tag = code pointer (one operation); boxed, the tag then 3 words at most
-    dispatch.ren:94  main(): s.area()  6 handlers reach → table call (tag = code pointer)  [more than 4]
-  Expr: 4 handlers (num dispatch.ren:70, add :72, mul :74, neg :76), 1 operation (eval)
+    dispatch.ren:98  main(): c.cost()  6 handlers reach → table call (tag = code pointer)  [more than 4]
+  Pipe: 4 handlers (source dispatch.ren:74, merge :76, scale :78, invert :80), 1 operation (pull)
     description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 2 words at most
-    dispatch.ren:73  add(): a.eval()  4 handlers reach → table call  [recursion through its own dependency]
-    dispatch.ren:73  add(): b.eval()  4 handlers reach → table call  [recursion through its own dependency]
-    dispatch.ren:75  mul(): a.eval()  4 handlers reach → table call  [recursion through its own dependency]
-    dispatch.ren:75  mul(): b.eval()  4 handlers reach → table call  [recursion through its own dependency]
-    dispatch.ren:77  neg(): a.eval()  4 handlers reach → table call  [recursion through its own dependency]
-    dispatch.ren:96  main(): tree(12, 5).eval()  4 handlers reach → arms inline, compare-and-branch  [4 handlers, at most 4]
+    dispatch.ren:77  merge(): a.pull()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:77  merge(): b.pull()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:79  scale(): a.pull()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:79  scale(): b.pull()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:81  invert(): a.pull()  4 handlers reach → table call  [recursion through its own dependency]
+    dispatch.ren:100  main(): pipeline(12, 5).pull()  4 handlers reach → arms inline, compare-and-branch  [4 handlers, at most 4]
 
 And 10d/dispatch_mix.ren's: a set with a handler with state in it,
-which the table has no method for and a call installs; a loop copied
+which the table has no method for and a `with` of one call installs
+(since the data stage's step 6 such a set's calls aren't written as
+methods, but `with o in Op.run(x)` is the same site); a loop copied
 inside another, and one whose copy for a handler with state installs
 it; a dependency whose tags are code, installed by a `with`; and a
 handler of two dependencies. The listing is a release build's, and
 names a dependency the program has.
 
-  $ for d in Op Tally Area Size Label; do (cd 10d && ren build --release --explain-dispatch $d dispatch_mix.ren -o ./dispatch.bin 2>&1); done
-  Op: 6 handlers (o_add dispatch_mix.ren:14, o_sub :16, o_mul :18, o_neg :20, o_id :22, o_seen :25), 1 operation (run)
+  $ for d in Op Tally Codec Width Name; do (cd 10d && ren build --release --explain-dispatch $d dispatch_mix.ren -o ./dispatch.bin 2>&1); done
+  Op: 6 handlers (o_add dispatch_mix.ren:17, o_sub :19, o_mul :21, o_neg :23, o_id :25, o_seen :28), 1 operation (run)
     description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
-    dispatch_mix.ren:84  main(): o.run(acc)  6 handlers reach → table call  [more than 4]
-    dispatch_mix.ren:89  main(): o.run(i)  6 handlers reach → table call  [more than 4]
-    dispatch_mix.ren:113  main(): p.left.run(p.right.run(10))  6 handlers reach → table call  [more than 4]
-    dispatch_mix.ren:113  main(): p.right.run(10)  6 handlers reach → table call  [more than 4]
-  Tally: 3 handlers (t_twice dispatch_mix.ren:34, t_plus :36, t_count :38), 1 operation (add)
+    dispatch_mix.ren:89  main(): with o in Op.run(acc)  6 handlers reach → table call  [more than 4]
+    dispatch_mix.ren:94  main(): with o in Op.run(i)  6 handlers reach → table call  [more than 4]
+    dispatch_mix.ren:118  main(): with p.right in Op.run(10)  6 handlers reach → table call  [more than 4]
+    dispatch_mix.ren:119  main(): with p.left in Op.run(r)  6 handlers reach → table call  [more than 4]
+  Tally: 3 handlers (t_twice dispatch_mix.ren:37, t_plus :39, t_count :41), 1 operation (add)
     description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
-    dispatch_mix.ren:75  total(): t.add(x + i)  3 handlers reach → loop copied per handler (t_twice, t_plus, t_count; 35 statements a copy), a direct call in each  [the description doesn't change in the loop]
-    dispatch_mix.ren:97  main(): t.add(i)  3 handlers reach → loop copied per handler (t_twice, t_plus, t_count; 34 statements a copy), a direct call in each  [the description doesn't change in the loop]
-  Area: 5 handlers (a_sq dispatch_mix.ren:47, a_rect :49, a_tri :51, a_line :53, a_zero :55), 1 operation (area)
+    dispatch_mix.ren:80  total(): with t in Tally.add(y)  3 handlers reach → loop copied per handler (t_twice, t_plus, t_count; 35 statements a copy), a direct call in each  [the description doesn't change in the loop]
+    dispatch_mix.ren:102  main(): with t in Tally.add(i)  3 handlers reach → loop copied per handler (t_twice, t_plus, t_count; 34 statements a copy), a direct call in each  [the description doesn't change in the loop]
+  Codec: 5 handlers (c_rle dispatch_mix.ren:51, c_lz :53, c_huff :55, c_raw :57, c_none :59), 1 operation (cost)
     description: tag = code pointer (one operation); boxed, the tag then 2 words at most
-    dispatch_mix.ren:78  both(): with a in Area.area() + Area.area()  5 handlers reach → installed through its handler's record  [a `with`'s body isn't copied per handler yet]
-    dispatch_mix.ren:105  main(): a.area()  5 handlers reach → table call (tag = code pointer)  [more than 4]
-  Size: 2 handlers (boxed dispatch_mix.ren:64, small :67), 1 operation (size)
+    dispatch_mix.ren:83  both(): with c in Codec.cost() + Codec.cost()  5 handlers reach → installed through its handler's record  [a `with`'s body isn't copied per handler yet]
+    dispatch_mix.ren:110  main(): c.cost()  5 handlers reach → table call (tag = code pointer)  [more than 4]
+  Width: 2 handlers (boxed dispatch_mix.ren:68, small :71), 1 operation (width)
     description: tag = the handler's number, which indexes each operation's table; boxed, the tag then 1 word at most
-    dispatch_mix.ren:108  main(): b.size()  2 handlers reach → arms inline, compare-and-branch  [2 handlers, at most 4]
-    dispatch_mix.ren:111  main(): s.size()  2 handlers reach → arms inline, compare-and-branch  [2 handlers, at most 4]
-  Label: 1 handler (boxed dispatch_mix.ren:64), 1 operation (label)
+    dispatch_mix.ren:113  main(): b.width()  2 handlers reach → arms inline, compare-and-branch  [2 handlers, at most 4]
+    dispatch_mix.ren:116  main(): w.width()  2 handlers reach → arms inline, compare-and-branch  [2 handlers, at most 4]
+  Name: 1 handler (boxed dispatch_mix.ren:68), 1 operation (name)
     description: one handler, so no site reads its tag; boxed, the tag then 1 word at most
-    dispatch_mix.ren:109  main(): b.label()  1 handler reaches → direct call  [one handler]
+    dispatch_mix.ren:114  main(): b.name()  1 handler reaches → direct call  [one handler]
   $ (cd 10d && ren build --explain-dispatch Op dispatch_mix.ren -o ./dispatch.bin)
   error: `--explain-dispatch` lists a release build's dispatch
     help: add `--release`
@@ -1725,3 +1904,158 @@ panics, with its message (bench/bytes.t has the rest).
   sort_nan.ren, perceus: the same, exit 1, objects live at exit 2
   sort_nan.ren, naive: the same, exit 1, objects live at exit 2
   sort_nan.ren, release: the same, exit 1
+The data stage's programs (compiler.md, "Data stage", "The tests"), in
+data/, checked as 10d's and 11a's are: each `.expected` holds what `ren
+run` prints, then how it exits, then the first line it writes to
+stderr. The step that lands one changes its line here to say so, and
+adds it to the loops above that check its native builds against `ren
+run`. `nested`, `rows` and `optional` are step 7's kernels, one for each
+layout fault: they ran before it, so they're as specified already, and
+step 7 measures them before and after its fixes and added them to the
+loops, with its own programs (below).
+`interp`, the milestone's kernel, and `shapes`, step 6's ADT, needed
+only step 2's by-name variants to run, so they're as specified since
+step 2; step 6 added `shapes` to the loops, and step 7 measures
+`interp` against Rust and adds it.
+
+  $ for f in update byname orpat variants todo_panic shapes nested rows optional interp; do spec data/$f.ren; done
+  data/update.ren: as specified
+  data/byname.ren: as specified
+  data/orpat.ren: as specified
+  data/variants.ren: as specified
+  data/todo_panic.ren: as specified
+  data/shapes.ren: as specified
+  data/nested.ren: as specified
+  data/rows.ren: as specified
+  data/optional.ren: as specified
+  data/interp.ren: as specified
+
+An update of a unique record is built over it in place (compiler.md,
+"Data stage", "Record update"): the loop at the end of `update` updates
+one 1000 times, and Perceus reuse pairs each update with the record it
+replaces, so the loop allocates nothing; what's allocated is the rest
+of the program's, and each update is a reuse.
+
+  $ (cd data && ren build --release --stats update.ren -o ./update.bin 2>/dev/null && ./update.bin 2>&1 >/dev/null | grep -o 'allocations [0-9]*\|reuses [0-9]*')
+  allocations 16
+  reuses 1002
+
+A variant type costs nothing when its value is unique (compiler.md,
+"Data stage", "Variant types"): its value is its sum's, so `as` binds
+the subject itself and `Placed { ..p }` is no code, and an update of
+one, `{ ..p, total }`, is built over it in place. The loop of
+`variants_reuse` does both 1000 times and allocates nothing: what's
+allocated is the rest of the program's, the same in both builds, and
+each update is a reuse.
+
+  $ (cd data && for m in debug release; do ren build --$m --stats variants_reuse.ren -o ./reuse.bin 2>/dev/null && ./reuse.bin 2>&1 >/dev/null | grep -o 'allocations [0-9]*\|reuses [0-9]*'; done)
+  allocations 4
+  reuses 1000
+  allocations 4
+  reuses 1000
+
+So does one of a sum with a pointer niche (compiler.md, "The layout
+fixes (step 7)"): in the debug build `niche_reuse`'s `Plan` is boxed,
+and each update is a reuse; in the release build it's two words, no tag,
+and the loop allocates nothing and reuses nothing.
+
+  $ (cd data && for m in debug release; do ren build --$m --stats niche_reuse.ren -o ./reuse.bin 2>/dev/null && ./reuse.bin 2>&1 >/dev/null | grep -o 'allocations [0-9]*\|reuses [0-9]*'; done)
+  allocations 4
+  reuses 1000
+  allocations 3
+  reuses 0
+
+A `main` that's only a `todo` is generic in what it would give, `fn
+main<T>() -> T`, so `$start` calls it at `Unit` (compiler.md, "Data
+stage", step 5's choices): it panics at the `todo`, natively as in `ren
+run`.
+
+  $ printf 'fn main() = todo\n' > data/todo_main.ren
+  $ same data/todo_main.ren; release data/todo_main.ren
+  data/todo_main.ren, perceus: the same, exit 1, objects live at exit 0
+  data/todo_main.ren, naive: the same, exit 1, objects live at exit 0
+  data/todo_main.ren, release: the same, exit 1, objects live at exit 0
+
+The layout fixes (compiler.md, "Data stage", "The layout fixes (step
+7)"). A small record or tuple inside a small value is flattened into
+its slots: `nested`'s `Draft(u: Unvalidated)` allocates nothing, so the
+kernel allocates what the rest of the program does, not one object for
+each `Draft`. An array of small records that hold an object keeps them
+inline, counted by the mask of their slots that hold objects: `rows`'
+100,000 `Line`s allocate nothing, and what's allocated is the array, its
+growth, and the rest of the program's. A sum with one constructor that
+has fields, one an object, and the rest without has no tag, its object's
+slot telling them apart: `optional`'s `Option<Item>` is two words, and
+allocates nothing (nor did it once its last line printed fields, not
+the option, whose `show` boxed it: it was a tag and two slots).
+
+  $ (cd data && for f in nested rows optional; do ren build --release --stats $f.ren -o ./kernel.bin 2>/dev/null && ./kernel.bin 2>&1 >/dev/null | grep -o 'allocations [0-9]*'; done)
+  allocations 4
+  allocations 6
+  allocations 4
+
+`layout` builds, matches, reads, updates and keeps such values: three
+deep, generic, holding a `Str`, one object alone, through `inout`, a
+block and arrays; `layout_walks` shows and compares them, which boxes
+the types walked; `layout_panic` panics with them alive; and
+`reuse_arms` has the three faults of boxed values' counting the others
+found: a `match` whose arms are constructors of different sizes, each
+building one of the other's size, a field read three times through a
+chain, and a `var` updated through its views. `rows_objs` keeps arrays
+of records that hold `Str`s, arrays, and a flattened record of a `Str`,
+and of a sum of one, and arrays of arrays of them, inline: grown,
+shared and changed whole, a field at a time and through `inout`,
+sliced, split, mapped and looped over every way; `rows_panic` panics
+part way through a loop that changes one in place. `niche` keeps sums
+with pointer niches and byte tags, the third fix's: options of a `Str`,
+an array and a record in arrays, sums of several constructors without
+fields and one with an object, first, last or alone, `Bool`s and sized
+ints packed beside a tag, and variant types of niche'd sums, built,
+matched with or-patterns and `as`, updated, and through `inout` and a
+block; `niche_walks` shows and compares them, which boxes them, keeps
+them in records and other sums, which boxes them too, and has an option
+of an option, whose inner `None` isn't the outer one's niche, and an
+option of a boxed sum, whose `Some(Plain)` is a scalar too;
+`niche_panic` panics with them alive; `niche_reuse` round-trips a
+niche'd sum's variant type (below); and `niche_join` returns a
+constructor without fields on one path and a parameter on another,
+which Mem Lint refused in debug builds, where each is boxed, until step
+7 taught its join that a constant stands for the reference the other
+path holds. Each is in the loops above; here, the release build with the
+naive counting too, under the sanitizers.
+
+  $ release_naive() {
+  >   (cd "$(dirname "$1")" && f=$(basename "$1") &&
+  >    REN_CC=cc REN_CFLAGS='-fsanitize=address,undefined' ren build --release --rc naive --stats "$f" -o ./naive.bin 2> naive.made &&
+  >    { ./naive.bin > native.out 2> native.err; echo "exit $?" > native.code; } &&
+  >    { ren run "$f" > interp.out 2> interp.err; echo "exit $?" > interp.code; } &&
+  >    grep -v -e '^ren stats: ' -e '^==[0-9]*==WARNING: ASan is ignoring' \
+  >      -e '^False positive error reports may follow' \
+  >      -e '^For details see https://github.com/google/sanitizers/issues/189' \
+  >      native.err > native.err2;
+  >    if cmp -s native.out interp.out && cmp -s native.err2 interp.err &&
+  >       cmp -s native.code interp.code
+  >    then echo "$1, release, naive: the same, $(cat native.code), $(grep -o 'objects live at exit [0-9]*' native.err)"
+  >    else echo "$1, release, naive: different"; diff native.out interp.out; diff native.err2 interp.err
+  >    fi)
+  > }
+  $ for f in nested rows optional layout layout_walks layout_panic reuse_arms rows_objs rows_panic niche niche_walks niche_panic niche_reuse niche_join interp review_keys review_state review_state_panic review_todo_panic; do release_naive data/$f.ren; done
+  data/nested.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/rows.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/optional.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/layout.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/layout_walks.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/layout_panic.ren, release, naive: the same, exit 1, objects live at exit 4
+  data/reuse_arms.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/rows_objs.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/rows_panic.ren, release, naive: the same, exit 1, objects live at exit 26
+  data/niche.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/niche_walks.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/niche_panic.ren, release, naive: the same, exit 1, objects live at exit 6
+  data/niche_reuse.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/niche_join.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/interp.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/review_keys.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/review_state.ren, release, naive: the same, exit 0, objects live at exit 0
+  data/review_state_panic.ren, release, naive: the same, exit 1, objects live at exit 2
+  data/review_todo_panic.ren, release, naive: the same, exit 1, objects live at exit 1

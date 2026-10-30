@@ -142,6 +142,20 @@ match &acme.transfer(t)
   can fail with needs an arm.
 - `_` matches a value, never an error. `fail _` matches any error. So a
   stray `_` can't silently swallow a failure.
+- A `match` that misses an error says which, and its help writes the
+  arms to paste under the others, each ending in `todo`, an expression of
+  any type that panics where it's reached:
+
+```
+error: this `match` doesn't handle every error it can fail with
+  ┌─ bank.ren:5:3
+5 │   match &acme.transfer(t)
+  │   ^^^^^
+  = missing: fail Frozen(_)
+  help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+    fail Frozen(_) => todo
+```
+
 - `try match` handles some errors and passes the rest on. The line still
   starts with `try`:
 
@@ -227,8 +241,8 @@ For all-or-nothing, change a copy and keep it only if nothing failed:
 pub fn transfer(inout self, t: Transfer) ! TransferError =
   ...
   var draft = self
-  try &draft.accounts[i].debit(t.amount, Sent(t.amount, t.to))
-  try &draft.accounts[j].credit(t.amount, Received(t.amount, t.from))
+  try &draft.accounts[i].debit(t.amount, Sent { amount: t.amount, to: t.to })
+  try &draft.accounts[j].credit(t.amount, Received { amount: t.amount, from: t.from })
   self = draft
 ```
 

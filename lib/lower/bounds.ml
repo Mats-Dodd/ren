@@ -424,6 +424,7 @@ let map f (e : expr) =
   | Assign (v, a) -> Assign (v, f a)
   | Assert a -> Assert (f a)
   | Field (a, p, n) -> Field (f a, p, n)
+  | Of_variant a -> Of_variant (f a)
   | Narrowed (ds, a) -> Narrowed (ds, f a)
   | Fail a -> Fail (f a)
   | Lambda l -> Lambda { l with body = f l.body }
@@ -477,7 +478,9 @@ let rec max_id (e : expr) =
         let rec pat (p : pattern) =
           match p.pkind with
           | PVar v -> v.id
-          | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps ->
+          | PAs (q, v) -> max v.id (pat q)
+          | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps)
+            ->
               List.fold_left (fun m p -> max m (pat p)) 0 ps
           | PWild | PInt _ | PBool _ -> 0
         in
@@ -504,6 +507,10 @@ let rename fresh (e : expr) =
       | PCon (t, c, ps) -> PCon (t, c, List.map pat ps)
       | PTag (t, ps) -> PTag (t, List.map pat ps)
       | PTuple ps -> PTuple (List.map pat ps)
+      | PRecord (t, ps) -> PRecord (t, List.map pat ps)
+      | PAs (q, v) ->
+          let q = pat q in
+          PAs (q, bind v)
       | POr (first :: rest) ->
           (* each alternative binds the same variables *)
           let first = pat first in
@@ -518,6 +525,8 @@ let rename fresh (e : expr) =
       | PCon (t, c, ps) -> PCon (t, c, List.map pat_again ps)
       | PTag (t, ps) -> PTag (t, List.map pat_again ps)
       | PTuple ps -> PTuple (List.map pat_again ps)
+      | PRecord (t, ps) -> PRecord (t, List.map pat_again ps)
+      | PAs (q, v) -> PAs (pat_again q, use v)
       | POr ps -> POr (List.map pat_again ps)
       | (PWild | PInt _ | PBool _) as k -> k
     in

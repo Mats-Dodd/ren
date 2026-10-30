@@ -82,18 +82,18 @@ fn main() =
 let%expect_test "a pattern can't bind the same name twice" =
   run
     {|
-type Pair = P(a: Int, b: Int)
+type Pair = P { a: Int, b: Int }
 fn main() =
-  match P(1, 2)
-    P(x, x) => print(x)
+  match P { a: 1, b: 2 }
+    P { a: x, b: x } => print(x)
 |};
   [%expect
     {|
     error: there are two pattern variables named `x`
-      ┌─ test.ren:4:10
-    4 │     P(x, x) => print(x)
-      │          ^
-      │       - the first `x` is here
+      ┌─ test.ren:4:18
+    4 │     P { a: x, b: x } => print(x)
+      │                  ^
+      │            - the first `x` is here
       help: rename one of them
     |}]
 
@@ -421,14 +421,13 @@ fn main() =
 |};
   [%expect
     {|
-    error: this alternative doesn't bind `id`, which the first one does
+    error: `id` is bound in `fail Frozen(id)` but not in `fail Gone`
       ┌─ test.ren:6:23
     6 │     fail Frozen(id) | fail Gone => id
       │                       ^^^^^^^^^
-      │                 -- `id` is bound here
       help: bind the same names in every alternative
 
-    error: `n` is bound by this alternative, but not by the first one
+    error: `n` is bound in `fail Even(n)` but not in `fail Odd`
       ┌─ test.ren:7:26
     7 │     fail Odd | fail Even(n) => n
       │                          ^

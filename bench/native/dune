@@ -17,6 +17,7 @@
   (glob_files handlers/*.ren)
   (glob_files maps/*.ren)
   (glob_files inout/*.ren)
+  (glob_files interp/*.ren)
   (glob_files nbody/*.ren)
   (glob_files nested/*.ren)
   (glob_files nqueens/*.ren)

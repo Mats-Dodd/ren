@@ -70,6 +70,10 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   match t with
   | TyName ({ tref = Param i; _ }, _) -> List.nth tvars i
   | TyName ({ tref = Named p; _ }, args) -> TCon (p, List.map go args)
+  | TyVariant ({ tref = Named p; _ }, c, args) ->
+      (* Resolve checked it's a sum's constructor with named fields *)
+      TVariant (p, c.name, List.map go args)
+  | TyVariant ({ tref = Param _; _ }, _, _) -> TError
   | TyImpl { impl_deps = ds; impl_over = over; impl_errors; impl_uses; _ } ->
       let deps = written_deps env ~tvars ds in
       (* what it can fail to start with is what's written, or nothing *)

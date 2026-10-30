@@ -11,23 +11,25 @@ import billing/stripe
 // the receipt, or 0 if there was nothing to pay or the card was declined
 fn checkout(p: Plan) =
   match invoice.pay(invoice.make(p))
-    Some(id) => stripe.receipt(id)
-    None => 0
-    fail Declined(_) => 0
+    { status: Paid { charge, .. }, .. } => stripe.receipt(charge)
+    _ => 0
+    fail Declined(_) | fail NothingDue => 0
 
 fn main() =
   let free: Plan = Free
   print(invoice.make(free))
   print(checkout(free))
+  print(attempt invoice.pay(invoice.make(Pro(1))))
 
   var c = Cart.of(UserId.new(7))
   &c.put(Free)
-  &c.put(Pro(seats: 3))
+  &c.put(Pro(3))
   print(c.owner().raw())
   print(c.len())
   print(c.total())
+  print(c.total_after(OverAmount { min: 20, off: 5 }))
   print(Cart.guest.len())
   &c.clear()
   print(c.len())
-  print(checkout(Pro(seats: 20)))   // declined: over the card's limit
-  checkout(Pro(seats: 3))
+  print(checkout(Pro(20)))   // declined: over the card's limit
+  checkout(Pro(3))

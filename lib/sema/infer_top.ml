@@ -77,7 +77,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec ty_ (t : Resolved.ty) =
     ty t;
     match t with
-    | TyName (_, args) -> List.iter ty_ args
+    | TyName (_, args) | TyVariant (_, _, args) -> List.iter ty_ args
     | TyFn (ps, ret, errs, _, _) ->
         List.iter ty_ ps;
         Option.iter ty_ ret;
@@ -100,12 +100,15 @@ let walk ~ty ~errors ~pattern (prog : program) =
     pattern p;
     match p.pkind with
     | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
+    | PAs (q, _) -> pattern_ q
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
+    | PRecord (_, fs) | PCon_named (_, fs) ->
+        List.iter (fun (_, q) -> pattern_ q) fs.fpats
   in
   let rec expr (e : expr) =
     let go = List.iter expr in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
     | Named (_, a) -> expr a
     | Unop (_, a, _)
     | Field (a, _)
@@ -131,7 +134,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
         List.iter stmt state;
         go (List.map (fun (a : handler_arm) -> a.arm_impl) arms)
     | Con (_, args) | Fail (_, args) -> go (List.map snd args)
-    | Record (_, fields) -> go (List.map snd fields)
+    | Record (_, fields) | Con_named (_, fields) -> go (List.map snd fields)
+    | Update { base; fields; _ } -> go (base :: List.map snd fields)
     | Match (s, arms) ->
         expr s;
         List.iter
@@ -150,9 +154,10 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Let { ty = t; value; _ } ->
         Option.iter ty_ t;
         expr value
-    | Let_tuple { pat; value } ->
+    | Let_pattern { pat; value; else_ } ->
         pattern_ pat;
-        expr value
+        expr value;
+        Option.iter expr else_
     | Expr e | Finally e -> expr e
   in
   let fn_ (f : fn_def) =
@@ -182,7 +187,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
    tag. [sets] are the named error sets the module can see, and [names]
    says how it writes a type's name. *)
 let written_loc : Resolved.ty -> Loc.t = function
-  | TyName ({ tloc; _ }, _) -> tloc
+  | TyName ({ tloc; _ }, _) | TyVariant ({ tloc; _ }, _, _) -> tloc
   | TyFn (_, _, _, _, l)
   | TyImpl { impl_loc = l; _ }
   | TyInout (_, l)
@@ -199,14 +204,15 @@ let check_written sink ~sets ~names (prog : program) =
         match arg with
         | TyErrors _ -> ()
         | arg -> report (result_needs_set (written_loc arg)))
-    | TyName ({ tref = Named p; _ }, args) ->
+    | TyName ({ tref = Named p; _ }, args)
+    | TyVariant ({ tref = Named p; _ }, _, args) ->
         List.iter
           (function
             | TyErrors (es : Resolved.errors) ->
                 report (set_not_taken es.eloc (names p))
             | _ -> ())
           args
-    | TyName _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> ()
+    | TyName _ | TyVariant _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> ()
   in
   let pr =
     Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
@@ -257,7 +263,7 @@ let rows_named (f : fn_def) =
   in
   let rec ty (t : Resolved.ty) =
     match t with
-    | TyName (_, args) -> List.iter ty args
+    | TyName (_, args) | TyVariant (_, _, args) -> List.iter ty args
     | TyFn (ps, ret, _, _, _) ->
         (* a block's own rows are never named (resolve.ml) *)
         List.iter ty ps;
@@ -1110,7 +1116,7 @@ let check_keeps_rules env so_far (r : Resolve.t) =
        it, `Option<P>`, `(P, Int)` *)
     let rec holds t =
       match repr t with
-      | TCon (p, args) -> p = path || List.exists holds args
+      | TCon (p, args) | TVariant (p, _, args) -> p = path || List.exists holds args
       | _ -> false
     in
     (* whether [ret] is a refusal written as a value, `Option<P>` or
@@ -1481,7 +1487,7 @@ let canonical env so_far (f : fn_def) =
         match repr t with
         | TSkol (id', _) -> id' = id
         | TVar _ | TError -> false
-        | TCon (_, ts) -> List.exists (mentions id) ts
+        | TCon (_, ts) | TVariant (_, _, ts) -> List.exists (mentions id) ts
         | TErrors r -> row_mentions id r
         | TImpl i ->
             List.exists
@@ -1552,7 +1558,7 @@ let canonical env so_far (f : fn_def) =
       (function
         | Installs { key; from } -> Installs { key = label key; from }
         | Installs_handler ls -> Installs_handler (List.map label ls)
-        | Calls_op { key; from; op } -> Calls_op { key = label key; from; op }
+        | Calls_op c -> Calls_op { c with key = label c.key }
         | Inline_op o -> Inline_op o
         | Block { name; given } -> Block { name; given = List.map label given }
         | Field_of p -> Field_of p
@@ -1629,7 +1635,7 @@ type place =
 let rec has_fun (t : Ty.ty) =
   match t with
   | Fun _ -> true
-  | Con (_, args) -> List.exists has_fun args
+  | Con (_, args) | Variant (_, _, args) -> List.exists has_fun args
   | Errors r ->
       List.exists (fun (l : Ty.label) -> List.exists has_fun l.payload) r.labels
   | Var _ | Impl _ | Error -> false
@@ -1647,7 +1653,7 @@ let rec has_handle (t : Ty.ty) =
   is_handle t
   ||
   match t with
-  | Con (_, args) -> List.exists has_handle args
+  | Con (_, args) | Variant (_, _, args) -> List.exists has_handle args
   | Fun _ | Errors _ | Var _ | Impl _ | Error -> false
 
 (* Whether a value of type [t] keeps a block: in a type's arguments or
@@ -1655,7 +1661,7 @@ let rec has_handle (t : Ty.ty) =
    it's declared. *)
 let keeps_block (t : Ty.ty) =
   match t with
-  | Con _ | Errors _ -> has_fun t
+  | Con _ | Variant _ | Errors _ -> has_fun t
   | Fun _ | Var _ | Impl _ | Error -> false
 
 (* Whether two places in the source overlap. *)
@@ -1719,7 +1725,10 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
   in
   let rec handle_in (t : Ty.ty) =
     if is_handle t then Some t
-    else match t with Con (_, args) -> List.find_map handle_in args | _ -> None
+    else
+      match t with
+      | Con (_, args) | Variant (_, _, args) -> List.find_map handle_in args
+      | _ -> None
   in
   let prelude = env.home = Path.prelude_home in
   let generic_here (e : expr) ~blame =
@@ -1862,7 +1871,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
     let carried = if block then Said else Kept Elsewhere in
     let all place = List.iter (walk (Kept place)) in
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
     | Named (_, a) -> walk pos a
     | Call (callee, args) ->
         (* a block a type variable of the callee stands for is blamed on
@@ -1932,6 +1941,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         List.iter (walk Said) xs
     | Tuple xs -> all In_tuple xs
     | Con (c, args) -> all (In_payload c.name.name) (List.map snd args)
+    | Con_named (c, fields) -> all (In_payload c.name.name) (List.map snd fields)
     | Record (name, fields) ->
         (* a record of a dependency's operations: inference reports it, as
            a handler to write *)
@@ -1946,6 +1956,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         in
         if of_dep then List.iter (walk Said) (List.map snd fields)
         else all In_record (List.map snd fields)
+    | Update { base; fields; _ } -> all In_record (base :: List.map snd fields)
     | Fail (_, args) -> all In_error (List.map snd args)
     | For _ | While _ -> all Elsewhere (Ast.children e)
     | Inline_handler l ->
@@ -1972,7 +1983,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         walk Said value
     | Let { name; value; _ } ->
         walk (if state then Kept Elsewhere else Let_value name.ident.name) value
-    | Let_tuple { value; _ } -> walk (Kept Elsewhere) value
+    | Let_pattern { value; else_; _ } ->
+        walk (Kept Elsewhere) value;
+        Option.iter (walk (Kept Elsewhere)) else_
     | Expr e -> walk (Kept Elsewhere) e
     | Finally f ->
         (* a block the handler, or its arm, is made of *)

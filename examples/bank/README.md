@@ -33,8 +33,8 @@ either. A caller of `deposit` never has to handle `Short`. `Refusal` and
 written out.
 
 **Passing an error on is one word.** `transfer` is a list of steps, each
-of which can fail: `var from = try self.get(t.from)`, then
-`try &from.debit(...)`. There's no nested `match` and no glue between
+of which can fail: `var out = try self.get(from)`, then
+`try &out.debit(...)`. There's no nested `match` and no glue between
 `Refusal` and `TransferError`: tags are structural, so a `Frozen` from
 `credit` is the same `Frozen` in `transfer`'s set. `get` is private, so
 what it fails with is inferred; it turns the `Option` the map gives into
@@ -45,7 +45,7 @@ account is changed the way any value in one is: get it, change the copy,
 set it back. `transfer` takes money out of one account and puts it into
 the other, and the second step can fail after the first went through.
 There's nothing to undo: both steps change copies, and they're set back,
-`&self.accounts.set(t.from, from)`, only if neither failed. When a call
+`&self.accounts.set(from, out)`, only if neither failed. When a call
 fails, what it changed stays changed, but here that's only a copy, which
 is thrown away. `batch` does the same for any number of transfers with a
 copy of the whole bank, `var draft = self`, which becomes the bank,
@@ -72,8 +72,21 @@ its own, `with numeric`: two add up, `a + b`, and compare, `a < b`, but
 `Money * Money` isn't a `Money`.
 
 **`&` shows what changes.** `&acme.transfer(...)` changes the bank, and
-`acme.balance(alice)` doesn't. Inside, `&from.debit(...)` changes one
+`acme.balance(alice)` doesn't. Inside, `&out.debit(...)` changes one
 copy of an account, and `&self.accounts.set(...)` puts it back.
+
+**A movement is data, taken apart by name.** `Movement` is a sum type:
+`Deposited(amount: Money)` has one field, so it's positional, and `Sent
+{ amount: Money, to: AccountId }` and `Received { amount: Money, from:
+AccountId }` have two, so they're by name, built and matched with their
+fields' names. `transfer` takes its `Transfer` apart first, `let { from,
+to, amount } = t`, and then each movement is written with the names it
+has in scope, `Sent { amount, to }` and `Received { amount, from }`.
+`Movement.change` is a `match` whose first arm is an or-pattern over two
+variants, each binding `m`: `Deposited(m) | Received { amount: m, .. }
+=> m`, and `Sent { amount, .. } => -amount`, where `..` leaves out the
+rest. The test "a statement adds up to the balance" takes each entry
+apart in the block's parameter, `fn({ what, .. }) => what.change()`.
 
 **Statements are stamped with `Clock.now()`.** `credit` and `debit` read
 the clock into each `Entry`'s `at`, so their signatures say `uses Clock`,
@@ -125,13 +138,15 @@ and `try` passes the error on), ~~`Option<Refusal>`, where `None` meant it
 worked~~, and ~~a nested `match` for "both accounts found"~~ (two lines
 with `try`). What's left, and what stage 6 found:
 
-- **Or-patterns are only for errors.** `fail A | fail B =>` works, but
-  `Err(Short(_, _)) | Err(Frozen(_)) =>` doesn't parse, so
-  `worth_retrying` has an arm for every tag.
+- ~~**Or-patterns are only for errors.**~~ Since the data stage, any
+  pattern can have alternatives, nested, so `worth_retrying` has two
+  arms: `Err(Short(_, _) | Frozen(_)) => true` and the rest.
 - **No `()` pattern.** The value arm of `match &acme.transfer(...)` is
   `_ =>`, since the value is `()` and `()` can't be written as a pattern.
 - **No `panic`.** The arms for errors that can't happen in that `match`
-  print `-1`, where they should stop the program.
+  print `-1`, where they should stop the program. Since the data stage
+  there's `todo`, which panics where it's reached, but it says "not
+  written yet", not "can't happen", so the arms still print `-1`.
 - **`ren types` writes named sets out.** `transfer` is declared
   `! TransferError`, and its interface lists the five tags instead. That's
   what the set means, but it's longer than what was written.
@@ -148,6 +163,9 @@ with `try`). What's left, and what stage 6 found:
   later `bank.open()` is also reported, as a missing function of the
   module: six errors that say nothing new. The compiler should report the
   clash once, and then treat the name as the variable.
+- **It doesn't build natively.** The real `Clock` and `Map` aren't in
+  the native slice yet, so `ren build bank/main.ren` says so and points
+  at `ren run`; the shop, which uses neither, builds.
 - **Strings are minimal.** There are literals, `==` and `show`, but no
   joining or formatting, so `main` prints cents and counts, not a statement.
 
@@ -184,3 +202,16 @@ What stage 9c changed:
   can't go below zero, and each change is stamped with the time. With
   `debit`'s check broken, the third fails too.
 - **`main` is `pub`,** with its full signature, so a test can call it.
+
+What the data stage changed:
+
+- **`Sent` and `Received` are by name.** They were `Sent(amount: Money,
+  to: AccountId)`, built `Sent(t.amount, t.to)`, which ties every
+  construction and pattern to the order of the fields; swapping two of
+  one type would still compile, with the values swapped. Now they're
+  `Sent { amount, to }`.
+- **`transfer` takes its `Transfer` apart** with `let { from, to, amount
+  } = t`, so it reads `from` and `amount`, not `t.from` and `t.amount`,
+  and the accounts it changes are `out` and `into`.
+- **`worth_retrying` has two arms,** with or-patterns, and
+  `Movement.change` one arm for the two ways money comes in.

@@ -340,17 +340,25 @@ module.exports = grammar({
 
     numeric: (_) => 'numeric',
 
-    // | Free | Pro(seats: Int), and indented, one `|` per line
+    // | Free | Pro(seats: Int) | Rect { w: Int, h: Int }, and indented, one
+    // `|` per line
     sum_type: ($) =>
       seq(
         optional('|'),
         sep1($.variant, seq(optional($._newline), '|')),
       ),
 
+    // Free; Flat(off: Money) or Flat(Money), one field by position, its
+    // name only documenting it; Rect { w: Int, h: Int }, by name
     variant: ($) =>
       seq(
         field('name', $.type_identifier),
-        optional(seq('(', commaSep($.field_declaration), ')')),
+        optional(
+          choice(
+            seq('(', choice($.field_declaration, field('type', $._type)), ')'),
+            field('fields', $.record_type),
+          ),
+        ),
       ),
 
     field_declaration: ($) =>
@@ -524,6 +532,7 @@ module.exports = grammar({
     _return_type: ($) =>
       choice(
         $.named_type,
+        $.variant_type,
         $.function_type,
         $.parenthesized_type,
         $.tuple_type,
@@ -579,6 +588,17 @@ module.exports = grammar({
         optional(field('arguments', $.type_arguments)),
       ),
 
+    // Order.Placed, a variant type: one of a sum's variants with named
+    // fields, its sum's arguments after it, Tree.Node<Int>, m.Order.Placed
+    // with the sum's module first
+    variant_type: ($) =>
+      seq(
+        field('sum', $.type_name),
+        '.',
+        field('variant', $.type_identifier),
+        optional(field('arguments', $.type_arguments)),
+      ),
+
     // in a type argument, a `uses` list ends at a comma unless a named row
     // follows it: `Pair<fn() uses Clock, Int>` has two arguments, and
     // several dependencies are written in parentheses
@@ -587,6 +607,7 @@ module.exports = grammar({
     _type_argument: ($) =>
       choice(
         $.named_type,
+        $.variant_type,
         $.parenthesized_type,
         $.tuple_type,
         $.error_set,
@@ -600,6 +621,7 @@ module.exports = grammar({
     _argument_return_type: ($) =>
       choice(
         $.named_type,
+        $.variant_type,
         alias($._argument_function_type, $.function_type),
         $.parenthesized_type,
         $.tuple_type,
@@ -695,34 +717,57 @@ module.exports = grammar({
         $._line,
       ),
 
-    // and `let (k, v) = pair`, a tuple taken apart, whose pattern the
-    // compiler checks always matches: names, `_` and tuples
+    // and `let (k, v) = pair`, taken apart by a pattern the compiler
+    // checks always matches, or `let Team(n) = p else fail NotTeam`, by
+    // one that might not, whose `else` leaves
     let_statement: ($) =>
       choice(
         seq(
           choice('let', 'var'),
-          field('name', $.identifier),
+          field('name', choice($.identifier, $.wildcard)),
           optional(seq(':', field('type', $._type))),
           '=',
           field('value', $._body),
+          optional($.let_else),
         ),
+        // let (k, v) = pair, let { id, lines } = order, let Some(n) = o
+        // else ...
         seq(
           'let',
-          field('pattern', $.tuple_pattern),
+          field('pattern', $._let_pattern),
           '=',
           field('value', $._body),
+          optional($.let_else),
         ),
       ),
 
-    // for x in xs, for (k, v) in m, for i in 0..n, and for i, x in &xs
-    // with each element's index first
+    // the `else` of `let Some(n) = o else fail Missing`, on the `let`'s
+    // line, its body a line or an indented block
+    let_else: ($) => seq('else', field('body', $._body)),
+
+    // a `let`'s pattern: any but a name or `_`, which are the other form
+    _let_pattern: ($) =>
+      choice(
+        $.number,
+        $.negative_number,
+        $.boolean,
+        $.constructor_pattern,
+        $.tuple_pattern,
+        $.record_pattern,
+        $.or_pattern,
+        $.as_pattern,
+        $.parenthesized_pattern,
+      ),
+
+    // for x in xs, for (k, v) in m, for { qty, .. } in lines, for i in
+    // 0..n, and for i, x in &xs with each element's index first
     for_statement: ($) =>
       seq(
         'for',
         optional(
           seq(field('index', choice($.identifier, $.wildcard)), ','),
         ),
-        field('variable', choice($.identifier, $.wildcard, $.tuple_pattern)),
+        field('variable', $._pattern),
         'in',
         field('iterable', choice($._expression, $.range)),
         field('body', $.block),
@@ -946,10 +991,14 @@ module.exports = grammar({
         $.fail_expression,
         $.with_expression,
         $.break,
+        $.todo,
       ),
 
     // leaves the innermost `while` or `for`
     break: (_) => 'break',
+
+    // code still to write: of any type, it panics where it's reached
+    todo: (_) => 'todo',
 
     // 1_000_000, hex 0x82F6_3B78 or binary 0b1010: the prefix in lower
     // case, underscores anywhere after the first digit. Always an `Int`
@@ -1014,22 +1063,48 @@ module.exports = grammar({
         optional(seq(':', field('type', $._type))),
       ),
 
+    // fn((k, v)) => ..., fn({ qty, .. }) => ..., fn(Meters(n)) => ...:
+    // taken apart by a pattern, which the compiler checks always matches.
+    // One with `|` or `as` is written in parentheses here, fn((A(n) as
+    // x)) => ..., so that `fn(_)` stays a parameter named `_`
     tuple_parameter: ($) =>
       seq(
-        field('pattern', $.tuple_pattern),
+        field(
+          'pattern',
+          choice(
+            $.constructor_pattern,
+            $.tuple_pattern,
+            $.record_pattern,
+            $.parenthesized_pattern,
+          ),
+        ),
         optional(seq(':', field('type', $._type))),
       ),
 
     _bracket_block: ($) => seq(sep1($._statement, $._newline), $._dedent),
 
-    // Free, Pro(5), Pro(seats: 5), Plan.Free, billing.Plan.Free
+    // Free, Pro(5), Plan.Free, billing.Plan.Free; by name after its type,
+    // Shape.Rect { w: 2, h: 3 } and Order.Placed { ..draft, id }. A bare
+    // Rect { ... } is a record_expression, as the compiler parses it, and
+    // its Resolve decides which it is
     constructor_expression: ($) =>
-      prec.right(
+      choice(
+        prec.right(
+          seq(
+            field('constructor', $.constructor_ref),
+            optional(field('arguments', $.constructor_arguments)),
+          ),
+        ),
         seq(
-          field('constructor', $.constructor_ref),
-          optional(field('arguments', $.constructor_arguments)),
+          field('constructor', alias($._qualified_constructor_ref, $.constructor_ref)),
+          '{',
+          optional($._record_body),
+          '}',
         ),
       ),
+
+    _qualified_constructor_ref: ($) =>
+      seq(field('type', $.type_name), '.', field('name', $.type_identifier)),
 
     constructor_ref: ($) =>
       seq(
@@ -1053,13 +1128,24 @@ module.exports = grammar({
     labeled_argument: ($) =>
       seq(field('label', $.identifier), ':', field('value', $._expression)),
 
-    // Plan { id: 1, plan }, and without its type, { id: 1 }
+    // Plan { id: 1, plan }, and without its type, { id: 1 }; an update,
+    // { ..order, status: Paid }, takes the rest from `spread`
     record_expression: ($) =>
       seq(
         optional(field('type', $.type_name)),
         '{',
-        commaSep($.field_initializer),
+        optional($._record_body),
         '}',
+      ),
+
+    _record_body: ($) =>
+      choice(
+        seq(
+          '..',
+          field('spread', $._expression),
+          optional(seq(',', commaSep($.field_initializer))),
+        ),
+        commaSep1($.field_initializer),
       ),
 
     // `id: 1`, or just `id`, meaning `id: id`
@@ -1148,7 +1234,14 @@ module.exports = grammar({
 
     match_arm: ($) =>
       seq(
-        field('pattern', choice($._pattern, $.fail_pattern, $.or_pattern)),
+        field(
+          'pattern',
+          choice(
+            $._pattern,
+            $.fail_pattern,
+            alias($._fail_alternatives, $.or_pattern),
+          ),
+        ),
         optional(seq('if', field('guard', $._expression))),
         '=>',
         field('body', $._body),
@@ -1165,6 +1258,10 @@ module.exports = grammar({
         $.boolean,
         $.constructor_pattern,
         $.tuple_pattern,
+        $.record_pattern,
+        $.or_pattern,
+        $.as_pattern,
+        $.parenthesized_pattern,
       ),
 
     wildcard: (_) => '_',
@@ -1184,18 +1281,72 @@ module.exports = grammar({
         ),
       ),
 
-    // fail NoSuchAccount(_) | fail SameAccount: so far, only of fail patterns
-    or_pattern: ($) => seq($.fail_pattern, repeat1(seq('|', $.fail_pattern))),
+    // Pro(n) | Team(n), anywhere a pattern goes
+    or_pattern: ($) => prec.left(2, seq($._pattern, '|', $._pattern)),
+
+    // fail NoSuchAccount(_) | fail SameAccount: an arm's whole pattern,
+    // of fail patterns only
+    _fail_alternatives: ($) =>
+      seq($.fail_pattern, repeat1(seq('|', $.fail_pattern))),
+
+    // Pro(n) as old: the whole of what's matched, named; looser than `|`,
+    // so A | B as x names the whole
+    as_pattern: ($) =>
+      prec.left(
+        1,
+        seq(field('pattern', $._pattern), 'as', field('name', $.identifier)),
+      ),
+
+    // (A as x) | B
+    parenthesized_pattern: ($) => seq('(', $._pattern, ')'),
 
     negative_number: ($) => seq('-', $.number),
 
     // (k, v), (_, Some(x))
     tuple_pattern: ($) => tupleOf($._pattern),
 
-    constructor_pattern: ($) =>
+    // { id, lines: ls, .. }, Seg { from: Pt { y: 0, .. }, .. }: a record
+    // taken apart, `..` last, for the fields left out
+    record_pattern: ($) =>
       seq(
-        field('constructor', $.constructor_ref),
-        optional(seq('(', commaSep($._pattern), ')')),
+        optional(field('type', $.type_name)),
+        '{',
+        optional($._field_patterns),
+        '}',
+      ),
+
+    _field_patterns: ($) =>
+      choice(
+        seq(
+          sep1($.field_pattern, ','),
+          optional(seq(',', optional($.rest_pattern))),
+        ),
+        $.rest_pattern,
+      ),
+
+    // `id: n`, or just `id`, which binds `id`
+    field_pattern: ($) =>
+      seq(
+        field('name', $.identifier),
+        optional(seq(':', field('pattern', $._pattern))),
+      ),
+
+    rest_pattern: (_) => '..',
+
+    // Some(x), Plan.Free; by name after its type, Shape.Rect { w, .. }
+    // (a bare Rect { w, .. } is a record_pattern, as for an expression)
+    constructor_pattern: ($) =>
+      choice(
+        seq(
+          field('constructor', $.constructor_ref),
+          optional(seq('(', commaSep($._pattern), ')')),
+        ),
+        seq(
+          field('constructor', alias($._qualified_constructor_ref, $.constructor_ref)),
+          '{',
+          optional($._field_patterns),
+          '}',
+        ),
       ),
 
     // ---- names ----

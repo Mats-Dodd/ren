@@ -10,6 +10,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
   match t with
   | Var i -> Option.value (List.nth_opt args i) ~default:t
   | Con (p, ts) -> Con (p, List.map (subst args) ts)
+  | Variant (p, c, ts) -> Variant (p, c, List.map (subst args) ts)
   | Fun _ | Errors _ | Impl _ | Error -> t
 
 (* Whether a value of type [t] is copied: a number, a sized one, a `Bool`
@@ -47,5 +48,8 @@ let rec is ~(types : Path.t -> Iface.type_decl option) ?(seen = []) (t : Ty.ty)
             | Opaque (Rep r) -> all [ r ]
             | Opaque (Hidden _) -> td.numeric <> None
             | Errors _ | Dep _ | Dep_alias _ -> false))
+  | Variant _ ->
+      (* a variant type's value is its sum's *)
+      is ~types ~seen (Ty.as_sum t)
   | Error -> true
   | Fun _ | Var _ | Errors _ | Impl _ -> false

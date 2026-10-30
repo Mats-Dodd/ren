@@ -1,0 +1,74 @@
+// Data stage, step 7: the milestone's kernel. bench/10d's interpreter,
+// research/dispatch.md's `interp`, written ADT-first: `Expr` a sum type
+// and `eval` a `match` (language.md §6), where bench/native/dispatch
+// has it as descriptions. It prints what that benchmark's Rust twin's
+// `interp enum` does at its small size (compiler.md, "Data stage", step
+// 7, which measures it against Rust).
+
+fn lcg(s: Int) -> Int = s *% 6364136223846793005 +% 1442695040888963407
+fn bits(s: Int) -> Int = s.shr(33).bit_and(2147483647)
+
+type Expr =
+  | Lit(v: Int)
+  | Slot(i: Int)
+  | Add { a: Expr, b: Expr }
+  | Sub { a: Expr, b: Expr }
+  | Lt { a: Expr, b: Expr }
+  | Neg(a: Expr)
+  | Max { a: Expr, b: Expr }
+  | Min { a: Expr, b: Expr }
+
+fn eval(e: Expr, env: Array<Int>) -> Int =
+  match e
+    Lit(v) => v
+    Slot(i) => env[i]
+    Add { a, b } => eval(a, env) + eval(b, env)
+    Sub { a, b } => eval(a, env) - eval(b, env)
+    Lt { a, b } => if eval(a, env) < eval(b, env) then 1 else 0
+    Neg(a) => 0 - eval(a, env)
+    Max { a, b } =>
+      let x = eval(a, env)
+      let y = eval(b, env)
+      if x > y then x else y
+    Min { a, b } =>
+      let x = eval(a, env)
+      let y = eval(b, env)
+      if x < y then x else y
+
+dep Rng =
+  next: fn() -> Int
+
+handler rng(seed: Int) for Rng =
+  var s = seed
+  next() =>
+    s = lcg(s)
+    bits(s)
+
+fn tree(d: Int) -> Expr uses Rng =
+  let r = Rng.next()
+  if d == 0 || r % 4 == 0 then
+    let r2 = Rng.next()
+    if r2 % 2 == 0 then Lit(r2 / 2 % 100) else Slot(r2 / 2 % 4)
+  else
+    let k = r.shr(8) % 6
+    if k == 3 then Neg(tree(d - 1))
+    else
+      let a = tree(d - 1)
+      let b = tree(d - 1)
+      if k == 0 then Add { a, b }
+      else if k == 1 then Sub { a, b }
+      else if k == 2 then Lt { a, b }
+      else if k == 4 then Max { a, b }
+      else Min { a, b }
+
+fn interp(evals: Int) -> Int =
+  let t = with rng(1) in tree(17)
+  var total = 0
+  for e in 0..evals
+    let env = [e, e * 3 + 1, e % 7, 100 - e]
+    total += eval(t, env)
+  total
+
+fn main() uses Console =
+  print(interp(3))
+  print(interp(256))

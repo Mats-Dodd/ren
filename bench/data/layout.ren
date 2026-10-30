@@ -1,0 +1,262 @@
+// Data stage, step 7: small records and tuples flattened into the small
+// value that holds them (compiler.md, "The layout fixes (step 7)", the
+// first fix). Nothing here is shown or compared whole, which would box
+// its type (layout_walks.ren does that): what's printed is read out of
+// the slots. Records three deep, a tuple in an `Option`, a record of a
+// `Str` in a variant, generic ones, built, matched, read a field at a
+// time and whole, updated, kept in `var`s and arrays, and through
+// `inout` and a block. `Slip` is only in an array, which before the
+// second fix boxed its type, and now holds it inline (rows_objs.ren has
+// more of those).
+
+type P = { x: Int, y: Int }
+
+type Q = { p: P, z: Int }
+
+// four slots: Q's three and a `Str`
+type R = { q: Q, w: Str }
+
+// a tag and three slots: `One`'s Q, `Two`'s P and an Int, shared
+type S =
+  | One(q: Q)
+  | Two { p: P, n: Int }
+  | Neither
+
+// a record that holds an object, in a variant
+type Line = { sku: Str, qty: Int }
+
+type Item =
+  | Draft(l: Line)
+  | Priced { l: Line, total: Int }
+  | Void
+
+// one object, flattened: one word, its niche the record's `Str`'s slot (the
+// third fix; before it, a tag and a slot)
+type Name = { s: Str }
+
+type Tagged =
+  | Named(n: Name)
+  | Anon
+
+type Pair<T> = { a: T, b: T }
+
+// a record whose `Bool`s share a word, flattened as its words
+type Flags = { on: Bool, hot: Bool, n: Int }
+
+type Gate =
+  | Set(f: Flags)
+  | Unset
+
+// only ever in an array, which holds them inline, a tag and the record's
+// two slots, the `Str` counted by the array's mask (the second fix's)
+type Note = { text: Str, n: Int }
+
+type Slip =
+  | Written(note: Note)
+  | Blank
+
+type Maybe<T> =
+  | Got(p: Pair<T>)
+  | Nope
+
+fn q(i: Int) -> Q = Q { p: P { x: i, y: i * 2 }, z: i * 3 }
+
+fn s(i: Int) -> S =
+  if i % 3 == 0 then One(q(i))
+  else if i % 3 == 1 then Two { p: P { x: i, y: -i }, n: i + 100 }
+  else Neither
+
+fn sum_s(v: S) -> Int =
+  match v
+    One(Q { p: P { x, y }, z }) => x + y + z
+    Two { p, n } => p.x * 10 + p.y + n
+    Neither => -1
+
+// a name bound to a flattened field, used after the subject's gone
+fn take_q(v: S) -> Q =
+  match v
+    One(q) => q
+    Two { p, n } => Q { p, z: n }
+    Neither => q(0)
+
+// or-patterns that bind a flattened field, and a guard on it
+fn pick_p(v: S) -> P =
+  match v
+    One(Q { p, z }) | Two { p, n: z } if z > 5 => p
+    _ => P { x: 0, y: 0 }
+
+// `as` on a flattened field and on the whole
+fn as_parts(v: S) -> Int =
+  match v
+    One(Q { p: P { x, .. } as pp, .. } as qq) => x + pp.y + qq.z
+    Two { p: pp, .. } as t => pp.x + t.n
+    Neither => 0
+
+fn line(i: Int, names: Array<Str>) -> Item =
+  if i % 4 == 3 then Void
+  else if i % 2 == 0 then Draft(Line { sku: names[i % 3], qty: i })
+  else Priced { l: Line { sku: names[i % 3], qty: i }, total: i * 7 }
+
+fn price(it: Item) -> Item =
+  match it
+    Draft(l) => Priced { l, total: l.qty * l.sku.len() }
+    Priced { .. } as p => Priced { ..p, total: p.total + 1 }
+    Void => Void
+
+fn sku(it: Item) -> Str =
+  match it
+    Draft(Line { sku, .. }) | Priced { l: Line { sku, .. }, .. } => sku
+    Void => "-"
+
+fn bump(inout r: R) =
+  r.q.p.x += 1
+  r.q = { ..r.q, z: r.q.z + 10 }
+  r.w = r.w.concat("+")
+
+fn swap<T>(m: Maybe<T>) -> Maybe<T> =
+  match m
+    Got(Pair { a, b }) => Got(Pair { a: b, b: a })
+    Nope => Nope
+
+fn firsts<T>(m: Maybe<T>, d: T) -> T =
+  match m
+    Got(p) => p.a
+    Nope => d
+
+fn apply(f: fn(S) -> Int, v: S) -> Int = try f(v)
+
+fn main() uses Console =
+  // built, matched and read, in a loop
+  var t = 0
+  for i in 0..30
+    let v = s(i)
+    t += sum_s(v)
+    let k = take_q(v)
+    t += k.p.x + k.p.y + k.z
+    t += pick_p(v).y
+    t += as_parts(v)
+  print(t)
+  // read through a chain of fields, and whole
+  let r = R { q: q(4), w: "r" }
+  print(r.q.p.x + r.q.p.y + r.q.z)
+  let pq = r.q.p
+  print(pq.x * 100 + pq.y)
+  print(r.w)
+  // updated, by `..` and field by field, in a `var` and through `inout`
+  var m = r
+  m = { ..m, q: { ..m.q, p: { ..m.q.p, y: 50 } } }
+  m.q.z = 7
+  bump(&m)
+  bump(&m)
+  print(m.q.p.x + m.q.p.y + m.q.z)
+  print(m.w)
+  print(r.q.p.y + r.q.z)
+  // a variant type's update over a flattened field
+  match s(4)
+    Two { .. } as w =>
+      let w2 = { ..w, p: { ..w.p, x: 9 } }
+      print(w2.p.x + w2.p.y + w2.n)
+    _ => print(-1)
+  // records holding objects inside variants, priced again and again
+  let names = ["tea", "jam", "cake"]
+  var total = 0
+  var skus = ""
+  for i in 0..12
+    var it = line(i, names)
+    for _ in 0..3
+      it = price(it)
+    match it
+      Priced { total: n, .. } => total += n
+      _ => ()
+    skus = skus.concat(sku(it))
+  print(total)
+  print(skus)
+  // one object, flattened
+  var tg = Named(Name { s: "a" })
+  for i in 0..4
+    tg = match tg
+      Named(n) => if i == 3 then Anon else Named(Name { s: n.s.concat("b") })
+      Anon => Anon
+  match tg
+    Named(n) => print(n.s)
+    Anon => print("anon")
+  let tn = Named(Name { s: "kept" })
+  match tn
+    Named(Name { s: kept }) => print(kept)
+    Anon => print("anon")
+  // generic: at `Int` and at `Str`
+  let gi = swap(Got(Pair { a: 1, b: 2 }))
+  print(firsts(gi, 0))
+  let gs = swap(Got(Pair { a: "x", b: "y" }))
+  print(firsts(gs, "none"))
+  print(firsts(swap(Nope), "none"))
+  // an `Option` of a tuple, and of a tuple of a tuple and a `Str`
+  var best: Option<(Int, Int)> = None
+  for i in 0..10
+    best = match best
+      Some((a, b)) => if i % 2 == 0 then Some((a + i, b * 2)) else Some((a, b))
+      None => Some((i, 1))
+  match best
+    Some((a, b)) => print(a * 1000 + b)
+    None => print(-1)
+  let nt: Option<((Int, Int), Str)> = Some(((3, 4), "n"))
+  match nt
+    Some(((a, b), c)) =>
+      print(c)
+      print(a + b)
+    None => ()
+  // kept in arrays, inline: of scalars only, and of ones with objects
+  var ps: Array<S> = []
+  for i in 0..9
+    &ps.push(s(i))
+  ps[2] = One(q(20))
+  var u = 0
+  for v in ps
+    u += sum_s(v)
+  match ps[2]
+    One(k) => u += k.p.y
+    _ => ()
+  print(u)
+  var slips: Array<Slip> = []
+  for i in 0..6
+    &slips.push(if i % 3 == 2 then Blank else Written(Note { text: names[i % 3], n: i }))
+  slips[1] = Written(Note { text: "new", n: 10 })
+  var w = ""
+  var wn = 0
+  for sl in slips
+    match sl
+      Written(nt) =>
+        w = w.concat(nt.text)
+        wn += nt.n
+      Blank => w = w.concat("-")
+  print(w)
+  print(wn)
+  // packed scalars, flattened, read and changed through the outer value
+  var g = Set(Flags { on: true, hot: false, n: 3 })
+  for i in 0..5
+    g = match g
+      Set(f) => if i == 7 then Unset else Set({ ..f, hot: not f.hot, n: f.n + i })
+      Unset => Unset
+  match g
+    Set(Flags { on, hot, n }) =>
+      print(on)
+      print(hot)
+      print(n)
+    Unset => print("unset")
+  let g2 = Set(Flags { on: false, hot: true, n: 1 })
+  match g2
+    Set(f) => print(f.hot && not f.on)
+    Unset => ()
+  // an array of them, of scalars only, kept inline, changed in place
+  var qs: Array<Q> = [q(1), q(2), q(3)]
+  qs[1].p.x = 90
+  qs[0].z += 5
+  qs[2] = { ..qs[2], p: P { x: 7, y: 8 } }
+  var qt = 0
+  for k in qs
+    qt += k.p.x * 100 + k.p.y * 10 + k.z
+  print(qt)
+  // given to a block, and captured by one
+  print(apply(fn(v) => sum_s(v) * 2, s(3)))
+  let cap = s(6)
+  print(apply(fn(v) => sum_s(v) + sum_s(cap), s(7)))

@@ -566,27 +566,28 @@ fn main() =
 
 (* ---- s3: descriptions as the only stored code (decision 3) ---- *)
 
-let shapes =
+let codecs =
   {|
-dep Shape =
-  area: fn() -> Float
+dep Codec =
+  cost: fn() -> Float
 
-handler circle(r: Float) for Shape =
-  area() => 3.0 * r * r
+handler deflate(level: Float) for Codec =
+  cost() => 3.0 * level * level
 
-handler square(s: Float) for Shape =
-  area() => s * s
+handler lz4(block: Float) for Codec =
+  cost() => block * block
 |}
 
 let%expect_test "[s3 accept] stateless handlers called as methods" =
-  (* foundations.md's example: Ren's answer to `dyn Trait` *)
+  (* codecs a library keeps, each a kind its users may add: a call of one
+     as a method is a pure dispatch (foundations.md, decision 3) *)
   run
-    (shapes
+    (codecs
    ^ {|
 fn main() uses Console =
-  let shapes: Array<Shape> = [circle(1.0), square(2.0), circle(2.0)]
-  print(shapes.map(fn(s) => s.area()))
-  print(shapes.map(fn(s) => s.area()).sum())
+  let codecs: Array<Codec> = [deflate(1.0), lz4(2.0), deflate(2.0)]
+  print(codecs.map(fn(c) => c.cost()))
+  print(codecs.map(fn(c) => c.cost()).sum())
 |});
   [%expect {|
     [3.0, 4.0, 12.0]
@@ -621,11 +622,8 @@ fn main() uses Console =
     ()
     |}]
 
-let%expect_test "[s3 accept] a handler with state, called as a method, starts fresh" =
-  (* a method call is `with c in Counter.bump()`: its state lives for the
-     call (compiler.md, "Stage 10d") *)
-  run
-    {|
+let counter =
+  {|
 dep Counter =
   bump: fn() -> Int
 
@@ -634,18 +632,48 @@ handler counting() for Counter =
   bump() =>
     n += 1
     n
+|}
 
+let%expect_test "[s3 reject] a handler with state isn't called as a method" =
+  (* a method call would be `with c in Counter.bump()`, its state living
+     for the call, so it would say 1 each time: since the data stage's
+     step 6 it's refused, and the help writes the `with` (compiler.md,
+     "Data stage", "Descriptions (step 6)") *)
+  run
+    (counter
+   ^ {|
 fn main() uses Console =
   let c: Counter = counting()
   print(c.bump())
   print(c.bump())
+|});
+  [%expect {|
+    error: `c` may be a description of `counting`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:12:11
+    12 │   print(c.bump())
+       │           ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with c in Counter.bump()`
+
+    error: `c` may be a description of `counting`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:13:11
+    13 │   print(c.bump())
+       │           ^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with c in Counter.bump()`
+    |}]
+
+let%expect_test "[s3 accept] a handler with state, installed, keeps it" =
+  run
+    (counter
+   ^ {|
+fn main() uses Console =
+  let c: Counter = counting()
   with c in
     print(Counter.bump())
     print(Counter.bump())
-|};
+|});
   [%expect {|
-    1
-    1
     1
     2
     ()

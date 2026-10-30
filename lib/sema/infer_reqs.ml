@@ -79,6 +79,7 @@ and lack =
 let key_loops env p =
   let rec reaches seen (t : Ty.ty) =
     match t with
+    | Variant (q, _, args) -> reaches seen (Con (q, args))
     | Con (q, args) ->
         q = p
         || (not (List.mem q !seen))
@@ -227,7 +228,7 @@ and lacks_in env seen (t : Ty.ty) : Infer_msg.no_eq option =
       List.find_map
         (fun (l : Ty.label) -> List.find_map (lacks_in env seen) l.payload)
         e.labels
-  | Con (q, args) -> (
+  | Con (q, args) | Variant (q, _, args) -> (
       match decl_lacks env seen q with
       | Some w -> Some w
       | None -> List.find_map (lacks_in env seen) args)
@@ -255,6 +256,11 @@ let rec has env req t =
   | TVar { contents = Unbound (id, _) } | TSkol (id, _) -> Has [ (id, req) ]
   | TVar { contents = Link _ } -> assert false (* [repr] followed it *)
   | TError -> Has []
+  | TVariant (p, _, args) when List.mem req [ "eq"; "hash"; "ord" ] ->
+      (* borrowed: a variant type's `==`, `hash` and order are its sum's,
+         through the sum's `key` if it has one (language.md §2, "Derived
+         operations are borrowed") *)
+      has env req (TCon (p, args))
   | t -> (
       match req with
       | "eq" | "hash" -> has_eq env req t

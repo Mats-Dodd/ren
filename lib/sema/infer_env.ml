@@ -30,10 +30,19 @@ type 'l found_ =
   | Installs_handler of 'l list
       (** a link that describes a handler of these dependencies, which it makes
           an instance of *)
-  | Calls_op of { key : 'l; from : Path.t; op : string }
+  | Calls_op of {
+      key : 'l;
+      from : Path.t;
+      op : string;
+      recv : string;
+      call : string;
+    }
       (** at the [d.op] of [d.op(...)]: an operation called as a method of a
           description, which installs it for the call, as [key], implementing
-          [from] (foundations.md, decision 3) *)
+          [from] (foundations.md, decision 3); [recv] is [d] as written and
+          [call] the `with` that would make the call, as code to paste, `with
+          d in Area.area()`, for the error that refuses one of a handler with
+          state (stateless.ml) *)
   | Inline_op of { dep : Path.t; op : string }
       (** at an inline handler, `handler fn(...) => ...`: the operation of
           [dep] it implements, its only one (foundations.md, decision 3) *)

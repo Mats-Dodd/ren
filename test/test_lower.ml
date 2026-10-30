@@ -252,6 +252,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }));
   [%expect
     {|
@@ -299,6 +300,7 @@ let%expect_test "Core Lint reports a test function used by other code" =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }));
   [%expect
     {|
@@ -371,6 +373,7 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
               shows;
               keys = [];
               ops = [];
+              method_calls = [];
             });
       print_endline "ok")
 
@@ -461,6 +464,7 @@ let%expect_test "Core Lint reports a block that's returned" =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }));
   [%expect
     {|
@@ -523,6 +527,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }));
   [%expect
     {|
@@ -569,6 +574,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }));
   [%expect
     {|
@@ -622,6 +628,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }));
   [%expect
     {|
@@ -666,6 +673,7 @@ let values_program ~uses_b ~values =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }))
 
 let%expect_test "Core Lint reports a value named as a function" =

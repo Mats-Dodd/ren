@@ -1,0 +1,19 @@
+// Data stage, step 8, the review's fixes: a handler's state whose `let
+// ... else` reaches its `todo` when it's installed panics there, natively
+// as `ren run` does (review_state.ren's `logged`).
+
+dep Area =
+  area: fn() -> Str
+
+handler logged(name: Option<Str>) for Area uses Console =
+  let Some(n) = name else todo
+  finally(r) =>
+    print("finally ".concat(n))
+    try r
+  area() => n
+
+fn main() uses Console =
+  with logged(Some("l")) in
+    print(Area.area())
+  with logged(None) in
+    print(Area.area())

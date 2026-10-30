@@ -96,6 +96,7 @@ let rhs h (r : rhs) : rhs =
   | Compare (c, x, y) -> Compare (c, a x, a y)
   | Not x -> Not (a x)
   | Tag_of x -> Tag_of (a x)
+  | Obj_tag x -> Obj_tag (a x)
   | Field (x, i, n) -> Field (a x, i, n)
   | Alloc { tag; fields; words; at } ->
       Alloc

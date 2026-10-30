@@ -24,7 +24,8 @@ fn main() -> Int = seat_limit(Free)
     9 │   match p
       │   ^^^^^
       = missing: Enterprise(_)
-      help: add an arm for `Enterprise(_)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Enterprise(_) => todo
     |}]
 
 let%expect_test "several missing cases" =
@@ -40,7 +41,9 @@ fn main() -> Int =
     9 │   match Free
       │   ^^^^^
       = missing: Pro(_), Enterprise(_)
-      help: add an arm for `Pro(_)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Pro(_) => todo
+        Enterprise(_) => todo
     |}]
 
 let%expect_test "missing nested case" =
@@ -63,7 +66,8 @@ fn main() -> Int = f(None)
     9 │   match o
       │   ^^^^^
       = missing: Some(Enterprise(_))
-      help: add an arm for `Some(Enterprise(_))`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Some(Enterprise(_)) => todo
     |}]
 
 let%expect_test "guarded arms don't count" =
@@ -87,7 +91,8 @@ fn main() -> Int = f(Free)
       │   ^^^^^
       = missing: Pro(_)
       = arms with an `if` guard don't count, since the guard may be false
-      help: add an arm for `Pro(_)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Pro(_) => todo
     |}]
 
 let%expect_test "Int and Bool matches" =
@@ -107,7 +112,8 @@ fn main() -> Int = f(0)
     2 │   match n
       │   ^^^^^
       = missing: _
-      help: add a `_ =>` arm to cover the remaining values
+      help: add a `_ =>` arm to cover the remaining values:
+        _ => todo
     |}];
   run {|
 fn main() -> Int =
@@ -121,7 +127,8 @@ fn main() -> Int =
     2 │   match true
       │   ^^^^^
       = missing: false
-      help: add an arm for `false`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        false => todo
     |}];
   run {|
 fn main() -> Int =
@@ -185,14 +192,17 @@ fn main() =
     9 │   match p
       │   ^^^^^
       = missing: Pro(_), Enterprise(_)
-      help: add an arm for `Pro(_)`, or a `_ =>` arm for the rest
+      help: add the missing arms, or a `_ =>` arm for the rest:
+        Pro(_) => todo
+        Enterprise(_) => todo
 
     error: this `match` doesn't handle every `Bool`
        ┌─ test.ren:12:3
     12 │   match true
        │   ^^^^^
        = missing: false
-       help: add an arm for `false`, or a `_ =>` arm for the rest
+       help: add the missing arms, or a `_ =>` arm for the rest:
+        false => todo
     |}]
 
 let%expect_test "exhaustiveness isn't checked once inference finds errors" =

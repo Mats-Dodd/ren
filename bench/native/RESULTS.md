@@ -9,6 +9,325 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## The data stage: the milestone (compiler.md, "Data stage", "The layout fixes (step 7)")
+
+The milestone: dispatch's `interp` kernel, research/dispatch.md's
+expression tree, written ADT-first (`interp/bench.ren`: `Expr` a sum
+type of eight constructors, the binary ones by name, and `eval` a
+`match`), against its Rust twin, dispatch's `rust/main.rs` run as `100
+interp enum` (`Expr` an enum of `Box`es, `eval` a `match`), and beside
+the descriptions: Rust's `interp dyn` and dispatch's Ren `interp`
+(build.sh's `dispatch-interp`, `dep Node`). The same work in each: one
+tree of depth 17 from seed 1 (about 1,200 nodes), 25,600 evaluations, each
+with a fresh four-element environment; every one prints -326745600, as
+`ren run main.ren` does (16.5 s), and at the small size 105, which
+native.t checks against `ren run small.ren`.
+
+**The machine is the cloud container of "Data stage: layout" below**,
+not the M4 Max of the older sections: an Intel Xeon at 2.10 GHz, 4
+vCPUs under KVM, 15 GiB, Linux 6.18.44, GCC 13.3 (`cc`, which `ren
+build` runs), rustc 1.97.0, go 1.24.7, hyperfine 2.0.0. **These numbers
+are for comparison only; the owner re-measures on the M4 Max.** Runs
+here drift by 15 to 25% from one to the next (each kernel's σ below),
+so the instruction counts, from valgrind's cachegrind, are the steady
+measure; times are one hyperfine run of all six (`-N --warmup 5 --runs
+100`), release builds, in ms:
+
+| build | mean | median | min | instructions | mean / Rust enum | mean / Rust dyn |
+|---|---|---|---|---|---|---|
+| Ren, ADT (`interp-perceus`) | 163.5 ± 20.4 | 164.7 | 97.8 | 886.2 M | **1.13×** | 2.90× |
+| Rust, `interp enum` | 144.5 ± 12.6 | 144.9 | 99.8 | 870.6 M | 1.00× | 2.56× |
+| Rust, `interp dyn` | 56.4 ± 11.9 | 52.4 | 40.4 | 430.2 M | 0.39× | 1.00× |
+| Ren, descriptions (`dispatch-interp-perceus`) | 101.9 ± 22.0 | 94.4 | 69.8 | 985.7 M | 0.70× | **1.81×** |
+| Ren, ADT at 213b4a9 | 140.0 ± 20.6 | 142.6 | 87.4 | 965.0 M | 0.97× | 2.48× |
+| Go, `interp` (an interface) | 87.6 ± 20.5 | 81.2 | 60.8 | | 0.61× | 1.55× |
+
+**The ADT kernel is within 1.13× of its Rust twin** (1.14× by
+medians), on 2% more instructions: both are one function whose `match`
+is a jump table through the node's tag, and both are bound by that one
+indirect jump, which the predictor can't learn across a random tree.
+Each description's `eval`, Ren's and Rust's `dyn`, calls its children
+through their code pointers from the arm it's in, eight call sites the
+predictor tells apart, so both run faster than either `match` on as
+many instructions or more: Ren's descriptions 0.62× the ADT's time on
+11% more, Rust's `dyn` 0.39× its enum's on half. That's what the
+dispatch table above found on the M4 too (Rust's enum 1.52× its `dyn`
+there, 2.56× here), so the ADT kernel is 1.6× slower than the
+descriptions version on this machine, not faster: `Expr` written as a
+sum is the program the docs teach (step 6), and its cost is Rust's for
+the same program.
+
+**The one change, a tag read with no scalar test.** A boxed sum all of
+whose constructors have fields is never a scalar, so its tag is its
+header's: `((int64_t)e->tag)`, not `ren_tag(e)`, which tested the
+pointer's low bit first (Mem's `Obj_tag`; compiler.md, step 7's
+choices, part 4). `eval` loses a test and a branch a node: 965.0 to
+886.2 million instructions (0.92×), 109 to 78 million conditional
+branches. Its time, though, moves with code layout more than with its
+instructions, both ways: with GCC's default layout it's 1.06 to 1.18×
+the time at 213b4a9 in six runs (1.17× in the table's); built from the
+same C with `-Wa,-mbranches-within-32B-boundaries` it's 0.78× (145 ms
+against 186), and with clang 18 at -O2 0.94× (141 ms against 150, in
+two runs), so the default layout's slowdown is where GCC puts the jump
+table's targets, not the change. Two programs of the suite read such a
+tag, and run faster in two hyperfine runs each (`-N --warmup 3 --runs
+20`), the same output:
+
+| program | instructions, 213b4a9 | after | time (ms), 213b4a9 | after | after / before |
+|---|---|---|---|---|---|
+| deriv | 8,029 M | 7,482 M | 1379 ± 54, 1417 ± 88 | 1264 ± 52, 1279 ± 70 | 0.92×, 0.90× |
+| cfold | 789.1 M | 747.1 M | 199 ± 14, 213 ± 16 | 186 ± 17, 193 ± 12 | 0.93×, 0.91× |
+
+No other program or kernel of the suite compiles to different C (each
+`main.ren`, bench/data's and bench/10d's programs, both countings,
+compared as for the layout fixes); of bench/data, interp, shapes,
+variants and variants_reuse do, and of bench/10d, overany and
+review_deps, each only in that read.
+
+**What's left in `eval`'s C,** each measured by editing the generated C
+by hand and counting instructions (none of these is built):
+
+| removed | instructions | against the built 886.2 M |
+|---|---|---|
+| `REN_STACK_CHECK()` at each call | 669.4 M | 0.76× |
+| the switch's default arm, the `match`'s "no arm matched" panic, as `__builtin_unreachable()` | 824.3 M | 0.93× |
+| `env[i]`'s bounds check | 871.5 M | 0.98× |
+| `+` and `-` checked, as wrapping | 1,016.0 M | 1.15× (GCC lays the wrapping version out worse) |
+| all four | 731.9 M | 0.83× |
+
+The stack check, checked arithmetic and the bounds check are the
+language's semantics (decision 15: an overflow, of the stack or of an
+`Int`, panics where it happens), so they stay; the stack check costs
+most because `__builtin_frame_address(0)` makes GCC keep a frame
+pointer, so it's seven instructions a call where the compare alone is
+three. The default arm is unreachable, since a value of a sum
+has one of its tags and the switch has a case for each, but making it
+`__builtin_unreachable()` turns a compiler fault into undefined
+behaviour where it's a panic today, for 7% of the instructions and no
+time this machine can see; not done. The evidence `eval` is passed and
+doesn't use costs nothing (GCC drops it, `ren_bench_eval_1.isra.0`).
+Ren allocates each evaluation's environment, 25,600 of the 26,812
+allocations (`--stats`), where Rust's is on the stack: one allocation
+for about 1,200 nodes evaluated, nothing to see.
+
+**How**, from the repository, `$S` a scratch folder:
+
+    sh bench/native/build.sh $S/bench        # interp-perceus, dispatch-interp-perceus, dispatch-rust, dispatch-go
+    sh bench/native/measure.sh $S/bench $S/res machine stats time
+    python3 -I bench/native/summarize.py $S/res     # the last table: the milestone's ratios
+    # or alone, as above:
+    hyperfine -N --warmup 5 --runs 100 -n ren-adt $S/bench/interp-perceus \
+      -n rust-enum "$S/bench/dispatch-rust 100 interp enum" \
+      -n rust-dyn "$S/bench/dispatch-rust 100 interp dyn" \
+      -n ren-descriptions $S/bench/dispatch-interp-perceus \
+      -n go "$S/bench/dispatch-go 100 interp"
+    valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null $S/bench/interp-perceus   # "I refs"
+    (cd bench/native/interp && ren run small.ren && ren run main.ren)   # 105; -326745600
+    # the change against 213b4a9: build each compiler, then each program with each
+    # (`ren build main.ren --release`), and time them in one run as above; the
+    # layout check builds `ren build main.ren --release --emit-c`'s C with
+    # cc -O2 -ffp-contract=off -Wa,-mbranches-within-32B-boundaries ... -lm -lpthread
+
+## Data stage: layout (compiler.md, "Data stage", "The layout fixes (step 7)")
+
+The data stage's three layout faults, each measured before its fix and
+after it, on the kernel bench/data has for it and on this folder's
+suite. **The machine isn't the M4 Max of the sections below:** a cloud
+container, an Intel Xeon at 2.10 GHz, 4 vCPUs under KVM, 15 GiB, Linux
+6.18.44, GCC 13.3, rustc 1.97.0, go 1.24.7, hyperfine 2.0.0, load
+average under 1. Its numbers are for before and after only; whole runs
+drift by up to 15% between hours (the Rust and Go twins, which don't
+change, moved 0.83× to 1.17× from one run of the suite to the next).
+
+**Before, at 8c7c65c, all three faults.** Release builds, 100,000 items
+each; allocations from `--stats`, peak resident memory from GNU time,
+time hyperfine's (`-N --warmup 5 --runs 50`, the kernels in one run),
+mostly the process starting:
+
+| kernel | the fault | allocations | peak RSS | time (ms) |
+|---|---|---|---|---|
+| nested | a small record in a small variant, `Draft(u: Unvalidated)` | 66,671 | 2.1 MB | 2.60 ± 0.36 |
+| rows | an array of records holding a `Str`, `Array<Line>` | 100,006 | 5.8 MB | 6.25 ± 1.36 |
+| optional | an `Option` of a record holding a `Str`, `Option<Item>` | 101,004 | 2.1 MB | 3.25 ± 0.50 |
+
+nested's last line printed an `Item` when step 0 wrote it, and `show`
+boxes a small value's type program-wide (compiler.md, "Small values are
+values"), which boxed `Unvalidated` too: 200,005 allocations, whatever
+the layout. It prints the total now (compiler.md, step 7's choices).
+rows' and optional's last lines `show` a `Line` and an `Option<Item>`
+the same way.
+
+**The first fix: a small record or tuple in a small value is flattened
+into its slots.** `Item` is a tag and `Unvalidated`'s two slots, and a
+`Draft` allocates nothing:
+
+| kernel | allocations, 8c7c65c | after | time (ms), 8c7c65c | after |
+|---|---|---|---|---|
+| nested | 66,671 | **4** | 2.47 ± 0.53 | 1.71 ± 0.42 |
+| nested, 100 times the items | 6,666,671 | **4** | 64.2 ± 8.7 | **17.0 ± 4.5** |
+| rows | 100,006 | 100,006 | | |
+| optional | 101,004 | 101,004 | | |
+
+Each pair of times is one hyperfine run of both binaries (200 runs for
+nested, 20 for the copy with a loop of 10 million, built from nested.ren
+by changing its count). Peak memory doesn't move (2.1 MB); rows and
+optional wait for the second and third fixes.
+
+**The suite**, every kernel measure.sh times, before and after, in two
+runs about two hours apart. Of its 49 programs and kernels, only three
+compile to different C, through the fix to reuse's sizes that the
+layout tests needed (compiler.md, step 7's choices), not the layout:
+deriv reuses 9.7 million objects, not 4.5 million, and allocates 31.4
+million, not 36.6 million; rbtree drops a reset in its `Leaf` arm that
+never ran; cfold's drops move. In one hyperfine run of before and after
+(`-N --warmup 3 --runs 20`): deriv 1.440 ± 0.096 s to 1.381 ± 0.088 s,
+rbtree 1.333 ± 0.105 to 1.371 ± 0.142, cfold 0.214 ± 0.017 to 0.212 ±
+0.020, so no regression. The rest of the suite is the same C, so its
+changes between the two runs, 0.82× to 1.05×, are the machine's, as the
+twins' are; peak memory is the same to 0.1 MB for every Ren build.
+
+| program | build | 8c7c65c (s) | after (s) | after / before |
+|---|---|---|---|---|
+| rbtree | perceus | 1.335 ± 0.150 | 1.250 ± 0.134 | 0.94× |
+| deriv | perceus | 1.388 ± 0.102 | 1.364 ± 0.073 | 0.98× |
+| nqueens | perceus | 1.072 ± 0.093 | 1.007 ± 0.059 | 0.94× |
+| cfold | perceus | 0.213 ± 0.024 | 0.195 ± 0.020 | 0.91× |
+| binary-trees | perceus | 13.245 ± 0.546 | 12.283 ± 0.374 | 0.93× |
+| nbody | perceus | 3.842 ± 0.238 | 3.700 ± 0.234 | 0.96× |
+| fannkuch | perceus | 2.788 ± 0.189 | 2.869 ± 0.137 | 1.03× |
+| inout | perceus | 3.022 ± 0.298 | 2.762 ± 0.338 | 0.91× |
+| nested | perceus | 1.754 ± 0.237 | 1.543 ± 0.096 | 0.88× |
+| dispatch interp | perceus | 0.117 ± 0.031 | 0.110 ± 0.032 | 0.93× |
+
+**The second fix: an array of small values that hold objects keeps them
+inline,** counted by the mask of their slots that hold objects, which
+the array's header keeps in its `objs` byte, instead of boxing their
+type program-wide. Against d86b474, the first fix's commit, in one
+hyperfine run of both binaries each (`-N`; 200 runs for rows, 20 for
+the copy of it with 100 times the items, built from rows.ren by
+changing its count), release:
+
+| kernel | allocations, d86b474 | after | peak RSS, d86b474 | after | time (ms), d86b474 | after |
+|---|---|---|---|---|---|---|
+| rows | 100,006 | **6** | 6.1 MB | 3.8 MB | 6.41 ± 0.90 | **3.50 ± 1.51** |
+| rows, 100 times the items | 10,000,006 | **6** | 402 MB | 162 MB | 445.6 ± 35.9 | **186.7 ± 29.1** |
+
+rows.ren's last line printed `ls[4]`, whose `show` boxes `Line`
+whatever the layout (100,006 allocations at d86b474 and after); it
+prints the element's fields now, `bb` and `4` (compiler.md, step 7's
+choices). What's left is the array and its growth: 17 doublings,
+`Line` two words inline, `{ sku, qty }`, the `Str` counted by the mask
+`0b01`.
+
+**The suite, second fix.** Of its programs and kernels, only `slices`
+compiles to different C, and `nbody` in one argument, the mask 0 of an
+array of uncounted structs: slices' `json` and `pages` tokens, an `Int`
+and a slice or two slices, are inline in their arrays now. Each against
+d86b474 in one hyperfine run (`-N --warmup 2`, 10 runs, 40 for the
+pages kernels, whose runs vary most), release, the same output:
+
+| program | allocations, d86b474 | after | peak RSS MB, d86b474 | after | time (s), d86b474 | after | after / before |
+|---|---|---|---|---|---|---|---|
+| slices (main.ren) | 164,220,000 | 96,149,400 | 381.6 | 305.6 | 6.701 ± 0.200 | 5.881 ± 0.280 | 0.88× |
+| slices, `json` kernel | 127,999,826 | 63,999,926 | 245.0 | 193.6 | 3.384 ± 0.133 | 2.644 ± 0.084 | 0.78× |
+| slices, `pages` kernel | 12,220,125 | 8,149,425 | 149.5 | 149.5 | 0.371 ± 0.053 | 0.342 ± 0.048 | 0.92× |
+| slices, `json_r` | 26 | 26 | 108.7 | 108.7 | 1.900 ± 0.127 | 1.652 ± 0.071 | 0.87× |
+| slices, `pages_r` | 8,025 | 8,025 | 149.5 | 149.3 | 0.259 ± 0.045 | 0.248 ± 0.031 | 0.96× |
+| nbody | 12 | 12 | 3.5 | 3.5 | 3.869 ± 0.329 | 3.678 ± 0.241 | 0.95× |
+
+The offsets kernels, `json_r` and `pages_r`, and nbody run the same
+code as before in their loops (their C differs in functions they don't
+call, or in the mask alone), so their ratios are this machine's noise.
+A first build pushed a struct's words through an out-of-line call that
+copied them with a `memcpy` of the stride the array keeps, and `pages`
+ran 7% slower than at d86b474 on 3% fewer instructions (cachegrind):
+the push of a struct whose size the compiler knows is inline now
+(`ren_array_push_slots_taking_k`), its words stores, and `pages` is
+0.92×. The rest of the suite is the same C as at d86b474.
+
+**The third fix: a byte tag, and pointer niches.** A sum with one
+constructor that has fields, one an object, and the rest without has no
+tag: the object's slot holds `ren_box(UINT32_MAX - t)` for constructor
+`t` without fields. Any other sum's tag is the low byte of slot 0, its
+constructors' small scalars packed above it. `Option<Item>` is two
+words, `{ name, price }`, where it was a tag and two slots. optional.ren's
+last line printed `best`, whose `show` boxes `Option<Item>` and so
+`Item`, 101,004 allocations at 7c68889 and after; it prints `best`'s
+fields now, `tea` and `7` (compiler.md, step 7's choices), and with that
+change alone it allocates 4 at 7c68889 too, the option a tag and two
+slots: the second word is what this fix saves. Against 7c68889, the
+second fix's commit, all in one hyperfine run (`-N --warmup 5 --runs
+50`), release, with instructions from valgrind's lackey, which this
+machine (no perf) counts steadily where its times drift; the copy with
+100 times the items is optional.ren with its count changed, and the
+array holds a million options, half `None`, read ten times:
+
+| kernel | allocations, 7c68889 | after | peak RSS, 7c68889 | after | instructions, 7c68889 | after | time (ms), 7c68889 | after |
+|---|---|---|---|---|---|---|---|---|
+| optional | 4 | 4 | 2.1 MB | 2.1 MB | 4.40 M | 4.30 M | 2.05 ± 0.32 | 2.30 ± 0.71 |
+| optional, 100 times the items | 4 | 4 | 2.1 MB | 2.1 MB | 411.2 M | **401.4 M** | 29.2 ± 6.9 | 31.8 ± 8.1 |
+| `Array<Option<Item>>`, a million | 4 | 4 | 25.2 MB | **17.6 MB** | 308.9 M | **256.4 M** | 45.7 ± 8.1 | **36.6 ± 5.8** |
+| optional as step 0 wrote it, `print(best)` | 101,004 | 101,004 | 2.1 MB | 2.1 MB | 12.53 M | 12.53 M | | |
+
+The first two runs' times are within this machine's noise of each other
+(their minimums, 1.56 and 1.45 ms, 19.6 and 19.5 ms, agree), on 2% fewer
+instructions: a variable's option is a word less to copy, and the match
+compares a pointer where it read a tag. An array of them is a third
+smaller, 16.8 MB of elements, not 25.2, and reading it 0.80× as long.
+
+**The suite, third fix.** No program or kernel of the suite compiles to
+different C: none keeps a sum that's a small value and has a niche or a
+scalar to pack beside its tag (the C of every program and kernel
+build.sh builds, both countings, compared as for the second fix). A sum
+with nothing packed beside its tag keeps the whole word, read without a
+mask, so `stack`'s `Option<Int>` is as it was. Nothing in it to time.
+
+**How.** `$S` is a scratch folder, `ren` the compiler at each commit
+copied there before building the next:
+
+    sh bench/native/build.sh $S/bench-before          # REN=$S/before/ren
+    REN=$S/before/ren sh bench/native/measure.sh $S/bench-before $S/res-before machine stats time memory
+    sh bench/native/build.sh $S/bench-after           # REN=$S/after/ren
+    REN=$S/after/ren sh bench/native/measure.sh $S/bench-after $S/res-after machine stats time memory
+    python3 -I bench/native/summarize.py $S/res-after
+    # the kernels, from bench/data, each binary built both ways
+    ren build --release nested.ren -o nested
+    ren build --release --stats nested.ren -o nested-stats && ./nested-stats
+    /usr/bin/time -v ./nested        # peak RSS
+    hyperfine -N --warmup 5 --runs 200 -n before $S/before/nested -n after $S/after/nested
+    # the second fix: rows the same way; which programs' C changed, from
+    # the C of every program and kernel build.sh builds, both countings,
+    # emitted by each compiler (`ren build main.ren --release --emit-c`,
+    # the part after `---- the program ----`) and compared; then each
+    # program whose C changed timed against d86b474 in one run
+    hyperfine -N --warmup 2 --runs 10 -n before $S/before/slices -n after $S/after/slices
+    # the third fix: optional the same way, and its two copies, in one run
+    sed 's/for k in 0..100000/for k in 0..10000000/' optional.ren > optional_big.ren
+    hyperfine -N --warmup 5 --runs 50 -n optional-before $S/before/optional -n optional-after $S/after/optional ...
+    valgrind --tool=lackey --basic-counts=yes ./optional     # "guest instrs"
+
+The array of options, `optional_array.ren` above:
+
+    type Item = { name: Str, price: Int }
+
+    fn main() uses Console =
+      let names = ["tea", "jam", "cake"]
+      var os: Array<Option<Item>> = []
+      for k in 0..1000000
+        let price = k * 7919 % 1000
+        &os.push(if price < 500 then Some(Item { name: names[k % 3], price }) else None)
+      var t = 0
+      for round in 0..10
+        for o in os
+          match o
+            Some(i) => t += i.price + i.name.len() + round
+            None => t += 1
+      print(t)
+
+measure.sh's whole run took 67 minutes here. build.sh stopped at the
+dispatch kernels at 8c7c65c (step 6 renamed `shapesK` to `codecsK`), and
+measure.sh's peak memory needed BSD time's `-l`: both are fixed.
+
 ## Dispatch (foundations.md, decision 4; compiler.md, "Dispatch (step 4)")
 
 `dispatch`'s kernels, each alone at main.ren's size (build.sh's
@@ -197,6 +516,13 @@ numbers into a dense array of entries.
 sh bench/native/profile/build.sh $out
 KERNELS=maps python3 -I bench/native/profile/measure.py $out 11
 ```
+Since the data stage's step 6 (compiler.md, "Data stage", "Descriptions
+(step 6)"), Ren's side of the shapesK kernels is codecs, `dep Codec2 =
+cost: fn() -> Int` and so on, since a program that owns every shape
+writes the ADT; the kernels keep their names here, in measure.sh and in
+the twins. Only names changed: the release build's C is the same but
+for its handlers' names, the checksums are the same, so these numbers
+stand (checked on a Linux cloud container, against ed8f0f8).
 
 ## Slices (foundations.md, decision 17; compiler.md, step 6)
 

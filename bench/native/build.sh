@@ -58,6 +58,8 @@ for dir in "$here"/*/; do
       build "$dir" "$out/$name-norestrict" --release --no-restrict
       ;;
   esac
+  # `interp` has no twins of its own: dispatch's are its (measure.sh)
+  [ -d "$dir/rust" ] || continue
   rustc -C opt-level=3 -C codegen-units=1 -o "$out/$name-rust" "$dir/rust/main.rs"
   # one file, built outside any module, so no go.mod is needed
   (cd "$dir/go" && go build -o "$out/$name-go" main.go)
@@ -121,12 +123,14 @@ for k in with function; do
 done
 # decision 4's dispatch (research/dispatch.md): each of `dispatch`'s
 # kernels alone, at main.ren's size; its Rust and Go twins run one
-# kernel given its name (measure.sh)
+# kernel given its name (measure.sh). The shapesK kernels are the
+# codecsK functions since the data stage's step 6, under their old names
+# (RESULTS.md, "Dispatch")
 dk() { kernel dispatch "$1" "fn main() uses Console = print($2)"; }
-dk shapes2 "shapes2(65_536, 100)"
-dk shapes4 "shapes4(65_536, 100)"
-dk shapes8 "shapes8(65_536, 100)"
-dk shapes32 "shapes32(65_536, 100)"
+dk shapes2 "codecs2(65_536, 100)"
+dk shapes4 "codecs4(65_536, 100)"
+dk shapes8 "codecs8(65_536, 100)"
+dk shapes32 "codecs32(65_536, 100)"
 dk db "db(100, 104_857_600)"
 dk router "router(65_536, 100)"
 dk interp "interp(25_600)"

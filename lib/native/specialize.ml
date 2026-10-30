@@ -66,6 +66,7 @@ let close_ty ~fin (s : sub) (t : Ty.ty) : Ty.ty =
     | Var i when fin && i = n -> Var 0
     | Var _ -> Ty.unit
     | Con (p, ts) -> Con (p, List.map ty ts)
+    | Variant (p, c, ts) -> Variant (p, c, List.map ty ts)
     | Fun (ps, r, e, u) ->
         Fun
           ( List.map (fun (p : Ty.param) -> { p with ty = ty p.ty }) ps,
@@ -115,7 +116,7 @@ let rec closed (t : Ty.ty) =
   in
   match t with
   | Var _ -> false
-  | Con (_, ts) -> List.for_all closed ts
+  | Con (_, ts) | Variant (_, _, ts) -> List.for_all closed ts
   | Fun (ps, r, e, u) ->
       List.for_all (fun (p : Ty.param) -> closed p.ty) ps
       && closed r && row e && row u
@@ -134,7 +135,7 @@ let error_vars (t : Ty.ty) =
   let rec ty (t : Ty.ty) =
     match t with
     | Var _ | Error -> ()
-    | Con (_, ts) -> List.iter ty ts
+    | Con (_, ts) | Variant (_, _, ts) -> List.iter ty ts
     | Fun (ps, r, e, u) ->
         List.iter (fun (p : Ty.param) -> ty p.ty) ps;
         ty r;
@@ -252,6 +253,7 @@ let rec map_vars f (e : C.expr) : C.expr =
     | Con (p, c, args) -> Con (p, c, List.map go args)
     | Record (p, fs) -> Record (p, List.map (fun (n, x) -> (n, go x)) fs)
     | Field (r, p, n) -> Field (go r, p, n)
+    | Of_variant r -> Of_variant (go r)
     | Update (r, n, v) -> Update (go r, n, go v)
     | Array xs -> Array (List.map go xs)
     | Tuple xs -> Tuple (List.map go xs)
@@ -277,6 +279,8 @@ and map_desc f (d : C.desc) : C.desc =
   | Known _ -> d
   | Param v -> Param (f v)
   | Applied (p, ds) -> Applied (p, List.map (map_desc f) ds)
+  | Applied_variant (p, c, ds) ->
+      Applied_variant (p, c, List.map (map_desc f) ds)
   | Errs r ->
       Errs
         {
@@ -312,7 +316,9 @@ and map_pat f (p : C.pattern) : C.pattern =
     | PCon (t, c, ps) -> PCon (t, c, List.map (map_pat f) ps)
     | PTag (t, ps) -> PTag (t, List.map (map_pat f) ps)
     | PTuple ps -> PTuple (List.map (map_pat f) ps)
+    | PRecord (t, ps) -> PRecord (t, List.map (map_pat f) ps)
     | POr ps -> POr (List.map (map_pat f) ps)
+    | PAs (q, v) -> PAs (map_pat f q, f v)
     | (PWild | PInt _ | PBool _) as k -> k
   in
   { p with pkind }
@@ -619,6 +625,7 @@ let key_label (k : C.dkey) : Ty.label =
     match d with
     | Known t -> t
     | Applied (p, ds) -> Con (p, List.map ty ds)
+    | Applied_variant (p, c, ds) -> Variant (p, c, List.map ty ds)
     | Param _ | Errs _ -> Error
   in
   { name = Ty.dep_label k.kpath; payload = List.map ty k.kargs }
@@ -635,16 +642,24 @@ let rec desc env (d : C.desc) : C.desc =
         ->
           Known (List.nth s.tys (-1 - v.id))
       | Param v -> Param (cvar env v)
-      | Applied (p, ds) ->
+      | Applied (p, ds) -> (
           let ds = List.map (desc env) ds in
-          let known =
-            List.filter_map (function C.Known t -> Some t | _ -> None) ds
-          in
-          if List.length known = List.length ds then Known (Con (p, known))
-          else Applied (p, ds)
+          match known ds with
+          | Some ts -> Known (Con (p, ts))
+          | None -> Applied (p, ds))
+      | Applied_variant (p, c, ds) -> (
+          let ds = List.map (desc env) ds in
+          match known ds with
+          | Some ts -> Known (Variant (p, c, ts))
+          | None -> Applied_variant (p, c, ds))
       | Errs r -> (
           let row = errs_of_desc env r in
           match row with Some t -> Known t | None -> Errs r))
+
+(* The types descriptors describe, if each is known. *)
+and known ds =
+  let ts = List.filter_map (function C.Known t -> Some t | _ -> None) ds in
+  if List.length ts = List.length ds then Some ts else None
 
 (* An error set's descriptor, closed, as the type it describes, if all
    it holds is known. *)
@@ -707,6 +722,12 @@ let rec pattern env (p : C.pattern) : C.pattern * env =
       | PCon (t, c, ps) -> PCon (t, c, List.map go ps)
       | PTag (t, ps) -> PTag (t, List.map go ps)
       | PTuple ps -> PTuple (List.map go ps)
+      | PRecord (t, ps) -> PRecord (t, List.map go ps)
+      | PAs (q, v) ->
+          let q = go q in
+          let v = cvar !env v in
+          env := in_scope !env v;
+          PAs (q, v)
       | POr (first :: rest) ->
           let first = go first in
           POr (first :: List.map (fun q -> fst (pattern !env q)) rest)
@@ -1027,6 +1048,7 @@ let rec rw cx fb env (e : C.expr) : C.expr =
   | Con (p, c, args) -> mk (Con (p, c, List.map r args))
   | Record (p, fs) -> mk (Record (p, List.map (fun (n, x) -> (n, r x)) fs))
   | Field (x, p, n) -> mk (Field (r x, p, n))
+  | Of_variant x -> mk (Of_variant (r x))
   | Update (x, n, v) -> mk (Update (r x, n, r v))
   | Array xs -> mk (Array (List.map r xs))
   | Tuple xs -> mk (Tuple (List.map r xs))

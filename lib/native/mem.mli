@@ -70,8 +70,10 @@ type layout =
           value and never allocated. With [true], a slot holds an object, and
           the struct is counted as its slots are, each its own (Koka's value
           types, Backend/C/FromCore.hs:1048, [genDupDropValue]); with [false],
-          it's never counted, and may be an array's element. Never a word, nor
-          in an object: a type whose value would be one is boxed instead *)
+          it's never counted. Either may be an array's element, kept inline,
+          which the array counts by the mask of its slots that hold objects
+          (ren_rt.h, [ren_obj]'s [objs]). Never a word, nor in an object: a
+          type whose value would be one is boxed instead *)
   | Token
       (** a reuse token: the memory of an object a [Reset] found unique, to
           build a new one in, or NULL. Never counted, and used or freed once *)
@@ -85,16 +87,23 @@ type layout =
 (* How a [Struct] keeps its value. *)
 type struct_kind =
   | Product  (** a record's or a tuple's fields, a slot each *)
-  | Tagged
-      (** a sum's: slot 0 its constructor's tag, an [Int], and the fields of
-          each constructor in the slots after, which constructors share where
+  | Tagged of int
+      (** a sum's: slot 0 an [Int], its constructor's tag in its low [bits]
+          bits, 8 for up to 256 constructors, and each constructor's small
+          scalars packed above it ([Pack]), or, with none, the tag the whole
+          word, [64]; the other fields of each
+          constructor in the slots after, which constructors share where
           their layouts are the same; a slot a constructor has no field in
           holds a scalar ([Scalar_ctor 0] where it's [Boxed]) *)
-  | Nullable of int * int
-      (** a sum of two constructors, the first tag's without fields and the
-          second's with one, an object, its only slot: the object, or
-          [Scalar_ctor (-1)], which no object or constructor is, for the first
-          (Koka's [DataAsMaybe], Core/Core.hs:533) *)
+  | Niche of { obj_ctor : int; slot : int; ctors : int }
+      (** a sum of [ctors] constructors, one with fields, [obj_ctor], at
+          least one an object, and the rest without: no tag. The slots are
+          [obj_ctor]'s fields', and its object in [slot] says which
+          constructor it is: there, constructor [t] without fields is
+          [Scalar_ctor (-1 - t)], [ren_box(UINT32_MAX - t)], which no object
+          or other constructor is, its other slots scalars (Roc's
+          [NullableUnwrapped], Swift's spare bits; Koka's [DataAsMaybe],
+          Core/Core.hs:533, the case of one without fields) *)
 
 (* A [Struct]: its slots' layouts, and how it keeps its value. *)
 type strukt = { sfields : layout list; skind : struct_kind }
@@ -119,7 +128,8 @@ type atom =
   | Unit
   | Enum_tag of int  (** an [Enum]: the constructor with this tag *)
   | Scalar_ctor of int
-      (** a [Boxed] sum's constructor without fields, with this tag *)
+      (** a [Boxed] sum's constructor without fields, with this tag; below
+          0, [-1 - t], constructor [t]'s niche in a [Niche] struct *)
   | Lit of int
       (** the program's [strings]'s n-th, a [Str] made once and never freed *)
   | Desc_lit of int
@@ -380,10 +390,11 @@ type rt =
   | Value_any of bool  (** a descriptor: `zero`, or `one` if [true] *)
   | New_desc of new_desc
       (** a descriptor built of the descriptors given: a named type's, from its
-          declaration, the program's [decls]'s n-th, or an array's or a tuple's
-      *)
+          declaration, the program's [decls]'s n-th, a variant type's, from its
+          sum's and its constructor's tag, or an array's or a tuple's *)
 
-and new_desc = Of_decl of int | Of_array | Of_tuple | Of_map | Of_set
+and new_desc = Of_decl of int | Of_variant of int * int | Of_array | Of_tuple
+  | Of_map | Of_set
 
 (* What a slice is of: a `Str` and `Bytes` are both the runtime's strings,
    but a `Str`'s slice can't cut a character. *)
@@ -403,7 +414,11 @@ type rhs =
   | Not of atom
   | Tag_of of atom
       (** the tag of a sum type's value, an [Int]: an [Enum], a [Boxed], or a
-          [Struct] that's [Tagged] or [Nullable] *)
+          [Struct] that's [Tagged] or [Niche] *)
+  | Obj_tag of atom
+      (** the tag of a [Boxed] sum type's value every constructor of which has
+          fields, an [Int]: always an object, so its header's, with no test for
+          a constructor without fields, a scalar *)
   | Field of atom * int * int
       (** the [n]-th field of a constructor, a record or a tuple of [size]
           fields, by its slot: borrowed, not counted again *)
@@ -634,6 +649,10 @@ type dkind =
   | D_str
   | D_bytes
   | D_named of int  (** the program's [decls]'s n-th *)
+  | D_variant of int * int
+      (** a variant type: its sum's, the [decls]'s n-th, and its constructor's
+          tag; walked as the sum's, and only another of that variant is the
+          same, so a dependency's key at it is its own *)
   | D_array
   | D_tuple
   | D_errors
@@ -650,7 +669,9 @@ type desc = { dkind : dkind; dargs : int list; dcounted : bool }
    templates, among the program's [descs]. *)
 type decl_body =
   | Record_decl of (string * int) list
-  | Sum_decl of (string * int list) list  (** its constructors, by tag *)
+  | Sum_decl of (string * string list option * int list) list
+      (** its constructors, by tag: each one's name, its fields' names if it's
+          by name, which `show` writes, and its fields' templates *)
   | Rep_decl of int  (** an opaque type: what it's represented as *)
 
 type decl = {

@@ -747,14 +747,17 @@ fn main() = ()
     12 │   match attempt big(id)
        │   ^^^^^
        = missing: Err(TooBig)
-       help: add an arm for `Err(TooBig)`, or a `_ =>` arm for the rest
+       help: add the missing arms, or a `_ =>` arm for the rest:
+        Err(TooBig) => todo
 
     error: this `match` doesn't handle every `Result`
        ┌─ test.ren:16:3
     16 │   match attempt big(id)
        │   ^^^^^
        = missing: Err(NotFound(_)), Err(TooBig)
-       help: add an arm for `Err(NotFound(_))`, or a `_ =>` arm for the rest
+       help: add the missing arms, or a `_ =>` arm for the rest:
+        Err(NotFound(_)) => todo
+        Err(TooBig) => todo
     |}];
   (* a misspelled tag is a different error, which the `Result` can't hold *)
   types
@@ -1378,7 +1381,8 @@ fn main() = ()
     4 │   match d(n - 1)
       │   ^^^^^
       = missing: fail One
-      help: add an arm for `fail One`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+      help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+        fail One => todo
     |}]
 
 let%expect_test "an or-pattern's names have one type" =
@@ -1393,10 +1397,11 @@ fn main() = ()
 |};
   [%expect
     {|
-    error: `x` is a `Bool` here, but an `Int` in the first alternative
+    error: `x` is an `Int` in `fail NotFound(x)`, but a `Bool` in `fail Bad(x)`
       ┌─ test.ren:5:33
     5 │     fail NotFound(x) | fail Bad(x) => 0
       │                                 ^
+      help: bind it to one type in every alternative
     |}]
 
 let%expect_test "a match handles every value and every error" =
@@ -1435,28 +1440,32 @@ fn main() = ()
     6 │   match load(id)
       │   ^^^^^
       = missing: fail TooBig(_, _)
-      help: add an arm for `fail TooBig(_, _)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+      help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+        fail TooBig(_, _) => todo
 
     error: this `match` doesn't handle every error it can fail with
        ┌─ test.ren:10:3
     10 │   match load(id)
        │   ^^^^^
        = missing: fail TooBig(_, _)
-       help: add an arm for `fail TooBig(_, _)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+       help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+        fail TooBig(_, _) => todo
 
     error: this `match` doesn't handle every `Int`
        ┌─ test.ren:14:3
     14 │   match load(id)
        │   ^^^^^
        = missing: _
-       help: add a `_ =>` arm to cover the remaining values
+       help: add a `_ =>` arm to cover the remaining values:
+        _ => todo
 
     error: this `match` doesn't handle every error it can fail with
        ┌─ test.ren:17:3
     17 │   match load(id)
        │   ^^^^^
        = missing: fail NotFound(_)
-       help: add an arm for `fail NotFound(_)`, or a `fail _ =>` arm for the rest, or pass them on with `try match`
+       help: add the missing arms, or a `fail _ =>` arm for the rest, or pass them on with `try match`:
+        fail NotFound(_) => todo
     |}];
   (* an arm after `fail _` can never match an error *)
   types
@@ -1700,7 +1709,8 @@ fn main() = ()
       = missing: fail _
       = arms with an `if` guard don't count, since the guard may be false
       = it can fail with whatever a function it was passed fails with, so only `fail _` matches all of it
-      help: add a `fail _ =>` arm, or pass the errors on with `try match`
+      help: add a `fail _ =>` arm, or pass the errors on with `try match`:
+        fail _ => todo
     |}];
   (* a public function passes them on, as its signature says *)
   types

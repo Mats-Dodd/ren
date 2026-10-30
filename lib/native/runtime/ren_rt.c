@@ -118,7 +118,7 @@ static size_t ren_elem_bytes(ren_obj *a) {
                     : (size_t)ren_stride(a) * sizeof(ren_val);
 }
 
-static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
+static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, uint8_t objs,
                                   uint32_t stride, uint8_t kind) {
   ren_array *a = ren_alloc_bytes(sizeof(ren_array));
   cap = cap > len ? cap : len;
@@ -132,29 +132,47 @@ static ren_obj *ren_alloc_array_c(int64_t len, int64_t cap, bool boxed_elems,
 #endif
   a->h.rc = 1;
   a->h.tag = REN_TAG_ARRAY;
-  a->h.objs = boxed_elems;
+  a->h.objs = objs;
   a->len = len;
   a->cap = cap;
   a->root = NULL;
   return &a->h;
 }
 
-static ren_obj *ren_alloc_array_s(int64_t len, bool boxed_elems,
-                                  uint32_t stride) {
-  return ren_alloc_array_c(len, len, boxed_elems, stride, 0);
-}
-
-ren_obj *ren_array_reserve(int64_t cap, bool boxed_elems, uint32_t stride) {
-  return ren_alloc_array_c(0, cap, boxed_elems, stride, 0);
+ren_obj *ren_array_reserve(int64_t cap, uint8_t objs, uint32_t stride) {
+  return ren_alloc_array_c(0, cap, objs, stride, 0);
 }
 
 ren_obj *ren_alloc_array(int64_t len, bool boxed_elems) {
-  return ren_alloc_array_s(len, boxed_elems, 0);
+  return ren_alloc_array_c(len, len, boxed_elems, 0, 0);
 }
 
-ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride) {
-  return ren_alloc_array_s(len, false, stride);
+ren_obj *ren_alloc_array_n(int64_t len, uint32_t stride, uint8_t objs) {
+  return ren_alloc_array_c(len, len, objs, stride, 0);
 }
+
+/* Each object the [n] elements of [a]'s kind from [e] hold, [x] in
+   [body]: a counted word's element, or the slots of an element of
+   structs that [a]'s mask says (ren_rt.h, [ren_obj]'s [objs]). */
+#define REN_ELEM_OBJS(a, e, n, x, body)                                        \
+  do {                                                                         \
+    int64_t ren_k_ = ren_stride(a), ren_n_ = (n);                              \
+    ren_val *ren_e_ = (e);                                                     \
+    unsigned ren_m_ = (a)->objs;                                               \
+    if (ren_m_ == 0)                                                           \
+      break;                                                                   \
+    if (ren_k_ == 1)                                                           \
+      for (int64_t ren_i_ = 0; ren_i_ < ren_n_; ren_i_++) {                    \
+        ren_obj *x = ren_e_[ren_i_].o;                                         \
+        body;                                                                  \
+      }                                                                        \
+    else                                                                       \
+      for (int64_t ren_i_ = 0; ren_i_ < ren_n_; ren_i_++)                      \
+        for (unsigned m = ren_m_; m != 0; m &= m - 1) {                        \
+          ren_obj *x = ren_e_[ren_i_ * ren_k_ + __builtin_ctz(m)].o;           \
+          body;                                                                \
+        }                                                                      \
+  } while (0)
 
 ren_obj *ren_alloc_array_k(int64_t len, uint8_t kind) {
   return ren_alloc_array_c(len, len, false, 0, kind);
@@ -291,9 +309,7 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
       bytes = (int64_t)size;
       break;
     }
-    if (o->objs)
-      for (int64_t i = 0; i < a->len; i++)
-        ren_release(t, a->data[i].o);
+    REN_ELEM_OBJS(o, a->data, a->len, x, ren_release(t, x));
     bytes = (int64_t)(sizeof(ren_array) + (size_t)a->cap * ren_elem_bytes(o));
     free(a->data);
     size = sizeof(ren_array);
@@ -390,7 +406,7 @@ void ren_mark_shared(ren_obj *o) {
       if (((ren_array *)x)->root != NULL)
         n = 1; /* a slice reaches its root, which reaches the elements */
       else
-        n = x->objs ? (size_t)((ren_array *)x)->len : 0;
+        n = (size_t)((ren_array *)x)->len * (size_t)__builtin_popcount(x->objs);
       break;
     case REN_TAG_DESC:
       n = ((ren_desc *)x)->nargs;
@@ -418,8 +434,8 @@ void ren_mark_shared(ren_obj *o) {
       if (((ren_array *)x)->root != NULL)
         todo[len++] = ((ren_array *)x)->root;
       else
-        for (size_t i = 0; i < n; i++)
-          todo[len++] = ((ren_array *)x)->data[i].o;
+        REN_ELEM_OBJS(x, ((ren_array *)x)->data, ((ren_array *)x)->len, e,
+                      todo[len++] = e);
       break;
     case REN_TAG_DESC:
       for (size_t i = 0; i < n; i++)
@@ -499,13 +515,15 @@ static ren_obj *ren_array_copy(ren_obj *a, int64_t extra) {
   ren_obj *b = ren_alloc_array_c(from->len + extra, from->len + extra, a->objs,
                                  (uint32_t)from->stride, a->nfields);
   ren_val *to = ren_elems(b);
-  if (a->objs)
+  if (a->objs && from->stride == 1)
     for (int64_t i = 0; i < from->len; i++) {
       to[i] = from->data[i];
       ren_dup(to[i].o);
     }
-  else
+  else {
     memcpy(to, from->data, (size_t)from->len * ren_elem_bytes(a));
+    REN_ELEM_OBJS(a, to, from->len, x, ren_dup(x));
+  }
   return b;
 }
 
@@ -623,7 +641,10 @@ ren_obj *ren_array_set_slots(ren_obj *a, int64_t i, const ren_val *v,
   ren_check_index(a, i, site);
   ren_obj *b = ren_array_copy(a, 0);
   int64_t k = ren_stride(a);
-  memcpy(&ren_elems(b)[i * k], v, (size_t)k * sizeof(ren_val));
+  ren_val *e = &ren_elems(b)[i * k];
+  ren_slots_drop(e, a->objs);
+  memcpy(e, v, (size_t)k * sizeof(ren_val));
+  ren_slots_dup(e, a->objs);
   return b;
 }
 
@@ -631,7 +652,12 @@ ren_obj *ren_array_set_field(ren_obj *a, int64_t i, int64_t off, int64_t k,
                              ren_val v, const ren_site *site) {
   ren_check_index(a, i, site);
   ren_obj *b = ren_array_copy(a, 0);
-  ren_elems(b)[i * k + off] = v;
+  ren_val *at = &ren_elems(b)[i * k + off];
+  if (a->objs & (1u << off)) {
+    ren_drop(at->o);
+    ren_dup(v.o);
+  }
+  *at = v;
   return b;
 }
 
@@ -639,8 +665,9 @@ void ren_array_push_slots(ren_obj **cell, const ren_val *v) {
   ren_obj *a = *cell;
   ren_obj *b = ren_array_copy(a, 1);
   int64_t k = ren_stride(a);
-  memcpy(&ren_elems(b)[(((ren_array *)b)->len - 1) * k], v,
-         (size_t)k * sizeof(ren_val));
+  ren_val *e = &ren_elems(b)[(((ren_array *)b)->len - 1) * k];
+  memcpy(e, v, (size_t)k * sizeof(ren_val));
+  ren_slots_dup(e, a->objs);
   ren_drop(a);
   *cell = b;
 }
@@ -883,9 +910,7 @@ static void ren_elems_copy(ren_obj *to, int64_t at, ren_obj *from, int64_t i,
     return;
   memcpy(ren_elem_at(to, at), ren_elem_at(from, i),
          (size_t)n * ren_elem_bytes(from));
-  if (from->objs)
-    for (int64_t k = 0; k < n; k++)
-      ren_dup(((ren_val *)ren_elem_at(from, i + k))->o);
+  REN_ELEM_OBJS(from, (ren_val *)ren_elem_at(from, i), n, x, ren_dup(x));
 }
 
 ren_obj *ren_array_splice(ren_obj *a, int64_t i, int64_t j, ren_obj *b) {
@@ -1656,12 +1681,14 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
       ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner, w);
       ren_puts(b, decl->opaque ? ")" : " }");
     } else {
+      /* a by-name constructor's fields after their names, in braces,
+         as it's built: `Rect { w: 2, h: 3 }` */
       const ren_ctor_info *c = &decl->ctors[ren_ctor_tag(decl, v)];
       ren_puts(b, c->name);
       if (c->nfields > 0) {
-        ren_puts(b, "(");
-        ren_show_fields(b, v.o, c, c->nfields, NULL, c->types, &inner, w);
-        ren_puts(b, ")");
+        ren_puts(b, c->fields != NULL ? " { " : "(");
+        ren_show_fields(b, v.o, c, c->nfields, c->fields, c->types, &inner, w);
+        ren_puts(b, c->fields != NULL ? " }" : ")");
       }
     }
     break;
@@ -2513,7 +2540,8 @@ ren_obj *ren_map_of(ren_obj *pairs, ren_obj *kd, ren_obj *vd, bool flat,
 ren_obj *ren_map_entries(ren_obj *o, bool flat) {
   ren_map *m = (ren_map *)o;
   if (flat) {
-    ren_obj *a = ren_alloc_array_n(m->len, 2);
+    /* never counted: [flat] only for two words that hold no object */
+    ren_obj *a = ren_alloc_array_n(m->len, 2, 0);
     int64_t i = 0;
     REN_MAP_EACH(m, e) {
       ren_elems(a)[2 * i] = e[1];

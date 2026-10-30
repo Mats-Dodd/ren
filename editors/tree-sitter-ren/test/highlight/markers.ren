@@ -302,3 +302,64 @@ fn store(k: Int) ! DbDown uses Sql =
 //^ keyword.failure
 //    ^ keyword
     try Sql.set(k)
+
+fn paid(o: Order) -> Int =
+  let p = { ..o, paid: true }
+//          ^ operator
+//               ^ property
+  match p
+    { total, .. } => total
+//    ^ property
+//           ^ operator
+
+type Shape =
+  | Dot
+  | Static(Int)
+//  ^ constructor
+//         ^ type
+  | Rect { w: Int, h: Int }
+//  ^ constructor
+//         ^ property
+
+fn wide(s: Shape) -> Shape =
+  match s
+    Shape.Rect { w, .. } => Shape.Rect { ..s2, w }
+//  ^ type
+//        ^ constructor
+//               ^ property
+//                  ^ operator
+//                                ^ constructor
+//                                       ^ operator
+    _ => s
+
+fn seats(p: Plan, o: Option<Int>) -> Int ! Missing =
+  let Some(n) = o else fail Missing
+//^ keyword
+//                ^ keyword
+//                     ^ keyword.failure
+  let f = fn(Meters(k)) => k
+//           ^ constructor
+//                  ^ variable.parameter
+  match p
+    Pro(m) | Team(m) as q => m + n
+//  ^ constructor
+//         ^ operator
+//                   ^ keyword
+    Free => 1
+
+// a variant type is a type, its variant's name too; a bare `Placed { ... }`
+// is read as a record, as the compiler's parser reads it
+fn ship(p: Order.Placed) -> Order = Order.Placed { ..p }
+//         ^ type
+//               ^ type
+//                          ^ type
+//                                        ^ constructor
+
+// `todo` is a keyword: code still to write, of any type
+fn first(o: Option<Int>) -> Int =
+  let Some(n) = o else todo
+//                     ^ keyword
+  match n
+    0 => todo
+//       ^ keyword
+    _ => n

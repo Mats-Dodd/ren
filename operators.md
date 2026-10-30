@@ -96,6 +96,13 @@ error: `Duration` has no `+` that takes a `Time`
   `key`. That's right for `Money` and `UserId`. A type whose
   representation isn't unique, so that two equal values can be stored
   differently, writes a `key`.
+- **A variant type's are its sum's, borrowed.** `Order.Placed`, a
+  variant with named fields as a type of its own (language.md §2,
+  "Variant types"), has no `==`, `hash`, order or `show` of its own:
+  `p == q` is `Placed { ..p } == Placed { ..q }`, compared without
+  wrapping, through `Order`'s `key` if it has one, and `p` shows as the
+  `Order` it is, `Placed { id: 1, ... }`. Deriving them from its fields
+  would let the two disagree.
 - **One `show`,** used by `print`, interpolation and test output. A type
   can write its own, `pub fn show(self) -> Str`, as `Path` does. A `Str`
   shows as itself at the top, `hello`, and quoted inside something,

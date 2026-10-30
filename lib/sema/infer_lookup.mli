@@ -19,6 +19,10 @@ val through_type :
 (* The declaration of a type already known to be a named type. *)
 val known_decl : env -> Types.ty -> Iface.type_decl option
 
+(* The sum at the path and its constructor of the name, which a variant
+   type, [Order.Placed], is one of (Resolve made sure there's one). *)
+val variant_ctor : env -> Path.t -> string -> Iface.type_decl * Iface.ctor
+
 (* The constructor written, where a value of type [expected] is wanted.
    Each problem is reported. *)
 val find_ctor :
@@ -27,13 +31,12 @@ val find_ctor :
   expected:Types.ty ->
   (Iface.type_decl * Iface.ctor) option
 
-(* Whether a constructor is given as many arguments as it has fields,
-   labelled correctly. Each problem is reported. *)
+(* Whether a positional constructor is given as many arguments as it has
+   fields; it's reported if it isn't. *)
 (* A record's fields, or [None] for any other type. *)
 val record_fields : Iface.type_decl -> Iface.field list option
 
-val ctor_shape :
-  env -> Loc.t -> Ast.ident -> Iface.ctor -> Ast.ident option list -> bool
+val ctor_shape : env -> Loc.t -> Ast.ident -> Iface.ctor -> int -> bool
 
 (* By name, in a type declaration: a dependency's operation, a member, and
    a record's field. *)

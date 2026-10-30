@@ -267,6 +267,9 @@ let rhs env (r : rhs) : layout =
       | Struct (k, _) when (struct_of env k).skind <> Product -> ()
       | l -> fail env (sprintf "the tag of %s" (show_layout l)));
       Int
+  | Obj_tag x ->
+      operand env "what a header's tag is read from" Boxed x;
+      Int
   | Field (x, n, size) ->
       operand env "what a field is read from" Boxed x;
       if n < 0 || n >= size then
@@ -302,9 +305,17 @@ let rhs env (r : rhs) : layout =
       List.iter (operand env "a field's descriptor" Desc) words;
       Boxed
   | Alloc_array { elem; elems; desc } ->
-      (* an array's elements are counted as words, or never: a struct that
-         holds an object is never one *)
-      if not (wordable elem || match elem with Struct (_, c) -> not c | _ -> false)
+      (* an array's elements are words, or structs, counted by the mask
+         of their slots that hold objects (ren_rt.h, [ren_obj]'s [objs]),
+         which has room for eight: a struct that holds one has at most
+         four *)
+      if
+        not
+          (wordable elem
+          || match elem with
+             | Struct (_, false) -> true
+             | Struct (k, true) -> List.length (struct_of env k).sfields <= 8
+             | _ -> false)
       then fail env (sprintf "an array of %s" (show_layout elem));
       List.iter (operand env "an array's element" elem) elems;
       (match (elem, desc) with
@@ -353,6 +364,16 @@ let rhs env (r : rhs) : layout =
       List.iter (operand env "a descriptor's argument" Desc) xs;
       Desc
   | Runtime (r, xs, _) ->
+      (* a field written in an array's struct is a slot of it, of its
+         layout, which says whether the old one is dropped *)
+      (match r with
+      | Array_set_field (n, k, l)
+      | Array_set_field_taking (n, k, l)
+      | Buf_set_field (n, k, l) ->
+          if List.nth_opt (struct_of env n).sfields k <> Some l then
+            fail env
+              (sprintf "slot %d of struct %d written as %s" k n (show_layout l))
+      | _ -> ());
       let want, gives = rt_sig r in
       args env (show_rt r) want xs;
       gives
@@ -520,10 +541,25 @@ let rec stmt env (s : stmt) : env =
                   (sprintf "%s is counted as a struct %s objects"
                      (show_layout v.layout)
                      (if c then "without" else "with"));
+              (* a niche, a constructor without fields, is only in a
+                 [Niche] struct's object slot, and is one of its
+                 constructors without fields *)
+              let niche (x, k) =
+                match (x, st.skind) with
+                | Scalar_ctor t, Niche { obj_ctor; slot; ctors } when t < 0 ->
+                    k = slot && -1 - t < ctors && -1 - t <> obj_ctor
+                | Scalar_ctor t, _ -> t >= 0
+                | _ -> true
+              in
+              if not (List.for_all niche (List.mapi (fun k x -> (x, k)) xs))
+              then fail env "a niche where it isn't one";
               (match (st.skind, st.sfields) with
               | Product, _ -> ()
-              | Tagged, Int :: _ -> ()
-              | Nullable _, [ Boxed ] -> ()
+              | Tagged (8 | 16 | 32 | 64), Int :: _ -> ()
+              | Niche { obj_ctor; slot; ctors }, ls
+                when List.nth_opt ls slot = Some Boxed
+                     && obj_ctor >= 0 && obj_ctor < ctors ->
+                  ()
               | _ -> fail env "a struct of a sum kept wrong")
           | l ->
               fail env
@@ -1099,12 +1135,30 @@ let merge env scope (states : rc_state list) : rc_state option =
             let k = List.hd ks in
             if k >= 0 then name first (find first k) else "a lent cell's value"
           in
-          (match totals with
-          | t :: rest when List.exists (( <> ) t) rest ->
-              rc_fail env
-                (sprintf "%s holds %s references on different paths" (what ())
-                   (String.concat " and " (List.map string_of_int totals)))
-          | _ -> ());
+          (* nor does a constant beside them: a path where some of them
+             hold constants, `$if` set to a constructor without fields
+             where another path sets it to a parameter, which is then
+             dropped there and moved here, may hold fewer references
+             than the paths where none does, each constant standing for
+             at most one, which dropping does nothing to. The paths where
+             none does hold as many as each other *)
+          let constants (st, _) =
+            List.length (List.filter (fun k -> not (real st (find st k))) ks)
+          in
+          let most = List.fold_left max 0 totals in
+          let plain =
+            List.filter_map
+              (fun p -> if constants p = 0 then Some (total p) else None)
+              per
+          in
+          let short p = most - total p in
+          if
+            (match plain with t :: rest -> List.exists (( <> ) t) rest | [] -> false)
+            || List.exists (fun p -> short p > constants p) per
+          then
+            rc_fail env
+              (sprintf "%s holds %s references on different paths" (what ())
+                 (String.concat " and " (List.map string_of_int totals)));
           match per with
           | [] -> ()
           | (_, [ b ]) :: rest
@@ -1132,7 +1186,7 @@ let merge env scope (states : rc_state list) : rc_state option =
                     st (bundles first)
                 in
                 let st, b =
-                  bundle env st ~count:(List.hd totals) kind (what ())
+                  bundle env st ~count:most kind (what ())
                 in
                 merged :=
                   List.fold_left
@@ -1378,7 +1432,9 @@ let rc_let env st (v : var) (r : rhs) =
       List.iter (read env st)
         (match r with
         | Arith (_, x, y, _) | Compare (_, x, y) -> [ x; y ]
-        | Neg (x, _) | Not x | Tag_of x | Is_unique x | Hole (x, _) -> [ x ]
+        | Neg (x, _) | Not x | Tag_of x | Obj_tag x | Is_unique x | Hole (x, _)
+          ->
+            [ x ]
         | _ -> []);
       fresh_var env st v ~count:0 B_static
 

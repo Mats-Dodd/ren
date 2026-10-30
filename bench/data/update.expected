@@ -1,0 +1,7 @@
+Order { id: 7, lines: [Line { sku: "a", qty: 1, price: 3 }, Line { sku: "b", qty: 2, price: 5 }], total: 13, paid: false }
+7
+29
+-2
+29
+499513
+exit 0

@@ -5,7 +5,7 @@
 // checksum, then the twin's, which agree.
 
 pub type Tree =
-  | Node(left: Tree, value: Int, right: Tree)
+  | Node { left: Tree, value: Int, right: Tree }
   | Leaf
 
 // the numbers from `lo` up to, not including, `hi`, as a balanced tree
@@ -13,18 +13,18 @@ pub fn build(lo: Int, hi: Int) -> Tree =
   if lo >= hi then Leaf
   else
     let mid = (lo + hi) / 2
-    Node(build(lo, mid), mid % 1000, build(mid + 1, hi))
+    Node { left: build(lo, mid), value: mid % 1000, right: build(mid + 1, hi) }
 
 // every value in order through `f`, from `acc`
 fn fold_tree<A>(t: Tree, acc: A, f: fn(A, Int) -> A) -> A =
   match t
-    Node(l, v, r) => try fold_tree(r, f(fold_tree(l, acc, f), v), f)
+    Node { left, value, right } => try fold_tree(right, f(fold_tree(left, acc, f), value), f)
     Leaf => acc
 
 // the twin: `acc` plus each value times `k`
 fn sum_tree(t: Tree, acc: Int, k: Int) -> Int =
   match t
-    Node(l, v, r) => sum_tree(r, sum_tree(l, acc, k) + v * k, k)
+    Node { left, value, right } => sum_tree(right, sum_tree(left, acc, k) + value * k, k)
     Leaf => acc
 
 // `body` until it gives something other than 0, `n` times at most: a

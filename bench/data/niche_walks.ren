@@ -1,0 +1,86 @@
+// Data stage, step 7: the third layout fix's sums where they're boxed
+// (compiler.md, "The layout fixes (step 7)"): shown and compared, which
+// boxes a small value's type; kept in a record or another sum as a
+// field, which boxes the field's type; and an option of an option, the
+// inner one boxed, its `None` a scalar that isn't the outer one's niche.
+// An option of a boxed sum is still niche'd, and `Some(Plain)`, a scalar
+// in its object slot, isn't `None`. Each through `==`, `show`, `match`
+// with or-patterns and `as`, and arrays of them.
+
+type Item = { name: Str, price: Int }
+
+type Plan =
+  | Free
+  | Trial
+  | Pro { name: Str, seats: Int }
+  | Lapsed
+
+type Cell =
+  | Wall(solid: Bool)
+  | Floor { lit: Bool, depth: Int16, glyph: UInt8 }
+  | Void
+
+// boxed because it's shown alone; an option of it is still niche'd
+type Shown =
+  | Plain
+  | Fancy(s: Str)
+  | Odd
+
+// a record of options, which keeps each option's type boxed
+type Pair = { a: Option<Str>, b: Option<Array<Int>> }
+
+// an option in another sum, as a field
+type Slot =
+  | Filled { o: Option<Item>, n: Int }
+  | Hole
+
+fn main() uses Console =
+  let it = Some(Item { name: "tea".concat("!"), price: 3 })
+  print(it)
+  print(it == Some(Item { name: "tea!", price: 3 }))
+  print(it == None)
+  let plans = [Free, Pro { name: "p".concat("q"), seats: 2 }, Lapsed, Trial]
+  print(plans)
+  print(plans[1] == Pro { name: "pq", seats: 2 })
+  print(plans[0] == plans[3])
+  match plans[1]
+    Pro { .. } as p => print(Pro { ..p, seats: 5 })
+    _ => ()
+  let cells = [Wall(true), Floor { lit: false, depth: -7, glyph: 200 }, Void]
+  print(cells)
+  print(cells[1] == Floor { lit: false, depth: -7, glyph: 200 })
+  print(cells[1] == Floor { lit: true, depth: -7, glyph: 200 })
+  let pr = Pair { a: Some("x".concat("y")), b: None }
+  let po: Option<Pair> = Some(Pair { ..pr, b: Some([4, 5]) })
+  match po
+    Some(Pair { a: Some(s), b: Some(xs) }) => print(s.len() + xs[1])
+    _ => print(-1)
+  match pr
+    Pair { a: Some(s), b: None } => print(s)
+    _ => print("?")
+  print(po)
+  let oo: Array<Option<Option<Str>>> = [None, Some(None), Some(Some("deep".concat("er")))]
+  for o in oo
+    match o
+      None => print("none")
+      Some(None) => print("some none")
+      Some(Some(s)) => print(s)
+  print(oo)
+  print(oo[0] == oo[1])
+  print(oo[1] == Some(None))
+  print(Plain)
+  let shown = [Some(Plain), None, Some(Fancy("f".concat("!"))), Some(Odd)]
+  for o in shown
+    match o
+      Some(Plain) | Some(Odd) => print("plain or odd")
+      Some(Fancy(x)) => print(x)
+      None => print("none")
+  let slots = [Filled { o: it, n: 1 }, Hole, Filled { o: None, n: 2 }]
+  var n = 0
+  for s in slots
+    match s
+      Filled { o: Some(i), n: k } => n += i.price * k
+      Filled { o: None, n: k } => n += k * 100
+      Hole => n += 1000
+  print(n)
+  print(slots[2])

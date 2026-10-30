@@ -4,17 +4,18 @@
 // It measures allocating and freeing small nodes.
 
 type Tree =
-  | Node(left: Tree, right: Tree)
+  | Node { left: Tree, right: Tree }
   | Tip
 
 // a perfect tree `depth` deep
 fn make(depth: Int) -> Tree =
-  if depth > 0 then Node(make(depth - 1), make(depth - 1)) else Node(Tip, Tip)
+  if depth > 0 then Node { left: make(depth - 1), right: make(depth - 1) }
+  else Node { left: Tip, right: Tip }
 
 // how many nodes it has
 fn check(t: Tree) -> Int =
   match t
-    Node(l, r) => check(l) + check(r) + 1
+    Node { left, right } => check(left) + check(right) + 1
     Tip => 0
 
 fn pow2(k: Int) -> Int =

@@ -257,6 +257,8 @@ let places facts (b : block) =
     match (pl.elem, l) with
     | _, (Word _ | Cell _ | Ev | Block | Ptr | Token) -> bad pl
     | None, l -> pl.elem <- Some l
+    (* a field's write says only which struct, not whether it's counted *)
+    | Some (Struct (n, _)), Struct (n', _) -> if n <> n' then bad pl
     | Some l', l -> if l <> l' then bad pl
   in
   (* each mention of a place, a view or a write's result must be one of

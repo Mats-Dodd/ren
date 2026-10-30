@@ -1,0 +1,31 @@
+// Data stage, step 3: or-patterns that bind counted values (a `Str`, an
+// `Array`), two in one arm, a guard that fails after an alternative
+// matched, `as` of what's counted, and `fail` alternatives that bind:
+// each native build against `ren run`, Perceus's counting of an
+// alternative's names among them (to_mem.ml, [match_]).
+
+type T =
+  | A(Str)
+  | B { s: Str, n: Int }
+  | C(Array<Str>)
+  | D
+
+fn pick(t: T, u: T) uses Console =
+  match (t, u)
+    (A(x) | B { s: x, .. }, A(y) | B { s: y, .. }) if x != "skip" => print((x, y))
+    (C(xs) as c, _) | (_, C(xs) as c) => print((xs.len(), c))
+    (A(x) as w, _) => print(("late", x, w))
+    _ => print("none")
+
+fn take(n: Int) -> Str ! Short(Str) | Late(Str) =
+  if n > 3 then fail Short("s") else if n < 0 then fail Late("l") else "ok"
+
+fn main() uses Console =
+  let ts = [A("a"), B { s: "b", n: 1 }, C(["c", "d"]), D, A("skip")]
+  for t in ts
+    for u in ts
+      pick(t, u)
+  for n in [5, -1, 2]
+    match take(n)
+      v => print(v)
+      fail Short(m) | fail Late(m) => print(m)

@@ -1590,7 +1590,7 @@ pub type Stack<T> = { items: Array<T> }
   pub fn push(inout self, x: T) = &self.items.push(x)
 pub type Tree<T> =
   | Leaf
-  | Node(left: Tree<T>, value: T, right: Tree<T>)
+  | Node { left: Tree<T>, value: T, right: Tree<T> }
   pub fn clear(inout self) = self = Leaf
 fn main() = ()
 |};

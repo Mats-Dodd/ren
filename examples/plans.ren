@@ -19,10 +19,10 @@ fn describe(u: User) -> Option<Int> =
     Free => None
     Pro(n) if n > 100 => Some(n * 2)
     Pro(n) => Some(n)
-    Enterprise(c) => Some(value: c)
+    Enterprise(c) => Some(c)
 
 fn main() =
-  let alice = User { id: 1, plan: Pro(seats: 5) }
+  let alice = User { id: 1, plan: Pro(5) }
   let bob = { id: 2, plan: Free }
   print(seat_limit(alice.plan))
   print(describe(alice))

@@ -188,7 +188,7 @@ fn seat_limit(p: Plan) -> Int =
     Enterprise(_) => 1_000_000
 
 fn main() -> Int =
-  let u = User { id: 1, plan: Pro(seats: 5) }
+  let u = User { id: 1, plan: Pro(5) }
   seat_limit(u.plan)
 |}
     );
@@ -200,7 +200,7 @@ let%expect_test "records: punning, field access, equality ignores field order" =
    ^ {|
 fn main() =
   let id = 7
-  let plan = Enterprise(contract: 42)
+  let plan = Enterprise(42)
   let u = { id, plan }
   print(u)
   print(u.plan)
@@ -257,7 +257,7 @@ fn describe(o: Option<Int>) -> Int =
 
 fn main() =
   print(describe(Some(5)))
-  print(describe(Some(value: 500)))
+  print(describe(Some(500)))
   print(describe(None))
 |};
   [%expect {|
@@ -1098,23 +1098,23 @@ let%expect_test "nested records, sums and arrays are compared field by field" =
 type Point = { x: Int, y: Int }
 type Shape =
   | Dot(at: Point)
-  | Line(from: Point, to: Point)
+  | Line { from: Point, to: Point }
   | Many(shapes: Array<Shape>)
 type Tree<T> =
   | Leaf
-  | Node(left: Tree<T>, value: T, right: Tree<T>)
+  | Node { left: Tree<T>, value: T, right: Tree<T> }
 type Tagged<T> = { tag: Str, items: Array<Option<T>> }
 fn same(a, b) = a == b
-fn leaf(x) = Node(Leaf, x, Leaf)
+fn leaf(x) = Node { left: Leaf, value: x, right: Leaf }
 fn main() uses Console =
   let p = Point { x: 1, y: 2 }
   let q = Point { x: 1, y: 3 }
-  print([same(Dot(p), Dot(p)), same(Dot(p), Dot(q)), same(Dot(p), Line(p, p))])
-  let many = Many([Dot(p), Many([Line(p, q)])])
-  print(same(many, Many([Dot(p), Many([Line(p, q)])])))
-  print(same(many, Many([Dot(p), Many([Line(q, p)])])))
-  let left = Node(leaf(1), 2, Leaf)
-  print([same(leaf(p), leaf(p)), same(left, Node(Leaf, 2, leaf(1)))])
+  print([same(Dot(p), Dot(p)), same(Dot(p), Dot(q)), same(Dot(p), Line { from: p, to: p })])
+  let many = Many([Dot(p), Many([Line { from: p, to: q }])])
+  print(same(many, Many([Dot(p), Many([Line { from: p, to: q }])])))
+  print(same(many, Many([Dot(p), Many([Line { from: q, to: p }])])))
+  let left = Node { left: leaf(1), value: 2, right: Leaf }
+  print([same(leaf(p), leaf(p)), same(left, Node { left: Leaf, value: 2, right: leaf(1) })])
   let t = Tagged { tag: "a", items: [Some(leaf("x")), None] }
   let u = Tagged { tag: "a", items: [Some(leaf("y")), None] }
   print([same(t, t), same(t, u)])

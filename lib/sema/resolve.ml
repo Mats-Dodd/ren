@@ -172,6 +172,14 @@ type env = {
   own_aliases : (string, tyname) Hashtbl.t;
       (** the module's own aliases of a dependency, `dep Jobs = Chan<Job>`, by
           name, each with the name of the one it names *)
+  named_ctors : (string, string) Hashtbl.t;
+      (** each by-name constructor of a sum type in scope bare, by its name,
+          with the sum's name: which a bare `Name { ... }` can also mean (see
+          [braces_name]) *)
+  sums : (string, unit) Hashtbl.t;  (** the sum types in scope bare, by name *)
+  own_sums : (string, Iface.ctor list) Hashtbl.t;
+      (** the module's own sum types, by name, with their constructors, which
+          a variant type is one of ([variant_type]) *)
   modules : (import * Iface.t) Env.t;  (** the same, by alias *)
   used : (string, unit) Hashtbl.t;  (** the aliases used *)
   used_types : (Path.t, unit) Hashtbl.t;
@@ -418,7 +426,7 @@ let tyname_loc (t : tyname) =
 
 (* Where a type is written: where it starts, for a named one. *)
 let written_loc : Parsed.ty -> Loc.t = function
-  | TyName (t, _) -> tyname_loc t
+  | TyName (t, _) | TyVariant (t, _, _) -> tyname_loc t
   | TyFn (_, _, _, _, l)
   | TyImpl { impl_loc = l; _ }
   | TyInout (_, l)
@@ -486,6 +494,85 @@ let declared_type env ~params ~what (t : tyname) =
         (sprintf "`%s` is a type parameter, so %s" t.tid.name what);
       None
   | None -> None
+
+(* The constructors of the sum type at [p], the module's own or an
+   imported one's; [None] if it isn't a sum, or its representation is
+   hidden here. *)
+let sum_ctors env (p : Path.t) : Iface.ctor list option =
+  if p.home = env.home then Hashtbl.find_opt env.own_sums p.name
+  else
+    match
+      List.find_map
+        (fun (i : Iface.t) ->
+          if i.home = p.home then Iface.find_type i p.name else None)
+        (env.ifaces @ List.map (fun (_, (_, i)) -> i) (Env.bindings env.modules))
+    with
+    | Some { body = Sum cs; _ } -> Some cs
+    | _ -> None
+
+(* The variant type [t].[c] names, `Order.Placed` (compiler.md, "Data
+   stage", "Variant types"): [t] a sum type, [c] one of its constructors,
+   with named fields. Whether it does; what's wrong is reported. *)
+let variant_type env (t : tyname) (found : tref) (c : ident) =
+  let shown = show_tyname t in
+  match found with
+  | Param _ ->
+      report env (tyname_loc t)
+        ~help:"a variant type is one of a sum's, like `Order.Placed`"
+        (sprintf "`%s` isn't a sum type, so it has no variants" shown);
+      false
+  | Named p -> (
+      match sum_ctors env p with
+      | None ->
+          report env (tyname_loc t)
+            ~help:"a variant type is one of a sum's, like `Order.Placed`"
+            (sprintf "`%s` isn't a sum type, so it has no variants" shown);
+          false
+      | Some cs -> (
+          match List.find_opt (fun (k : Iface.ctor) -> k.cname = c.name) cs with
+          | Some k when k.cnamed -> true
+          | Some k ->
+              let arg =
+                match k.cfields with
+                | { fname = ""; _ } :: _ | [] -> "x"
+                | f :: _ -> f.fname
+              in
+              report env c.loc
+                ~help:
+                  (if k.cfields = [] then
+                     sprintf "match it where it's matched, `%s => ...`" c.name
+                   else
+                     sprintf "take its field out where it's matched, `%s(%s) => ...`"
+                       c.name arg)
+                (sprintf
+                   "`%s.%s` isn't a type: only a variant with named fields has \
+                    one"
+                   shown c.name);
+              false
+          | None ->
+              let named =
+                List.filter_map
+                  (fun (k : Iface.ctor) -> if k.cnamed then Some k.cname else None)
+                  cs
+              in
+              let help =
+                match Infer_msg.nearest c.name (List.map (fun (k : Iface.ctor) -> k.cname) cs) with
+                | Some n -> Some (sprintf "did you mean `%s`?" n)
+                | None when named = [] ->
+                    Some
+                      (sprintf
+                         "none of `%s`'s variants has named fields, so it has \
+                          no variant types"
+                         shown)
+                | None ->
+                    Some
+                      (sprintf "its variants with named fields: %s"
+                         (String.concat ", "
+                            (List.map (fun n -> "`" ^ n ^ "`") named)))
+              in
+              report env c.loc ?help
+                (sprintf "`%s` has no variant `%s`" shown c.name);
+              false))
 
 (* The named row [n], written as a row of kind [kind]. *)
 let row_name env ~rows kind (n : ident) =
@@ -569,6 +656,19 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) ?(tags = false)
       TyFn (ps, ret, errs, Option.map (uses_of env ~params ~rows) u, l)
   | TyInout (t, l) -> TyInout (ty env ~params ~rows t, l)
   | TyTuple (ts, l) -> TyTuple (List.map (ty env ~params ~rows) ts, l)
+  | TyVariant (t, c, args) -> (
+      (* the sum's name, as a [TyName]'s, then the variant: a variant type
+         has its sum's type arguments *)
+      let named tref = { tref; tloc = tyname_loc t } in
+      match find_named env ~params t with
+      | None -> TyName (named (Named (Path.make env.home t.tid.name)), [])
+      | Some (tref, n) ->
+          let given = List.length args in
+          if variant_type env t tref c && n <> given then
+            report env (tyname_loc t)
+              (sprintf "`%s` takes %d type argument%s but was given %d"
+                 (show_tyname t) n (plural n) given);
+          TyVariant (named tref, c, List.map (ty env ~params ~rows ~arg:true) args))
   | TyImpl { impl_deps = ts; impl_over; impl_errors; impl_uses; impl_loc = l }
     -> (
       let u = Option.map (uses_of env ~params ~rows) impl_uses in
@@ -981,7 +1081,9 @@ let param env sc ?rows ?(top = false) bound (p : Parsed.param) :
 let receiver_type sc (r : Resolved.expr) =
   match r.kind with
   | Var (Local b) -> List.assoc_opt b.id sc.fn.typed
-  | Record (Some { tref = Named p; _ }, _) -> Some p
+  | Record (Some { tref = Named p; _ }, _)
+  | Update { target = Some (Into_type { tref = Named p; _ }); _ } ->
+      Some p
   | _ -> None
 
 let params env sc ?rows ?top bound ps =
@@ -1299,7 +1401,10 @@ let rec pattern_vars (p : Parsed.pattern) =
   match p.pkind with
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
   | PVar x -> [ x ]
+  | PAs (q, x) -> pattern_vars q @ [ x ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map pattern_vars ps
+  | PRecord (_, fs) | PCon_named (_, fs) ->
+      List.concat_map (fun (_, q) -> pattern_vars q) fs.fpats
   | POr ps ->
       (* each alternative binds the same names (see [pattern]) *)
       Option.fold ~none:[] ~some:pattern_vars (List.nth_opt ps 0)
@@ -1357,16 +1462,70 @@ let ctor_ref env sc (c : Parsed.ctor_ref) : Resolved.ctor_ref =
     name = c.name;
   }
 
-(* A pattern, and the scope its names are bound in. [same] are the
-   binders the first alternative of an or-pattern bound, which the names
-   of the others are: `fail Short(_, by) | fail Late(by)` binds one `by`. *)
-let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
-    Resolved.pattern * scope =
+(* The record type named before a `{`, in a literal, an update or a
+   pattern: `User { ... }`. *)
+let record_name env sc (t : tyname) =
+  match declared_type env ~params:sc.tparams ~what:"it can't make a record" t with
+  | Some n -> n
+  | None -> { tref = Named (Path.make env.home t.tid.name); tloc = tyname_loc t }
+
+(* What a bare `Name { ... }` is, in a value, an update or a pattern
+   (compiler.md, "Data stage", "The grammar"): the record type [Name] if a
+   type of that name is in scope, and otherwise the by-name constructor
+   [Name], which inference finds through a type, as it finds a bare
+   constructor. A type in scope that's also a by-name constructor of a sum
+   the module can name bare is refused, never picked, unless the type is
+   that sum, or another sum, which has no fields to build: `type Point = |
+   Point { x: Int, y: Int }`. A name with its module in front, `rows.Row {
+   ... }`, is always a record's. With [update], it's an update's target,
+   which, left out, is the base's type (Infer_expr.infer_update), so the
+   help says that. *)
+type braced = Braced_type of tname | Braced_ctor of Resolved.ctor_ref
+
+let braces_name ?(update = false) env sc (t : tyname) =
+  let name = t.tid.name in
+  let is_type =
+    index_of name 0 sc.tparams <> None || Hashtbl.mem env.types name
+  in
+  match (t.tmod, Hashtbl.find_opt env.named_ctors name) with
+  | Some _, _ -> Braced_type (record_name env sc t)
+  | None, None when is_type -> Braced_type (record_name env sc t)
+  | None, None -> Braced_ctor { qual = None; name = t.tid }
+  | None, Some sum when is_type && not (Hashtbl.mem env.sums name) ->
+      report env t.tid.loc
+        ~help:
+          (if update then
+             sprintf
+               "write `%s.%s { ..base }` for the constructor, or `{ ..base }` \
+                with the type left out for the base's own type"
+               sum name
+           else
+             sprintf
+               "write `%s.%s { ... }` for the constructor, or `{ ... }` with \
+                the type left out for the record"
+               sum name)
+        (sprintf "`%s` is a record type here, and a constructor of `%s` too"
+           name sum);
+      Braced_type (record_name env sc t)
+  | None, Some _ -> Braced_ctor { qual = None; name = t.tid }
+
+(* A pattern, and the scope its names are bound in, each bound as [how]
+   says: a loop's are its loop variables. [same] are the binders the
+   first alternative of an or-pattern bound, which the names of the others
+   are: `Pro(n) | Team(n)` binds one `n`. *)
+let rec pattern env ?(how = By_pattern) ?(same = Env.empty) sc
+    (p : Parsed.pattern) : Resolved.pattern * scope =
+  let pattern env ?(same = same) sc p = pattern env ~how ~same sc p in
+  let name sc (x : ident) =
+    match Env.find_opt x.name same with
+    | Some b -> (b, { sc with locals = Env.add x.name b sc.locals })
+    | None -> bind env sc x how
+  in
   let patterns sc ps =
     let ps, sc =
       List.fold_left
         (fun (acc, sc) p ->
-          let p, sc = pattern env ~same sc p in
+          let p, sc = pattern env sc p in
           (p :: acc, sc))
         ([], sc) ps
     in
@@ -1392,21 +1551,33 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
                    x.name)
               "a `fail` pattern can't bind the whole error to a name";
             (PFail_any, sc))
-    | PVar x -> (
-        match Env.find_opt x.name same with
-        | Some b -> (PVar b, { sc with locals = Env.add x.name b sc.locals })
-        | None ->
-            let b, sc = bind env sc x By_pattern in
-            (PVar b, sc))
+    | PVar x ->
+        let b, sc = name sc x in
+        (PVar b, sc)
+    | PAs (q, x) ->
+        let q, sc = pattern env sc q in
+        let b, sc = name sc x in
+        (PAs (q, b), sc)
     | PCon (c, ps) ->
         let ps, sc = patterns sc ps in
         (PCon (ctor_ref env sc c, ps), sc)
+    | PCon_named (c, fs) ->
+        let qs, sc = patterns sc (List.map snd fs.fpats) in
+        let fpats = List.combine (List.map fst fs.fpats) qs in
+        (PCon_named (ctor_ref env sc c, { fs with fpats }), sc)
     | PFail (t, ps) ->
         let ps, sc = patterns sc ps in
         (PFail (t, ps), sc)
     | PTuple ps ->
         let ps, sc = patterns sc ps in
         (PTuple ps, sc)
+    | PRecord (t, fs) -> (
+        let qs, sc = patterns sc (List.map snd fs.fpats) in
+        let fpats = List.combine (List.map fst fs.fpats) qs in
+        match Option.map (braces_name env sc) t with
+        | Some (Braced_ctor c) -> (PCon_named (c, { fs with fpats }), sc)
+        | Some (Braced_type t) -> (PRecord (Some t, { fs with fpats }), sc)
+        | None -> (PRecord (None, { fs with fpats }), sc))
     | POr [] -> assert false (* the parser makes one of two or more *)
     | POr (first :: rest) ->
         (* `fail on` takes what its tags are, which an alternative beside
@@ -1430,31 +1601,26 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
           List.exists (fun (y : ident) -> y.name = x.name) vars
         in
         let help = "bind the same names in every alternative" in
-        (* a name only some alternatives bind is reported, and bound
+        (* "`n` is bound in `Pro(n)` but not in `Free`", either way round;
+           a name only some alternatives bind is reported, and bound
            anyway, so its uses aren't reported too *)
+        let unbound (x : ident) ~(in_ : Parsed.pattern) ~(not_in : Parsed.pattern) =
+          report env x.loc ~help
+            (sprintf "`%s` is bound in `%s` but not in `%s`" x.name
+               (show_pattern in_) (show_pattern not_in))
+        in
         let rest, inner =
           List.fold_left
             (fun (acc, inner) (alt : Parsed.pattern) ->
               let vars = pattern_vars alt in
               no_duplicates env "pattern variables" vars;
               List.iter
-                (fun (x : ident) ->
-                  if not (has bound x) then
-                    report env x.loc ~help
-                      (sprintf
-                         "`%s` is bound by this alternative, but not by the \
-                          first one"
-                         x.name))
+                (fun x -> if not (has bound x) then unbound x ~in_:alt ~not_in:first)
                 vars;
               List.iter
-                (fun (y : ident) ->
+                (fun y ->
                   if not (has vars y) then
-                    report env alt.ploc ~help
-                      ~labels:[ (y.loc, sprintf "`%s` is bound here" y.name) ]
-                      (sprintf
-                         "this alternative doesn't bind `%s`, which the first \
-                          one does"
-                         y.name))
+                    unbound { y with loc = alt.ploc } ~in_:first ~not_in:alt)
                 bound;
               let alt, inner = pattern env ~same:inner.locals inner alt in
               (alt :: acc, inner))
@@ -1464,30 +1630,28 @@ let rec pattern env ?(same = Env.empty) sc (p : Parsed.pattern) :
   in
   ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
 
-(* The pattern of a `let` or a `for`, of names, `_` and tuples (the
-   parser sees to that), whose names are bound as [bound] says: a loop's
-   are its loop variables. *)
-let rec binding env sc bound (p : Parsed.pattern) : Resolved.pattern * scope =
-  let kind, sc =
-    match p.pkind with
-    | PVar x ->
-        let b, sc = bind env sc x bound in
-        (PVar b, sc)
-    | PTuple ps ->
-        let ps, sc =
-          List.fold_left
-            (fun (acc, sc) p ->
-              let p, sc = binding env sc bound p in
-              (p :: acc, sc))
-            ([], sc) ps
-        in
-        (PTuple (List.rev ps), sc)
-    | PWild -> (PWild, sc)
-    | PInt _ | PBool _ | PCon _ | PFail _ | PFail_any | PFail_in _ | POr _ ->
-        (* the parser lets only names, `_` and tuples through *)
-        assert false
-  in
-  ({ pkind = kind; ploc = p.ploc; pnode = p.pnode }, sc)
+(* The pattern of a `let`, a `for` or a block's parameter, whose names are
+   bound as [bound] says: a loop's are its loop variables. Exhaust checks
+   it always matches, or that a `let ... else` might not (compiler.md,
+   "Data stage", "Patterns that always match"). *)
+let binding env sc bound (p : Parsed.pattern) = pattern env ~how:bound sc p
+
+(* Whether [e], the `else` of a `let ... else`, leaves: it's a `fail`, a
+   `break` or a `todo`, which panics, or a block whose last line leaves,
+   an `if` with an `else` whose branches both do, or a `match` whose every
+   arm does. Ren has no `return`, and no other expression a program writes
+   panics with any type (compiler.md, "Data stage", "`let ... else`"). *)
+let rec leaves (e : Parsed.expr) =
+  match e.kind with
+  | Fail _ | Break | Todo -> true
+  | Block (_, last) -> leaves last
+  | If (_, t, Some f) -> leaves t && leaves f
+  | Match (_, arms) -> List.for_all (fun (a : Parsed.arm) -> leaves a.arm_body) arms
+  | _ -> false
+
+(* The line a block ends in, which is where it doesn't leave. *)
+let rec last_line (e : Parsed.expr) =
+  match e.kind with Block (_, l) -> last_line l | _ -> e
 
 (* `Stack.of`, which the parser reads as the field `of` of a constructor
    `Stack`, is a member of the type when `Stack` names a type.
@@ -1778,23 +1942,30 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Con (c, args) ->
         let c = ctor_ref env sc c in
         Con (c, List.map (fun (l, a) -> (l, go a)) args)
-    | Record (name, fields) ->
-        let name =
+    | Record (name, fields) -> (
+        let fields = List.map (fun (f, v) -> (f, expr env sc v)) fields in
+        match Option.map (braces_name env sc) name with
+        | Some (Braced_ctor c) -> Con_named (c, fields)
+        | Some (Braced_type t) -> Record (Some t, fields)
+        | None -> Record (None, fields))
+    | Con_named (c, fields) ->
+        let c = ctor_ref env sc c in
+        Con_named (c, List.map (fun (f, v) -> (f, go v)) fields)
+    | Update { target; base; fields } ->
+        (* the base first, then the fields, as they're evaluated *)
+        let target =
           Option.map
-            (fun (t : tyname) ->
-              match
-                declared_type env ~params:sc.tparams
-                  ~what:"it can't make a record" t
-              with
-              | Some n -> n
-              | None ->
-                  {
-                    tref = Named (Path.make env.home t.tid.name);
-                    tloc = tyname_loc t;
-                  })
-            name
+            (function
+              | Into_type t -> (
+                  match braces_name ~update:true env sc t with
+                  | Braced_ctor c -> Into_ctor c
+                  | Braced_type t -> Into_type t)
+              | Into_ctor c -> Into_ctor (ctor_ref env sc c))
+            target
         in
-        Record (name, List.map (fun (f, v) -> (f, expr env sc v)) fields)
+        let base = go base in
+        Update
+          { target; base; fields = List.map (fun (f, v) -> (f, go v)) fields }
     | Field ({ kind = Var (Bare m); _ }, f) when Env.mem m env.modules ->
         Var (qualified env sc (Env.find m env.modules) f)
     | Field (r, f) -> Field (go r, f)
@@ -1894,6 +2065,7 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               ~help:"end the `with`'s body with a `Bool`, and `break` after it"
               "a `break` can't leave a `with`");
         Break
+    | Todo -> Todo
     | Fail (t, args) ->
         (match Hashtbl.find_opt env.types t.name with
         | Some (p, _) when is_set env p ->
@@ -1954,16 +2126,26 @@ and block_stmts ?(finally = false) env sc (stmts : Parsed.stmt list) =
             let t = ty_opt env ~params:sc.tparams ~rows:(Body sc.rows) t in
             let b, sc = bind env sc name (if mut then By_var else By_let) in
             (match (t, value.kind) with
-            | None, Record (Some n, _) ->
+            | None, (Record (Some n, _) | Update { target = Some (Into_type n); _ })
+              ->
                 (* `let b = Bag { ... }` is a `Bag` *)
                 note_type sc b (Some (TyName (n, [])))
             | _ -> note_type sc b t);
             (Let { name = b; ty = t; value; mut } :: acc, sc)
-        | Let_tuple { pat; value } ->
+        | Let_pattern { pat; value; else_ } ->
             let value = expr env sc value in
+            (* the `else` runs where the pattern didn't match, so it sees
+               nothing the pattern binds *)
+            let else_ = Option.map (expr env sc) else_ in
+            (match s with
+            | Let_pattern { else_ = Some e; _ } when not (leaves e) ->
+                report env (last_line e).loc
+                  ~help:"end it with `fail`, `break` or `todo`"
+                  "the `else` of a `let ... else` has to leave"
+            | _ -> ());
             no_duplicates env "variables" (pattern_vars pat);
             let pat, sc = binding env sc By_let pat in
-            (Let_tuple { pat; value } :: acc, sc)
+            (Let_pattern { pat; value; else_ } :: acc, sc)
         | Expr e -> (Expr (expr env sc e) :: acc, sc)
         | Finally f ->
             if not finally then
@@ -2376,16 +2558,22 @@ and forwards env x (body : Resolved.expr) =
         go ~again:true n body
     | Lambda (_, b) | Inline_handler b -> go ~again:true before b
     | Block (stmts, last) ->
+        (* a `let ... else`'s `else` is another path, which leaves the
+           block *)
+        let left = ref 0 in
         let n =
           List.fold_left
             (fun n (s : Resolved.stmt) ->
               match s with
-              | Let { value; _ } | Let_tuple { value; _ } | Expr value ->
-                  go ~again n value
+              | Let { value; _ } | Expr value -> go ~again n value
+              | Let_pattern { value; else_; _ } ->
+                  let n = go ~again n value in
+                  Option.iter (fun e -> left := max !left (go ~again n e)) else_;
+                  n
               | Finally f -> go ~again:true n f)
             before stmts
         in
-        go ~again n last
+        max !left (go ~again n last)
     | _ -> List.fold_left (fun n c -> go ~again n c) before (children e)
   in
   ignore (go ~again:false 0 body)
@@ -2510,7 +2698,7 @@ let rec mentions name (t : Parsed.ty) =
   in
   let in_uses (u : Parsed.uses) = List.exists (dep_mentions name) u.deps in
   match t with
-  | TyName (n, args) ->
+  | TyName (n, args) | TyVariant (n, _, args) ->
       (n.tmod = None && n.tid.name = name) || List.exists (mentions name) args
   | TyFn (ps, ret, es, u, _) ->
       List.exists (mentions name) ps
@@ -3057,6 +3245,7 @@ let type_def env (td : Parsed.type_def) :
                {
                  ctor_name = c.ctor_name;
                  ctor_fields = List.map field c.ctor_fields;
+                 ctor_named = c.ctor_named;
                })
              cs)
     | Opaque { rep; numeric } ->
@@ -3225,9 +3414,12 @@ let type_def env (td : Parsed.type_def) :
 (* Every type named in [t], with where it's named, left to right. *)
 let rec named_in (t : Resolved.ty) =
   match t with
-  | TyName ({ tref = Named p; tloc }, args) ->
+  | TyName ({ tref = Named p; tloc }, args)
+  | TyVariant ({ tref = Named p; tloc }, _, args) ->
       (p, tloc) :: List.concat_map named_in args
-  | TyName ({ tref = Param _; _ }, args) -> List.concat_map named_in args
+  | TyName ({ tref = Param _; _ }, args)
+  | TyVariant ({ tref = Param _; _ }, _, args) ->
+      List.concat_map named_in args
   | TyFn (ps, ret, errs, u, _) ->
       List.concat_map named_in ps
       @ Option.fold ~none:[] ~some:named_in ret
@@ -3323,7 +3515,7 @@ let no_private_errors env ~private_ ~set ~tag (es : Resolved.errors) =
 
 (* Where a written type is, for an error. *)
 let written_at : Resolved.ty -> Loc.t = function
-  | TyName ({ tloc; _ }, _) -> tloc
+  | TyName ({ tloc; _ }, _) | TyVariant ({ tloc; _ }, _, _) -> tloc
   | TyFn (_, _, _, _, l)
   | TyImpl { impl_loc = l; _ }
   | TyInout (_, l)
@@ -3340,6 +3532,10 @@ let rec written_handle (t : Resolved.ty) =
     | TyName ({ tref = Named p; _ }, args) ->
         p.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
     | TyName ({ tref = Param _; _ }, _) -> "T"
+    | TyVariant ({ tref = Named p; _ }, c, []) -> p.name ^ "." ^ c.name
+    | TyVariant ({ tref = Named p; _ }, c, args) ->
+        p.name ^ "." ^ c.name ^ "<" ^ String.concat ", " (List.map show args) ^ ">"
+    | TyVariant ({ tref = Param _; _ }, c, _) -> "T." ^ c.name
     | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show ts) ^ ")"
     | TyFn _ -> "fn(...)"
     | TyImpl _ | TyErrors _ -> "..."
@@ -3375,7 +3571,8 @@ let no_kept_blocks env (items : Resolved.program) =
   (* the types in [t], which may itself be a block *)
   and inner (t : Resolved.ty) =
     match t with
-    | TyName (_, args) -> List.iter (data In_type_arg) args
+    | TyName (_, args) | TyVariant (_, _, args) ->
+        List.iter (data In_type_arg) args
     | TyTuple (ts, _) -> List.iter (data In_tuple) ts
     | TyFn (ps, ret, es, _, _) ->
         List.iter inner ps;
@@ -3397,7 +3594,8 @@ let no_kept_blocks env (items : Resolved.program) =
   let rec has_block (t : Resolved.ty) =
     match t with
     | TyFn _ -> true
-    | TyName (_, ts) | TyTuple (ts, _) -> List.exists has_block ts
+    | TyName (_, ts) | TyVariant (_, _, ts) | TyTuple (ts, _) ->
+        List.exists has_block ts
     | TyInout (t, _) -> has_block t
     | TyImpl _ | TyErrors _ -> false
   in
@@ -3406,7 +3604,7 @@ let no_kept_blocks env (items : Resolved.program) =
   let rec expr (e : Resolved.expr) =
     let stmt = function
       | Let { ty = Some t; _ } -> inner t
-      | Let _ | Let_tuple _ | Expr _ | Finally _ -> ()
+      | Let _ | Let_pattern _ | Expr _ | Finally _ -> ()
     in
     (match e.kind with
     | Lambda (ps, _) ->
@@ -3713,6 +3911,9 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       own_sets = Hashtbl.create 8;
       own_deps = Hashtbl.create 8;
       own_aliases = Hashtbl.create 8;
+      named_ctors = Hashtbl.create 8;
+      sums = Hashtbl.create 8;
+      own_sums = Hashtbl.create 8;
       modules =
         List.fold_left
           (fun acc ((i : import), iface) -> Env.add i.alias.name (i, iface) acc)
@@ -3875,6 +4076,60 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                 (Path.make home name.name, List.length td.type_params))
       | Fn _ | Import _ | Testing _ -> ())
     prog;
+  (* the sum types in scope bare, and their by-name constructors, which a
+     bare `Name { ... }` can mean ([braces_name]) *)
+  Hashtbl.iter
+    (fun name ((p : Path.t), _) ->
+      let ctors =
+        if p.home = home then
+          List.find_map
+            (function
+              | Type ({ type_body = Ctors cs; _ } as td : Parsed.type_def)
+                when td.type_name.name = p.name ->
+                  Hashtbl.replace env.own_sums p.name
+                    (List.map
+                       (fun (c : Parsed.ctor) : Iface.ctor ->
+                         {
+                           cname = c.ctor_name.name;
+                           cnamed = c.ctor_named;
+                           cloc = c.ctor_name.loc;
+                           cfields =
+                             List.map
+                               (fun (f : Parsed.field) : Iface.field ->
+                                 {
+                                   fname = f.field_name.name;
+                                   fty = Ty.Error;
+                                 })
+                               c.ctor_fields;
+                         })
+                       cs);
+                  Some
+                    (List.filter_map
+                       (fun (c : Parsed.ctor) ->
+                         if c.ctor_named then Some c.ctor_name.name else None)
+                       cs)
+              | _ -> None)
+            prog
+        else
+          match
+            List.find_map
+              (fun (i : Iface.t) ->
+                if i.home = p.home then Iface.find_type i p.name else None)
+              env.ifaces
+          with
+          | Some { body = Sum cs; _ } ->
+              Some
+                (List.filter_map
+                   (fun (c : Iface.ctor) -> if c.cnamed then Some c.cname else None)
+                   cs)
+          | _ -> None
+      in
+      Option.iter
+        (fun cs ->
+          Hashtbl.replace env.sums name ();
+          List.iter (fun c -> Hashtbl.replace env.named_ctors c name) cs)
+        ctors)
+    env.types;
   (* the functions in scope: the prelude's, then this module's own *)
   List.iter
     (fun (iface : Iface.t) ->

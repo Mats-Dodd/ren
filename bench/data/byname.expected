@@ -1,0 +1,13 @@
+Dot
+0
+Circle(2)
+12
+Rect { w: 2, h: 3 }
+6
+Rect { w: 5, h: 4 }
+20
+Frame { w: 6, h: 6, t: 1 }
+20
+19987
+true
+exit 0

@@ -14,7 +14,7 @@ type Box<T> = { item: T }
 type Texel = { r: UInt8, g: UInt8, b: UInt8, lit: Bool, depth: Int16 }
 type Shape =
   | Dot(d: Int8)
-  | Line(a: Int16, b: Int16)
+  | Line { a: Int16, b: Int16 }
   | Empty
 
 fn fnv32(bytes: Array<UInt8>) -> Int =
@@ -94,7 +94,7 @@ fn main() uses Console =
   var ints: Array<Int32> = [5, -2, 9, 0]
   ints[1] = ints[1] *% 2000000000
   print(ints)
-  print([Dot(-3), Line(-1000, 1000), Empty])
+  print([Dot(-3), Line { a: -1000, b: 1000 }, Empty])
   var fs: Array<Float32> = [0.5, 1.25]
   &fs.push(3.4)
   print(fs)

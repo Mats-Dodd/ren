@@ -1,0 +1,63 @@
+// Data stage, step 7: three faults in the counting of boxed values that
+// the layout tests found (compiler.md, "Data stage", step 7's choices).
+// A `match` whose arms read constructors of different sizes, each arm
+// building one of the other's size from a unique subject: reuse pairs a
+// reset with a build only as big as what's known on its path. A field
+// read three times through a chain, each read dead where the record
+// dies: one slot, nested once. A `var` updated through its views, then
+// dropped: a view of its old value isn't its field. `Item` is kept boxed
+// in release builds by the array.
+
+type Line = { sku: Str, qty: Int }
+
+type Item =
+  | Draft(l: Line)
+  | Priced { l: Line, total: Int }
+  | Void
+
+type P = { x: Int, y: Int }
+
+type Q = { p: P, z: Int }
+
+type R = { q: Q, w: Str }
+
+fn price(it: Item) -> Item =
+  match it
+    Draft(l) => Priced { l, total: l.qty * l.sku.len() }
+    Priced { .. } as p => Priced { ..p, total: p.total + 1 }
+    Void => Void
+
+fn unprice(it: Item) -> Item =
+  match it
+    Priced { l, .. } => Draft(l)
+    other => other
+
+fn main() uses Console =
+  var t = 0
+  for i in 0..6
+    var it = if i % 3 == 2 then Void else Draft(Line { sku: "ab".concat("c"), qty: i })
+    it = price(it)
+    it = price(it)
+    it = unprice(it)
+    it = price(it)
+    match it
+      Priced { total, l } => t += total + l.qty
+      _ => t += 1000
+  print(t)
+  let kept: Array<Item> = [price(Draft(Line { sku: "x", qty: 2 })), Void]
+  print(kept.len())
+  reads()
+  print(updated())
+
+fn reads() uses Console =
+  let r = R { q: Q { p: P { x: 1, y: 2 }, z: 3 }, w: "r" }
+  print(r.q.p.x + r.q.p.y + r.q.z)
+  let pq = r.q.p
+  print(pq.x * 100 + pq.y)
+  print(r.w)
+
+fn updated() -> Int =
+  let r = R { q: Q { p: P { x: 1, y: 2 }, z: 3 }, w: "r" }
+  var m = r
+  m = { ..m, q: { ..m.q, p: { ..m.q.p, y: 50 } } }
+  r.q.z

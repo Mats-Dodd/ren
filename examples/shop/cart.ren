@@ -7,6 +7,19 @@
 import plan.{Plan}
 import users.{UserId}
 
+// A discount is a policy, and a policy is data: it can be compared,
+// shown and stored, and `apply` matches on it.
+pub type Discount =
+  | NoDiscount
+  | Flat(off: Int)
+  | OverAmount { min: Int, off: Int }
+
+  pub fn apply(self, m: Int) -> Int =
+    match self
+      NoDiscount => m
+      Flat(off) => m - off
+      OverAmount { min, off } => if m < min then m else m - off
+
 pub type Cart = opaque { owner: UserId, plans: Array<Plan> }
   pub fn of(owner: UserId) -> Cart = Cart { owner: owner, plans: [] }
   pub let guest: Cart = Cart.of(UserId.new(0))   // made once, at start
@@ -17,6 +30,18 @@ pub type Cart = opaque { owner: UserId, plans: Array<Plan> }
   pub fn clear(inout self) = self.plans = []
   pub fn len(self) -> Int = self.plans.len()
   pub fn total(self) -> Int = self.prices().sum()
+  pub fn total_after(self, d: Discount) -> Int = d.apply(self.total())
 
   // Private: only this module can call `cart.prices()`.
   fn prices(self) -> Array<Int> = self.plans.map(fn(p) => plan.price(p))
+
+test "a discount over an amount comes off only above it" =
+  let d = OverAmount { min: 20, off: 5 }
+  assert d.apply(30) == 25
+  assert d.apply(10) == 10
+  assert NoDiscount.apply(30) == 30
+
+test "a cart's total, after a discount" =
+  var c = Cart.of(UserId.new(1))
+  &c.put(Pro(3))
+  assert c.total_after(Flat(5)) == 25

@@ -55,7 +55,7 @@ fn f() = &c.plans[i].put(util.double(x), y)
 constructors, records and ops items
 ================================================================================
 
-fn f() = g(Free, Pro(5), Pro(seats: 5), Plan.Free, billing.Plan.Free(1), Plan { id: 1, plan }, { x: 1 }, Stack.of, stack.Stack.empty, Admin.rank())
+fn f() = g(Free, Pro(5), Shape.Rect { w: 2, h: 3 }, Plan.Free, billing.Plan.Free(1), Plan { id: 1, plan }, { x: 1 }, Stack.of, stack.Stack.empty, Admin.rank())
 
 --------------------------------------------------------------------------------
 
@@ -76,11 +76,15 @@ fn f() = g(Free, Pro(5), Pro(seats: 5), Plan.Free, billing.Plan.Free(1), Plan { 
             (number)))
         (constructor_expression
           (constructor_ref
+            (type_name
+              (type_identifier))
             (type_identifier))
-          (constructor_arguments
-            (labeled_argument
-              (identifier)
-              (number))))
+          (field_initializer
+            (identifier)
+            (number))
+          (field_initializer
+            (identifier)
+            (number)))
         (constructor_expression
           (constructor_ref
             (type_name

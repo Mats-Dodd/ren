@@ -2,29 +2,32 @@
 // (foundations.md, decision 3; compiler.md, "Stage 10d"). Stateless
 // handlers called as methods, inline handlers that copy what they
 // capture, descriptions kept in arrays and records, and a stored
-// description's `uses` as an upper bound.
+// description's `uses` as an upper bound. Its codecs are kinds a
+// library keeps and its users add to; the shapes it once had are an ADT
+// now, in bench/data/shapes.ren (language.md §6).
 
-dep Shape =
-  area: fn() -> Float
+// what each codec costs a block
+dep Codec =
+  cost: fn() -> Float
 
-handler circle(r: Float) for Shape =
-  area() => 3.0 * r * r
+handler deflate(level: Float) for Codec =
+  cost() => 3.0 * level * level
 
-handler square(s: Float) for Shape =
-  area() => s * s
+handler lz4(block: Float) for Codec =
+  cost() => block * block
 
-handler rect(w: Float, h: Float) for Shape =
-  area() => w * h
+handler zstd(level: Float, window: Float) for Codec =
+  cost() => level * window
 
-fn total(shapes: Array<Shape>) -> Float =
+fn total(codecs: Array<Codec>) -> Float =
   var t = 0.0
-  for s in shapes
-    t = t + s.area()
+  for c in codecs
+    t = t + c.cost()
   t
 
 // an inline handler for a dependency of one operation: what it reads
 // from here, `k`, is copied in when it's made
-fn scaled(k: Float) -> Shape = handler fn() => k * k * 2.0
+fn tuned(k: Float) -> Codec = handler fn() => k * k * 2.0
 
 dep Price =
   of: fn(item: Str) -> Int
@@ -46,15 +49,15 @@ fn quote(offers: Array<Offer>, item: Str) -> Int uses Clock =
   sum
 
 fn main() uses Console =
-  let shapes: Array<Shape> = [circle(1.0), square(2.0), rect(2.0, 3.0), scaled(1.5)]
-  for s in shapes
-    print(s.area())
-  print(total(shapes))
+  let codecs: Array<Codec> = [deflate(1.0), lz4(2.0), zstd(2.0, 3.0), tuned(1.5)]
+  for c in codecs
+    print(c.cost())
+  print(total(codecs))
   // capture by copy: the handler keeps `n` as it was when it was made
   var n = 1
-  let get: Shape = handler fn() => Float.of(n)
+  let get: Codec = handler fn() => Float.of(n)
   n = 5
-  print(get.area())
+  print(get.cost())
   // the slot's `uses` is the most a price may need: `flat` needs nothing
   // and fits beside `surge`
   let offers = [

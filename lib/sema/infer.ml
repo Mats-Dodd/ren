@@ -65,7 +65,13 @@ type 'l found_ = 'l Infer_env.found_ =
   | Method_of of Path.t
   | Installs of { key : 'l; from : Path.t }
   | Installs_handler of 'l list
-  | Calls_op of { key : 'l; from : Path.t; op : string }
+  | Calls_op of {
+      key : 'l;
+      from : Path.t;
+      op : string;
+      recv : string;
+      call : string;
+    }
   | Inline_op of { dep : Path.t; op : string }
   | Install_order of int list
   | Handler_facts of {

@@ -1,0 +1,9 @@
+Draft { lines: [3, 4, 5] }
+Placed { id: 7, lines: [3, 4, 5], total: 12 }
+25
+Placed { id: 0, lines: [0, 1], total: 1 }
+true
+Placed { id: 1, lines: [1, 2], total: 3 }
+Placed { id: 9, lines: [2, 3], total: 100 }
+Shipped { id: 7, tracking: "track" }
+exit 0

@@ -97,7 +97,8 @@ let rec labels_named name t =
   match repr t with
   | TFun (ps, r, e, _) ->
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
-  | TCon (_, args) -> List.concat_map (labels_named name) args
+  | TCon (_, args) | TVariant (_, _, args) ->
+      List.concat_map (labels_named name) args
   | TErrors e -> row e
   | TImpl i -> row i.fails
   | TVar _ | TSkol _ | TError -> []
@@ -331,18 +332,57 @@ let ctor_arity loc (c : Ast.ident) (ctor : Iface.ctor) given =
            `%s((%s))`"
           c.name
           (if given = 2 then "a, b" else "a, b, c")
+    | [ { fname = ""; _ } ] -> sprintf "write it with one value: `%s(...)`" c.name
     | fs -> sprintf "its field%s: %s" (plural n) (quote (field_names fs))
   in
   Diag.make loc ~help
     (sprintf "`%s` has %d field%s but was given %d" c.name n (plural n) given)
 
-let some_labels loc (c : Ast.ident) =
-  Diag.make loc (sprintf "label every field of `%s`, or none of them" c.name)
+(* ---- by-name variants (compiler.md, "Data stage", "By-name
+   variants") ----
 
-let wrong_label (l : Ast.ident) (f : Iface.field) =
-  Diag.make l.loc
-    ~help:"labels are written in the order the fields are declared"
-    (sprintf "expected the label `%s` here, found `%s`" f.fname l.name)
+   A variant's declaration decides how it's written: in braces, by name,
+   or by position, in parentheses, with one field at most. Each of these
+   is said where it's written the other way, at the whole constructor
+   or pattern, and its help is the one way, written out in full, which
+   replaces exactly what's underlined. [c] is the constructor as it's
+   written, `Rect` or `Shape.Rect`. *)
+
+(* `Rect(2, 3)` or `Rect(w: 2, h: 3)`, of a by-name variant, [written]
+   its fields given their names: `Rect { w: 2, h: 3 }`. *)
+let built_by_name loc c ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s`" written)
+    (sprintf "`%s` has named fields, so it's built with them" c)
+
+(* `Rect(w, tall)`, a pattern of a by-name variant, [written] by name:
+   `Rect { w, h: tall }`. *)
+let matched_by_name loc c ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s`" written)
+    (sprintf "`%s` has named fields, so it's matched by them" c)
+
+(* `Circle(r: 2)` or `Circle { r: 2 }`, of a variant with one field,
+   built, or matched if [pattern], [written] by position: `Circle(2)`.
+   One with no fields, `Dot { }`, is written alone. *)
+let by_position loc c ~fields ~pattern ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s`" written)
+    (if fields = 0 then sprintf "`%s` has no fields, so it's written alone" c
+     else
+       sprintf "`%s` has one field, so it's %s by position" c
+         (if pattern then "matched" else "built"))
+
+(* `{ w, .. }` matched against the sum type [shown]: [written] names a
+   variant it could be, `Rect { w, .. }`, if there's one with named
+   fields. *)
+let record_pattern_of_sum loc shown ~written =
+  Diag.make loc
+    ~help:
+      (match written with
+      | Some w -> sprintf "name the variant: `%s`" w
+      | None -> "match its variants instead")
+    (sprintf "`%s` is a sum type, so a record pattern doesn't match it" shown)
 
 (* `Plan { ... }`, where `Plan` isn't a record *)
 let not_a_record ~names ?(test = false) loc (td : Iface.type_decl) =
@@ -372,10 +412,228 @@ let several_records_fit ~names loc paths =
     (sprintf "these fields fit more than one type: %s"
        (quote (List.map names paths)))
 
-let no_such_field ~names ?(what = "field") (f : Ast.ident) path decl =
+(* How many single-character edits turn [a] into [b], swapping two
+   neighbours counting as one (the optimal string alignment distance), for
+   a name that's probably a misspelling of another: `piad` is one from
+   `paid`. *)
+let distance a b =
+  let m = String.length a and n = String.length b in
+  (* [d.(i).(j)]: from the first [i] characters of [a] to the first [j] of
+     [b] *)
+  let d = Array.make_matrix (m + 1) (n + 1) 0 in
+  for i = 0 to m do d.(i).(0) <- i done;
+  for j = 0 to n do d.(0).(j) <- j done;
+  for i = 1 to m do
+    for j = 1 to n do
+      let cost = if a.[i - 1] = b.[j - 1] then 0 else 1 in
+      d.(i).(j) <-
+        min (min (d.(i - 1).(j) + 1) (d.(i).(j - 1) + 1)) (d.(i - 1).(j - 1) + cost);
+      if i > 1 && j > 1 && a.[i - 1] = b.[j - 2] && a.[i - 2] = b.[j - 1] then
+        d.(i).(j) <- min d.(i).(j) (d.(i - 2).(j - 2) + 1)
+    done
+  done;
+  d.(m).(n)
+
+(* The name among [names] that [name] is most likely a misspelling of:
+   the nearest, if it's near enough. *)
+let nearest name names =
+  let near n =
+    let d = distance (String.lowercase_ascii name) (String.lowercase_ascii n) in
+    if d <= max 2 (String.length name / 3) && d < String.length name then
+      Some (d, n)
+    else None
+  in
+  match List.sort compare (List.filter_map near names) with
+  | (_, n) :: _ -> Some n
+  | [] -> None
+
+(* A field [f] that [path], whose fields are [decl], doesn't have: the one
+   it's likely a misspelling of, if one is near, or else all of them. *)
+let no_such_field ~names ?(what = "field") ?owner (f : Ast.ident) path decl =
   Diag.make f.loc
-    ~help:(sprintf "its %ss: %s" what (quote (field_names decl)))
-    (sprintf "`%s` has no %s named `%s`" (names path) what f.name)
+    ~help:
+      (match nearest f.name (field_names decl) with
+      | Some near -> sprintf "did you mean `%s`?" near
+      | None -> sprintf "its %ss: %s" what (quote (field_names decl)))
+    (sprintf "`%s` has no %s named `%s`"
+       (match owner with Some o -> o | None -> names path)
+       what f.name)
+
+(* ---- the errors that teach the model (compiler.md, "Data stage",
+   "The errors that teach the model") ---- *)
+
+(* How code a help writes names the by-name constructor [c] of the sum
+   [sum] in a pattern: bare, `Rect`, unless a bare `Rect { ... }` would be
+   a type in scope there that isn't a sum with it (resolve.ml,
+   [braces_name]), and then after its sum, `Shape.Rect`. [types] is every
+   type the module can see, and [names] how it writes one, bare only if
+   it's in scope. *)
+let braced_ctor ~types ~names sum c =
+  let sum_bare = not (String.contains (names sum) '.') in
+  let shadowed =
+    Hashtbl.fold
+      (fun p (td : Iface.type_decl) acc ->
+        acc
+        || names p = c
+           && match td.body with Sum _ -> not sum_bare | _ -> true)
+      types false
+  in
+  if shadowed then names sum ^ "." ^ c else c
+
+(* `s.r`, where [recv], `s` as it's written, is of the sum type [td],
+   which has no fields: which of its variants have [f], a by-name one or a
+   positional one whose label it is, said with the `match` that takes it
+   from them, or, if every variant has it at one type, how to make it the
+   sum's own. [None] if none of them has it. *)
+let field_of_sum ~types ~names (f : Ast.ident) ~recv (td : Iface.type_decl) =
+  let cs = match td.body with Sum cs -> cs | _ -> [] in
+  let has =
+    List.filter_map
+      (fun (k : Iface.ctor) ->
+        Option.map
+          (fun (d : Iface.field) -> (k, d.fty))
+          (List.find_opt (fun (d : Iface.field) -> d.fname = f.name) k.cfields))
+      cs
+  in
+  let sum = names td.path in
+  let printer =
+    Ty.printer ~names
+      {
+        ty = Ty.Con (td.path, List.mapi (fun i _ -> Ty.Var i) td.params);
+        names = List.mapi (fun i n -> (i, n)) td.params;
+        reqs = [];
+        row_reqs = [];
+        modes = [];
+        defaults = [];
+      }
+  in
+  (* each variant's pattern that binds the field to its name *)
+  let pattern ((k : Iface.ctor), _) =
+    if k.cnamed then
+      sprintf "%s { %s%s }"
+        (braced_ctor ~types ~names td.path k.cname)
+        f.name
+        (if List.length k.cfields > 1 then ", .." else "")
+    else sprintf "%s(%s)" k.cname f.name
+  in
+  let one_type =
+    match has with
+    | (_, t) :: rest -> List.for_all (fun (_, t') -> t' = t) rest
+    | [] -> true
+  in
+  let every = List.length has = List.length cs in
+  (* the arms: the variants in one, if they have it at one type *)
+  let arms =
+    if one_type then
+      [ String.concat " | " (List.map pattern has) ^ " => " ^ f.name ]
+    else List.map (fun v -> pattern v ^ " => " ^ f.name) has
+  in
+  let code =
+    (sprintf "match %s" recv :: List.map (fun a -> "  " ^ a) arms)
+    @ if every then [] else [ "  _ => todo" ]
+  in
+  let ctor_names = List.map (fun ((k : Iface.ctor), _) -> k.cname) has in
+  match has with
+  | [] -> None
+  | (_, t) :: _ when every && one_type ->
+      let name = td.path.name in
+      let args =
+        if td.params = [] then ""
+        else "<" ^ String.concat ", " td.params ^ ">"
+      in
+      Some
+        (Diag.make f.loc
+           ~help:
+             (sprintf
+                "hoist it into a record, `type %s%s = { %s: %s, kind: \
+                 %sKind%s }`, or write a method that matches each variant"
+                name args f.name (Ty.show printer t) name args)
+           (sprintf "every variant of `%s` has `%s`, but a sum type has no \
+                     fields" sum f.name))
+  | _ when every ->
+      (* at different types, so there's nothing one record could hold *)
+      Some
+        (Diag.make f.loc ~help:"take it from each with a `match`:" ~code
+           (sprintf "every variant of `%s` has `%s`, but a sum type has no \
+                     fields" sum f.name))
+  | [ _ ] ->
+      Some
+        (Diag.make f.loc
+           ~help:(sprintf "take it from `%s` with a `match`:" (List.hd ctor_names))
+           ~code
+           (sprintf "`%s` is a sum type; only `%s` has `%s`" sum
+              (List.hd ctor_names) f.name))
+  | _ ->
+      Some
+        (Diag.make f.loc ~help:"take it from them with a `match`:" ~code
+           (sprintf "`%s` is a sum type; only %s have `%s`" sum
+              (and_list ctor_names) f.name))
+
+(* ---- record update, `{ ..base, f: v }` (compiler.md, "Data stage",
+   "Record update") ----
+
+   [base] is how the value after `..` is written, `..o`. *)
+
+(* `{ ..n }`, where [n] is of the type [shown], which isn't a record. *)
+let update_not_record loc ~base shown =
+  Diag.make loc ~help:"write every field, without `..`"
+    (sprintf "`%s` takes the rest from a record, but `%s` is %s" base
+       (String.sub base 2 (String.length base - 2))
+       (article shown))
+
+(* `{ ..o }`, where [o] is of the sum type [shown]: the rest is taken from
+   a variant's type, which matching it binds with `as` ([variant], one of
+   its by-name variants). *)
+let update_from_sum loc ~base shown ~variant =
+  let v = Option.value variant ~default:"Placed" in
+  Diag.make loc
+    ~help:
+      (sprintf
+         "match it, and take the rest from the variant: `%s { .. } as p => %s \
+          { ..p, ... }`"
+         v v)
+    (sprintf
+       "`%s` takes the rest from a record, but `%s` is %s, a sum type" base
+       (String.sub base 2 (String.length base - 2))
+       (article shown))
+
+(* The field [f] of the target [target], which [base] doesn't have and
+   the update doesn't give. *)
+let update_needs loc ~target ~base f =
+  Diag.make loc
+    ~help:(sprintf "give it: `%s: ...`" f)
+    (sprintf "`%s` needs `%s`, which `%s` doesn't have" target f base)
+
+(* The field [f] of [base], which the target [target] doesn't have. *)
+let update_drops loc ~target ~base f =
+  Diag.make loc
+    ~help:(sprintf "name the fields to keep instead of `%s`" base)
+    (sprintf "`%s` would drop `%s`: `%s` has no field `%s`" base f target f)
+
+(* The field [f], taken from [base], where it's of the type [found], and
+   the target [target] wants [expected]. *)
+let update_field_type loc ~target ~base f ~found ~expected =
+  Diag.make loc
+    ~help:(sprintf "give it: `%s: ...`" f)
+    (sprintf "`%s`'s `%s` is %s, but `%s`'s `%s` is %s" base f (article found)
+       target f (article expected))
+
+(* ---- record patterns ---- *)
+
+(* A record pattern matched against a value of the type [shown]. *)
+let pattern_not_record loc shown =
+  Diag.make loc ~help:"take it apart as what it is, or bind it to a name"
+    (sprintf "a record pattern matches a record, but this is %s"
+       (article shown))
+
+(* A record pattern, in a `match`, that leaves out the fields [missing]
+   without `..`; [written] is it with `..` at the end. *)
+let pattern_misses loc missing ~written =
+  Diag.make loc
+    ~help:(sprintf "write `%s` to leave the rest out" written)
+    (sprintf "this pattern doesn't name %s; add %s, or `..` for the rest"
+       (quote missing)
+       (if List.length missing = 1 then code (List.hd missing) else "them"))
 
 (* `c.now`, where `c` is an implementation of the dependency [dep], which
    has the operation `now` or not: an implementation's operations are
@@ -488,13 +746,15 @@ let impl_record_made loc ~dep ~name arms =
             head arm)
     (sprintf "an implementation of `%s` is a handler, not a record" dep)
 
-let missing_fields ~names loc path missing =
+(* A record literal, or a by-name constructor, [what], `Order` or `Rect`,
+   that doesn't give [missing]. *)
+let missing_fields loc what missing =
   Diag.make loc
     ~help:
       (sprintf "give %s a value too, like `%s: ...`"
          (if List.length missing = 1 then "it" else "each")
          (List.hd missing))
-    (sprintf "this `%s` is missing %s" (names path) (quote missing))
+    (sprintf "this `%s` is missing %s" what (quote missing))
 
 let needs_record (f : Ast.ident) shown =
   Diag.make f.loc
@@ -607,6 +867,13 @@ type behind =
       (** an implementation of [deps], of type [all], where one of [dep], which
           isn't among them, is wanted; or, if not [here], one of [dep] where
           that one, given first, is *)
+  | Variant_wanted of { variant : string; sum : string; ctor : string }
+      (** a value of the sum [sum] where its variant type [variant] is wanted,
+          which only a pattern's `as` binds (compiler.md, "Data stage",
+          "Variant types") *)
+  | Sum_wanted of { ctor : string }
+      (** a value of a variant type, of the constructor [ctor], where its sum is
+          wanted: no implicit conversion *)
 
 let behind_note = function
   | Needs_more { extra; slot } ->
@@ -703,6 +970,13 @@ let behind_note = function
               "write it where it's made or passed, `let x: %s = ...` or `fn \
                f(x: %s)`"
               part part )
+  | Variant_wanted { variant; sum; ctor } ->
+      ( [],
+        sprintf
+          "`%s` is one variant of `%s`: match it and bind that with `as`, `%s \
+           { .. } as p`"
+          variant sum ctor )
+  | Sum_wanted { ctor } -> ([], sprintf "make it the sum: `%s { ..p }`" ctor)
   | Other_handler { all; deps; dep; here } ->
       ( [
           sprintf "%s is an implementation of %s, not of `%s`" (article all)
@@ -736,6 +1010,37 @@ let mismatch loc ?msg ~notes ?help ~labels ?type_params ~found ~expected ~f ~x
       (more, help) behind
   in
   Diag.make loc ?help ~notes:(notes @ more) ~labels msg
+
+(* A pattern of the constructor [c], [sum] as it's written, matched
+   against a value of another of its sum's variant types, [shown], which is
+   always that one. *)
+let other_variant loc shown c ~own =
+  Diag.make loc
+    ~help:
+      (sprintf
+         "a value of a variant type is always that variant: match it as `%s { \
+          .. }`, or match the sum it came from"
+         own)
+    (sprintf "%s is never a `%s`, so this pattern never matches"
+       (article shown) c)
+
+(* `p.size()`, where [p] is of the variant type [shown] and `size` is its
+   sum's method: a variant type has no methods of its own. *)
+let variant_no_methods loc ~shown ~ctor ~recv ~name =
+  Diag.make loc
+    ~help:(sprintf "call it on the sum: `%s { ..%s }.%s()`" ctor recv name)
+    (sprintf "`%s` has no methods of its own" shown)
+
+(* What a constructor builds, where its sum's variant type is wanted. *)
+let builds_the_sum =
+  "a constructor always builds the sum; a variant type is bound by a \
+   pattern's `as`"
+
+(* The help for a value of a variant type, written [value], where its sum
+   is wanted: the conversion, written out. *)
+let make_the_sum ~ctor ~value =
+  let value = if String.contains value ' ' then "(" ^ value ^ ")" else value in
+  sprintf "make it the sum: `%s { ..%s }`" ctor value
 
 (* A type that would have to contain itself, `a = Array<a>`. *)
 let contains_itself loc ~found ~expected =
@@ -1075,10 +1380,11 @@ let arm_after f x =
 
 let first_arm x = sprintf "the first arm is %s" (article x)
 
-(* the variable [name] of one alternative of a pattern, `A(x) | B(x)` *)
-let alternative name f x =
-  sprintf "`%s` is %s here, but %s in the first alternative" name (article f)
-    (article x)
+(* the variable [name] of the alternative [here] of a pattern, `A(x) |
+   B(x)`, which has another type in the [first] *)
+let alternative name ~first ~here f x =
+  sprintf "`%s` is %s in `%s`, but %s in `%s`" name (article x) first
+    (article f) here
 
 let pattern_for f x =
   sprintf "expected a pattern for `%s`, but this one is %s" x (article f)
@@ -1096,6 +1402,9 @@ let tuple_parts_help (ps : Ast.Resolved.pattern list) n =
     | PCon (c, []) -> c.name.name
     | PCon (c, ps) -> c.name.name ^ args ps
     | PTuple ps -> args ps
+    | PRecord (_, fs) -> Ast.show_fields shown fs
+    | PCon_named (c, fs) -> c.name.name ^ " " ^ Ast.show_fields shown fs
+    | PAs (q, b) -> shown q ^ " as " ^ b.ident.name
     | PWild | PFail _ | PFail_any | PFail_in _ | POr _ -> "_"
   in
   let parts =
@@ -3327,41 +3636,6 @@ let tag_arity ?(value = false) loc (c : Ast.ident) want given =
 
 (* A tag pattern for an error the set doesn't have; [tags] are those it
    has, as shown. *)
-(* How many single-character edits turn [a] into [b] (the Levenshtein
-   distance), for a name that's probably a misspelling of another. *)
-let distance a b =
-  let n = String.length b in
-  (* [prev.(j)] is the distance from the part of [a] seen so far to the
-     first [j] characters of [b] *)
-  let prev = Array.init (n + 1) Fun.id in
-  String.iteri
-    (fun i ca ->
-      let diag = ref prev.(0) in
-      prev.(0) <- i + 1;
-      for j = 1 to n do
-        let here = prev.(j) in
-        prev.(j) <-
-          min
-            (min (prev.(j) + 1) (prev.(j - 1) + 1))
-            (!diag + if ca = b.[j - 1] then 0 else 1);
-        diag := here
-      done)
-    a;
-  prev.(n)
-
-(* The name among [names] that [name] is most likely a misspelling of:
-   the nearest, if it's near enough. *)
-let nearest name names =
-  let near n =
-    let d = distance (String.lowercase_ascii name) (String.lowercase_ascii n) in
-    if d <= max 2 (String.length name / 3) && d < String.length name then
-      Some (d, n)
-    else None
-  in
-  match List.sort compare (List.filter_map near names) with
-  | (_, n) :: _ -> Some n
-  | [] -> None
-
 (* [c] matched in an error set that doesn't hold it; [tags] are what it
    holds, each its name and how it's shown. *)
 let not_an_error (c : Ast.ident) ?(arm = false) tags =

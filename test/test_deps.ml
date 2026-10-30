@@ -157,6 +157,7 @@ let lint_evidence body =
               shows = [];
               keys = [];
               ops = [];
+              method_calls = [];
             }))
 
 (* deps.md's handler of two dependencies sharing one state, and a function
@@ -3186,6 +3187,31 @@ let%expect_test "an operation read from a value holding a handler of several" =
   run
     (rates
    ^ {|
+handler fixed_rates(rate: Int) for Rates, RateCalls =
+  usd_to(_) => rate
+  count() => 0
+
+fn id(x) = x
+
+fn main() uses Console =
+  let h = id(fixed_rates(3))
+  print(h.usd_to(1))
+|}
+    );
+  [%expect
+    {|
+    3
+    ()
+    |}]
+
+let%expect_test "an operation of a handler of several that keeps state isn't called as a method" =
+  (* `counting_rates` counts its calls, so a call as a method, which would
+     start it fresh, is refused (compiler.md, "Data stage",
+     "Descriptions (step 6)"), the help naming the dependency the
+     operation was found in *)
+  run
+    (rates
+   ^ {|
 fn id(x) = x
 
 fn main() uses Console =
@@ -3195,8 +3221,12 @@ fn main() uses Console =
     );
   [%expect
     {|
-    3
-    ()
+    error: `h` may be a description of `counting_rates`, which keeps state, so it isn't called as a method
+       ┌─ test.ren:20:11
+    20 │   print(h.usd_to(1))
+       │           ^^^^^^
+       = a call as a method makes a fresh instance, so its state would start again at each call
+       help: install it: `with h in Rates.usd_to(1)`
     |}]
 
 let%expect_test "a handler of several, then said to be something else" =
@@ -4840,14 +4870,14 @@ let%expect_test "a failed assert leaves out what its two sides share" =
      fields, the other elements and an element only one side has *)
   test
     {|
-pub type Shape = Dot | Box(w: Int, h: Int)
+pub type Shape = Dot | Box { w: Int, h: Int }
 pub type P = { name: Str, at: Int, shapes: Array<Shape> }
 
 test "a payload" =
-  assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
+  assert P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 2 }] } == P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 3 }] }
 
 test "two constructors" =
-  assert [Dot, Dot, Dot] == [Dot, Box(1, 1), Dot]
+  assert [Dot, Dot, Dot] == [Dot, Box { w: 1, h: 1 }, Dot]
 
 test "one side is longer" =
   assert [1, 2, 3, 4] == [1, 2]
@@ -4881,22 +4911,22 @@ test "apart first, left longer" =
 
     ──── a payload ── test.ren:5
       │
-    5 │   assert P { name: "a", at: 1, shapes: [Dot, Box(1, 2)] } == P { name: "a", at: 1, shapes: [Dot, Box(1, 3)] }
-      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    5 │   assert P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 2 }] } == P { name: "a", at: 1, shapes: [Dot, Box { w: 1, h: 3 }] }
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       │
-      left:  P { ..., shapes: [..., Box(..., 2)] }
-      right: P { ..., shapes: [..., Box(..., 3)] }
-                                             ^ differs here
+      left:  P { ..., shapes: [..., Box { ..., h: 2 }] }
+      right: P { ..., shapes: [..., Box { ..., h: 3 }] }
+                                                  ^ differs here
 
       seed 4626 · rerun: ren test test.ren --only "a payload" --seed 4626
 
     ──── two constructors ── test.ren:8
       │
-    8 │   assert [Dot, Dot, Dot] == [Dot, Box(1, 1), Dot]
-      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    8 │   assert [Dot, Dot, Dot] == [Dot, Box { w: 1, h: 1 }, Dot]
+      │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       │
       left:  [..., Dot, ...]
-      right: [..., Box(1, 1), ...]
+      right: [..., Box { w: 1, h: 1 }, ...]
                    ^ differs here
 
       seed 446 · rerun: ren test test.ren --only "two constructors" --seed 446

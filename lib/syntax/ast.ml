@@ -61,6 +61,10 @@ type 't ty =
   | TyTuple of 't ty list * Loc.t
       (** [(Str, Int)]: a tuple's type, of two or three (operators.md, "Tuples")
       *)
+  | TyVariant of 't * ident * 't ty list
+      (** [Order.Placed], a variant type: the sum, the variant's name and the
+          sum's type arguments, written after the variant, [Tree.Node<Int>]
+          (compiler.md, "Data stage", "Variant types") *)
 
 (* What a function can fail with, written after `!` (errors.md):
 
@@ -159,20 +163,42 @@ and ('b, 't) pattern_kind =
   | PBool of bool
   | PCon of 't ctor_ref * ('b, 't) pattern list
       (** [Free], [Pro(seats)], [Plan.Free] *)
+  | PCon_named of 't ctor_ref * ('b, 't) fields
+      (** [Shape.Rect { w, .. }]: a by-name constructor, its fields named
+          (compiler.md, "Data stage", "By-name variants"). The parser makes
+          one only of a constructor written after its type; [Rect { w, .. }]
+          is a [PRecord] until Resolve finds [Rect] isn't a type *)
   | PFail of ident * ('b, 't) pattern list
       (** [fail Short(_, by)]: an error, destructured. A `fail` pattern is a
           whole arm's, never part of another pattern *)
   | PFail_any  (** [fail _]: any error *)
   | POr of ('b, 't) pattern list
-      (** [fail Short(_, _) | fail Frozen(_)]: any of them. So far only `fail`
-          patterns are combined, and each binds the same names *)
+      (** [Pro(n) | Team(n)], [fail Short(_, _) | fail Frozen(_)]: any of
+          them, each binding the same names (compiler.md, "Data stage",
+          "Or-patterns"). `fail` patterns combine only with each other *)
+  | PAs of ('b, 't) pattern * 'b
+      (** [Pro(n) as old]: what the pattern matches, the whole of it bound
+          to the name too. It binds looser than `|`: [A | B as x] names the
+          whole. Never of a `fail` pattern *)
   | PTuple of ('b, 't) pattern list
       (** [(k, v)]: a tuple of two or three, taken apart *)
+  | PRecord of 't option * ('b, 't) fields
+      (** [{ id, lines: ls, .. }], a record of the type matched, or [User {
+          id, .. }], of the type named (compiler.md, "Data stage", "Record
+          patterns") *)
   | PFail_in of 'b
       (** [fail on], where [on] is a parameter of type `Tags`: an error whose
           tag is one of those it was given, binding nothing (compiler.md,
           "`over any` and `retry`"). The parser reads it as a [PFail] of no
           payload, which Resolve makes this when [on] is such a parameter *)
+
+(* A record pattern's fields, in the order written: each a name and its
+   pattern, a punned one, `{ id }`, a [PVar] of its name; and whether it
+   ends in `..`, which leaves out the rest. *)
+and ('b, 't) fields = {
+  fpats : (ident * ('b, 't) pattern) list;
+  rest : bool;
+}
 
 (* How a parameter is passed: read-only (the default), or [inout], which
    updates the caller's value. *)
@@ -232,10 +258,26 @@ and ('v, 'b, 't) expr_kind =
   | Block of ('v, 'b, 't) stmt list * ('v, 'b, 't) expr
       (** statements, then the block's value *)
   | Con of 't ctor_ref * (ident option * ('v, 'b, 't) expr) list
-      (** a constructor: [Pro(5)], [Pro(seats: 5)] or [Plan.Pro(5)] *)
+      (** a constructor: [Pro(5)] or [Plan.Pro(5)]; [Pro(seats: 5)] parses,
+          and inference refuses it *)
+  | Con_named of 't ctor_ref * (ident * ('v, 'b, 't) expr) list
+      (** a by-name constructor, [Shape.Rect { w: 2, h: 3 }], its fields in
+          the order written, punned or not, as a record literal's. The parser
+          makes one only of a constructor written after its type; [Rect { w:
+          2, h: 3 }] is a [Record] until Resolve finds [Rect] isn't a type
+          (compiler.md, "Data stage", "By-name variants") *)
   | Record of 't option * (ident * ('v, 'b, 't) expr) list
       (** [User { id: 1 }], [rows.Row { id: 1 }], or [{ id: 1 }] with the type
           left out *)
+  | Update of {
+      target : 't target option;
+      base : ('v, 'b, 't) expr;
+      fields : (ident * ('v, 'b, 't) expr) list;
+    }
+      (** [{ ..order, status: Paid }]: a record with these fields, each given
+          one in the order written, punned or not, and the rest taken from
+          [base]. Its type is [target]'s, [Shipped { ..p, carrier }], or else
+          the base's (compiler.md, "Data stage", "Record update") *)
   | Field of ('v, 'b, 't) expr * ident  (** [user.plan] *)
   | Match of ('v, 'b, 't) expr * ('v, 'b, 't) arm list
   | Array of ('v, 'b, 't) expr list  (** [[1, 2, 3]] *)
@@ -278,6 +320,10 @@ and ('v, 'b, 't) expr_kind =
   | Break
       (** [break]: leaves the innermost `while` or `for` it's written in, never
           a block's (resolve.ml) *)
+  | Todo
+      (** [todo]: code still to write, of any type, which panics where it's
+          reached, "reached a `todo`"; what a `match`'s missing arms are
+          printed with (compiler.md, "Data stage") *)
   | Fail of ident * (ident option * ('v, 'b, 't) expr) list
       (** [fail Short(self.id, by)]: stop with that error. A tag isn't a value,
           so it's only ever written here, after `!`, in a pattern, and as the
@@ -334,6 +380,10 @@ and ('v, 'b, 't) expr_kind =
       (** [Flaky | Broken], the tags a `Tags` argument is given: tag names,
           without payloads, or named error sets. Only ever a [Named]'s value *)
 
+(* What an update builds, when it's written: the record type named, or a
+   by-name constructor, [Placed { ..draft, id }], which builds its sum. *)
+and 't target = Into_type of 't | Into_ctor of 't ctor_ref
+
 (* An item of a `with`: an implementation, or a chain of them joined by
    `over`, [chain], the top first, each over the next:
    `cached(ttl) over counted() over pg_users(pool)`. [under] are the
@@ -384,9 +434,16 @@ and ('v, 'b, 't) stmt =
       value : ('v, 'b, 't) expr;
       mut : bool;
     }  (** [let], or [var] when [mut] *)
-  | Let_tuple of { pat : ('b, 't) pattern; value : ('v, 'b, 't) expr }
-      (** [let (k, v) = pair]: a tuple taken apart, by a pattern that always
-          matches, of names, [_] and tuples *)
+  | Let_pattern of {
+      pat : ('b, 't) pattern;
+      value : ('v, 'b, 't) expr;
+      else_ : ('v, 'b, 't) expr option;
+    }
+      (** [let (k, v) = pair], [let { id, .. } = order]: taken apart by a
+          pattern that always matches; or, with [else_], [let Team(n) = p
+          else fail NotTeam], by one that might not, the [else_] run, and
+          leaving, when it doesn't (compiler.md, "Data stage", "`let ...
+          else`"). Exhaust checks which *)
   | Expr of ('v, 'b, 't) expr
   | Finally of ('v, 'b, 't) expr
       (** [finally(r) => ...], a lambda of one parameter: it covers what comes
@@ -400,7 +457,15 @@ and ('v, 'b, 't) stmt =
 (* Type declarations. *)
 
 type 't field = { field_name : ident; field_ty : 't ty }
-type 't ctor = { ctor_name : ident; ctor_fields : 't field list }
+(* A constructor as it's declared: [Free], [Flat(off: Money)] or
+   [Flat(Money)], with one field, positional, whose name, if written, only
+   documents it (an unwritten one is [""]); or [Rect { w: Int, h: Int }],
+   by name, [ctor_named] (compiler.md, "Data stage", "By-name variants"). *)
+type 't ctor = {
+  ctor_name : ident;
+  ctor_fields : 't field list;
+  ctor_named : bool;
+}
 
 type 't type_body =
   | Fields of 't field list  (** a record: [{ id: Int, plan: Plan }] *)
@@ -606,14 +671,16 @@ let with_links items =
   List.concat_map (fun i -> List.map (fun l -> l.link) i.chain) items
 
 (* The expressions directly inside [e], in source order: a statement's
-   value, a guard and an arm's body, a handler's state and arms too. *)
+   value (and a `let ... else`'s `else`), a guard and an arm's body, a
+   handler's state and arms too. *)
 let children (e : ('v, 'b, 't) expr) =
   let stmt = function
-    | Let { value; _ } | Let_tuple { value; _ } -> value
-    | Expr e | Finally e -> e
+    | Let { value; _ } -> [ value ]
+    | Let_pattern { value; else_; _ } -> value :: Option.to_list else_
+    | Expr e | Finally e -> [ e ]
   in
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> []
+  | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> []
   | Unop (_, a, _)
   | Field (a, _)
   | Ref a
@@ -634,8 +701,9 @@ let children (e : ('v, 'b, 't) expr) =
   | For { over = Range (lo, hi); body; _ } -> [ lo; hi; body ]
   | While { cond; body } -> [ cond; body ]
   | Con (_, args) | Fail (_, args) -> List.map snd args
-  | Record (_, fields) -> List.map snd fields
-  | Block (stmts, last) -> List.map stmt stmts @ [ last ]
+  | Record (_, fields) | Con_named (_, fields) -> List.map snd fields
+  | Update { base; fields; _ } -> base :: List.map snd fields
+  | Block (stmts, last) -> List.concat_map stmt stmts @ [ last ]
   | Match (s, arms) ->
       s
       :: List.concat_map
@@ -643,7 +711,7 @@ let children (e : ('v, 'b, 't) expr) =
            arms
   | With { items; body } -> with_links items @ [ body ]
   | Handler { state; arms; _ } ->
-      List.map stmt state @ List.map (fun a -> a.arm_impl) arms
+      List.concat_map stmt state @ List.map (fun a -> a.arm_impl) arms
 
 (* ---- names, once resolved ----
 
@@ -705,6 +773,23 @@ type name =
           (operators.md, "Generic code"); of [Int] or [Float]; or a `with
           numeric` type's [zero] *)
 
+(* A record pattern's fields as they're written, [show] writing each
+   field's pattern, and a punned one alone: `{ id, lines: ls, .. }`. *)
+let show_fields show (fs : ('b, 't) fields) =
+  let field ((f : ident), q) =
+    let shown = show q in
+    if shown = f.name then f.name else f.name ^ ": " ^ shown
+  in
+  "{ "
+  ^ String.concat ", "
+      (List.map field fs.fpats @ if fs.rest then [ ".." ] else [])
+  ^ " }"
+
+(* An alternative of an or-pattern as it's written, [show] writing it: in
+   parentheses if it's an `as`, which would otherwise name the whole. *)
+let or_alt show (p : ('b, 't) pattern) =
+  match p.pkind with PAs _ -> "(" ^ show p ^ ")" | _ -> show p
+
 module Parsed = struct
   type nonrec ty = tyname ty
   type nonrec errors = tyname errors
@@ -713,6 +798,7 @@ module Parsed = struct
   type nonrec payload = tyname payload
   type nonrec ctor_ref = tyname ctor_ref
   type nonrec pattern = (ident, tyname) pattern
+  type nonrec fields = (ident, tyname) fields
   type nonrec param = (ident, tyname) param
   type nonrec expr = (vname, ident, tyname) expr
   type nonrec expr_kind = (vname, ident, tyname) expr_kind
@@ -741,6 +827,7 @@ module Resolved = struct
   type nonrec payload = tname payload
   type nonrec ctor_ref = tname ctor_ref
   type nonrec pattern = (binder, tname) pattern
+  type nonrec fields = (binder, tname) fields
   type nonrec param = (binder, tname) param
   type nonrec expr = (name, binder, tname) expr
   type nonrec expr_kind = (name, binder, tname) expr_kind
@@ -872,6 +959,11 @@ let rec show_ty : ty -> string = function
       | rest -> "(" ^ String.concat " " (names :: rest) ^ ")")
   | TyErrors es -> show_errors es
   | TyTuple (ts, _) -> "(" ^ String.concat ", " (List.map show_ty ts) ^ ")"
+  | TyVariant (name, c, []) -> show_tyname name ^ "." ^ c.name
+  | TyVariant (name, c, args) ->
+      show_tyname name ^ "." ^ c.name ^ "<"
+      ^ String.concat ", " (List.map show_ty args)
+      ^ ">"
 
 (* `Clock & TestClock` *)
 and show_joined deps = String.concat " & " (List.map show_dep deps)
@@ -922,8 +1014,13 @@ let rec show_pattern (p : pattern) =
       ^ ")"
   | PFail_any -> "fail _"
   | PFail_in t -> "fail " ^ t.name
-  | POr ps -> String.concat " | " (List.map show_pattern ps)
+  | POr ps -> String.concat " | " (List.map (or_alt show_pattern) ps)
+  | PAs (q, x) -> show_pattern q ^ " as " ^ x.name
   | PTuple ps -> "(" ^ String.concat ", " (List.map show_pattern ps) ^ ")"
+  | PRecord (name, fs) ->
+      let name = match name with Some t -> show_tyname t ^ " " | None -> "" in
+      name ^ show_fields show_pattern fs
+  | PCon_named (c, fs) -> show_ctor_ref c ^ " " ^ show_fields show_pattern fs
 
 let rec show_expr (e : expr) =
   match e.kind with
@@ -955,6 +1052,19 @@ let rec show_expr (e : expr) =
       let ty = match name with Some n -> [ show_tyname n ] | None -> [] in
       let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
       parens (("record" :: ty) @ List.map show_field fields)
+  | Con_named (c, fields) ->
+      let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
+      parens ("con" :: show_ctor_ref c :: "{}" :: List.map show_field fields)
+  | Update { target; base; fields } ->
+      let ty =
+        match target with
+        | Some (Into_type n) -> [ show_tyname n ]
+        | Some (Into_ctor c) -> [ show_ctor_ref c ]
+        | None -> []
+      in
+      let show_field ((f : ident), v) = f.name ^ "=" ^ show_expr v in
+      parens
+        (("update" :: ty) @ (".." ^ show_expr base) :: List.map show_field fields)
   | Field (r, f) -> parens [ "."; show_expr r; f.name ]
   | Match (subject, arms) ->
       parens ("match" :: show_expr subject :: List.map show_arm arms)
@@ -983,6 +1093,7 @@ let rec show_expr (e : expr) =
         ]
   | While { cond; body } -> parens [ "while"; show_expr cond; show_expr body ]
   | Break -> "break"
+  | Todo -> "todo"
   | Fail (t, args) ->
       let show_arg = function
         | Some (l : ident), a -> l.name ^ "=" ^ show_expr a
@@ -1069,8 +1180,10 @@ and show_param (p : param) =
 and show_stmt : stmt -> string = function
   | Let { name; value; mut; _ } ->
       parens [ (if mut then "var" else "let"); name.name; show_expr value ]
-  | Let_tuple { pat; value } ->
+  | Let_pattern { pat; value; else_ = None } ->
       parens [ "let"; show_pattern pat; show_expr value ]
+  | Let_pattern { pat; value; else_ = Some e } ->
+      parens [ "let"; show_pattern pat; show_expr value; "else"; show_expr e ]
   | Expr e -> show_expr e
   | Finally f -> parens [ "finally"; show_expr f ]
 
@@ -1103,14 +1216,21 @@ let show_type_def (td : type_def) =
         ^ String.concat ", " (List.map (fun (p : ident) -> p.name) ps)
         ^ ">"
   in
-  let show_field f = f.field_name.name ^ ":" ^ show_ty f.field_ty in
+  let show_field f =
+    (* a positional field's name, if it isn't written, is [""] *)
+    if f.field_name.name = "" then show_ty f.field_ty
+    else f.field_name.name ^ ":" ^ show_ty f.field_ty
+  in
   let body =
     match td.type_body with
     | Fields fs -> [ parens ("fields" :: List.map show_field fs) ]
     | Ctors cs ->
         List.map
           (fun c ->
-            parens (c.ctor_name.name :: List.map show_field c.ctor_fields))
+            parens
+              (c.ctor_name.name
+               :: ((if c.ctor_named then [ "{}" ] else [])
+                  @ List.map show_field c.ctor_fields)))
           cs
     | Opaque { rep; numeric = None } -> [ parens [ "opaque"; show_ty rep ] ]
     | Opaque { rep; numeric = Some _ } ->
@@ -1214,7 +1334,12 @@ let bound_in (e : Resolved.expr) =
   let rec pat (p : Resolved.pattern) =
     match p.pkind with
     | PVar b -> see b
+    | PAs (q, b) ->
+        pat q;
+        see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
+    | PRecord (_, fs) | PCon_named (_, fs) ->
+        List.iter (fun (_, q) -> pat q) fs.fpats
     | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   let rec go (e : Resolved.expr) =
@@ -1224,7 +1349,7 @@ let bound_in (e : Resolved.expr) =
         List.iter
           (function
             | Let { name; _ } -> see name
-            | Let_tuple { pat = p; _ } -> pat p
+            | Let_pattern { pat = p; _ } -> pat p
             | Expr _ | Finally _ -> ())
           stmts
     | For { index; pat = p; _ } ->
@@ -1247,6 +1372,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Bool b -> string_of_bool b
     | Str s -> show_str s
     | Unit -> "()"
+    | Todo -> "todo"
     | Var (Local b) -> b.ident.name
     | Var (Global p | Global_value p) -> value_name p
     | Var (Intrinsic x) -> Intrinsic.name x
@@ -1297,6 +1423,21 @@ let source ~type_name ~value_name (e : Resolved.expr) =
         ^ String.concat ", "
             (List.map (fun ((f : ident), v) -> f.name ^ ": " ^ go v) fields)
         ^ " }"
+    | Con_named (c, fields) ->
+        ctor c ^ " { "
+        ^ String.concat ", " (List.map named fields)
+        ^ " }"
+    | Update { target; base; fields } ->
+        let t =
+          match target with
+          | Some (Into_type { tref = Named p; _ }) -> type_name p ^ " "
+          | Some (Into_ctor c) -> ctor c ^ " "
+          | Some (Into_type { tref = Param _; _ }) | None -> ""
+        in
+        t ^ "{ .." ^ go base
+        ^ String.concat ""
+            (List.map (fun ((f : ident), v) -> ", " ^ f.name ^ ": " ^ go v) fields)
+        ^ " }"
     | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | While _ | Break
     | With _ | Handler _ | Inline_handler _ ->
         raise Exit
@@ -1325,6 +1466,12 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Unop (Not, b, _) when 3 >= at -> ends_open n 3 b
     | _ -> false
   and list xs = String.concat ", " (List.map go xs)
+  (* a by-name constructor's field, punned where its value is a local of
+     its name *)
+  and named ((f : ident), (v : Resolved.expr)) =
+    match v.kind with
+    | Var (Local b) when b.ident.name = f.name -> f.name
+    | _ -> f.name ^ ": " ^ go v
   and con_args args =
     let arg = function
       | Some (l : ident), a -> l.name ^ ": " ^ go a
@@ -1337,3 +1484,34 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Some { tref = Param _; _ } | None -> c.name.name
   in
   try Some (go e) with Exit -> None
+
+(* A resolved pattern as it's written, for messages: [type_name] writes a
+   type's name. *)
+let rec pattern_source ~type_name (p : Resolved.pattern) =
+  let go = pattern_source ~type_name in
+  let ctor (c : Resolved.ctor_ref) =
+    match c.qual with
+    | Some { tref = Named t; _ } -> type_name t ^ "." ^ c.name.name
+    | Some { tref = Param _; _ } | None -> c.name.name
+  in
+  let args ps = "(" ^ String.concat ", " (List.map go ps) ^ ")" in
+  match p.pkind with
+  | PWild -> "_"
+  | PVar b -> b.ident.name
+  | PInt n -> Int64.to_string n
+  | PBool b -> string_of_bool b
+  | PCon (c, []) -> ctor c
+  | PCon (c, ps) -> ctor c ^ args ps
+  | PFail (t, []) -> "fail " ^ t.name
+  | PFail (t, ps) -> "fail " ^ t.name ^ args ps
+  | PFail_any -> "fail _"
+  | PFail_in b -> "fail " ^ b.ident.name
+  | POr ps -> String.concat " | " (List.map (or_alt go) ps)
+  | PAs (q, b) -> go q ^ " as " ^ b.ident.name
+  | PTuple ps -> args ps
+  | PRecord (t, fs) ->
+      (match t with
+      | Some { tref = Named t; _ } -> type_name t ^ " "
+      | Some { tref = Param _; _ } | None -> "")
+      ^ show_fields go fs
+  | PCon_named (c, fs) -> ctor c ^ " " ^ show_fields go fs

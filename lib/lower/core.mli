@@ -35,6 +35,9 @@ type desc =
           parameter it was given that in (see [fn_def]) *)
   | Applied of Path.t * desc list
       (** a named type, given its arguments: [Option<T>] *)
+  | Applied_variant of Path.t * string * desc list
+      (** a variant type of a generic sum, given the sum's arguments:
+          [Tree.Node<T>] *)
   | Errs of desc_row  (** an error set as a type argument *)
 
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)
@@ -331,9 +334,17 @@ and kind =
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
-  | Field of expr * Path.t * string  (** [r.f], and the record type of [r] *)
+  | Field of expr * Path.t * string
+      (** [r.f], and the record type of [r]; or the sum type, when [r] is a
+          value of one of its variant types, [Order.Placed], a field read at a
+          known constructor *)
   | Update of expr * string * expr
-      (** the record with one field replaced: a new record *)
+      (** the record with one field replaced: a new record; or a new value of
+          [r]'s variant type *)
+  | Of_variant of expr
+      (** a value of a variant type, [Order.Placed], as its sum, [Order]: the
+          same value, so no code (compiler.md, "Data stage", "Variant types").
+          What [Placed { ..p }] with nothing else given is *)
   | Array of expr list
   | Tuple of expr list  (** [(k, v)]: two parts, or three *)
   | Tag of string * expr list * desc list
@@ -394,8 +405,15 @@ and pattern_kind =
   | PCon of Path.t * string * pattern list
   | PTag of string * pattern list  (** an error with this tag, destructured *)
   | PTuple of pattern list  (** [(k, v)]: a tuple, taken apart *)
+  | PRecord of Path.t * pattern list
+      (** [{ id, .. }]: a record of this type, taken apart, a pattern for each
+          of its fields in declaration order, [PWild] for one the pattern
+          leaves out *)
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
+  | PAs of pattern * var
+      (** [p as x]: what [p] matches, the whole bound to [x] too (compiler.md,
+          "Data stage", "`as`") *)
 
 (* Where a function came from. The specializer makes the others, each
    from what the program wrote (specialize.ml). *)
@@ -450,6 +468,20 @@ type fn_def = {
           knows any (compiler.md, "Specialization") *)
 }
 
+(* A method call on a description, `c.area()` (compiler.md, "Data
+   stage", "Descriptions"): lowered as the [With] that installs [c] for
+   the call, at [mloc], so it's recorded beside, for Stateless, which
+   refuses one that may reach a handler with state. *)
+type method_call = {
+  mdep : Path.t;  (** the dependency whose operation it calls *)
+  mrecv : string;  (** the receiver, as written, `c` *)
+  mcall : string;
+      (** the `with` that makes the call, as the help writes it, `with c in
+          Area.area()` *)
+  mloc : Loc.t;  (** the [With]'s *)
+  mop : Loc.t;  (** the operation's name, where the error points *)
+}
+
 (* A module, lowered. [types] are the types it declares. *)
 type program = {
   home : string;
@@ -474,6 +506,8 @@ type program = {
           a requirement, `add` or `zero`, by the type and the requirement, each
           with the member that gives it: an operator that takes one of the type
           and gives one, or a value of the type (Infer_reqs) *)
+  method_calls : method_call list;
+      (** each method call on a description in its functions, in no order *)
 }
 
 (* ---- building ---- *)
@@ -570,6 +604,13 @@ val children : expr -> expr list
    or a call that can fail that no [Handle] in it catches. A lambda's
    body fails only when it's called. *)
 val can_fail : expr -> bool
+
+(* Whether a handler's body, or part of one, ends in its [Instance]: one
+   in its [Let]s', [Seq]s' and [Covered]s' last part, a [Handle]'s body or
+   an arm of a [Match]. The state's `let PATTERN = value` is a [Match]
+   whose arm that binds it is the rest of the state; with an `else`, its
+   other arm leaves, and ends in none (lower.ml, [take_apart]). *)
+val ends_in_instance : expr -> bool
 
 (* Whether evaluating it can stop at a cancel (compiler.md, "Stage 11a",
    "Cancellation"): it makes a call, a dependency's or a function's, or

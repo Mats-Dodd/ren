@@ -68,12 +68,8 @@ fn cents(b: Bank, id: AccountId) -> Int = try b.balance(id).in_cents()
 // whether asking again later could work
 fn worth_retrying(r: Result<Unit, ! TransferError>) -> Bool =
   match r
-    Ok(_) => false
-    Err(Short(_, _)) => true
-    Err(Frozen(_)) => true
-    Err(NoSuchAccount(_)) => false
-    Err(NotPositive(_)) => false
-    Err(SameAccount) => false
+    Err(Short(_, _) | Frozen(_)) => true
+    Ok(_) | Err(NoSuchAccount(_) | NotPositive(_) | SameAccount) => false
 
 // `main` runs here with the test `Console`, which keeps what it prints
 test "main prints the balances, and every refusal" =

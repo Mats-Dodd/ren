@@ -71,6 +71,9 @@ type desc =
           parameter it was given that in (see [fn_def]) *)
   | Applied of Path.t * desc list
       (** a named type, given its arguments: [Option<T>] *)
+  | Applied_variant of Path.t * string * desc list
+      (** a variant type of a generic sum, given the sum's arguments:
+          [Tree.Node<T>] *)
   | Errs of desc_row  (** an error set as a type argument *)
 
 (* An error row's tags, each with its payload, and its tail (Ty.row). *)
@@ -372,9 +375,17 @@ and kind =
   | Con of Path.t * string * expr list
       (** a constructor: its type, its name, its fields in order *)
   | Record of Path.t * (string * expr) list  (** in the order written *)
-  | Field of expr * Path.t * string  (** [r.f], and the record type of [r] *)
+  | Field of expr * Path.t * string
+      (** [r.f], and the record type of [r]; or the sum type, when [r] is a
+          value of one of its variant types, [Order.Placed], a field read at a
+          known constructor *)
   | Update of expr * string * expr
-      (** the record with one field replaced: a new record *)
+      (** the record with one field replaced: a new record; or a new value of
+          [r]'s variant type *)
+  | Of_variant of expr
+      (** a value of a variant type, [Order.Placed], as its sum, [Order]: the
+          same value, so no code (compiler.md, "Data stage", "Variant types").
+          What [Placed { ..p }] with nothing else given is *)
   | Array of expr list
   | Tuple of expr list  (** [(k, v)]: two parts, or three *)
   | Tag of string * expr list * desc list
@@ -435,8 +446,15 @@ and pattern_kind =
   | PCon of Path.t * string * pattern list
   | PTag of string * pattern list  (** an error with this tag, destructured *)
   | PTuple of pattern list  (** [(k, v)]: a tuple, taken apart *)
+  | PRecord of Path.t * pattern list
+      (** [{ id, .. }]: a record of this type, taken apart, a pattern for each
+          of its fields in declaration order, [PWild] for one the pattern
+          leaves out *)
   | POr of pattern list
       (** any of these; each binds the same variables (the same [var]s) *)
+  | PAs of pattern * var
+      (** [p as x]: what [p] matches, the whole bound to [x] too (compiler.md,
+          "Data stage", "`as`") *)
 
 (* Where a function came from. The specializer makes the others, each
    from what the program wrote (specialize.ml). *)
@@ -490,6 +508,20 @@ type fn_def = {
           knows any (compiler.md, "Specialization") *)
 }
 
+(* A method call on a description, `c.area()` (compiler.md, "Data
+   stage", "Descriptions"): lowered as the [With] that installs [c] for
+   the call, at [mloc], so it's recorded beside, for Stateless, which
+   refuses one that may reach a handler with state. *)
+type method_call = {
+  mdep : Path.t;  (** the dependency whose operation it calls *)
+  mrecv : string;  (** the receiver, as written, `c` *)
+  mcall : string;
+      (** the `with` that makes the call, as the help writes it, `with c in
+          Area.area()` *)
+  mloc : Loc.t;  (** the [With]'s *)
+  mop : Loc.t;  (** the operation's name, where the error points *)
+}
+
 (* A module, lowered. [types] are the types it declares. *)
 type program = {
   home : string;
@@ -514,6 +546,8 @@ type program = {
           a requirement, `add` or `zero`, by the type and the requirement, each
           with the member that gives it: an operator that takes one of the type
           and gives one, or a value of the type (Infer_reqs) *)
+  method_calls : method_call list;
+      (** each method call on a description in its functions, in no order *)
 }
 
 (* ---- building ---- *)
@@ -567,7 +601,7 @@ let rec has_param n (t : Ty.ty) =
   in
   match t with
   | Var m -> m < n
-  | Con (_, args) -> List.exists (has_param n) args
+  | Con (_, args) | Variant (_, _, args) -> List.exists (has_param n) args
   | Fun (ps, r, e, u) ->
       List.exists (fun (p : Ty.param) -> has_param n p.ty) ps
       || has_param n r || row e || row u
@@ -591,10 +625,15 @@ let rec describe tys (t : Ty.ty) =
       dtail = r.tail;
     }
   in
+  (* a variant type keeps its constructor: it's a type of its own, so a
+     dependency's key at `Order.Placed` isn't one at `Order`; a walk
+     shows, compares and hashes one as the sum (walk.ml, shown.ml;
+     compiler.md, "Data stage", "Variant types" and "Step 8, as built") *)
   match t with
   | _ when not (has_param (List.length tys) t) -> Known t
   | Var n -> Param (List.nth tys n)
   | Con (p, args) -> Applied (p, List.map (describe tys) args)
+  | Variant (p, c, args) -> Applied_variant (p, c, List.map (describe tys) args)
   | Fun _ ->
       (* a type variable never stands for a block (Core Lint), so no
          function type with one of them in it is described *)
@@ -619,7 +658,7 @@ let params_in n (t : Ty.ty) =
     match t with
     | Var m when m < n -> m :: acc
     | Var _ | Error -> acc
-    | Con (_, args) -> List.fold_left go acc args
+    | Con (_, args) | Variant (_, _, args) -> List.fold_left go acc args
     | Fun (ps, r, e, u) ->
         row
           (row
@@ -662,7 +701,7 @@ let dict_for tys own req (t : Ty.ty) =
 let rec desc_vars = function
   | Known _ -> []
   | Param v -> [ v ]
-  | Applied (_, ds) -> List.concat_map desc_vars ds
+  | Applied (_, ds) | Applied_variant (_, _, ds) -> List.concat_map desc_vars ds
   | Errs e -> desc_row_vars e
 
 and desc_row_vars r =
@@ -724,6 +763,7 @@ let children (e : expr) =
   | Assign (_, a)
   | Assert a
   | Field (a, _, _)
+  | Of_variant a
   | Narrowed (_, a)
   | Fail a
   | Lambda { body = a; _ }
@@ -753,6 +793,15 @@ let rec can_fail (e : expr) =
   | Handle { on_value; on_error; _ } -> can_fail on_value || can_fail on_error
   | Lambda _ | Handler _ -> false
   | _ -> List.exists can_fail (children e)
+
+let rec ends_in_instance (e : expr) =
+  match e.kind with
+  | Instance _ -> true
+  | Let (_, _, b) | Seq (_, b) | Covered { after = b; _ } | Handle { body = b; _ }
+    ->
+      ends_in_instance b
+  | Match (_, arms) -> List.exists (fun (a : arm) -> ends_in_instance a.body) arms
+  | _ -> false
 
 let rec can_stop (e : expr) =
   match e.kind with
@@ -871,7 +920,10 @@ let rec pattern_sexp p =
   | PTag (t, []) -> List [ atom "tag"; Atom t ]
   | PTag (t, ps) -> List (atom "tag" :: Atom t :: List.map pattern_sexp ps)
   | PTuple ps -> List (atom "tuple" :: List.map pattern_sexp ps)
+  | PRecord (p, ps) ->
+      List (atom "record" :: Atom (Path.local p) :: List.map pattern_sexp ps)
   | POr ps -> List (atom "or" :: List.map pattern_sexp ps)
+  | PAs (q, v) -> List [ atom "as"; pattern_sexp q; var v ]
 
 (* A descriptor, as a print shows it: a type, or a hidden type
    parameter. *)
@@ -885,6 +937,9 @@ let rec show_desc = function
   | Applied (p, []) -> Path.full p
   | Applied (p, ds) ->
       Path.full p ^ "<" ^ String.concat ", " (List.map show_desc ds) ^ ">"
+  | Applied_variant (p, c, ds) ->
+      Path.full p ^ "." ^ c ^ "<" ^ String.concat ", " (List.map show_desc ds)
+      ^ ">"
   | Errs _ -> "!"
 
 (* A dependency's key, `Log<Int>`, or one that isn't generic, its path. *)
@@ -1039,6 +1094,7 @@ let rec sexp_with t e =
         (atom "record"
         :: List.map (fun (f, v) -> List [ Atom (f ^ ":"); sexp v ]) fields)
   | Field (r, _, f) -> List [ atom "."; sexp r; atom f ]
+  | Of_variant r -> List [ atom "of_variant"; sexp r ]
   | Update (r, f, v) -> List [ atom "update"; sexp r; Atom (f ^ ":"); sexp v ]
   | Array xs -> List (atom "array" :: List.map sexp xs)
   | Tuple xs -> List (atom "tuple" :: List.map sexp xs)

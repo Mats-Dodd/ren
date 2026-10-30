@@ -442,7 +442,7 @@ let%expect_test "a type or constructor can be qualified" =
 type Order = { client: stripe.Client, plans: Array<billing.Plan> }
 fn main() =
   let a = Light.Red
-  let b = billing.Plan.Pro(seats: 2)
+  let b = billing.Plan.Pro(2)
   let c = rows.Row { id: 1 }
   match b
     billing.Plan.Free => Plan.Free
@@ -451,7 +451,7 @@ fn main() =
   [%expect
     {|
     (type Order (fields client:stripe.Client plans:Array<billing.Plan>))
-    (fn main () (block (let a (con Light.Red)) (let b (con billing.Plan.Pro seats=2)) (let c (record rows.Row id=1)) (match b (billing.Plan.Free => (con Plan.Free)) (Plan.Pro(n) => (. user plan)))))
+    (fn main () (block (let a (con Light.Red)) (let b (con billing.Plan.Pro 2)) (let c (record rows.Row id=1)) (match b (billing.Plan.Free => (con Plan.Free)) (Plan.Pro(n) => (. user plan)))))
     |}]
 
 let%expect_test "another module's type isn't a value" =

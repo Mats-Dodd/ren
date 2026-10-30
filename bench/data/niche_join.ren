@@ -1,0 +1,35 @@
+// Data stage, step 7: where paths meet, a variable that holds a
+// constructor without fields on one and a parameter on another
+// (compiler.md, "The layout fixes (step 7)", part 3's choices). In a
+// debug build each sum is boxed and `None` is a scalar, which holds no
+// reference: the parameter is dropped on that path and moved on the
+// other, and Mem Lint's join takes the constant as standing for the
+// reference the other path holds. It refused both functions before.
+
+type Plan =
+  | Free
+  | Pro(name: Str)
+
+fn pick(c: Bool, p: Option<Str>) -> Option<Str> = if c then None else p
+
+fn plan(c: Bool, p: Plan) -> Plan = if c then Free else p
+
+// and with the parameter kept on the constant's path, and both sides
+// constants or parameters
+fn either(c: Bool, p: Option<Str>, q: Option<Str>) -> Option<Str> =
+  if c then p else if q == None then None else q
+
+fn main() uses Console =
+  for c in [false, true]
+    match pick(c, Some("a".concat("!")))
+      Some(s) => print(s)
+      None => print("none")
+    match plan(c, Pro("b".concat("!")))
+      Pro(n) => print(n)
+      Free => print("free")
+    match either(c, Some("p".concat("!")), Some("q".concat("!")))
+      Some(s) => print(s)
+      None => print("none")
+    match either(c, None, None)
+      Some(s) => print(s)
+      None => print("none")

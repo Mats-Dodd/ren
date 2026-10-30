@@ -41,9 +41,10 @@ The twins take the size as their first argument and default to
 | `nested` | 10,000 rounds, lists of 1,000,000 | 20 rounds, lists of 2,000 | an array of arrays changed by index and mapped in place (swap-out), and lists built and mapped by recursion that takes no stack (tail recursion modulo cons) |
 | `bytes` | 1,000,000 elements, 100 rounds | 1,000, 3 | an `Array<UInt8>` and an `Array<Int32>` changed in place, each store checked, and an FNV-1a hash with `*%` into a `UInt32`: sized storage |
 | `vec` | arrays of 1,000, 1,000,000 rounds | 100, 10 | **decision 16**: loops by `for x in &xs`, `for i, x in &ys` and `zip`, each a kernel a vector unit could do (a dot product, a Float sum, scaling, axpy, an LCG with `*%`, a checked Int sum, a `UInt8` blend); which vectorize is RESULTS.md's "Follow-ups" |
-| `dispatch` | 65,536 descriptions, 100 rounds | 1,000, 1 | **decision 4**: research/dispatch.md's kernels, calls on descriptions chosen at run time: 2, 4, 8 and 32 shapes in an array, a `Db` of four handlers called in a loop, a router of 50 inline handlers, and an expression tree's `eval`, recursion through its own dependency; Rust is run `dyn` and enum, Go through an interface |
+| `dispatch` | 65,536 descriptions, 100 rounds | 1,000, 1 | **decision 4**: research/dispatch.md's kernels, calls on descriptions chosen at run time: 2, 4, 8 and 32 kinds of codec in an array (research/dispatch.md's shapes, which a program would write as an ADT), a `Db` of four handlers called in a loop, a router of 50 inline handlers, and an expression tree's `eval`, recursion through its own dependency; Rust is run `dyn` and enum, Go through an interface |
 | `frames` | 1,000,000 records, 20 passes | 1,000, 2 | layer 3 of formats.md (compiler.md, "Bytes stage"): a stream of length-prefixed little-endian records, each a `u32` length, a `u8` kind, a `VarUInt` id, an `i64` time, an `i32` value and a short name, written with writes at an offset into `Bytes.zeros` and decoded through a cursor, a framing loop; the Rust reads a `&[u8]` through a cursor of its own with `from_le_bytes`, the Go a `[]byte` with `encoding/binary` and `binary.Uvarint` |
 | `maps` | 200,000 accounts, 20 rounds | 1,000, 2 | `Map` natively (compiler.md, "Bytes stage", step 3): records with a name kept in a `Map<Int, Account>` and a `Map<Str, Int>`, each round built, looked up, a third removed and iterated in insertion order; the Rust keeps std's `HashMap` of each key to its entry's place in a `Vec` in insertion order (indexmap's shape, no crate), the Go a `map` the same way |
+| `interp` | 25,600 evaluations, dispatch's `interp` at its size | 3 | **the data stage's milestone**: `dispatch`'s expression tree written ADT-first, `Expr` a sum type and `eval` a `match`; no twins of its own: dispatch's Rust, run `100 interp enum` (and `dyn`), is its, and build.sh builds none for it |
 | `slices` | 200,000 log lines, 100,000 objects and 4,000 pages, each parsed 20 times | 1,000 lines, 500 objects and 20 pages, twice | **decision 17**: research/slices.md's three parsers, each with slices, `b[i..j]`, and with offsets, its twin in the same file: log lines split into fields read and dropped, a JSON-ish tokenizer whose tokens keep slices, and pages parsed into records that keep them; the Rust holds `&[u8]`s, the Go `[]byte`s. `retain` keeps 1,000 small slices of each of eight 8 MiB buffers, and then their `copy()`s, which build.sh's `retain` kernels run |
 
 The first four are the Perceus set, ported from Koka's
@@ -74,10 +75,10 @@ twin without it, in the same file, and print both checksums:
 
 - **`nested`** writes each element of a grid, an `Array<Array<Int>>`,
   by its indices, maps the grid with `map` inside `map`, and builds and
-  scales a list of a million cells by recursion, `Cons(i, build(...))`.
-  The first two need a row moved out of the grid while it's changed
-  (swap.ml), the third a loop that fills a hole (trmc.ml). The Rust
-  writes `g[i][j]`, maps with `into_iter().map().collect()`, which
+  scales a list of a million cells by recursion, `Cons { head: i, tail:
+  build(...) }`. The first two need a row moved out of the grid while
+  it's changed (swap.ml), the third a loop that fills a hole (trmc.ml).
+  The Rust writes `g[i][j]`, maps with `into_iter().map().collect()`, which
   reuses each Vec, and builds its list front to back through a `&mut`
   to the next link, as one too long to recurse over must be; the Go is
   the same with pointers, its `map` writing new slices.

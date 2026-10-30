@@ -1,0 +1,76 @@
+// Data stage, step 7: `show`, `==` and hashing of values whose layout
+// flattens a small record into a small variant (compiler.md, "The
+// layout fixes (step 7)"). A walk is given a word, so a type it's given
+// is kept boxed, and so is any small type its object holds (compiler.md,
+// "Small values are values"); a type that holds one, and isn't walked,
+// is still flattened. Each is printed and compared; hashing them, as a
+// `Map`'s keys, waits for `Map` to be native. An array keeps small
+// values inline (the second fix), but a walk reads an array's elements
+// as words, so a small type in an array in a walked type is boxed too,
+// with objects or without.
+
+type P = { x: Int, y: Int }
+
+type Q = { p: P, z: Int }
+
+type S =
+  | One(q: Q)
+  | Two { p: P, n: Int }
+  | Neither
+
+type Line = { sku: Str, qty: Int }
+
+type Item =
+  | Draft(l: Line)
+  | Priced { l: Line, total: Int }
+  | Void
+
+// never walked, so flattened into `Held`, which holds a boxed `S` too
+type Z = { a: Int, b: Str }
+
+type Held =
+  | Has { z: Z, s: S }
+  | Lacks
+
+// walked only as arrays' elements in a record that's walked
+type Pt = { x: Int, y: Int }
+
+type Tag = { name: Str, n: Int }
+
+type Figure = { name: Str, pts: Array<Pt>, tags: Array<Tag>, grid: Array<Array<Tag>> }
+
+fn q(i: Int) -> Q = Q { p: P { x: i, y: i * 2 }, z: i * 3 }
+
+fn s(i: Int) -> S =
+  if i % 3 == 0 then One(q(i))
+  else if i % 3 == 1 then Two { p: P { x: i, y: -i }, n: i + 100 }
+  else Neither
+
+fn held(i: Int) -> Held =
+  if i % 2 == 0 then Has { z: Z { a: i, b: "z" }, s: s(i) } else Lacks
+
+fn main() uses Console =
+  for i in 0..4
+    print(s(i))
+  print(s(3) == s(3))
+  print(s(3) == s(6))
+  print(One(q(1)) == One(Q { p: P { x: 1, y: 2 }, z: 3 }))
+  let it = Priced { l: Line { sku: "tea", qty: 2 }, total: 9 }
+  print(it)
+  print(it == Priced { l: Line { sku: "tea", qty: 2 }, total: 9 })
+  print(Draft(Line { sku: "jam", qty: 1 }) == Draft(Line { sku: "jam", qty: 2 }))
+  print([s(0), s(1), s(2)])
+  print(Some(q(5)))
+  var t = 0
+  for i in 0..6
+    match held(i)
+      Has { z, s: One(k) } => t += k.z + z.a + z.b.len()
+      Has { z: Z { a, .. }, s: Two { n, .. } } => t += n + a
+      _ => t += 1
+  print(t)
+  var fig = Figure { name: "sq", pts: [Pt { x: 0, y: 0 }, Pt { x: 1, y: 2 }], tags: [Tag { name: "a", n: 1 }], grid: [[Tag { name: "g", n: 2 }]] }
+  &fig.tags.push(Tag { name: "b", n: 2 })
+  fig.pts[1].y = 5
+  print(fig)
+  print(fig == fig)
+  print(fig.pts[1].y + fig.tags[1].n + fig.grid[0][0].n)

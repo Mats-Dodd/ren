@@ -101,6 +101,7 @@ let rec subst_ty s (t : Ty.ty) : Ty.ty =
   | Var n -> s.var n
   | Error -> Error
   | Con (p, args) -> Con (p, List.map (subst_ty s) args)
+  | Variant (p, c, args) -> Variant (p, c, List.map (subst_ty s) args)
   | Errors r -> Errors (subst_row s r)
   | Impl i -> (
       let needs = subst_row s i.needs and fails = subst_row s i.fails in
@@ -179,6 +180,8 @@ type cx = {
       (** what's added to each block's name in a function made for a request,
           so that each copy's blocks have names of their own *)
   requests : request list ref;  (** what it uses that's made for a request *)
+  calls : C.method_call list ref;
+      (** each method call on a description it has (Core.program) *)
   types : Path.t -> Iface.type_decl option;
       (** every type of the program, by path, which a dependency's operations
           are found in *)
@@ -713,6 +716,33 @@ and expr_of cx (e : expr) : C.expr =
             (Record
                (p, List.map (fun ((f : ident), v) -> (f.name, expr cx v)) fields))
       | _ -> bug "a record literal whose type isn't a record")
+  | Con_named (_, fields) -> (
+      match (node cx e.node).found with
+      | Some (Ctor_of (p, c)) ->
+          (* each value, in the order written, then the constructor's
+             fields in the order declared: written in that order, they're
+             the constructor's arguments as they are *)
+          let decl = ctor_decl cx p c in
+          let names = List.map (fun ((f : ident), _) -> f.name) fields in
+          if names = List.map (fun (d : Iface.field) -> d.fname) decl then
+            here (Con (p, c, List.map (fun (_, v) -> expr cx v) fields))
+          else
+            let given =
+              List.map
+                (fun ((f : ident), v) ->
+                  let v = expr cx v in
+                  (f.name, temp cx f.name v.ty, v))
+                fields
+            in
+            let arg (d : Iface.field) =
+              let _, v, _ = List.find (fun (f, _, _) -> f = d.fname) given in
+              local v e.loc
+            in
+            lets
+              (List.map (fun (_, v, value) -> (v, value)) given)
+              (here (Con (p, c, List.map arg decl)))
+      | _ -> bug "a by-name constructor inference didn't find")
+  | Update { base; fields; _ } -> update cx e base fields
   | Field (r, f) -> (
       match (node cx e.node).found with
       | Some (Field_of p) -> here (Field (expr cx r, p, f.name))
@@ -741,6 +771,7 @@ and expr_of cx (e : expr) : C.expr =
       let cond = expr cx cond in
       here (While (cond, expr cx body))
   | Break -> here Break
+  | Todo -> todo cx e.loc (ty ())
   | With { items; body } -> with_ cx e items body
   | Handler { deps; state; arms; _ } ->
       (* it runs where it's installed, with the evidence there *)
@@ -1072,8 +1103,8 @@ and handler cx (e : expr) deps state arms =
         let v = bind cx name value.ty in
         let body = state_lets rest in
         mk (Let (v, value, body)) body.ty value.loc
-    | Let_tuple { pat; value } :: rest ->
-        take_apart cx pat (expr cx value) (fun () -> state_lets rest)
+    | Let_pattern { pat; value; else_ } :: rest ->
+        take_apart cx pat ?else_ (expr cx value) (fun () -> state_lets rest)
     | Expr s :: rest -> seq (expr cx s) (state_lets rest)
     | Finally f :: rest ->
         (* the state after it, which, if it fails to start, it's given;
@@ -1108,7 +1139,7 @@ and handler cx (e : expr) deps state arms =
           | Let { name; mut = true; _ } ->
               let v = var_of cx name in
               Some (v, temp cx v.name (C.cell_ty v.ty))
-          | Let _ | Let_tuple _ | Expr _ | Finally _ -> None)
+          | Let _ | Let_pattern _ | Expr _ | Finally _ -> None)
         state
     in
     let impl (d : tname dep_ref) : Path.t * C.expr =
@@ -1248,7 +1279,8 @@ and handler cx (e : expr) deps state arms =
 and opaque_state cx loc kind =
   let rec opaque (t : Ty.ty) =
     match t with
-    | Con (p, args) -> List.mem p cx.opaque || List.exists opaque args
+    | Con (p, args) | Variant (p, _, args) ->
+        List.mem p cx.opaque || List.exists opaque args
     | Fun (ps, r, _, _) -> List.exists (fun (q : Ty.param) -> opaque q.ty) ps || opaque r
     | Var _ | Errors _ | Impl _ | Error -> false
   in
@@ -1678,6 +1710,16 @@ and value_of cx req (t : Ty.ty) loc =
 
    A method call's receiver is its first argument, passed `inout` when
    [changed], `&s.push(1)`. *)
+(* A `todo` reached where a [t] is wanted: the standard library's panic,
+   at [t], with the `todo`'s place as the call's, which is where the
+   panic is said. *)
+and todo cx loc t =
+  let a : Ty.args = { tys = [ t ]; rows = [ Ty.closed; Ty.closed ] } in
+  let fty = Ty.apply a (Prelude.scheme Lib_panic).ty in
+  let f = mk (Intrinsic (Lib_panic, a, descs cx a, [])) fty loc in
+  let msg = mk (Str "reached a `todo`") Ty.str loc in
+  mk (Call (f, [ C.Value msg ], cx.ev)) t loc
+
 and call cx ?(changed = false) (e : expr) f args =
   (* a call that gives a default by name, or leaves it out: its arguments
      in order, each left out its literal (Infer.Args) *)
@@ -1687,6 +1729,12 @@ and call cx ?(changed = false) (e : expr) f args =
     | _ -> args
   in
   match f.kind with
+  | Todo ->
+      (* `todo(x)`: the callee is evaluated first, and panics, so nothing
+         is called and its arguments are never evaluated, as in `ren run`;
+         a type variable never stands for a block (Core Lint), so it's the
+         panic at the call's type, not a block's *)
+      todo cx f.loc (ty_of cx e.node)
   | Var (Dep_op (dep, op)) ->
       (* never with `&` (mut.ml), so its arguments are values, evaluated in
          order *)
@@ -1752,7 +1800,8 @@ and call cx ?(changed = false) (e : expr) f args =
       tags_call cx ~changed e f p args
   | Field (r, _) -> (
       match ((node cx f.node).found, args) with
-      | Some (Calls_op { key; from; op }), _ -> desc_method cx e r key from op args
+      | Some (Calls_op { key; from; op; recv; call }), _ ->
+          desc_method cx e f r ~key ~from ~op ~written:recv ~shown:call args
       | Some (Method_of p), [ n; body ]
         when changed
              && List.mem (Prelude.find p)
@@ -1803,8 +1852,11 @@ and given_tags cx (v : expr) =
 
 (* `d.op(args)`, [e]: `with d in Dep.op(args)`, the description [r] and
    the arguments evaluated first, in order, outside (foundations.md,
-   decision 3). [key] is what it's installed as, implementing [from]. *)
-and desc_method cx (e : expr) (r : expr) key from op args =
+   decision 3). [key] is what it's installed as, implementing [from].
+   It's recorded in [calls], with [written], [r] as written, and [shown],
+   the call as a `with` would make it, for Stateless (stateless.ml). *)
+and desc_method cx (e : expr) (f : expr) (r : expr) ~key ~from ~op ~written ~shown
+    args =
   let k = key_of_label cx key in
   let hold_r, recv = hold ~local:true cx "desc" (expr cx r) in
   let binds, values =
@@ -1821,6 +1873,10 @@ and desc_method cx (e : expr) (r : expr) key from op args =
     | _ -> bug "a method call that isn't a call"
   in
   let ev = evidence cx and outer = cx.ev in
+  let mop = match f.kind with Field (_, m) -> m.loc | _ -> e.loc in
+  cx.calls :=
+    { C.mdep = from; mrecv = written; mcall = shown; mloc = e.loc; mop }
+    :: !(cx.calls);
   let body =
     mk
       (Dep_call
@@ -1963,9 +2019,9 @@ and block cx stmts last =
       let v = bind cx name value.ty in
       let body = block cx rest last in
       mk (Let (v, value, body)) body.ty value.loc
-  | Let_tuple { pat; value } :: rest ->
+  | Let_pattern { pat; value; else_ } :: rest ->
       let value = expr cx value in
-      take_apart cx pat value (fun () -> block cx rest last)
+      take_apart cx pat ?else_ value (fun () -> block cx rest last)
   | Expr e :: rest ->
       let e = expr cx e in
       seq e (block cx rest last)
@@ -1985,19 +2041,34 @@ and block cx stmts last =
           mk (Covered { body = covered; result; after }) after.ty f.loc
       | _ -> bug "a `finally` that isn't a lambda of one parameter")
 
-(* [body ()] with [pat], a name or a tuple of them (the parser sees to
-   that), bound to [value]: a [Let], or a [match] of one arm, which always
-   matches. *)
-and take_apart cx (pat : pattern) (value : C.expr) body =
-  match pat.pkind with
-  | PVar b ->
+(* [body ()] with [pat] bound to [value]: a [Let], or a [match] of one
+   arm, which always matches (Exhaust sees to that). With [else_], `let
+   PAT = value else LEAVE`, a [match] of two arms, [pat] then the body,
+   and `_` then [else_], which leaves, so it's of the body's type
+   (inference checked it is). *)
+and take_apart cx (pat : pattern) ?else_ (value : C.expr) body =
+  match (pat.pkind, else_) with
+  | PVar b, None ->
       let v = bind cx b value.ty in
       let body = body () in
       mk (Let (v, value, body)) body.ty value.loc
-  | _ ->
+  | _, None ->
       let pat = pattern cx pat in
       let body = body () in
       mk (Match (value, [ { pat; guard = None; body } ])) body.ty value.loc
+  | _, Some leave ->
+      let leave = expr cx leave in
+      let pat = pattern cx pat in
+      let body = body () in
+      let other : C.pattern = { pkind = PWild; pty = value.ty; ploc = pat.ploc } in
+      mk
+        (Match
+           ( value,
+             [
+               { pat; guard = None; body };
+               { pat = other; guard = None; body = leave };
+             ] ))
+        body.ty value.loc
 
 (* `for i in a..b` holds both ends, then counts from the first up to the
    second, which it never reaches: when it starts there, the body never
@@ -2296,9 +2367,154 @@ and pattern cx (p : pattern) : C.pattern =
     | PFail_any -> PWild
     | PFail_in _ -> bug "`fail on` other than as a whole arm's pattern"
     | POr ps -> POr (List.map (pattern cx) ps)
+    | PAs (q, b) ->
+        (* of a by-name constructor's pattern, its variant type, as
+           inference has it: the same value, the subject itself *)
+        let whole : Ty.ty =
+          match (q.pkind, (node cx q.pnode).found, pty) with
+          | PCon_named _, Some (Ctor_of (path, c)), Con (s, args)
+            when s = path && ctor_named cx path c ->
+              Variant (path, c, args)
+          | _ -> pty
+        in
+        PAs (pattern cx q, bind cx b whole)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
+    | PCon_named (_, fs) -> (
+        (* the positional constructor, a pattern for every field, in
+           declaration order, `_` for one left out *)
+        match ((node cx p.pnode).found, pty) with
+        | Some (Ctor_of (path, c)), (Con (_, args) | Variant (_, _, args)) ->
+            let field (d : Iface.field) =
+              match
+                List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+              with
+              | Some (_, q) -> pattern cx q
+              | None ->
+                  {
+                    pkind = PWild;
+                    pty = Ty.apply { tys = args; rows = [] } d.fty;
+                    ploc = p.ploc;
+                  }
+            in
+            PCon (path, c, List.map field (ctor_decl cx path c))
+        | _ -> bug "a by-name constructor pattern inference didn't find")
+    | PRecord (_, fs) -> (
+        (* a pattern for every field, in declaration order, `_` for one
+           left out *)
+        let field path (d : Iface.field) : C.pattern =
+          match
+            List.find_opt (fun ((f : ident), _) -> f.name = d.fname) fs.fpats
+          with
+          | Some (_, q) -> pattern cx q
+          | None ->
+              { pkind = PWild; pty = field_ty cx pty path d.fname; ploc = p.ploc }
+        in
+        match pty with
+        | Variant (path, c, _) ->
+            (* a variant type is a record of its constructor's fields: its
+               constructor's pattern, which always matches *)
+            PCon (path, c, List.map (field path) (ctor_decl cx path c))
+        | Con (path, _) -> PRecord (path, List.map (field path) (record_decl cx path))
+        | _ -> bug "a record pattern whose type isn't a record")
   in
   { pkind; pty; ploc = p.ploc }
+
+(* The fields of the constructor [c] of the sum type [path], as they're
+   declared. *)
+and ctor_decl cx path c =
+  match cx.types path with
+  | Some { body = Sum cs; _ } -> (
+      match List.find_opt (fun (k : Iface.ctor) -> k.cname = c) cs with
+      | Some k -> k.cfields
+      | None -> bug "a constructor its type doesn't have")
+  | _ -> bug "a constructor of something that isn't a sum type"
+
+(* Whether the constructor [c] of the sum type [path] is by name. *)
+and ctor_named cx path c =
+  match cx.types path with
+  | Some { body = Sum cs; _ } ->
+      List.exists (fun (k : Iface.ctor) -> k.cname = c && k.cnamed) cs
+  | _ -> false
+
+(* The fields of the record type [path], as it's declared. *)
+and record_decl cx path =
+  match cx.types path with
+  | Some { body = Record fs; _ } -> fs
+  | _ -> bug "a record type without fields"
+
+(* The type of the field [f] of [t], a value of the record type [path]. *)
+and field_ty cx (t : Ty.ty) path f =
+  match t with
+  | Variant (_, c, args) -> (
+      (* a variant type's fields are its constructor's *)
+      match
+        List.find_opt (fun (d : Iface.field) -> d.fname = f) (ctor_decl cx path c)
+      with
+      | Some d -> Ty.apply { tys = args; rows = [] } d.fty
+      | None -> bug "a field its constructor doesn't have")
+  | Con (_, args) -> (
+      match
+        List.find_opt (fun (d : Iface.field) -> d.fname = f) (record_decl cx path)
+      with
+      | Some d -> Ty.apply { tys = args; rows = [] } d.fty
+      | None -> bug "a field its record doesn't have")
+  | _ -> bug "a field of something that isn't a record"
+
+(* `{ ..base, f: v, ... }` (compiler.md, "Data stage", "Record update"):
+   the base, bound first, then each field given, bound in the order
+   written, then the record, its fields in declaration order, each the
+   one given or the base's. A unique base is built over in place, since
+   reuse (reuse.ml) pairs it, dead once its fields are read, with the
+   record's allocation. *)
+and update cx (e : expr) base fields =
+  let loc = e.loc in
+  let t = ty_of cx e.node in
+  let b = expr cx base in
+  let bv = temp cx "base" b.ty in
+  let given =
+    List.map
+      (fun ((f : ident), v) ->
+        let v = expr cx v in
+        (f.name, temp cx f.name v.ty, v))
+      fields
+  in
+  let bpath =
+    match b.ty with
+    | Con (p, _) | Variant (p, _, _) -> p
+    | _ -> bug "an update of something that isn't a record"
+  in
+  let field (d : Iface.field) =
+    match List.find_opt (fun (f, _, _) -> f = d.fname) given with
+    | Some (_, v, _) -> (d.fname, local v loc)
+    | None ->
+        ( d.fname,
+          mk
+            (Field (local bv loc, bpath, d.fname))
+            (field_ty cx b.ty bpath d.fname)
+            loc )
+  in
+  let bound = (bv, b) :: List.map (fun (_, v, value) -> (v, value)) given in
+  match ((node cx e.node).found, t, b.ty) with
+  | Some (Ctor_of (path, c)), _, Variant (s, c', _)
+    when fields = [] && s = path && c = c' ->
+      (* `Placed { ..p }`, of a `p` of its own variant type: the same
+         value, as the sum, no code (compiler.md, "Data stage", "Variant
+         types") *)
+      mk (Of_variant b) t loc
+  | Some (Ctor_of (path, c)), _, _ ->
+      (* `Placed { ..draft, id }`: the sum, built by the constructor *)
+      lets bound
+        (mk (Con (path, c, List.map snd (List.map field (ctor_decl cx path c)))) t loc)
+  | _, Variant (path, c, _), _ ->
+      (* `{ ..p, total: x }`: a value of [p]'s variant type, built by its
+         constructor *)
+      lets bound
+        (mk (Con (path, c, List.map snd (List.map field (ctor_decl cx path c)))) t loc)
+  | _, Con (path, _), _ ->
+      lets bound
+        (mk (Record (path, List.map field (record_decl cx path))) t loc)
+  | _ -> bug "an update whose type isn't a record"
+
 
 (* The locals [e] uses but doesn't bind, in order of id. Every local of a
    function has its own id, so that's every local used, minus every local
@@ -2398,11 +2614,15 @@ and free (e : C.expr) =
         bind ev;
         List.iter use captures
     | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
-    | Field (r, _, _) -> go r
+    | Field (r, _, _) | Of_variant r -> go r
   and pat (p : C.pattern) =
     match p.pkind with
     | PVar v -> bind v
-    | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps -> List.iter pat ps
+    | PAs (q, v) ->
+        pat q;
+        bind v
+    | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps) ->
+        List.iter pat ps
     | PWild | PInt _ | PBool _ -> ()
   in
   go e;
@@ -2418,7 +2638,7 @@ let max_binder (f : fn_def) =
   let see (b : binder) = m := max !m b.id in
   let rec go (e : expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Tag_set _ -> ()
+    | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _ -> ()
     | Unop (_, a, _)
     | Field (a, _)
     | Ref a
@@ -2445,7 +2665,11 @@ let max_binder (f : fn_def) =
         List.iter stmt stmts;
         go last
     | Con (_, args) -> List.iter (fun (_, a) -> go a) args
-    | Record (_, fields) -> List.iter (fun (_, v) -> go v) fields
+    | Record (_, fields) | Con_named (_, fields) ->
+        List.iter (fun (_, v) -> go v) fields
+    | Update { base; fields; _ } ->
+        go base;
+        List.iter (fun (_, v) -> go v) fields
     | Match (s, arms) ->
         go s;
         List.iter
@@ -2469,14 +2693,19 @@ let max_binder (f : fn_def) =
     | Let { name; value; _ } ->
         see name;
         go value
-    | Let_tuple { pat = p; value } ->
+    | Let_pattern { pat = p; value; else_ } ->
         pat p;
-        go value
+        go value;
+        Option.iter go else_
     | Expr e | Finally e -> go e
   and pat (p : pattern) =
     match p.pkind with
     | PVar b -> see b
+    | PAs (q, b) ->
+        pat q;
+        see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
+    | PRecord (_, fs) | PCon_named (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
     | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;
@@ -2484,8 +2713,9 @@ let max_binder (f : fn_def) =
   !m
 
 (* [f], lowered; or made for [made], what a use of it asked for. What
-   it uses that's made for a request, it adds to [requests]. *)
-let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
+   it uses that's made for a request, it adds to [requests], and each
+   method call on a description it has, to [calls]. *)
+let fn_def ~home ~types ~requests ~calls ?made (inferred : Infer.t) (f : fn_def) :
     C.fn_def =
   let path = Ast.fn_path home f in
   let scheme = Path.Map.find path inferred.schemes in
@@ -2554,6 +2784,7 @@ let fn_def ~home ~types ~requests ?made (inferred : Infer.t) (f : fn_def) :
       tags;
       suffix;
       requests;
+      calls;
       types;
       opaque = inferred.opaque;
       vars = Hashtbl.create 16;
@@ -2657,16 +2888,13 @@ let ops (types : Iface.type_decl list) =
         Iface.requirements)
     types
 
-let program (r : Resolve.t) (inferred : Infer.t) =
-  let requests = ref [] in
-  (* only a function made for a request looks for a dependency's
-     operations *)
-  let types _ = None in
+let program ~types (r : Resolve.t) (inferred : Infer.t) =
+  let requests = ref [] and calls = ref [] in
   let fns =
     List.filter_map
       (fun f ->
         if made_for_requests inferred (Ast.fn_path r.home f) f then None
-        else Some (fn_def ~home:r.home ~types ~requests inferred f))
+        else Some (fn_def ~home:r.home ~types ~requests ~calls inferred f))
       (Ast.functions r.prog)
   in
   (* the indices its loops keep in bounds, marked so (bounds.ml) *)
@@ -2681,22 +2909,23 @@ let program (r : Resolve.t) (inferred : Infer.t) =
        shows = shows r.types fns;
        keys = keys r.types fns;
        ops = ops r.types;
+       method_calls = !calls;
      }
       : C.program),
     List.rev !requests )
 
 (* The function [req] asks for, made in the module that declares the
-   function it's made of, [r], and what it uses that's made for a request
-   in turn. *)
+   function it's made of, [r], what it uses that's made for a request in
+   turn, and the method calls on descriptions it has (Core.program). *)
 let made ~types (r : Resolve.t) (inferred : Infer.t) req =
   let p = match req with Any_for (p, _) | Tags_for (p, _) -> p in
   match
     List.find_opt (fun f -> Ast.fn_path r.home f = p) (Ast.functions r.prog)
   with
   | Some f ->
-      let requests = ref [] in
-      let fn = fn_def ~home:r.home ~types ~requests ~made:req inferred f in
-      (Bounds.mark fn, List.rev !requests)
+      let requests = ref [] and calls = ref [] in
+      let fn = fn_def ~home:r.home ~types ~requests ~calls ~made:req inferred f in
+      (Bounds.mark fn, List.rev !requests, !calls)
   | None -> bug ("a request of `" ^ Path.local p ^ "`, which isn't there")
 
 (* ---- starting ---- *)
@@ -2718,19 +2947,30 @@ let main_uses (main : C.fn_def) =
    (infer_top.ml, [check_main]). It starts from no evidence at all. *)
 let start (main : C.fn_def) : C.fn_def =
   let loc = main.loc in
+  (* A `main` that never gives a value, `fn main() = todo`, is generic in
+     the one it would give, `fn main<T>() -> T`: `$start` calls it at
+     `Unit`, so that what the runtime runs isn't generic. *)
+  let own = Ty.own_args main.scheme.ty in
+  let own =
+    if main.scheme.reqs = [] then
+      { own with tys = List.map (fun _ -> Ty.unit) own.tys }
+    else own
+  in
   let ret, errs =
-    match main.scheme.ty with
+    match Ty.apply own main.scheme.ty with
     | Fun (_, ret, errs, _) -> (ret, errs)
     | _ -> bug "a `main` whose type isn't a function's"
   in
   let deps = main_uses main in
-  let scheme = { main.scheme with ty = Fun ([], ret, errs, Ty.closed) } in
+  let scheme =
+    let names = if main.scheme.reqs = [] then [] else main.scheme.names in
+    { main.scheme with ty = Fun ([], ret, errs, Ty.closed); names }
+  in
   let tys = C.type_params scheme in
   let dicts = C.dict_params scheme in
   (* each install's evidence is numbered after the one it extends *)
   let rec install n = function
     | [] ->
-        let own = Ty.own_args main.scheme.ty in
         mk
           (Call
              ( mk
@@ -2739,7 +2979,7 @@ let start (main : C.fn_def) : C.fn_def =
                       own,
                       List.map (C.describe tys) own.tys,
                       List.map (fun v -> C.Dict_param v) dicts ))
-                 main.scheme.ty loc,
+                 (Ty.apply own main.scheme.ty) loc,
                [],
                C.evidence n ))
           ret loc

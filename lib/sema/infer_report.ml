@@ -68,8 +68,11 @@ let result_loc (e : expr) = (result_of e).loc
 let rec binders (p : pattern) =
   match p.pkind with
   | PVar b -> [ (b, p.ploc) ]
+  | PAs (q, b) -> binders q @ [ (b, b.ident.loc) ]
   | PCon (_, ps) | PFail (_, ps) | PTuple ps -> List.concat_map binders ps
   | POr ps -> List.concat_map binders ps
+  | PRecord (_, fs) | PCon_named (_, fs) ->
+      List.concat_map (fun (_, q) -> binders q) fs.fpats
   | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
 
 (* How to explain a mismatch with an expected type, passed down along with
@@ -376,10 +379,28 @@ let mismatch env why loc ?(behind = []) ~found ~expected failure =
             ]
         | None -> []
       in
+      (* a variant type and its sum, either way round, at the top or inside
+         the same type: there's no conversion (compiler.md, "Data stage",
+         "Variant types") *)
+      let rec variant_pair f x =
+        match (repr f, repr x) with
+        | TCon (p, _), TVariant (q, c, _) when p = q ->
+            Some
+              (Variant_wanted
+                 { variant = env.names p ^ "." ^ c; sum = env.names p; ctor = c })
+        | TVariant (p, c, _), TCon (q, _) when p = q ->
+            Some (Sum_wanted { ctor = c })
+        | TCon (p, fs), TCon (q, xs) when p = q && List.length fs = List.length xs
+          ->
+            List.find_map Fun.id (List.map2 variant_pair fs xs)
+        | _ -> None
+      in
+      let variant = Option.to_list (variant_pair found expected) in
       let d =
         mismatch loc ?msg ~notes:why.notes ?help ~labels:(why.labels f x)
           ~type_params:why.type_params ~found ~expected ~f ~x
-          (if why.alone then [] else behind @ needs_more @ errors @ private_ @ several)
+          (if why.alone then []
+           else behind @ needs_more @ errors @ private_ @ several @ variant)
       in
       (* test code using its module's own opaque type as what it's
          represented as: at the first use only, as [report_rep] *)

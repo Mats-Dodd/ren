@@ -306,3 +306,36 @@ table(
     ],
     rows,
 )
+
+print("### The data stage's milestone: interp, ADT-first\n")
+t = timing("interp")
+adt, enum, dyn, desc = (
+    t.get("ren-adt"),
+    t.get("rust-enum"),
+    t.get("rust-dyn"),
+    t.get("ren-descriptions"),
+)
+table(
+    [
+        "Ren ADT (s)",
+        "Rust enum (s)",
+        "Rust dyn (s)",
+        "Ren descriptions (s)",
+        "ADT / Rust enum",
+        "ADT / Rust dyn",
+        "ADT / descriptions",
+        "descriptions / Rust dyn",
+    ],
+    [
+        [
+            secs(adt),
+            secs(enum),
+            secs(dyn),
+            secs(desc),
+            ratio(adt, enum),
+            ratio(adt, dyn),
+            ratio(adt, desc),
+            ratio(desc, dyn),
+        ]
+    ],
+)

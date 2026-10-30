@@ -27,7 +27,7 @@ let rec occurs id level t =
       if l > level then r := Unbound (id', level)
   | TVar { contents = Link _ } -> assert false
   | TSkol _ | TError -> ()
-  | TCon (_, args) -> List.iter (occurs id level) args
+  | TCon (_, args) | TVariant (_, _, args) -> List.iter (occurs id level) args
   | TErrors e -> occurs_row ~ty:id (-1) level e
   | TImpl i ->
       List.iter (fun d -> List.iter (occurs id level) d.dargs) i.deps;
@@ -73,6 +73,11 @@ let rec unify st a b =
   | TError, _ | _, TError -> ()
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
     ->
+      List.iter2 (unify st) a1 a2
+  (* a variant type is only itself: never its sum, with no subtyping and
+     no conversion (compiler.md, "Data stage", "Variant types") *)
+  | TVariant (n1, c1, a1), TVariant (n2, c2, a2)
+    when n1 = n2 && c1 = c2 && List.length a1 = List.length a2 ->
       List.iter2 (unify st) a1 a2
   (* in its own module, an opaque type is what it's represented as *)
   | (TCon (p, _) as t), u when Hashtbl.mem st.reps p -> unify st (reveal st t) u
@@ -200,7 +205,7 @@ and open_args (l : label) =
   let rec go t =
     match repr t with
     | TVar { contents = Unbound _ } -> true
-    | TCon (_, args) -> List.exists go args
+    | TCon (_, args) | TVariant (_, _, args) -> List.exists go args
     | _ -> false
   in
   l.dep && List.exists go l.payload
@@ -255,6 +260,7 @@ let copier () =
             c)
     | TVar { contents = Link _ } -> assert false
     | TCon (p, args) -> TCon (p, List.map ty args)
+    | TVariant (p, c, args) -> TVariant (p, c, List.map ty args)
     | TFun (ps, r, e, u) ->
         TFun
           ( List.map (fun (p : param) -> { p with ty = ty p.ty }) ps,
