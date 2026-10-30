@@ -1,0 +1,104 @@
+# machine cloud, 2026-10-30T16:05:49Z, plant P2, stage build-release-fast
+# $ /home/user/ren/experiments/native-lang/build.sh zig release-fast P2
+== zig-release-fast-P2: /home/user/ren/experiments/native-lang/zig/build.sh release-fast /home/user/ren/experiments/native-lang/build/zig-release-fast-P2
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:74:31: note: called inline here
+            @atomicStore(T, at(a, b), x, .monotonic);
+                            ~~^~~~~~
+referenced by:
+    ren_dq_push: src/root.zig:119:17
+    ren_dq_push: src/root.zig:118:1
+    4 reference(s) hidden; use '-freference-trace=6' to see all references
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:74:31: note: called inline here
+            @atomicStore(T, at(a, b), x, .monotonic);
+                            ~~^~~~~~
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:83:35: note: called inline here
+                @atomicStore(T, at(n, i), @atomicLoad(T, at(a, i), .monotonic), .monotonic);
+                                ~~^~~~~~
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:83:35: note: called inline here
+                @atomicStore(T, at(n, i), @atomicLoad(T, at(a, i), .monotonic), .monotonic);
+                                ~~^~~~~~
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:97:46: note: called inline here
+                var x: ?T = @atomicLoad(T, at(a, b), .monotonic);
+                                           ~~^~~~~~
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:97:46: note: called inline here
+                var x: ?T = @atomicLoad(T, at(a, b), .monotonic);
+                                           ~~^~~~~~
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:114:44: note: called inline here
+                const x = @atomicLoad(T, at(a, t), .monotonic);
+                                         ~~^~~~~~
+src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64'
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ~~^~~~~~~~~~~~~
+src/dq.zig:66:37: note: type 'u64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                    ^
+src/dq.zig:66:41: note: type 'i64' here
+            return &a.slot[@intCast(i & (a.cap - 1))];
+                                        ^~~~~~~~~~~
+src/dq.zig:114:44: note: called inline here
+                const x = @atomicLoad(T, at(a, t), .monotonic);
+                                         ~~^~~~~~
+# exit 1 after .354523802 s

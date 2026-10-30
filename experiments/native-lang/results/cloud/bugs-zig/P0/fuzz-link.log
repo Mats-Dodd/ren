@@ -1,0 +1,8 @@
+# machine cloud, 2026-10-30T16:12:05Z, plant P0, stage fuzz-link
+# $ bash -c fuzz_bin () 
+{ 
+    local core=$ROOT/build/$(tag release-safe)/libren_core.a out=$ROOT/bin/$(tag release-safe)/fuzz;
+    [ -e "$core" ] || return 1;
+    ( cd "$H" && clang -O1 -g -fsanitize=fuzzer,address,undefined -D_GNU_SOURCE -I"$H" fuzz/fuzz_target.c fuzz/fuzz_common.c rt.c workloads/wl_common.c workloads/w1_spawn.c workloads/w2_switch.c workloads/w3_rtt.c workloads/t_io.c workloads/w_fuzz.c "$core" -lpthread -lm -o "$out" )
+}; ROOT='/home/user/ren/experiments/native-lang' H='/home/user/ren/experiments/native-lang/harness' P='P0' plant=''; tag() { echo "zig-$1${plant:+-$plant}"; }; fuzz_bin
+# exit 0 after 2.343180040 s

@@ -1,0 +1,78 @@
+# machine cloud, 2026-10-30T14:38:12Z, plant P3, stage libfuzzer-asan
+# $ bash -c cd '/home/user/ren/experiments/native-lang/build/bugs-c-fuzz/P3' && '/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz' -max_total_time=300 -seed=1 -max_len=4096 -print_final_stats=1 corpus
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x563b5f7fed88, 0x563b5f7ffcaf), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x563b5f7ffcb0,0x563b5f80ef20), 
+INFO:        0 files found in corpus
+INFO: A corpus is not provided, starting from an empty corpus
+#2	INITED cov: 99 ft: 100 corp: 1/1b exec/s: 0 rss: 33Mb
+#201	NEW    cov: 158 ft: 166 corp: 2/4b lim: 4 exec/s: 0 rss: 36Mb L: 3/3 MS: 4 ChangeBinInt-ChangeBit-CopyPart-InsertByte-
+#217	NEW    cov: 158 ft: 218 corp: 3/8b lim: 4 exec/s: 0 rss: 37Mb L: 4/4 MS: 1 CrossOver-
+#396	NEW    cov: 158 ft: 270 corp: 4/11b lim: 4 exec/s: 0 rss: 40Mb L: 3/4 MS: 4 ChangeBinInt-EraseBytes-ShuffleBytes-InsertByte-
+#444	NEW    cov: 158 ft: 277 corp: 5/15b lim: 4 exec/s: 0 rss: 41Mb L: 4/4 MS: 3 CrossOver-ShuffleBytes-ChangeBit-
+#590	NEW    cov: 158 ft: 328 corp: 6/18b lim: 4 exec/s: 0 rss: 44Mb L: 3/4 MS: 1 ChangeBinInt-
+#661	REDUCE cov: 158 ft: 328 corp: 6/17b lim: 4 exec/s: 0 rss: 45Mb L: 3/4 MS: 1 EraseBytes-
+#874	REDUCE cov: 159 ft: 329 corp: 7/23b lim: 6 exec/s: 0 rss: 48Mb L: 6/6 MS: 3 ChangeByte-CopyPart-CopyPart-
+#883	NEW    cov: 161 ft: 381 corp: 8/29b lim: 6 exec/s: 0 rss: 48Mb L: 6/6 MS: 4 ChangeByte-CrossOver-CopyPart-ChangeByte-
+#897	NEW    cov: 161 ft: 382 corp: 9/35b lim: 6 exec/s: 0 rss: 48Mb L: 6/6 MS: 4 ChangeBit-CopyPart-ChangeByte-CrossOver-
+#913	NEW    cov: 161 ft: 383 corp: 10/41b lim: 6 exec/s: 0 rss: 48Mb L: 6/6 MS: 1 CrossOver-
+#955	REDUCE cov: 161 ft: 385 corp: 11/47b lim: 6 exec/s: 0 rss: 49Mb L: 6/6 MS: 2 CopyPart-CopyPart-
+#1174	NEW    cov: 179 ft: 403 corp: 12/54b lim: 8 exec/s: 0 rss: 52Mb L: 7/7 MS: 4 ChangeBit-InsertByte-ShuffleBytes-CrossOver-
+#1255	REDUCE cov: 179 ft: 403 corp: 12/52b lim: 8 exec/s: 0 rss: 53Mb L: 4/7 MS: 1 EraseBytes-
+#1362	NEW    cov: 179 ft: 411 corp: 13/59b lim: 8 exec/s: 0 rss: 54Mb L: 7/7 MS: 2 ChangeByte-ChangeBit-
+#1364	NEW    cov: 179 ft: 419 corp: 14/67b lim: 8 exec/s: 0 rss: 54Mb L: 8/8 MS: 2 ShuffleBytes-InsertByte-
+#1531	NEW    cov: 179 ft: 427 corp: 15/75b lim: 8 exec/s: 0 rss: 56Mb L: 8/8 MS: 2 CrossOver-CopyPart-
+#1557	NEW    cov: 179 ft: 435 corp: 16/83b lim: 8 exec/s: 0 rss: 56Mb L: 8/8 MS: 1 ChangeBit-
+#1560	NEW    cov: 179 ft: 441 corp: 17/91b lim: 8 exec/s: 0 rss: 57Mb L: 8/8 MS: 3 ChangeByte-CopyPart-ShuffleBytes-
+#1700	REDUCE cov: 179 ft: 441 corp: 17/90b lim: 8 exec/s: 0 rss: 58Mb L: 7/8 MS: 5 ChangeBit-ChangeBit-ChangeBit-CrossOver-EraseBytes-
+#1751	REDUCE cov: 179 ft: 441 corp: 17/89b lim: 8 exec/s: 0 rss: 59Mb L: 3/8 MS: 1 EraseBytes-
+#2142	REDUCE cov: 179 ft: 441 corp: 17/88b lim: 11 exec/s: 0 rss: 64Mb L: 3/8 MS: 1 EraseBytes-
+#2396	NEW    cov: 179 ft: 448 corp: 18/99b lim: 11 exec/s: 0 rss: 67Mb L: 11/11 MS: 4 ChangeBinInt-InsertRepeatedBytes-ChangeBit-CopyPart-
+#2452	NEW    cov: 179 ft: 450 corp: 19/110b lim: 11 exec/s: 0 rss: 68Mb L: 11/11 MS: 1 ShuffleBytes-
+#2456	NEW    cov: 180 ft: 451 corp: 20/121b lim: 11 exec/s: 0 rss: 68Mb L: 11/11 MS: 4 CopyPart-ChangeByte-InsertByte-CrossOver-
+#2457	NEW    cov: 180 ft: 453 corp: 21/132b lim: 11 exec/s: 0 rss: 68Mb L: 11/11 MS: 1 ShuffleBytes-
+#2722	REDUCE cov: 180 ft: 463 corp: 22/143b lim: 11 exec/s: 0 rss: 71Mb L: 11/11 MS: 5 ShuffleBytes-ChangeBit-ShuffleBytes-InsertByte-CrossOver-
+#3296	NEW    cov: 180 ft: 472 corp: 23/156b lim: 14 exec/s: 0 rss: 78Mb L: 13/13 MS: 4 InsertByte-InsertByte-ChangeByte-CrossOver-
+#3527	NEW    cov: 180 ft: 474 corp: 24/167b lim: 14 exec/s: 0 rss: 81Mb L: 11/13 MS: 1 InsertRepeatedBytes-
+#3528	REDUCE cov: 180 ft: 474 corp: 24/166b lim: 14 exec/s: 0 rss: 81Mb L: 10/13 MS: 1 EraseBytes-
+#3770	NEW    cov: 180 ft: 475 corp: 25/179b lim: 14 exec/s: 0 rss: 85Mb L: 13/13 MS: 2 ShuffleBytes-ChangeBit-
+fuzz: oracle failure (worker 0, finish 1): fuzz oracle: a stale reply was ACCEPTED (id 0000000a00000001, ren_reply = 0, input offset 12)
+==29567== ERROR: libFuzzer: deadly signal
+    #0 0x563b5f725c65 in __sanitizer_print_stack_trace (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x141c65) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #1 0x563b5f67f77c in fuzzer::PrintStackTrace() (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x9b77c) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #2 0x563b5f665807 in fuzzer::Fuzzer::CrashCallback() (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x81807) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #3 0x7f21b1c4532f  (/lib/x86_64-linux-gnu/libc.so.6+0x4532f) (BuildId: a4a7992a8e66555c8141ab2a08a8465ff6e0ea65)
+    #4 0x7f21b1c9ec0b in __pthread_kill_implementation nptl/pthread_kill.c:43:17
+    #5 0x7f21b1c9ec0b in __pthread_kill_internal nptl/pthread_kill.c:78:10
+    #6 0x7f21b1c9ec0b in pthread_kill nptl/pthread_kill.c:89:10
+    #7 0x7f21b1c4527d in raise signal/../sysdeps/posix/raise.c:26:13
+    #8 0x7f21b1c288fe in abort stdlib/abort.c:79:7
+    #9 0x563b5f759b61 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:32:5
+    #10 0x563b5f7594a7 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #11 0x563b5f666dd4 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x82dd4) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #12 0x563b5f6664c9 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool, bool*) (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x824c9) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #13 0x563b5f667cb5 in fuzzer::Fuzzer::MutateAndTestOne() (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x83cb5) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #14 0x563b5f668815 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x84815) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #15 0x563b5f655aef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x71aef) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #16 0x563b5f680176 in main (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x9c176) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+    #17 0x7f21b1c2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #18 0x7f21b1c2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #19 0x563b5f64aad4 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x66ad4) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+
+NOTE: libFuzzer has rudimentary signal handlers.
+      Combine libFuzzer with AddressSanitizer or similar for better crash reports.
+SUMMARY: libFuzzer: deadly signal
+MS: 4 InsertRepeatedBytes-CopyPart-ShuffleBytes-ChangeBit-; base unit: ced9932cdd463b4355e40b1e3586beb3eb68a07c
+0x21,0x55,0xff,0x5b,0xa,0x21,0xff,0x48,0xff,0xff,0xfb,0xff,0xff,0xff,
+!U\377[\012!\377H\377\377\373\377\377\377
+artifact_prefix='./'; Test unit written to ./crash-174060b18b1939c061d4c843bf0184c6f889a982
+Base64: IVX/Wwoh/0j///v///8=
+stat::number_of_executed_units: 3909
+stat::average_exec_per_sec:     0
+stat::new_units_added:          30
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              87
+# exit 77 after .499639204 s
+corpus
+crash-174060b18b1939c061d4c843bf0184c6f889a982

@@ -1,0 +1,104 @@
+# machine cloud, 2026-10-30T14:01:56Z, plant P0, stage deque-stress-x50
+# $ bash -c for i in $(seq 50); do timeout 60 '/home/user/ren/experiments/native-lang/bin/c-release/deque_stress' stress 10 200000 || { echo "iteration $i failed"; exit 1; }; done; echo 50 ok
+stress: rounds=10 n=200000 steals=789209 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=845458 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=753372 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=870004 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=855242 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=1005935 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=797742 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=882807 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=731998 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=917711 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=718879 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=947565 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=843738 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=891399 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=936861 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=738160 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=823005 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=784120 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=813555 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=955951 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=885593 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=873524 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=977765 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=815684 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=984269 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=778431 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=953194 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=800163 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=825156 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=858327 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=841979 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=914608 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=883851 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=876910 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=870171 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=924592 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=824479 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=849131 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=844773 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=944924 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=914598 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=860010 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=936985 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=842277 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=915909 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=973594 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=907139 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=944882 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=955231 duplicated=0 lost=0
+deque_stress stress: ok
+stress: rounds=10 n=200000 steals=822795 duplicated=0 lost=0
+deque_stress stress: ok
+50 ok
+# exit 0 after 17.458193194 s

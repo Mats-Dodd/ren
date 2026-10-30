@@ -1,0 +1,11 @@
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3.98s
+     Running tests/loom_deque.rs (rust/target/loom/release/deps/loom_deque-bd3f44839ac2c67c)
+
+running 3 tests
+test take_vs_steal_last ... ok
+test two_thieves ... ok
+test steal_during_grow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+

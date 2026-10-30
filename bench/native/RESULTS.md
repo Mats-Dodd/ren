@@ -9,6 +9,93 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Bytes stage, part two, step 4, part 2 (compiler.md, "Bytes stage, part two", "Step 4 (part 2), as built")
+
+The uncounted view, lent element reads, `lend_parts` again, and runs of
+one root dropped at once when an array is freed. x86_64 cloud container,
+4 cores, shared (other agents building beside it), GCC 13.3 -O2,
+rustc 1.97.0, **wall time** (no cycle counters here; `perf` isn't
+installed), and **callgrind's instruction counts**, which don't move
+with load. Before is 3b649c6 (part one), built by that commit's `ren`;
+after is this commit's. ms a round, (median at R rounds - median at 0)
+/ R, interleaved and rotated, the R runs' spread in brackets.
+
+```sh
+sh bench/native/strs/build.sh $before   # REN=<3b649c6's ren>
+sh bench/native/strs/build.sh $after
+python3 -I bench/native/strs/ab.py $before $after 7 tok:10 sort:5 map:5 group:5 logs:5 \
+  json_1m:5 json_plus_1m:5 logfmt_1m:5 logfmt_plus_1m:5 slices_logs:20 slices_logs_r:20 \
+  slices_json:20 slices_json_r:20 slices_pages:20 slices_pages_r:20 maps:20
+# instructions a round: (I at R - I at 0) / R, each binary once
+valgrind --tool=callgrind --callgrind-out-file=/dev/null $after/slices_json-20   # and -0
+```
+
+The slices parsers at 20 rounds are 5 to 100 ms over 0-round runs of
+100 to 190 ms, which this machine's noise swamps (pages_r, the same C,
+came out 0.81 and 1.23 of itself), so they were also built at more
+rounds, json 60, logs 100, pages 200 and 1,000, by the same main.ren as
+build.sh's with the count changed, and timed beside slices' Rust twin at
+the same rounds (`slices-rust 200000 <rounds> <parser>`), 11 runs.
+
+| kernel | before | after | after / before | instructions a round, M | after / Rust (Rust) |
+|---|---|---|---|---|---|
+| tok | 38.63 (446-523) | 36.35 (379-548) | 0.94 | 205.5 / 171.4 (0.83) | |
+| sort | 433.71 (2434-2767) | 446.51 (2321-2635) | 1.03 | 1652.9 / 1618.4 (0.98) | |
+| map | 1921.2 (9989-12022) | 1793.4 (9880-10914) | 0.93 | 4049.7 / 3968.9 (0.98) | |
+| group | 446.40 (2911-3343) | 430.25 (2842-3251) | 0.96 | 4017.4 / 4002.4 (1.00) | |
+| logs | 273.38 (2074-2466) | 237.14 (2106-2482) | 0.87 | 1967.0 / 1898.0 (0.96) | |
+| out json, 1M, `+=` | 253.61 (2260-2621) | 260.15 (2433-2714) | 1.03 | 2398.0 / 2226.1 (0.93) | |
+| out json, 1M, `a + b` | 321.11 (2765-3175) | 305.85 (2695-2876) | 0.95 | 3323.7 / 3061.9 (0.92) | |
+| out logfmt, 1M, `+=` | 170.65 (2142-2327) | 182.36 (2128-2375) | 1.07 | 1204.7 / 1161.9 (0.96) | |
+| out logfmt, 1M, `a + b` | 193.93 (2161-2380) | 181.14 (1987-2294) | 0.93 | 1188.7 / 1141.9 (0.96) | |
+| slices logs, 100 rounds | 19.38 (1850-2343) | 19.12 (1860-2130) | 0.99 | 206.4 / 205.2 (0.99) | 1.41 (13.60) |
+| slices logs_r, 100 | 19.82 (1975-2514) | 17.92 (1787-1962) | 0.90 | 227.7 / 218.2 (0.96) | 0.91 (19.74) |
+| slices json, 60 | 100.15 (5963-6404) | 91.62 (5426-6114) | 0.91 | 423.1 / 310.9 (0.73) | 1.39 (65.84) |
+| slices json_r, 60 | 83.57 (4906-5418) | 82.72 (5011-5550) | 0.99 | 328.8 / 328.7 (1.00) | 2.08 (39.85) |
+| slices pages, 1000 | 5.253 (5154-5603) | 4.476 (4217-5032) | 0.85 | 50.8 / 31.2 (0.61) | 1.97 (2.273) |
+| slices pages_r, 1000 | 3.669 (3457-4088) | 3.630 (3457-4165) | 0.99 | 23.1 / 23.1 (1.00) | 1.82 (1.992) |
+| maps | 146.14 (2612-3124) | 134.80 (2627-4167) | 0.92 | 310.2 / 296.2 (0.96) | |
+
+Against their `_r` forms, after: json 1.11, logs 1.07, pages 1.23.
+Other runs of the same binaries: pages 1.19 (9 runs), 1.28 (15) and
+1.28 (9, 1000 rounds); logs 1.10 and 1.11 (15 and 9); json 1.11 and
+1.12. Pages against Rust: 2.05 and 2.15 in the other runs. Pages' gap to
+`_r` is the free walk: the same binary with `ren_release_elems` skipped
+(an experiment that leaks the root) runs 0.3 to 0.6 ms a round faster,
+about what's left.
+
+**Fix by fix** (`python3 -I abn.py 9 hb,h1,h2,ha,h3 slices_json:60
+slices_json_r:60 slices_pages:200 slices_pages_r:200 slices_logs:100
+slices_logs_r:100`, a loop like ab.py's over five build directories,
+each built by `ren` at that fix; instructions at 2 rounds minus 0):
+
+| | part one | (1) view | (2) lent elements | (3) `lend_parts` | (4) runs | (5) loops |
+|---|---|---|---|---|---|---|
+| json, ms | 111.06 (6300-7216) | 107.13 (6323-7699) | 104.39 (5709-6778) | 102.89 (5951-7072) | 100.96 (5921-6776) | 98.88 (5792-6777), 11 runs, part one 104.94 |
+| json, M instructions | 425.8 | 425.5 | 366.3 | 367.9 | 345.5 | 313.5 |
+| json_r, ms | 87.64 | 87.74 | 88.88 | 87.85 | 88.33 | 88.04 |
+| pages, ms | 5.877 (1222-1813) | 6.112 (1264-1512) | 5.718 (1125-1485) | 5.094 (1095-1446) | 4.981 (1059-1394) | 4.934 (987-1627), 11 runs, part one 5.947 |
+| pages, M instructions | 51.2 | 50.0 | 40.6 | 39.0 | 36.0 | 31.9 |
+| pages_r, ms | 3.931 | 3.652 | 3.910 | 3.831 | 3.884 | 4.032 |
+| logs, ms | 21.79 (2158-2760) | 20.57 (2049-2324) | 20.14 (2051-2400) | 21.21 (2040-2349) | 20.91 (1966-2316) | |
+| logs, M instructions | 196.4 | 205.8 | 205.8 | 205.8 | 205.8 | |
+
+logs' instructions rise at (1) on C that only lost counts: GCC compiles
+`logs`' byte loop, unchanged, to more instructions a byte, as it does
+`group`'s byte loop after (4) and (5) (same Ren C, 576 million more
+instructions on that one loop's line, `callgrind_annotate` of a `-g`
+build of the emitted C; the free loop out of line didn't undo it).
+
+**The rest of bench/native, once** (5 runs, `rest.py`, each program's
+main.ren): binary-trees 1.04, blocks 0.96, bytes 0.99, cfold 1.01,
+deriv 1.02, dispatch 0.90, fannkuch 1.06, frames 0.93, handlers 1.02,
+inout 0.99, interp 0.84, nbody 1.05, nested 0.99, nqueens 0.99, rbtree
+1.01, stack 1.02, vec 1.04. Their C is the same but for the runtime and
+an element read's `dup` moved in dispatch and stack; callgrind gives
+fannkuch, vec, blocks, nested and nbody the same instructions within
+0.01% (fannkuch 22,505,571,626 and 22,505,571,641): noise and placement.
+`-DREN_RC_SHARED` wasn't measured again; this part makes fewer counts.
+
 ## Bytes stage, part two, step 4, part 1 (compiler.md, "Bytes stage, part two", "Step 4 (part 1), as built")
 
 Representation B in release builds: a `Str` or `Bytes` is two words, a

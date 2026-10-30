@@ -1,0 +1,2 @@
+# machine cloud, 2026-10-30T15:56:41Z, plant P0, c-release: ./deque_stress stress 10 200000 x30
+result: deque-release c-release failed 0/30 first_fail_run=none total_s=22.897793678

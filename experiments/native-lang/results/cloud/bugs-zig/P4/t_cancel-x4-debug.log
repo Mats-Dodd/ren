@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:28:09Z, plant P4, stage t_cancel-x4-debug
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-debug-P4/harness t_cancel --driver epoll --workers 4
+ren zig panic: index out of bounds: index 1431655765, len 16384
+# exit 134 after .016745900 s

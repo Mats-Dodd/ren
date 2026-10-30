@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T14:18:35Z, plant P1, stage fuzz-run-release
+# $ timeout 600 /home/user/ren/experiments/native-lang/bin/c-release-P1/fuzz_run --random 20000 7
+fuzz_run: 20000 random inputs ok
+# exit 0 after .409645219 s

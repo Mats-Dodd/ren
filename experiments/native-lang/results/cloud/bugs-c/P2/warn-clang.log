@@ -1,0 +1,41 @@
+# machine cloud, 2026-10-30T14:34:29Z, plant P2, stage warn-clang
+# $ bash -c cd '/home/user/ren/experiments/native-lang/c' && for f in dq.c journal.c sched.c core.c layout.c drv_common.c drv_epoll.c drv_replay.c drv_uring.c; do clang -std=c11 -O2 -Wall -Wextra -Wconversion -Wno-unused-parameter -DREN_PLANT=2 -D_GNU_SOURCE -I'/home/user/ren/experiments/native-lang/harness' -I'/home/user/ren/experiments/native-lang/c' -fsyntax-only $f; done
+dq.c:32:60: warning: implicit conversion changes signedness: 'int64_t' (aka 'long') to 'dq_i' (aka 'unsigned long') [-Wsign-conversion]
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |                                                  ~  ~~~~~~~^~~
+./atom.h:48:48: note: expanded from macro 'LD'
+   48 | #define LD(p, mo)        atomic_load_explicit((p), (mo))
+      |                                                ^
+./atom.h:49:54: note: expanded from macro 'ST'
+   49 | #define ST(p, v, mo)     atomic_store_explicit((p), (v), (mo))
+      |                                                      ^
+dq.c:32:29: warning: implicit conversion changes signedness: 'int64_t' (aka 'long') to 'dq_i' (aka 'unsigned long') [-Wsign-conversion]
+   32 |     ST(&n->slot[i & (n->cap - 1)], LD(&a->slot[i & (a->cap - 1)], RLX), RLX);
+      |                   ~  ~~~~~~~^~~
+./atom.h:49:49: note: expanded from macro 'ST'
+   49 | #define ST(p, v, mo)     atomic_store_explicit((p), (v), (mo))
+      |                                                 ^
+dq.c:48:27: warning: implicit conversion changes signedness: 'int64_t' (aka 'long') to 'dq_i' (aka 'unsigned long') [-Wsign-conversion]
+   48 |   ST(&a->slot[b & (a->cap - 1)], x, RLX);
+      |                 ~  ~~~~~~~^~~
+./atom.h:49:49: note: expanded from macro 'ST'
+   49 | #define ST(p, v, mo)     atomic_store_explicit((p), (v), (mo))
+      |                                                 ^
+dq.c:47:13: warning: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+dq.c:68:43: warning: implicit conversion changes signedness: 'int64_t' (aka 'long') to 'dq_i' (aka 'unsigned long') [-Wsign-conversion]
+   68 |     uintptr_t x = LD(&a->slot[b & (a->cap - 1)], RLX);
+      |                                 ~  ~~~~~~~^~~
+./atom.h:48:48: note: expanded from macro 'LD'
+   48 | #define LD(p, mo)        atomic_load_explicit((p), (mo))
+      |                                                ^
+dq.c:89:43: warning: implicit conversion changes signedness: 'int64_t' (aka 'long') to 'dq_i' (aka 'unsigned long') [-Wsign-conversion]
+   89 |     uintptr_t x = LD(&a->slot[t & (a->cap - 1)], RLX);
+      |                                 ~  ~~~~~~~^~~
+./atom.h:48:48: note: expanded from macro 'LD'
+   48 | #define LD(p, mo)        atomic_load_explicit((p), (mo))
+      |                                                ^
+6 warnings generated.
+# exit 0 after .439895400 s
+warnings: 6

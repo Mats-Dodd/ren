@@ -1,0 +1,300 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running tests/optable.rs (target/miri-P5/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/e6b2bfbaaaf94ea5/out/optable-e6b2bfbaaaf94ea5)
+Trying seed: 0
+Trying seed: 15
+Trying seed: 14
+Trying seed: 13
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+test threads_reply_from_elsewhere ... test threads_reply_from_elsewhere ... test threads_reply_from_elsewhere ... test threads_reply_from_elsewhere ... warning: integer-to-pointer cast
+   --> core/tests/optable.rs:407:29
+    |
+407 |                     let c = c as *mut ren_core;
+    |                             ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = help: this program is using integer-to-pointer casts or (equivalently) `ptr::with_exposed_provenance`, which means that Miri might miss pointer bugs in this program
+    = help: see https://doc.rust-lang.org/nightly/std/ptr/fn.with_exposed_provenance.html for more details on that operation
+    = help: to ensure that Miri does not miss bugs in your program, use Strict Provenance APIs (https://doc.rust-lang.org/nightly/std/ptr/index.html#strict-provenance, https://crates.io/crates/sptr) instead
+    = help: you can then set `MIRIFLAGS=-Zmiri-strict-provenance` to ensure you are not relying on `with_exposed_provenance` semantics
+    = help: alternatively, `MIRIFLAGS=-Zmiri-permissive-provenance` disables this warning
+    = note: this is on thread `unnamed-2`
+note: the current function got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/src/sched.rs:289:12
+    |
+    = note: integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-2`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::inj_pop
+                at core/src/sched.rs:289:13: 289:65
+            1: ren_core::sched::Core::run
+                at core/src/sched.rs:681:21: 681:35
+            2: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            3: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/src/sched.rs:435:23
+    |
+    = note: integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-3`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::steal_any
+                at core/src/sched.rs:435:24: 435:42
+            1: ren_core::sched::Core::run
+                at core/src/sched.rs:684:21: 684:38
+            2: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            3: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/src/sched.rs:677:20
+    |
+    = note: integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-2`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::run
+                at core/src/sched.rs:677:21: 677:43
+            1: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            2: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:426:34
+    |
+426 |                 assert_eq!(reply(c as *mut ren_core, id, REN_DONE, 9), ACC);
+    |                                  ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-4`
+note: the current function got called indirectly due to this code
+   --> core/tests/optable.rs:424:23
+    |
+424 |           let replier = std::thread::spawn(move || {
+    |  _______________________^
+425 | |             for id in rx {
+426 | |                 assert_eq!(reply(c as *mut ren_core, id, REN_DONE, 9), ACC);
+427 | |             }
+428 | |         });
+    | |__________^
+
+warning: integer-to-pointer cast
+   --> core/src/sched.rs:447:44
+    |
+    = note: integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-2`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::deliver
+                at core/src/sched.rs:447:45: 447:77
+            1: ren_core::sched::Core::drain_inbox
+                at core/src/sched.rs:478:13: 478:32
+            2: ren_core::sched::Core::run
+                at core/src/sched.rs:658:9: 658:28
+            3: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            4: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:177:21
+    |
+177 |         ren_rc_drop((*s).root as *mut ren_obj);
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-2`
+    = note: stack backtrace:
+            0: caller_fin
+                at core/tests/optable.rs:177:21: 177:46
+            1: ren_obj_free
+                at core/tests/optable.rs:27:13: 27:17
+            2: ren_rc_drop
+                at core/tests/optable.rs:52:9: 52:24
+            3: ren_core::sched::Core::task_done
+                at core/src/sched.rs:373:9: 373:44
+            4: ren_core::sched::Core::run_task
+                at core/src/sched.rs:393:17: 393:37
+            5: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            6: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            7: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:170:24
+    |
+170 |         ren_notify(cx, (*s).root as *mut ren_task);
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-2`
+    = note: stack backtrace:
+            0: caller_resume
+                at core/tests/optable.rs:170:24: 170:50
+            1: ren_core::sched::Core::run_task
+                at core/src/sched.rs:387:17: 387:46
+            2: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            3: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            4: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:436:18
+    |
+436 |         ren_free(c as *mut ren_core);
+    |                  ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `threads_reply_f`
+    = note: stack backtrace:
+            0: threads_reply_from_elsewhere
+                at core/tests/optable.rs:436:18: 436:36
+            1: threads_reply_from_elsewhere::{closure#0}
+                at core/tests/optable.rs:396:34: 396:34
+
+ok
+ok
+
+test result: 
+oktest result: okok
+. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out
+test result: ; finished in 2.94s
+
+ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 2.93s. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out
+
+; finished in 2.98s
+
+Trying seed: 12
+Trying seed: 1
+Trying seed: 11
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.65s
+
+Trying seed: 10
+
+running 1 test
+test threads_reply_from_elsewhere ... 
+running 1 test
+test threads_reply_from_elsewhere ... 
+running 1 test
+test threads_reply_from_elsewhere ... 
+running 1 test
+test threads_reply_from_elsewhere ... error: Undefined Behavior: Data race detected between (1) non-atomic write on thread `unnamed-2` and (2) non-atomic read on thread `unnamed-3` at alloc522923+0x408
+   --> core/src/sched.rs:653:40
+    |
+    = note: (2) just happened here
+help: and (1) occurred earlier here
+   --> core/src/sched.rs:433:20
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: this is on thread `unnamed-3`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::run
+                at core/src/sched.rs:653:41: 653:62
+            1: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            2: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+FAILING SEED: 1
+error: test failed, to rerun pass `-p ren_core --test optable`
+
+Caused by:
+  process didn't exit successfully: `/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo-miri runner /home/user/ren/experiments/native-lang/rust/target/miri-P5/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/e6b2bfbaaaf94ea5/out/optable-e6b2bfbaaaf94ea5 threads_reply_from_elsewhere` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.
+exit 1 in 8s

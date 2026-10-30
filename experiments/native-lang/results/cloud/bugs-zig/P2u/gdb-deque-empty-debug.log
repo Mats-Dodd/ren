@@ -1,0 +1,12 @@
+ren zig panic: integer overflow
+#0  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+#1  __pthread_kill_internal (signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:78
+#2  __GI___pthread_kill (threadid=<optimized out>, signo=signo@entry=6) at ./nptl/pthread_kill.c:89
+#3  0x00007ffff7c4527e in __GI_raise (sig=sig@entry=6) at ../sysdeps/posix/raise.c:26
+#4  0x00007ffff7c288ff in __GI_abort () at ./stdlib/abort.c:79
+#5  0x000055555555bb9a in root.renPanic (msg=..., ra=...)
+#6  0x000055555555c4e4 in debug.FullPanic((function 'renPanic')).integerOverflow ()
+#7  0x00005555556fda91 in dq.Deque(u64).take (q=0x5555557de080)
+#8  0x00005555556fd9c3 in ren_dq_take (q=...)
+#9  0x000055555555a94f in t_empty () at tests/deque_stress.c:18
+#10 0x000055555555a810 in main (argc=2, argv=0x7fffffffc568) at tests/deque_stress.c:90

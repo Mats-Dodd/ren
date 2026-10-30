@@ -124,6 +124,16 @@
   (glob_files strs/*.ren)
   (glob_files strs/*.expected)))
 
+; strs_lent.t, step 4's lent reads (part two), as strs.t checks its programs.
+
+(cram
+ (applies_to strs_lent)
+ (deps
+  %{bin:ren}
+  (env_var REN_TCC)
+  (glob_files strs/*.ren)
+  (glob_files strs/*.expected)))
+
 (cram
  (applies_to strs_big)
  (enabled_if

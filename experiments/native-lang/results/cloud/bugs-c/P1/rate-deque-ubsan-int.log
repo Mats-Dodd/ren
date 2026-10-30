@@ -1,0 +1,6 @@
+# machine cloud, 2026-10-30T15:54:39Z, plant P1, c-ubsan-int-P1: ./deque_stress stress 10 200000 x30
+## first failing run 1
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=1122674 duplicated=27455 lost=27455
+deque_stress stress: FAIL
+result: deque-ubsan-int c-ubsan-int-P1 failed 16/30 first_fail_run=1 total_s=11.886625873

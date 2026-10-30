@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:10:06Z, plant P0, stage deque-stress-release-safe
+# $ timeout 120 /home/user/ren/experiments/native-lang/bin/zig-release-safe/deque_stress stress 10 200000
+stress: rounds=10 n=200000 steals=894460 duplicated=0 lost=0
+deque_stress stress: ok
+# exit 0 after .358380157 s

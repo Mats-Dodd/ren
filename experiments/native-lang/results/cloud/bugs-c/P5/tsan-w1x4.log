@@ -1,0 +1,70 @@
+# machine cloud, 2026-10-30T14:42:21Z, plant P5, stage tsan-w1x4
+# $ bash -c for i in 1 2 3 4 5; do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/c-tsan-P5/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done; done
+==================
+WARNING: ThreadSanitizer: data race (pid=16179)
+  Read of size 8 at 0x727000000460 by thread T3:
+    #0 ren_run /home/user/ren/experiments/native-lang/c/sched.c:191:23 (harness+0xe64dd) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed627) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #2 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed173) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Previous write of size 8 at 0x727000000460 by thread T2:
+    #0 steal_any /home/user/ren/experiments/native-lang/c/sched.c:165:27 (harness+0xe69b3) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 ren_run /home/user/ren/experiments/native-lang/c/sched.c:210:17 (harness+0xe69b3)
+    #2 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed627) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed173) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Location is heap block of size 1920 at 0x727000000000 allocated by main thread:
+    #0 aligned_alloc <null> (harness+0x5fc74) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 xalloc64 /home/user/ren/experiments/native-lang/c/core.c:15:13 (harness+0xe779f) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #2 ren_start /home/user/ren/experiments/native-lang/c/core.c:92:10 (harness+0xe779f)
+    #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Thread T3 (tid=16183, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Thread T2 (tid=16182, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:191:23 in ren_run
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=16179)
+  Write of size 8 at 0x727000000288 by thread T4:
+    #0 steal_any /home/user/ren/experiments/native-lang/c/sched.c:165:27 (harness+0xe69b3) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 ren_run /home/user/ren/experiments/native-lang/c/sched.c:210:17 (harness+0xe69b3)
+    #2 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed627) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed173) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Previous write of size 8 at 0x727000000288 by thread T3:
+    #0 steal_any /home/user/ren/experiments/native-lang/c/sched.c:165:27 (harness+0xe69b3) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 ren_run /home/user/ren/experiments/native-lang/c/sched.c:210:17 (harness+0xe69b3)
+    #2 drv_epoll_worker /home/user/ren/experiments/native-lang/c/drv_epoll.c:335:17 (harness+0xed627) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/c/drv_common.c:289:12 (harness+0xed173) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xdfc1c) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Location is heap block of size 1920 at 0x727000000000 allocated by main thread:
+    #0 aligned_alloc <null> (harness+0x5fc74) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 xalloc64 /home/user/ren/experiments/native-lang/c/core.c:15:13 (harness+0xe779f) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #2 ren_start /home/user/ren/experiments/native-lang/c/core.c:92:10 (harness+0xe779f)
+    #3 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xdf0f0) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Thread T4 (tid=16184, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+  Thread T3 (tid=16183, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x606cf) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xdf305) (BuildId: e2d3a9c71321406f0cab020073b0c5ad09bd5b0c)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/c/sched.c:165:27 in steal_any
+==================
+ThreadSanitizer: reported 2 warnings
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=373654 inner_s=0.535254 wall_s=0.538679
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.538679
+# exit 66 after .571538356 s

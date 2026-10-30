@@ -1,0 +1,133 @@
+# machine cloud, 2026-10-30T16:26:06Z, plant P3, stage asanh-abi
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test
+ok   basic
+  FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE
+FAIL stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+
+=================================================================
+==29444==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 618 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde6600 in realloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf600) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce2b9e7 in th_journal /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:41:68
+
+Indirect leak of 65536 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde61e3 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf1e3) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce4265d in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x560e7ce4265d in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce4265d in mem.Allocator.allocBytesAligned__func_17 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce4265d in mem.Allocator.allocWithSizeAndAlignment__func_250 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34
+    #5 0x560e7ce4265d in mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89
+    #6 0x560e7ce4265d in mem.Allocator.alloc__func_385 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41
+    #7 0x560e7ce4265d in alloc.allocSlice__func_379 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23
+    #8 0x560e7ce4265d in core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:519:30
+    #9 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #10 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #11 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 16384 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde61e3 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf1e3) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce4288c in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x560e7ce4288c in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce4288c in mem.Allocator.allocBytesAligned__func_345 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce4288c in mem.Allocator.allocWithSizeAndAlignment__func_343 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34
+    #5 0x560e7ce4288c in mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89
+    #6 0x560e7ce4288c in mem.Allocator.alloc__func_384 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41
+    #7 0x560e7ce4288c in alloc.allocSlice__func_380 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23
+    #8 0x560e7ce4288c in core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:525:33
+    #9 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #10 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #11 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 2048 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde61e3 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf1e3) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce42983 in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x560e7ce42983 in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce42983 in mem.Allocator.allocBytesAligned__func_17 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce42983 in mem.Allocator.allocWithSizeAndAlignment__func_15 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34
+    #5 0x560e7ce42983 in mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89
+    #6 0x560e7ce42983 in mem.Allocator.alloc__func_77 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41
+    #7 0x560e7ce42983 in alloc.allocSlice__func_76 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23
+    #8 0x560e7ce42983 in dq.Deque(*slice.struct_ren_task).newRing /home/user/ren/experiments/native-lang/zig/src/dq.zig:44:54
+    #9 0x560e7ce42983 in dq.Deque(*slice.struct_ren_task).init /home/user/ren/experiments/native-lang/zig/src/dq.zig:50:41
+    #10 0x560e7ce42983 in core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:530:18
+    #11 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #12 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #13 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 768 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde6ccb in posix_memalign (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcfccb) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce4261d in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:239:37
+    #2 0x560e7ce4261d in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce4261d in mem.Allocator.allocBytesAligned__func_20 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce4261d in mem.Allocator.allocWithSizeAndAlignment__func_387 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:311:34
+    #5 0x560e7ce4261d in mem.Allocator.allocAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:299:89
+    #6 0x560e7ce4261d in mem.Allocator.alloc__func_386 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:223:41
+    #7 0x560e7ce4261d in alloc.allocSlice__func_378 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:32:23
+    #8 0x560e7ce4261d in core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:518:26
+    #9 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #10 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #11 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 384 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde6ccb in posix_memalign (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcfccb) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce4255a in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:239:37
+    #2 0x560e7ce4255a in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce4255a in mem.Allocator.allocBytesAligned__func_20 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce4255a in mem.Allocator.createAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:195:79
+    #5 0x560e7ce4255a in mem.Allocator.create__func_381 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:171:39
+    #6 0x560e7ce4255a in alloc.create__func_377 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:26:24
+    #7 0x560e7ce4255a in core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:507:23
+    #8 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #9 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #10 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 136 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde61e3 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf1e3) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce418af in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x560e7ce418af in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce418af in mem.Allocator.allocBytesAligned__func_17 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce418af in mem.Allocator.createAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:195:79
+    #5 0x560e7ce418af in mem.Allocator.create__func_360 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:171:39
+    #6 0x560e7ce418af in alloc.create__func_359 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:26:24
+    #7 0x560e7ce418af in core.world /home/user/ren/experiments/native-lang/zig/src/core.zig:772:23
+    #8 0x560e7ce2c2d1 in caller_resume /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:95:19
+    #9 0x560e7ce3a7bb in core.runTask /home/user/ren/experiments/native-lang/zig/src/core.zig:373:28
+    #10 0x560e7ce3a7bb in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:580:20
+    #11 0x560e7ce25f66 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:213:3
+    #12 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 128 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde63cd in calloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf3cd) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce3272d in ren_task_new /home/user/ren/experiments/native-lang/harness/rt.c:51:29
+    #2 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #3 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #4 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+Indirect leak of 32 byte(s) in 1 object(s) allocated from:
+    #0 0x560e7cde61e3 in malloc (/home/user/ren/experiments/native-lang/bin/zig-asanh-P3/abi_test+0xcf1e3) (BuildId: 1682e42059d613603b250fbee9d6535de4cddef6)
+    #1 0x560e7ce4292b in heap.c_allocator_impl.alloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap.zig:230:37
+    #2 0x560e7ce4292b in mem.Allocator.rawAlloc /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:147:26
+    #3 0x560e7ce4292b in mem.Allocator.allocBytesAligned__func_17 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:325:35
+    #4 0x560e7ce4292b in mem.Allocator.createAdvancedWithRetAddr /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:195:79
+    #5 0x560e7ce4292b in mem.Allocator.create__func_78 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:171:39
+    #6 0x560e7ce4292b in alloc.create__func_75 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:26:24
+    #7 0x560e7ce4292b in dq.Deque(*slice.struct_ren_task).newRing /home/user/ren/experiments/native-lang/zig/src/dq.zig:43:31
+    #8 0x560e7ce4292b in dq.Deque(*slice.struct_ren_task).init /home/user/ren/experiments/native-lang/zig/src/dq.zig:50:41
+    #9 0x560e7ce4292b in core.start /home/user/ren/experiments/native-lang/zig/src/core.zig:530:18
+    #10 0x560e7ce25e12 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+    #11 0x560e7ce25e12 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+    #12 0x560e7ce249a3 in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+
+SUMMARY: AddressSanitizer: 86034 byte(s) leaked in 9 allocation(s).
+# exit 1 after .051888680 s

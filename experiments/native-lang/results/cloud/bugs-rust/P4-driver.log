@@ -1,0 +1,22 @@
+build-release          rc=0      8.4s  
+build-debug            rc=0      7.0s  
+build-release-nostd    rc=0      7.9s  
+build-tsan             rc=0     36.5s  
+build-asanh            rc=0      8.8s  
+clippy                 rc=0      1.8s  
+cargo-test             rc=101    3.6s  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+tests-release          rc=1      9.3s  FAIL abi_test (exit 134)
+tests-debug            rc=1     15.4s  FAIL abi_test (exit 134)
+tests-nostd            rc=1      8.5s  FAIL abi_test (exit 134)
+tests-asanh            rc=1     16.3s  FAIL abi_test (exit 1)
+tests-tsan             rc=1     38.8s  FAIL abi_test (exit 66)
+tsan-w1x4              rc=0      0.3s  
+tsan-deque             rc=0      4.1s  
+deque-stress-x50       rc=0     40.7s  
+deque-stress-debug-x20 rc=0     19.1s  
+loom                   rc=0     20.6s  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+miri                   rc=1     11.0s  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+fuzz-run-release       rc=134    0.0s  
+fuzz-run-debug         rc=134    0.0s  
+fuzz-regress           rc=134    0.0s  
+libfuzzer-asanh        rc=1      0.1s  ==4573==ERROR: AddressSanitizer: attempting double-free on 0x50d000042cb0 in thread T0:

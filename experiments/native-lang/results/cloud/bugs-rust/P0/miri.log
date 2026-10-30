@@ -1,0 +1,218 @@
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.17s
+     Running unittests src/lib.rs (rust/target/miri/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/d4dc11b142504f0a/out/ren_core-d4dc11b142504f0a)
+
+running 2 tests
+test deque::tests::empty_and_lifo ... ok
+test deque::tests::threads ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+     Running tests/loom_deque.rs (rust/target/miri/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/091483ace9163b00/out/loom_deque-091483ace9163b00)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/optable.rs (rust/target/miri/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/9f1a6859638b8326/out/optable-9f1a6859638b8326)
+
+running 6 tests
+test basic ... warning: integer-to-pointer cast
+ --> core/src/sched.rs:289:12
+  |
+  = note: integer-to-pointer cast
+  |
+  = help: this program is using integer-to-pointer casts or (equivalently) `ptr::with_exposed_provenance`, which means that Miri might miss pointer bugs in this program
+  = help: see https://doc.rust-lang.org/nightly/std/ptr/fn.with_exposed_provenance.html for more details on that operation
+  = help: to ensure that Miri does not miss bugs in your program, use Strict Provenance APIs (https://doc.rust-lang.org/nightly/std/ptr/index.html#strict-provenance, https://crates.io/crates/sptr) instead
+  = help: you can then set `MIRIFLAGS=-Zmiri-strict-provenance` to ensure you are not relying on `with_exposed_provenance` semantics
+  = help: alternatively, `MIRIFLAGS=-Zmiri-permissive-provenance` disables this warning
+  = note: this is on thread `basic`
+  = note: stack backtrace:
+          0: ren_core::sched::Core::inj_pop
+              at core/src/sched.rs:289:13: 289:65
+          1: ren_core::sched::Core::run
+              at core/src/sched.rs:681:21: 681:35
+          2: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          3: basic
+              at core/tests/optable.rs:275:20: 275:37
+          4: basic::{closure#0}
+              at core/tests/optable.rs:271:11: 271:11
+
+warning: integer-to-pointer cast
+ --> core/src/sched.rs:447:44
+  |
+  = note: integer-to-pointer cast
+  |
+  = note: this is on thread `basic`
+  = note: stack backtrace:
+          0: ren_core::sched::Core::deliver
+              at core/src/sched.rs:447:45: 447:77
+          1: ren_core::sched::Core::drain_inbox
+              at core/src/sched.rs:478:13: 478:32
+          2: ren_core::sched::Core::run
+              at core/src/sched.rs:658:9: 658:28
+          3: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          4: basic
+              at core/tests/optable.rs:282:20: 282:37
+          5: basic::{closure#0}
+              at core/tests/optable.rs:271:11: 271:11
+
+warning: integer-to-pointer cast
+ --> core/src/sched.rs:677:20
+  |
+  = note: integer-to-pointer cast
+  |
+  = note: this is on thread `basic`
+  = note: stack backtrace:
+          0: ren_core::sched::Core::run
+              at core/src/sched.rs:677:21: 677:43
+          1: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          2: basic
+              at core/tests/optable.rs:282:20: 282:37
+          3: basic::{closure#0}
+              at core/tests/optable.rs:271:11: 271:11
+
+ok
+test full_then_slot_frees ... warning: integer-to-pointer cast
+   --> core/tests/optable.rs:177:21
+    |
+177 |         ren_rc_drop((*s).root as *mut ren_obj);
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `full_then_slot_`
+    = note: stack backtrace:
+            0: caller_fin
+                at core/tests/optable.rs:177:21: 177:46
+            1: ren_obj_free
+                at core/tests/optable.rs:27:13: 27:17
+            2: ren_rc_drop
+                at core/tests/optable.rs:52:9: 52:24
+            3: ren_core::sched::Core::task_done
+                at core/src/sched.rs:373:9: 373:44
+            4: ren_core::sched::Core::run_task
+                at core/src/sched.rs:393:17: 393:37
+            5: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            6: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            7: full_then_slot_frees
+                at core/tests/optable.rs:374:9: 374:26
+            8: full_then_slot_frees::{closure#0}
+                at core/tests/optable.rs:366:26: 366:26
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:170:24
+    |
+170 |         ren_notify(cx, (*s).root as *mut ren_task);
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `full_then_slot_`
+    = note: stack backtrace:
+            0: caller_resume
+                at core/tests/optable.rs:170:24: 170:50
+            1: ren_core::sched::Core::run_task
+                at core/src/sched.rs:387:17: 387:46
+            2: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            3: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            4: full_then_slot_frees
+                at core/tests/optable.rs:380:16: 380:33
+            5: full_then_slot_frees::{closure#0}
+                at core/tests/optable.rs:366:26: 366:26
+
+ok
+test retract ... ok
+test stale_after_reuse ... ok
+test stop_cancels_pulled ... ok
+test threads_reply_from_elsewhere ... warning: integer-to-pointer cast
+   --> core/tests/optable.rs:407:29
+    |
+407 |                     let c = c as *mut ren_core;
+    |                             ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-7`
+note: the current function got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/src/sched.rs:435:23
+    |
+    = note: integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-8`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::steal_any
+                at core/src/sched.rs:435:24: 435:42
+            1: ren_core::sched::Core::run
+                at core/src/sched.rs:684:21: 684:38
+            2: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            3: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:426:34
+    |
+426 |                 assert_eq!(reply(c as *mut ren_core, id, REN_DONE, 9), ACC);
+    |                                  ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-9`
+note: the current function got called indirectly due to this code
+   --> core/tests/optable.rs:424:23
+    |
+424 |           let replier = std::thread::spawn(move || {
+    |  _______________________^
+425 | |             for id in rx {
+426 | |                 assert_eq!(reply(c as *mut ren_core, id, REN_DONE, 9), ACC);
+427 | |             }
+428 | |         });
+    | |__________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:436:18
+    |
+436 |         ren_free(c as *mut ren_core);
+    |                  ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `threads_reply_f`
+    = note: stack backtrace:
+            0: threads_reply_from_elsewhere
+                at core/tests/optable.rs:436:18: 436:36
+            1: threads_reply_from_elsewhere::{closure#0}
+                at core/tests/optable.rs:396:34: 396:34
+
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.40s
+
+warning: 9 warnings emitted
+
+   Doc-tests ren_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

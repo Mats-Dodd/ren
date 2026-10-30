@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:04:30Z, plant P0, stage build-release-fast
+# $ /home/user/ren/experiments/native-lang/build.sh zig release-fast
+== zig-release-fast: /home/user/ren/experiments/native-lang/zig/build.sh release-fast /home/user/ren/experiments/native-lang/build/zig-release-fast
+built zig-release-fast: language 4.39s, harness link 2.76s
+# exit 0 after 7.172627362 s

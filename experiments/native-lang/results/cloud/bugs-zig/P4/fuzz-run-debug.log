@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:31:26Z, plant P4, stage fuzz-run-debug
+# $ timeout 300 /home/user/ren/experiments/native-lang/bin/zig-debug-P4/fuzz_run --random 5000 7
+ren zig panic: index out of bounds: index 1431655765, len 16
+# exit 134 after .017691349 s

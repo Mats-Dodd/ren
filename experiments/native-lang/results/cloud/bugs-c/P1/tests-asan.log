@@ -1,0 +1,84 @@
+# machine cloud, 2026-10-30T14:15:47Z, plant P1, stage tests-asan
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=60 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/c-asan-P1
+== layout (c-asan-P1)
+PASS layout_check
+== abi (c-asan-P1)
+PASS abi_test
+== deque (c-asan-P1)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (c-asan-P1)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (c-asan-P1)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+PASS t_cancel epoll x4
+PASS t_block stop epoll x4
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+PASS t_cancel epoll x8
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+PASS t_cancel uring x4
+PASS t_block stop uring x4
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+PASS t_cancel uring x8
+PASS t_block stop uring x8
+PASS t_block kill uring x8
+== replay (c-asan-P1)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (c-asan-P1)
+PASS fuzz_run random 300
+PASS libFuzzer 20000 runs
+== summary c-asan-P1: 73 passed, 0 failed
+# exit 0 after 11.076054800 s

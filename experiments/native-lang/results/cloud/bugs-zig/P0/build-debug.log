@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:04:58Z, plant P0, stage build-debug
+# $ /home/user/ren/experiments/native-lang/build.sh zig debug
+== zig-debug: /home/user/ren/experiments/native-lang/zig/build.sh debug /home/user/ren/experiments/native-lang/build/zig-debug
+built zig-debug: language 0.63s, harness link 2.04s
+# exit 0 after 2.702556911 s

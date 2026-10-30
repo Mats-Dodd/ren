@@ -1,0 +1,9 @@
+# machine cloud, 2026-10-30T16:33:51Z, plant P5, stage w1x4-release-safe
+# $ bash -c for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-release-safe-P5/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=143827 inner_s=1.390556 wall_s=1.391580
+metric: harness workload=w1 driver=epoll workers=4 wall_s=1.391580
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=148543 inner_s=1.346414 wall_s=1.347696
+metric: harness workload=w1 driver=uring workers=4 wall_s=1.347696
+# exit 0 after 2.755943360 s

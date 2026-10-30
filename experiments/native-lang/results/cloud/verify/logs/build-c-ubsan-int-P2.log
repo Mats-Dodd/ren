@@ -1,0 +1,7 @@
+# machine: cloud -- VERIFY re-run log (build-c-ubsan-int-P2.log), 2026-10-30
+== c-ubsan-int-P2: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/build.sh ubsan-int /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/c-ubsan-int-P2
+/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/dq.c:47:13: warning: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+1 warning generated.
+built c-ubsan-int-P2: language 2.35s, harness link 4.63s

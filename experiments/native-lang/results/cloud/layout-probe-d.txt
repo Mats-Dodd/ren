@@ -1,0 +1,9 @@
+# layout probe edit d, machine cloud, 2026-10-30 (Measure step), all three languages
+# edit d: in a COPY of slice.h (build/probe-d/harness/slice.h), ren_io_result.res int64_t -> uint64_t
+#         (same size and offsets; only the signedness changes; negative errno results now wrap)
+c    (release): BUILDS (core compiled with -Werror: no diagnostic in the core; the harness gets 3 -Wsign-compare
+                warnings) AND PASSES layout_check, abi_test, w3, t_cancel, t_pipe, t_tcp(uring) -> silent
+rust (release): FAILS THE BUILD: rustc E0308 mismatched types (u64 vs i64) in the core (bindgen regenerated res: u64)
+zig  (release-fast): FAILS THE BUILD: "expected type 'i64', found 'u64'", "type 'u64' cannot represent integer value '-125'"
+                (core.zig:235, 611, 757; drv.zig:131, 160; replay.zig:205)
+logs: build/probe-d/build-{c,rust,zig}.log

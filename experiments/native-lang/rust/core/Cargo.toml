@@ -1,0 +1,29 @@
+[package]
+name = "ren_core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["std"]
+std = []
+# tsan profile only: see deque.rs PUSH_BOTTOM
+tsan = []
+plant1 = []
+plant2 = []
+plant3 = []
+plant4 = []
+plant5 = []
+
+[dependencies]
+libc = { version = "0.2", default-features = false }
+
+# test-only: present only under RUSTFLAGS="--cfg loom" (tests/loom_deque.rs)
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

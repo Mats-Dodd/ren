@@ -1,0 +1,33 @@
+# machine cloud, 2026-10-30T14:36:21Z, plant P3, stage tsan-w1x4
+# $ bash -c for i in 1 2 3 4 5; do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/c-tsan-P3/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done; done
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=605744 inner_s=0.330172 wall_s=0.333091
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.333091
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=668783 inner_s=0.299051 wall_s=0.302599
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.302599
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=633886 inner_s=0.315514 wall_s=0.318710
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.318710
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=652304 inner_s=0.306605 wall_s=0.310232
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.310232
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=663921 inner_s=0.301241 wall_s=0.304338
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.304338
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=627552 inner_s=0.318699 wall_s=0.321896
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.321896
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=578048 inner_s=0.345992 wall_s=0.350423
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.350423
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=710081 inner_s=0.281658 wall_s=0.285379
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.285379
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=599242 inner_s=0.333755 wall_s=0.338740
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.338740
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=551724 inner_s=0.362500 wall_s=0.365865
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.365865
+# exit 0 after 3.421147450 s

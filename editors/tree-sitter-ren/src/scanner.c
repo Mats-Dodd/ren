@@ -26,10 +26,22 @@
 // it finds the same next line, and closes another block, or separates it
 // with a NEWLINE. The grammar asks for at most one NEWLINE in a row, so
 // nothing repeats.
+//
+// Strings whose ends need counting are the scanner's too (strings.md,
+// "Literals"): a raw string, `#"..."#`, which ends at a quote with as
+// many `#`s after it and whose escapes are `\` and as many `#`s, `\#n`
+// and the hole `\#{x}`; a multi-line one, `"""`, which ends at a `"""`
+// that starts its own line, after its indentation; and either, or a plain
+// one, after `b`, a `Bytes` literal. A string's start pushes what it is
+// on a stack of its own, since a hole can hold another string, and its
+// end pops it. Its text is one token to the next escape, hole or end, so
+// no layout token is ever made inside it. Which lines are indented too
+// little is the compiler's to say.
 
 #include "tree_sitter/array.h"
 #include "tree_sitter/parser.h"
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -46,7 +58,18 @@ enum TokenType {
   RBRACE,
   ARROW_BLOCK,
   ERROR_SENTINEL,
+  STRING_START,
+  BYTES_START,
+  STRING_CONTENT,
+  STRING_ESCAPE,
+  HOLE_START,
+  STRING_END,
 };
+
+// a string on the string stack: its `#`s, and whether it's `"""` and `b`
+#define STR_HASHES 63
+#define STR_MULTI 64
+#define STR_BYTES 128
 
 // on the stack, an open bracket rather than a block's indentation
 #define BRACKET UINT16_MAX
@@ -56,6 +79,8 @@ typedef struct {
   // indentation, and BRACKET for each open bracket; the file's own
   // block, indented 0, is implied
   Array(uint16_t) stack;
+  // the strings open, innermost last, each its `#`s and flags (STR_*)
+  Array(uint8_t) strings;
 } Scanner;
 
 // How far the innermost block is indented.
@@ -192,12 +217,181 @@ static bool arrow_block(Scanner *s, TSLexer *lexer) {
   return true;
 }
 
+// Are the next [n] characters `#`? Moves past them.
+static bool hashes(TSLexer *lexer, unsigned n) {
+  for (unsigned i = 0; i < n; i++) {
+    if (lexer->lookahead != '#') return false;
+    advance(lexer);
+  }
+  return true;
+}
+
+// A string's start the grammar lexes no other way: `#`s and a quote, or
+// `"""`, with a `b` before either, or before a plain quote.
+static bool string_start(Scanner *s, TSLexer *lexer, const bool *valid) {
+  bool bytes = false;
+  if (lexer->lookahead == 'b') {
+    advance(lexer);
+    if (lexer->lookahead != '"' && lexer->lookahead != '#') return false;
+    bytes = true;
+  }
+  unsigned n = 0;
+  while (lexer->lookahead == '#') {
+    advance(lexer);
+    n++;
+  }
+  if (lexer->lookahead != '"' || n > STR_HASHES) return false;
+  advance(lexer);
+  lexer->mark_end(lexer);
+  // `""` is an empty string, unless a third quote makes it `"""`
+  bool multi = false;
+  if (lexer->lookahead == '"') {
+    advance(lexer);
+    if (lexer->lookahead == '"') {
+      advance(lexer);
+      lexer->mark_end(lexer);
+      multi = true;
+    }
+  }
+  if (!bytes && !multi && n == 0) return false;
+  enum TokenType tok = bytes ? BYTES_START : STRING_START;
+  if (!valid[tok] || s->strings.size >= UINT8_MAX) return false;
+  array_push(&s->strings, (uint8_t)(n | (multi ? STR_MULTI : 0) |
+                                    (bytes ? STR_BYTES : 0)));
+  lexer->result_symbol = tok;
+  return true;
+}
+
+// The innermost string's text, up to its next escape, hole or end; or
+// that escape, hole or end.
+static bool string_body(Scanner *s, TSLexer *lexer) {
+  uint8_t top = *array_back(&s->strings);
+  unsigned n = top & STR_HASHES;
+  bool multi = top & STR_MULTI, bytes = top & STR_BYTES;
+  bool text = false;
+  // at a line's start in a `"""`, where its closing `"""` may be
+  bool line_start = multi && lexer->get_column(lexer) == 0;
+  for (;;) {
+    if (lexer->eof(lexer)) {
+      lexer->result_symbol = STRING_CONTENT;
+      return text;
+    }
+    if (line_start) {
+      line_start = false;
+      while (lexer->lookahead == ' ' || lexer->lookahead == '\t') advance(lexer);
+      if (lexer->lookahead == '"') {
+        // the text before the indentation first, then the end
+        if (text) {
+          lexer->result_symbol = STRING_CONTENT;
+          return true;
+        }
+        advance(lexer);
+        if (lexer->lookahead == '"') {
+          advance(lexer);
+          if (lexer->lookahead == '"') {
+            advance(lexer);
+            if (hashes(lexer, n)) {
+              lexer->mark_end(lexer);
+              array_pop(&s->strings);
+              lexer->result_symbol = STRING_END;
+              return true;
+            }
+          }
+        }
+      }
+      lexer->mark_end(lexer);
+      text = true;
+      continue;
+    }
+    int32_t c = lexer->lookahead;
+    if (c == '\\') {
+      advance(lexer);
+      if (!hashes(lexer, n)) {
+        // a `\` without its `#`s is text in a raw string
+        lexer->mark_end(lexer);
+        text = true;
+        continue;
+      }
+      if (text) {
+        lexer->result_symbol = STRING_CONTENT;
+        return true;
+      }
+      if (lexer->lookahead == '{' && !bytes) {
+        advance(lexer);
+        lexer->mark_end(lexer);
+        // a hole is code, in braces of its own, as a bracket is
+        if (s->stack.size < UINT16_MAX) array_push(&s->stack, BRACKET);
+        lexer->result_symbol = HOLE_START;
+        return true;
+      }
+      if (lexer->lookahead == 'u') {
+        advance(lexer);
+        if (lexer->lookahead == '{') {
+          advance(lexer);
+          while (isxdigit(lexer->lookahead)) advance(lexer);
+          if (lexer->lookahead == '}') advance(lexer);
+        }
+      } else if (lexer->lookahead == 'x') {
+        advance(lexer);
+        for (int i = 0; i < 2 && isxdigit(lexer->lookahead); i++) advance(lexer);
+      } else if (lexer->lookahead == '\r') {
+        // `\` at a line's end joins it to the next
+        advance(lexer);
+        if (lexer->lookahead == '\n') advance(lexer);
+      } else if (lexer->lookahead == '\n') {
+        advance(lexer);
+      } else if (!lexer->eof(lexer)) {
+        advance(lexer);
+      }
+      lexer->mark_end(lexer);
+      lexer->result_symbol = STRING_ESCAPE;
+      return true;
+    }
+    if (c == '"' && !multi) {
+      if (text) {
+        lexer->result_symbol = STRING_CONTENT;
+        return true;
+      }
+      advance(lexer);
+      if (hashes(lexer, n)) {
+        lexer->mark_end(lexer);
+        array_pop(&s->strings);
+        lexer->result_symbol = STRING_END;
+        return true;
+      }
+      lexer->mark_end(lexer);
+      text = true;
+      continue;
+    }
+    if (c == '\n') {
+      // a one-line string isn't closed
+      if (!multi) {
+        lexer->result_symbol = STRING_CONTENT;
+        return text;
+      }
+      advance(lexer);
+      lexer->mark_end(lexer);
+      text = true;
+      line_start = true;
+      continue;
+    }
+    advance(lexer);
+    lexer->mark_end(lexer);
+    text = true;
+  }
+}
+
 bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
                                            const bool *valid) {
   Scanner *s = payload;
   bool recovering = valid[ERROR_SENTINEL];
 
   lexer->mark_end(lexer);
+
+  // inside a string, where nothing is skipped
+  if (s->strings.size > 0 && !recovering &&
+      (valid[STRING_CONTENT] || valid[STRING_END]))
+    return string_body(s, lexer);
 
   // Skip to the next token, noting whether a line ended on the way, and
   // how far that token is indented if so.
@@ -286,25 +480,35 @@ bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
   if (lexer->lookahead == '=' && valid[ARROW_BLOCK] && !recovering &&
       !in_block(s))
     return arrow_block(s, lexer);
+  if ((lexer->lookahead == '"' || lexer->lookahead == '#' ||
+       lexer->lookahead == 'b') &&
+      (valid[STRING_START] || valid[BYTES_START]) && !recovering)
+    return string_start(s, lexer, valid);
   return bracket(s, lexer, valid);
 }
 
 void *tree_sitter_ren_external_scanner_create(void) {
   Scanner *s = ts_calloc(1, sizeof(Scanner));
   array_init(&s->stack);
+  array_init(&s->strings);
   return s;
 }
 
 void tree_sitter_ren_external_scanner_destroy(void *payload) {
   Scanner *s = payload;
   array_delete(&s->stack);
+  array_delete(&s->strings);
   ts_free(s);
 }
 
 unsigned tree_sitter_ren_external_scanner_serialize(void *payload,
                                                     char *buffer) {
   Scanner *s = payload;
+  // the strings first, their count then each, then the blocks and
+  // brackets
   unsigned n = 0;
+  buffer[n++] = (char)s->strings.size;
+  for (uint32_t i = 0; i < s->strings.size; i++) buffer[n++] = (char)s->strings.contents[i];
   for (uint32_t i = 0; i < s->stack.size &&
                        n + sizeof(uint16_t) <= TREE_SITTER_SERIALIZATION_BUFFER_SIZE;
        i++) {
@@ -319,7 +523,13 @@ void tree_sitter_ren_external_scanner_deserialize(void *payload,
                                                   unsigned length) {
   Scanner *s = payload;
   array_clear(&s->stack);
+  array_clear(&s->strings);
   unsigned n = 0;
+  if (length > 0) {
+    unsigned k = (uint8_t)buffer[n++];
+    for (unsigned i = 0; i < k && n < length; i++)
+      array_push(&s->strings, (uint8_t)buffer[n++]);
+  }
   while (n + sizeof(uint16_t) <= length) {
     uint16_t top;
     memcpy(&top, &buffer[n], sizeof(uint16_t));

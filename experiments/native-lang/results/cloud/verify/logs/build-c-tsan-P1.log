@@ -1,0 +1,3 @@
+# machine: cloud -- VERIFY re-run log (build-c-tsan-P1.log), 2026-10-30
+== c-tsan-P1: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/build.sh tsan /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/c-tsan-P1
+built c-tsan-P1: language 1.85s, harness link 2.98s

@@ -1,0 +1,16 @@
+# The Rust entry of the native-lang experiment (SPEC.md). Two crates:
+#   core/  ren_core: deque, core, epoll + io_uring drivers, replay/fuzz, layout table
+#   hot/   ren_hot:  the W5 hot path (SPEC §E)
+# Built by rust/build.sh <profile> <outdir>; never by hand-mirrored layouts.
+[workspace]
+members = ["core", "hot"]
+resolver = "2"
+
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"
+codegen-units = 1
+
+[profile.dev]
+panic = "abort"
+overflow-checks = true

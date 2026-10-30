@@ -1,0 +1,69 @@
+# machine cloud, 2026-10-30T16:31:29Z, plant P4, stage libfuzzer-release-safe
+# $ bash -c cd '/home/user/ren/experiments/native-lang/build/bugs-zig-fuzz/P4' && '/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz' -max_total_time=120 -timeout=10 -seed=1 -max_len=4096 -print_final_stats=1 corpus
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x55e5daad8b90, 0x55e5daad9ab7), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x55e5daad9ab8,0x55e5daae8d28), 
+INFO:        0 files found in corpus
+INFO: A corpus is not provided, starting from an empty corpus
+#2	INITED cov: 99 ft: 100 corp: 1/1b exec/s: 0 rss: 34Mb
+ren zig panic: double free of [addr: 5290003eb8e8, len: 136 (0x88) align: 8]
+alloc: 
+(empty stack trace)
+
+first free: 
+(empty stack trace)
+
+second free:
+==2004== ERROR: libFuzzer: deadly signal
+    #0 0x55e5da969f05 in __sanitizer_print_stack_trace (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x13ef05) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #1 0x55e5da8c3a1c in fuzzer::PrintStackTrace() (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x98a1c) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #2 0x55e5da8a9aa7 in fuzzer::Fuzzer::CrashCallback() (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x7eaa7) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #3 0x7f1f9c24532f  (/lib/x86_64-linux-gnu/libc.so.6+0x4532f) (BuildId: a4a7992a8e66555c8141ab2a08a8465ff6e0ea65)
+    #4 0x7f1f9c29ec0b in __pthread_kill_implementation nptl/pthread_kill.c:43:17
+    #5 0x7f1f9c29ec0b in __pthread_kill_internal nptl/pthread_kill.c:78:10
+    #6 0x7f1f9c29ec0b in pthread_kill nptl/pthread_kill.c:89:10
+    #7 0x7f1f9c24527d in raise signal/../sysdeps/posix/raise.c:26:13
+    #8 0x7f1f9c2288fe in abort stdlib/abort.c:79:7
+    #9 0x55e5da888b9d in root.renPanic /home/user/ren/experiments/native-lang/zig/src/root.zig:24:16
+    #10 0x55e5da88ce07 in debug.panicExtra__func_667 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/debug.zig:485:27
+    #11 0x55e5da88cc68 in debug.panic__func_491 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/debug.zig:462:15
+    #12 0x55e5da9fa4c3 in heap.SafeAllocator.AllocFooter.startModify /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap/SafeAllocator.zig:518:30
+    #13 0x55e5daa195da in heap.SafeAllocator.free /opt/zig/zig-x86_64-linux-0.17.0/lib/std/heap/SafeAllocator.zig:1121:18
+    #14 0x55e5daa2616a in mem.Allocator.rawFree /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:165:25
+    #15 0x55e5daa2616a in mem.Allocator.destroy__func_763 /opt/zig/zig-x86_64-linux-0.17.0/lib/std/mem/Allocator.zig:207:17
+    #16 0x55e5daa2616a in alloc.destroy__func_762 /home/user/ren/experiments/native-lang/zig/src/alloc.zig:29:18
+    #17 0x55e5daa2616a in core.deliver /home/user/ren/experiments/native-lang/zig/src/core.zig:455:14
+    #18 0x55e5daa2616a in core.drainInbox /home/user/ren/experiments/native-lang/zig/src/core.zig:464:16
+    #19 0x55e5daa24fb1 in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:564:19
+    #20 0x55e5daa23f5b in replay.Fz.runW /home/user/ren/experiments/native-lang/zig/src/replay.zig:220:27
+    #21 0x55e5daa21895 in replay.fuzz /home/user/ren/experiments/native-lang/zig/src/replay.zig:301:23
+    #22 0x55e5daa21895 in drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:307:88
+    #23 0x55e5da99db25 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #24 0x55e5da99d747 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #25 0x55e5da8ab074 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x80074) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #26 0x55e5da8aa769 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool, bool*) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x7f769) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #27 0x55e5da8abf55 in fuzzer::Fuzzer::MutateAndTestOne() (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x80f55) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #28 0x55e5da8acab5 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x81ab5) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #29 0x55e5da899d8f in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x6ed8f) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #30 0x55e5da8c4416 in main (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x99416) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+    #31 0x7f1f9c22a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #32 0x7f1f9c22a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #33 0x55e5da88ed74 in _start (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P4/fuzz+0x63d74) (BuildId: 31798b1f9844088c9739e0423b011a2d4b568d85)
+
+NOTE: libFuzzer has rudimentary signal handlers.
+      Combine libFuzzer with AddressSanitizer or similar for better crash reports.
+SUMMARY: libFuzzer: deadly signal
+MS: 4 ChangeBinInt-ChangeBit-CopyPart-InsertByte-; base unit: adc83b19e793491b1c6ea0fd8b46cd9f32e592fc
+0x21,0xed,0xed,
+!\355\355
+artifact_prefix='./'; Test unit written to ./crash-38df24fec077f39add4a6feac01f4091f78c964b
+Base64: Ie3t
+stat::number_of_executed_units: 201
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              38
+# exit 77 after .137409703 s
+corpus
+crash-38df24fec077f39add4a6feac01f4091f78c964b

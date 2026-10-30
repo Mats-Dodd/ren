@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:54:16Z, plant P2u, stage abi-debug
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-debug-P2u/abi_test
+ren zig panic: integer overflow
+# exit 134 after .014778228 s

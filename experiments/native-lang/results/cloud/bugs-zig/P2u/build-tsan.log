@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:06:22Z, plant P2u, stage build-tsan
+# $ /home/user/ren/experiments/native-lang/build.sh zig tsan P2u
+== zig-tsan-P2u: /home/user/ren/experiments/native-lang/zig/build.sh tsan /home/user/ren/experiments/native-lang/build/zig-tsan-P2u
+built zig-tsan-P2u: language 3.64s, harness link 3.11s
+# exit 0 after 6.775973450 s

@@ -1,0 +1,228 @@
+================================================================================
+literals: `\r`, `\0` and `\u{...}` in a string and a character literal
+================================================================================
+
+fn f() = ("GET /\r\n\0", "\u{E9}\u{1F600}", ['\r', '\0', '\u{E9}'])
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (tuple_expression
+      (string
+        (escape_sequence)
+        (escape_sequence)
+        (escape_sequence))
+      (string
+        (escape_sequence)
+        (escape_sequence))
+      (array_expression
+        (character)
+        (character)
+        (character)))))
+
+================================================================================
+literals: bytes, `\x` among their escapes
+================================================================================
+
+fn f() = ([b"\r\n", b"\x00\xFF é", b""], b"ok".len())
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (tuple_expression
+      (array_expression
+        (bytes
+          (escape_sequence)
+          (escape_sequence))
+        (bytes
+          (escape_sequence)
+          (escape_sequence))
+        (bytes))
+      (method_call_expression
+        (bytes)
+        (identifier)
+        (arguments)))))
+
+================================================================================
+literals: a raw string, its escapes and holes with its `#`s
+================================================================================
+
+fn f() = (#"\d{3} "\n" \#n \#{who} \#{who=} \{who}"#, ##"a "# b \##{x}"##, #""#)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (tuple_expression
+      (string
+        (escape_sequence)
+        (interpolation
+          (interpolation_start)
+          (identifier)
+          (interpolation_end))
+        (interpolation
+          (interpolation_start)
+          (identifier)
+          (interpolation_end)))
+      (string
+        (interpolation
+          (interpolation_start)
+          (identifier)
+          (interpolation_end)))
+      (string))))
+
+================================================================================
+literals: a multi-line string, its holes and escapes, and a line joined
+================================================================================
+
+fn f(name: Str) -> Str =
+  let body = """
+    {
+      "name": "\{name}",
+      "tags": ["a", "b"] \
+    }\t
+    """
+  body
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (string
+          (interpolation
+            (interpolation_start)
+            (identifier)
+            (interpolation_end))
+          (escape_sequence)
+          (escape_sequence)))
+      (identifier))))
+
+================================================================================
+literals: a multi-line string is one token: no layout inside it, nor at its end
+================================================================================
+
+fn f() =
+  let s = """
+<p>
+  x
+</p>
+"""
+  print("""
+      a
+    """.byte_len())
+  s
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (string))
+      (call_expression
+        (identifier)
+        (arguments
+          (method_call_expression
+            (string)
+            (identifier)
+            (arguments))))
+      (identifier))))
+
+================================================================================
+literals: every form together, raw multi-line, raw bytes and multi-line bytes
+================================================================================
+
+fn f(who: Str) =
+  let doc = #"""
+    "\n" means newline. Ask \#{who}.
+    a """ is text
+    """#
+  let b = b#"\x41\#x41 \{x}"#
+  let req = b"""
+    GET / HTTP/1.1\r
+    \r
+    """
+  let raw = b#"""
+    \r\#r
+    """#
+  doc
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (let_statement
+        (identifier)
+        (string
+          (interpolation
+            (interpolation_start)
+            (identifier)
+            (interpolation_end))))
+      (let_statement
+        (identifier)
+        (bytes
+          (escape_sequence)))
+      (let_statement
+        (identifier)
+        (bytes
+          (escape_sequence)
+          (escape_sequence)))
+      (let_statement
+        (identifier)
+        (bytes
+          (escape_sequence)))
+      (identifier))))
+
+================================================================================
+literals: a raw string in a hole, and a hole in it
+================================================================================
+
+fn f() = "a \{#"b \#{"c"}"#} d"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (string
+      (interpolation
+        (interpolation_start)
+        (string
+          (interpolation
+            (interpolation_start)
+            (string)
+            (interpolation_end)))
+        (interpolation_end)))))

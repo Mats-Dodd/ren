@@ -1,0 +1,584 @@
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
+     Running unittests src/lib.rs (rust/target/miri-P3/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/3a257a4619831617/out/ren_core-3a257a4619831617)
+
+running 2 tests
+test deque::tests::empty_and_lifo ... ok
+test deque::tests::threads ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.72s
+
+     Running tests/loom_deque.rs (rust/target/miri-P3/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/425740d119007e28/out/loom_deque-425740d119007e28)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/optable.rs (rust/target/miri-P3/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/c06a611b108e75a7/out/optable-c06a611b108e75a7)
+
+running 6 tests
+test basic ... warning: integer-to-pointer cast
+ --> core/src/sched.rs:289:12
+  |
+  = note: integer-to-pointer cast
+  |
+  = help: this program is using integer-to-pointer casts or (equivalently) `ptr::with_exposed_provenance`, which means that Miri might miss pointer bugs in this program
+  = help: see https://doc.rust-lang.org/nightly/std/ptr/fn.with_exposed_provenance.html for more details on that operation
+  = help: to ensure that Miri does not miss bugs in your program, use Strict Provenance APIs (https://doc.rust-lang.org/nightly/std/ptr/index.html#strict-provenance, https://crates.io/crates/sptr) instead
+  = help: you can then set `MIRIFLAGS=-Zmiri-strict-provenance` to ensure you are not relying on `with_exposed_provenance` semantics
+  = help: alternatively, `MIRIFLAGS=-Zmiri-permissive-provenance` disables this warning
+  = note: this is on thread `basic`
+  = note: stack backtrace:
+          0: ren_core::sched::Core::inj_pop
+              at core/src/sched.rs:289:13: 289:65
+          1: ren_core::sched::Core::run
+              at core/src/sched.rs:681:21: 681:35
+          2: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          3: basic
+              at core/tests/optable.rs:275:20: 275:37
+          4: basic::{closure#0}
+              at core/tests/optable.rs:271:11: 271:11
+
+warning: integer-to-pointer cast
+ --> core/src/sched.rs:447:44
+  |
+  = note: integer-to-pointer cast
+  |
+  = note: this is on thread `basic`
+  = note: stack backtrace:
+          0: ren_core::sched::Core::deliver
+              at core/src/sched.rs:447:45: 447:77
+          1: ren_core::sched::Core::drain_inbox
+              at core/src/sched.rs:478:13: 478:32
+          2: ren_core::sched::Core::run
+              at core/src/sched.rs:658:9: 658:28
+          3: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          4: basic
+              at core/tests/optable.rs:282:20: 282:37
+          5: basic::{closure#0}
+              at core/tests/optable.rs:271:11: 271:11
+
+warning: integer-to-pointer cast
+ --> core/src/sched.rs:677:20
+  |
+  = note: integer-to-pointer cast
+  |
+  = note: this is on thread `basic`
+  = note: stack backtrace:
+          0: ren_core::sched::Core::run
+              at core/src/sched.rs:677:21: 677:43
+          1: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          2: basic
+              at core/tests/optable.rs:282:20: 282:37
+          3: basic::{closure#0}
+              at core/tests/optable.rs:271:11: 271:11
+
+ok
+test full_then_slot_frees ... warning: integer-to-pointer cast
+   --> core/tests/optable.rs:177:21
+    |
+177 |         ren_rc_drop((*s).root as *mut ren_obj);
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `full_then_slot_`
+    = note: stack backtrace:
+            0: caller_fin
+                at core/tests/optable.rs:177:21: 177:46
+            1: ren_obj_free
+                at core/tests/optable.rs:27:13: 27:17
+            2: ren_rc_drop
+                at core/tests/optable.rs:52:9: 52:24
+            3: ren_core::sched::Core::task_done
+                at core/src/sched.rs:373:9: 373:44
+            4: ren_core::sched::Core::run_task
+                at core/src/sched.rs:393:17: 393:37
+            5: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            6: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            7: full_then_slot_frees
+                at core/tests/optable.rs:374:9: 374:26
+            8: full_then_slot_frees::{closure#0}
+                at core/tests/optable.rs:366:26: 366:26
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:170:24
+    |
+170 |         ren_notify(cx, (*s).root as *mut ren_task);
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `full_then_slot_`
+    = note: stack backtrace:
+            0: caller_resume
+                at core/tests/optable.rs:170:24: 170:50
+            1: ren_core::sched::Core::run_task
+                at core/src/sched.rs:387:17: 387:46
+            2: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            3: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            4: full_then_slot_frees
+                at core/tests/optable.rs:380:16: 380:33
+            5: full_then_slot_frees::{closure#0}
+                at core/tests/optable.rs:366:26: 366:26
+
+ok
+test retract ... ok
+test stale_after_reuse ... FAILED
+test stop_cancels_pulled ... ok
+test threads_reply_from_elsewhere ... warning: integer-to-pointer cast
+   --> core/tests/optable.rs:407:29
+    |
+407 |                     let c = c as *mut ren_core;
+    |                             ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-7`
+note: the current function got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/src/sched.rs:435:23
+    |
+    = note: integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-8`
+    = note: stack backtrace:
+            0: ren_core::sched::Core::steal_any
+                at core/src/sched.rs:435:24: 435:42
+            1: ren_core::sched::Core::run
+                at core/src/sched.rs:684:21: 684:38
+            2: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            3: threads_reply_from_elsewhere::{closure#0}::{closure#0}
+                at core/tests/optable.rs:409:33: 409:49
+note: the last function in that backtrace got called indirectly due to this code
+   --> core/tests/optable.rs:406:17
+    |
+406 | /                 std::thread::spawn(move || {
+407 | |                     let c = c as *mut ren_core;
+408 | |                     loop {
+409 | |                         let r = ren_run(c, w, 8);
+...   |
+420 | |                 })
+    | |__________________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:426:34
+    |
+426 |                 assert_eq!(reply(c as *mut ren_core, id, REN_DONE, 9), ACC);
+    |                                  ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `unnamed-9`
+note: the current function got called indirectly due to this code
+   --> core/tests/optable.rs:424:23
+    |
+424 |           let replier = std::thread::spawn(move || {
+    |  _______________________^
+425 | |             for id in rx {
+426 | |                 assert_eq!(reply(c as *mut ren_core, id, REN_DONE, 9), ACC);
+427 | |             }
+428 | |         });
+    | |__________^
+
+warning: integer-to-pointer cast
+   --> core/tests/optable.rs:436:18
+    |
+436 |         ren_free(c as *mut ren_core);
+    |                  ^^^^^^^^^^^^^^^^^^ integer-to-pointer cast
+    |
+    = note: this is on thread `threads_reply_f`
+    = note: stack backtrace:
+            0: threads_reply_from_elsewhere
+                at core/tests/optable.rs:436:18: 436:36
+            1: threads_reply_from_elsewhere::{closure#0}
+                at core/tests/optable.rs:396:34: 396:34
+
+ok
+
+failures:
+
+---- stale_after_reuse stdout ----
+
+thread 'stale_after_reuse' (25694) panicked at core/tests/optable.rs:308:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+stack backtrace:
+   0: std::panicking::panic_handler
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:676:5
+   1: std::rt::panic_fmt
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:80:14
+   2: core::panicking::assert_failed_inner
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:452:17
+   3: core::panicking::assert_failed::<i32, i32>
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panicking.rs:407:5
+   4: stale_after_reuse
+             at core/tests/optable.rs:308:9
+   5: stale_after_reuse::{closure#0}
+             at core/tests/optable.rs:296:23
+   6: <{closure@core/tests/optable.rs:296:1: 316:2} as std::ops::FnOnce<()>>::call_once - shim
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+   7: <fn() -> std::result::Result<(), std::string::String> as std::ops::FnOnce<()>>::call_once - shim(fn() -> std::result::Result<(), std::string::String>)
+             at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    stale_after_reuse
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.93s
+
+error: memory leaked: alloc505482 (Rust heap, size: 256, align: 16), allocated here:
+  --> core/tests/optable.rs:56:13
+   |
+56 |     let t = alloc_zeroed(FRAME) as *mut ren_task;
+   |             ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: stack backtrace:
+           0: task_new
+               at core/tests/optable.rs:56:13: 56:32
+           1: new_caller
+               at core/tests/optable.rs:181:13: 181:42
+           2: main_caller
+               at core/tests/optable.rs:190:13: 190:29
+           3: ren_core::sched::Core::start
+               at core/src/sched.rs:608:20: 608:51
+           4: ren_core::ffi::ren_start
+               at core/src/ffi.rs:26:5: 26:44
+           5: start
+               at core/tests/optable.rs:237:13: 237:54
+           6: stale_after_reuse
+               at core/tests/optable.rs:299:17: 299:53
+           7: stale_after_reuse::{closure#0}
+               at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc508748 (Rust heap, size: 588, align: 1), allocated here:
+   --> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:580:17
+    |
+580 |                 self.alloc.grow(ptr, old_layout, new_layout)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: alloc::raw_vec::RawVecInner::finish_grow
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:580:17: 580:61
+            1: alloc::raw_vec::RawVecInner::grow_amortized
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:550:28: 550:62
+            2: alloc::raw_vec::RawVecInner::<A>::reserve::do_reserve_and_handle::<std::alloc::Global>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:690:40: 690:88
+            3: alloc::raw_vec::RawVecInner::reserve
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:699:17: 699:74
+            4: alloc::raw_vec::RawVec::<u8>::reserve
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:358:18: 358:64
+            5: std::vec::Vec::<u8>::reserve
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:1378:9: 1378:47
+            6: std::vec::Vec::<u8>::append_elements
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:2923:9: 2923:34
+            7: <std::vec::Vec<u8> as std::vec::spec_extend::SpecExtend<&u8, std::slice::Iter<'_, u8>>>::spec_extend
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_extend.rs:58:18: 58:45
+            8: std::vec::Vec::<u8>::extend_from_slice
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:3579:9: 3579:39
+            9: th_journal
+                at core/tests/optable.rs:76:5: 76:109
+            10: ren_core::sched::Core::journal
+                at core/src/sched.rs:240:22: 240:71
+            11: ren_core::sched::Core::world
+                at core/src/sched.rs:928:13: 928:46
+            12: ren_core::ffi::ren_world
+                at core/src/ffi.rs:82:5: 82:52
+            13: caller_resume
+                at core/tests/optable.rs:145:21: 145:78
+            14: ren_core::sched::Core::run_task
+                at core/src/sched.rs:387:17: 387:46
+            15: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            16: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            17: stale_after_reuse
+                at core/tests/optable.rs:304:20: 304:37
+            18: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc418601 (Rust heap, size: 65536, align: 8), allocated here:
+   --> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41
+    |
+485 |             AllocInit::Uninitialized => alloc.allocate(layout),
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: alloc::raw_vec::RawVecInner::try_allocate_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41: 485:63
+            1: alloc::raw_vec::RawVecInner::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15: 453:92
+            2: alloc::raw_vec::RawVec::<ren_core::sched::Slot>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20: 187:77
+            3: std::vec::Vec::<ren_core::sched::Slot>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:933:20: 933:61
+            4: std::vec::Vec::<ren_core::sched::Slot>::with_capacity
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:529:9: 529:49
+            5: <std::vec::Vec<ren_core::sched::Slot> as std::vec::spec_from_iter_nested::SpecFromIterNested<ren_core::sched::Slot, std::iter::Map<std::ops::Range<usize>, {closure@ren_core::sched::Core::start::{closure#0}}>>>::from_iter
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_from_iter_nested.rs:52:33: 52:58
+            6: <std::vec::Vec<ren_core::sched::Slot> as std::vec::spec_from_iter::SpecFromIter<ren_core::sched::Slot, std::iter::Map<std::ops::Range<usize>, {closure@ren_core::sched::Core::start::{closure#0}}>>>::from_iter
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_from_iter.rs:33:9: 33:48
+            7: <std::vec::Vec<ren_core::sched::Slot> as std::iter::FromIterator<ren_core::sched::Slot>>::from_iter::<std::iter::Map<std::ops::Range<usize>, {closure@ren_core::sched::Core::start::{closure#0}}>>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4108:9: 4108:76
+            8: <std::iter::Map<std::ops::Range<usize>, {closure@ren_core::sched::Core::start::{closure#0}}> as std::iter::Iterator>::collect::<std::vec::Vec<ren_core::sched::Slot>>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2100:9: 2100:38
+            9: ren_core::sched::Core::start
+                at core/src/sched.rs:570:13: 570:122
+            10: ren_core::ffi::ren_start
+                at core/src/ffi.rs:26:5: 26:44
+            11: start
+                at core/tests/optable.rs:237:13: 237:54
+            12: stale_after_reuse
+                at core/tests/optable.rs:299:17: 299:53
+            13: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc393348 (Rust heap, size: 64, align: 8), allocated here:
+   --> core/tests/optable.rs:263:19
+    |
+263 |     Box::into_raw(Box::new(v))
+    |                   ^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: bx::<Host>
+                at core/tests/optable.rs:263:19: 263:30
+            1: stale_after_reuse
+                at core/tests/optable.rs:298:23: 298:42
+            2: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc504819 (Rust heap, size: 184, align: 8), allocated here:
+ --> core/src/sched.rs:571:33
+  |
+  = note: stack backtrace:
+          0: ren_core::sched::Core::start
+              at core/src/sched.rs:571:34: 592:11
+          1: ren_core::ffi::ren_start
+              at core/src/ffi.rs:26:5: 26:44
+          2: start
+              at core/tests/optable.rs:237:13: 237:54
+          3: stale_after_reuse
+              at core/tests/optable.rs:299:17: 299:53
+          4: stale_after_reuse::{closure#0}
+              at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc393563 (Rust heap, size: 32, align: 8), allocated here:
+   --> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41
+    |
+485 |             AllocInit::Uninitialized => alloc.allocate(layout),
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: alloc::raw_vec::RawVecInner::try_allocate_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41: 485:63
+            1: alloc::raw_vec::RawVecInner::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15: 453:92
+            2: alloc::raw_vec::RawVec::<std::sync::atomic::Atomic<u64>>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20: 187:77
+            3: std::vec::Vec::<std::sync::atomic::Atomic<u64>>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:933:20: 933:61
+            4: std::vec::Vec::<std::sync::atomic::Atomic<u64>>::with_capacity
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:529:9: 529:49
+            5: <std::vec::Vec<std::sync::atomic::Atomic<u64>> as std::vec::spec_from_iter_nested::SpecFromIterNested<std::sync::atomic::Atomic<u64>, std::iter::Map<std::ops::Range<i64>, {closure@ren_core::deque::Ring::new::{closure#0}}>>>::from_iter
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_from_iter_nested.rs:52:33: 52:58
+            6: <std::vec::Vec<std::sync::atomic::Atomic<u64>> as std::vec::spec_from_iter::SpecFromIter<std::sync::atomic::Atomic<u64>, std::iter::Map<std::ops::Range<i64>, {closure@ren_core::deque::Ring::new::{closure#0}}>>>::from_iter
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_from_iter.rs:33:9: 33:48
+            7: <std::vec::Vec<std::sync::atomic::Atomic<u64>> as std::iter::FromIterator<std::sync::atomic::Atomic<u64>>>::from_iter::<std::iter::Map<std::ops::Range<i64>, {closure@ren_core::deque::Ring::new::{closure#0}}>>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4108:9: 4108:76
+            8: <std::iter::Map<std::ops::Range<i64>, {closure@ren_core::deque::Ring::new::{closure#0}}> as std::iter::Iterator>::collect::<std::vec::Vec<std::sync::atomic::Atomic<u64>>>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2100:9: 2100:38
+            9: ren_core::deque::Ring::new
+                at core/src/deque.rs:41:36: 41:81
+            10: ren_core::deque::Deque::new
+                at core/src/deque.rs:72:35: 72:55
+            11: ren_core::sched::Core::start
+                at core/src/sched.rs:544:21: 544:45
+            12: ren_core::ffi::ren_start
+                at core/src/ffi.rs:26:5: 26:44
+            13: start
+                at core/tests/optable.rs:237:13: 237:54
+            14: stale_after_reuse
+                at core/tests/optable.rs:299:17: 299:53
+            15: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc508058 (Rust heap, size: 136, align: 8), allocated here:
+ --> core/src/sched.rs:898:30
+  |
+  = note: stack backtrace:
+          0: ren_core::sched::Core::world
+              at core/src/sched.rs:898:31: 920:11
+          1: ren_core::ffi::ren_world
+              at core/src/ffi.rs:82:5: 82:52
+          2: caller_resume
+              at core/tests/optable.rs:145:21: 145:78
+          3: ren_core::sched::Core::run_task
+              at core/src/sched.rs:387:17: 387:46
+          4: ren_core::sched::Core::run
+              at core/src/sched.rs:695:13: 695:32
+          5: ren_core::ffi::ren_run
+              at core/src/ffi.rs:34:5: 34:31
+          6: stale_after_reuse
+              at core/tests/optable.rs:304:20: 304:37
+          7: stale_after_reuse::{closure#0}
+              at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc393478 (Rust heap, size: 640, align: 128), allocated here:
+   --> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41
+    |
+485 |             AllocInit::Uninitialized => alloc.allocate(layout),
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: alloc::raw_vec::RawVecInner::try_allocate_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41: 485:63
+            1: alloc::raw_vec::RawVecInner::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15: 453:92
+            2: alloc::raw_vec::RawVec::<ren_core::sched::Worker>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20: 187:77
+            3: std::vec::Vec::<ren_core::sched::Worker>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:933:20: 933:61
+            4: std::vec::Vec::<ren_core::sched::Worker>::with_capacity
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:529:9: 529:49
+            5: ren_core::sched::Core::start
+                at core/src/sched.rs:541:22: 541:53
+            6: ren_core::ffi::ren_start
+                at core/src/ffi.rs:26:5: 26:44
+            7: start
+                at core/tests/optable.rs:237:13: 237:54
+            8: stale_after_reuse
+                at core/tests/optable.rs:299:17: 299:53
+            9: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc393905 (Rust heap, size: 16384, align: 4), allocated here:
+   --> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41
+    |
+485 |             AllocInit::Uninitialized => alloc.allocate(layout),
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: alloc::raw_vec::RawVecInner::try_allocate_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:41: 485:63
+            1: alloc::raw_vec::RawVecInner::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15: 453:92
+            2: alloc::raw_vec::RawVec::<u32>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20: 187:77
+            3: std::vec::Vec::<u32>::with_capacity_in
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:933:20: 933:61
+            4: std::vec::Vec::<u32>::with_capacity
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:529:9: 529:49
+            5: <std::vec::Vec<u32> as std::vec::spec_from_iter_nested::SpecFromIterNested<u32, std::iter::Rev<std::ops::Range<u32>>>>::from_iter
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_from_iter_nested.rs:52:33: 52:58
+            6: <std::vec::Vec<u32> as std::vec::spec_from_iter::SpecFromIter<u32, std::iter::Rev<std::ops::Range<u32>>>>::from_iter
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/spec_from_iter.rs:33:9: 33:48
+            7: <std::vec::Vec<u32> as std::iter::FromIterator<u32>>::from_iter::<std::iter::Rev<std::ops::Range<u32>>>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4108:9: 4108:76
+            8: <std::iter::Rev<std::ops::Range<u32>> as std::iter::Iterator>::collect::<std::vec::Vec<u32>>
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2100:9: 2100:38
+            9: ren_core::sched::Core::start
+                at core/src/sched.rs:557:27: 557:49
+            10: ren_core::ffi::ren_start
+                at core/src/ffi.rs:26:5: 26:44
+            11: start
+                at core/tests/optable.rs:237:13: 237:54
+            12: stale_after_reuse
+                at core/tests/optable.rs:299:17: 299:53
+            13: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc393793 (Rust heap, size: 24, align: 8), allocated here:
+ --> core/src/deque.rs:42:22
+  |
+  = note: stack backtrace:
+          0: ren_core::deque::Ring::new
+              at core/src/deque.rs:42:23: 42:76
+          1: ren_core::deque::Deque::new
+              at core/src/deque.rs:72:35: 72:55
+          2: ren_core::sched::Core::start
+              at core/src/sched.rs:544:21: 544:45
+          3: ren_core::ffi::ren_start
+              at core/src/ffi.rs:26:5: 26:44
+          4: start
+              at core/tests/optable.rs:237:13: 237:54
+          5: stale_after_reuse
+              at core/tests/optable.rs:299:17: 299:53
+          6: stale_after_reuse::{closure#0}
+              at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc393408 (Rust heap, size: 3872, align: 8), allocated here:
+   --> core/tests/optable.rs:263:19
+    |
+263 |     Box::into_raw(Box::new(v))
+    |                   ^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: bx::<St>
+                at core/tests/optable.rs:263:19: 263:30
+            1: stale_after_reuse
+                at core/tests/optable.rs:298:44: 298:86
+            2: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+error: memory leaked: alloc506525 (Rust heap, size: 32, align: 8), allocated here:
+   --> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:583:13
+    |
+583 |             self.alloc.allocate(new_layout)
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: stack backtrace:
+            0: alloc::raw_vec::RawVecInner::finish_grow
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:583:13: 583:44
+            1: alloc::raw_vec::RawVecInner::grow_amortized
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:550:28: 550:62
+            2: alloc::raw_vec::RawVecInner::grow_one
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:514:36: 514:92
+            3: alloc::raw_vec::RawVec::<*mut ren_core::sched::Op>::grow_one
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:198:18: 198:48
+            4: std::collections::VecDeque::<*mut ren_core::sched::Op>::grow
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2916:9: 2916:28
+            5: std::collections::VecDeque::<*mut ren_core::sched::Op>::push_back_mut
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2407:13: 2407:24
+            6: std::collections::VecDeque::<*mut ren_core::sched::Op>::push_back
+                at /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/vec_deque/mod.rs:2388:17: 2388:42
+            7: ren_core::sched::Core::world
+                at core/src/sched.rs:949:9: 949:42
+            8: ren_core::ffi::ren_world
+                at core/src/ffi.rs:82:5: 82:52
+            9: caller_resume
+                at core/tests/optable.rs:145:21: 145:78
+            10: ren_core::sched::Core::run_task
+                at core/src/sched.rs:387:17: 387:46
+            11: ren_core::sched::Core::run
+                at core/src/sched.rs:695:13: 695:32
+            12: ren_core::ffi::ren_run
+                at core/src/ffi.rs:34:5: 34:31
+            13: stale_after_reuse
+                at core/tests/optable.rs:300:20: 300:37
+            14: stale_after_reuse::{closure#0}
+                at core/tests/optable.rs:296:23: 296:23
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+note: set `MIRIFLAGS=-Zmiri-ignore-leaks` to disable this check
+
+error: aborting due to 12 previous errors; 9 warnings emitted
+
+error: test failed, to rerun pass `-p ren_core --test optable`
+
+Caused by:
+  process didn't exit successfully: `/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo-miri runner /home/user/ren/experiments/native-lang/rust/target/miri-P3/miri/x86_64-unknown-linux-gnu/debug/build/ren_core/c06a611b108e75a7/out/optable-c06a611b108e75a7` (exit status: 1)
+note: test exited abnormally; to see the full output pass --no-capture to the harness.

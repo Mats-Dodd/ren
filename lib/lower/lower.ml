@@ -2280,7 +2280,13 @@ and plain_call cx ~changed ?callee ?through (e : expr) f args =
     | _ when callee <> None -> (Option.get callee, [])
     | Field (r, _), Some (Method_of p) ->
         let recv =
-          if changed then inout r (ty_of cx r.node) else Read (expr cx r)
+          if changed then inout r (ty_of cx r.node)
+          else if is_pulled cx r then
+            (* a cursor's `count()`, its receiver a pull argument
+               (Infer_expr.cursor_count) *)
+            let binds, block = pull_block cx r in
+            Pull (binds, block)
+          else Read (expr cx r)
         in
         (* a built-in method, `xs.len()`, is built into the compiler *)
         let callee : C.kind =
@@ -2305,6 +2311,10 @@ and plain_call cx ~changed ?callee ?through (e : expr) f args =
         args
   in
   let ty = ty_of cx e.node in
+  match (f.kind, lowered) with
+  | Intrinsic (((Pulled_count | Pulled_count_by) as x), _, _, _), Pull (binds, items) :: rest ->
+      pulled_count cx e.loc ~by:(x = Pulled_count_by) binds items rest
+  | _ ->
   let direct = function
     | Read a | Pull ([], a) -> Some (C.Value a)
     | Inout { binds = []; place = { root; steps = [] }; _ } -> Some (C.Ref root)
@@ -2826,6 +2836,49 @@ and next_call cx ?through ~at ~meth_at next opt loc (v : C.var) =
   match through with
   | Some alias -> rebound cx ~alias loc call
   | None -> call ()
+
+(* A cursor's `c.count()`, or `c.count(f)` if [by] (Infer_expr.cursor_count),
+   written out: [items], the block that pulls the cursor, after [binds],
+   called until it gives `None`, as [option_loop] calls it, counting the
+   items, or those [f], held first, is true of. *)
+and pulled_count cx loc ~by binds (items : C.expr) rest =
+  let opt = match items.ty with Fun (_, r, _, _) -> r | _ -> bug "a pull that isn't a block" in
+  let elem = match opt with Con (_, [ x ]) -> x | _ -> bug "a pull of what isn't an `Option`" in
+  let b = temp cx "items" items.ty and n = temp cx "n" Ty.int in
+  let held, test =
+    match (by, rest) with
+    | true, [ Read f ] ->
+        let fv = temp cx "f" f.ty in
+        ([ (fv, f) ], Some fv)
+    | false, [] -> ([], None)
+    | _ -> bug "a cursor's `count` given what it doesn't take"
+  in
+  let x = temp cx "x" elem in
+  let add =
+    mk (Assign (n, mk (Prim (Binop Add, [ local n loc; int_lit 1L loc ])) Ty.int loc)) Ty.unit loc
+  in
+  let counted =
+    match test with
+    | Some fv ->
+        let yes = mk (Call (local fv loc, [ Value (local x loc) ], cx.ev)) Ty.bool loc in
+        mk (If (yes, add, C.unit loc)) Ty.unit loc
+    | None -> add
+  in
+  let pat kind : C.pattern = { pkind = kind; pty = opt; ploc = loc } in
+  let some : C.arm =
+    {
+      pat = pat (PCon (option_path, "Some", [ { pkind = PVar x; pty = elem; ploc = loc } ]));
+      guard = None;
+      body = counted;
+    }
+  in
+  let none : C.arm =
+    { pat = pat (PCon (option_path, "None", [])); guard = None; body = mk Break Ty.unit loc }
+  in
+  let pass = mk (Match (mk (Call (local b loc, [], cx.ev)) opt loc, [ some; none ])) Ty.unit loc in
+  lets
+    (binds @ [ (b, items) ] @ held @ [ (n, int_lit 0L loc) ])
+    (seq (mk (While (mk (Bool true) Ty.bool loc, pass)) Ty.unit loc) (local n loc))
 
 (* `for x in f`, or `for x in try f`, [f] a block `fn() -> Option<T>`
    (Infer_expr.block_subject): [f] is called each time round, until it

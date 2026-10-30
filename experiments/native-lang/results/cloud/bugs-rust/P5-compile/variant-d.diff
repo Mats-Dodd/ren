@@ -1,0 +1,40 @@
+--- rust/core/src/sched.rs	2026-10-30 14:23:33.620976860 +0000
++++ d/core/src/sched.rs	2026-10-30 14:25:32.879466402 +0000
+@@ -151,7 +151,7 @@
+     // A bare `u64` field fails to compile (E0594, behind `&`); UnsafeCell is
+     // what it takes, and Core's existing `unsafe impl Sync` covers it.
+     #[cfg(feature = "plant5")]
+-    stolen_from: UnsafeCell<u64>,
++    stolen_from: AtomicU64,
+     inbox: Mpsc<Op>,
+     remote: Mpsc<CancelNode>,
+     local: UnsafeCell<Local>,
+@@ -429,9 +429,7 @@
+                 #[cfg(not(feature = "plant5"))]
+                 self.worker(v).stolen_from.fetch_add(1, Relaxed);
+                 #[cfg(feature = "plant5")]
+-                {
+-                    *self.worker(v).stolen_from.get() += 1;
+-                }
++                { let w = self.worker(v); w.stolen_from.store(w.stolen_from.load(Relaxed) + 1, Relaxed); }
+                 return x as *mut ren_task;
+             }
+         }
+@@ -547,7 +545,7 @@
+                 #[cfg(not(feature = "plant5"))]
+                 stolen_from: AtomicU64::new(0),
+                 #[cfg(feature = "plant5")]
+-                stolen_from: UnsafeCell::new(0),
++                stolen_from: AtomicU64::new(0),
+                 inbox: Mpsc::new(),
+                 remote: Mpsc::new(),
+                 local: UnsafeCell::new(Local {
+@@ -650,7 +648,7 @@
+         }
+         #[cfg(feature = "plant5")]
+         {
+-            self.local(w).stolen_seen = *me.stolen_from.get();
++            self.local(w).stolen_seen = me.stolen_from.load(Relaxed);
+         }
+         if self.done.load(Acquire) != 0 {
+             return REN_FINISHED as i32;

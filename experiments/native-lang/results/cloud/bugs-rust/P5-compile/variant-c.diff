@@ -1,0 +1,48 @@
+--- rust/core/src/sched.rs	2026-10-30 14:23:33.620976860 +0000
++++ c/core/src/sched.rs	2026-10-30 14:25:32.879168017 +0000
+@@ -151,7 +151,7 @@
+     // A bare `u64` field fails to compile (E0594, behind `&`); UnsafeCell is
+     // what it takes, and Core's existing `unsafe impl Sync` covers it.
+     #[cfg(feature = "plant5")]
+-    stolen_from: UnsafeCell<u64>,
++    stolen_from: core::cell::Cell<u64>,
+     inbox: Mpsc<Op>,
+     remote: Mpsc<CancelNode>,
+     local: UnsafeCell<Local>,
+@@ -193,7 +193,6 @@
+ // that only the owning worker's thread dereferences (SPEC §B.1), the
+ // injector's plain fields only under its spinlock, and `Slot.op` follows
+ // the publication rule above.
+-unsafe impl Sync for Core {}
+ unsafe impl Send for Core {}
+ 
+ #[inline]
+@@ -429,9 +428,7 @@
+                 #[cfg(not(feature = "plant5"))]
+                 self.worker(v).stolen_from.fetch_add(1, Relaxed);
+                 #[cfg(feature = "plant5")]
+-                {
+-                    *self.worker(v).stolen_from.get() += 1;
+-                }
++                self.worker(v).stolen_from.set(self.worker(v).stolen_from.get() + 1);
+                 return x as *mut ren_task;
+             }
+         }
+@@ -547,7 +544,7 @@
+                 #[cfg(not(feature = "plant5"))]
+                 stolen_from: AtomicU64::new(0),
+                 #[cfg(feature = "plant5")]
+-                stolen_from: UnsafeCell::new(0),
++                stolen_from: core::cell::Cell::new(0),
+                 inbox: Mpsc::new(),
+                 remote: Mpsc::new(),
+                 local: UnsafeCell::new(Local {
+@@ -650,7 +647,7 @@
+         }
+         #[cfg(feature = "plant5")]
+         {
+-            self.local(w).stolen_seen = *me.stolen_from.get();
++            self.local(w).stolen_seen = me.stolen_from.get();
+         }
+         if self.done.load(Acquire) != 0 {
+             return REN_FINISHED as i32;

@@ -1,0 +1,119 @@
+# machine cloud, 2026-10-30T14:35:19Z, plant P3, stage tests-asan
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=20 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/c-asan-P3
+== layout (c-asan-P3)
+PASS layout_check
+== abi (c-asan-P3)
+FAIL abi_test (exit 1)
+     | 
+     | Indirect leak of 128 byte(s) in 1 object(s) allocated from:
+     |     #0 0x56446b23d37d in calloc (/home/user/ren/experiments/native-lang/bin/c-asan-P3/abi_test+0xd237d) (BuildId: f26faf4539f536fe96844300da70b3f78571c123)
+     |     #1 0x56446b289732 in ren_task_new /home/user/ren/experiments/native-lang/harness/rt.c:51:29
+     |     #2 0x56446b282dc2 in new_caller /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:114:25
+     |     #3 0x56446b281ad0 in main_caller /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:137:87
+     |     #4 0x56446b28ca37 in ren_start /home/user/ren/experiments/native-lang/c/core.c:119:20
+     |     #5 0x56446b27cda2 in start /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:150:17
+     |     #6 0x56446b27cda2 in t_stale /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:205:17
+     |     #7 0x56446b27b92f in main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5
+     |     #8 0x7f740bc2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |     #9 0x7f740bc2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+     |     #10 0x56446b1a2344 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P3/abi_test+0x37344) (BuildId: f26faf4539f536fe96844300da70b3f78571c123)
+     | 
+     | SUMMARY: AddressSanitizer: 85698 byte(s) leaked in 8 allocation(s).
+== deque (c-asan-P3)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (c-asan-P3)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (c-asan-P3)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+PASS t_cancel epoll x1
+PASS t_block stop epoll x1
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+PASS t_cancel epoll x4
+PASS t_block stop epoll x4
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+PASS t_cancel epoll x8
+PASS t_block stop epoll x8
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+PASS t_cancel uring x1
+PASS t_block stop uring x1
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+PASS t_cancel uring x4
+PASS t_block stop uring x4
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+PASS t_cancel uring x8
+PASS t_block stop uring x8
+PASS t_block kill uring x8
+== replay (c-asan-P3)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel epoll (4914 journal bytes, output identical)
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+PASS W4 replay t_cancel uring (4970 journal bytes, output identical)
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (c-asan-P3)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25: 25025 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL fuzz_run random 300 (exit 134)
+     | fuzz: oracle failure (worker 0, finish 1): fuzz oracle: a stale reply was ACCEPTED (id 0000000c00000001, ren_reply = 0, input offset 75)
+FAIL libFuzzer 20000 runs (exit 77)
+     |     #14 0x55dd73fff815 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x84815) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+     |     #15 0x55dd73fecaef in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x71aef) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+     |     #16 0x55dd74017176 in main (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x9c176) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+     |     #17 0x7f2210e2a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+     |     #18 0x7f2210e2a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+     |     #19 0x55dd73fe1ad4 in _start (/home/user/ren/experiments/native-lang/bin/c-asan-P3/fuzz+0x66ad4) (BuildId: a8fdde4760fa60a68b39ea06c643e621b9912cb4)
+     | 
+     | NOTE: libFuzzer has rudimentary signal handlers.
+     |       Combine libFuzzer with AddressSanitizer or similar for better crash reports.
+     | SUMMARY: libFuzzer: deadly signal
+     | MS: 4 InsertRepeatedBytes-CopyPart-ShuffleBytes-ChangeBit-; base unit: ced9932cdd463b4355e40b1e3586beb3eb68a07c
+     | 0x21,0x55,0xff,0x5b,0xa,0x21,0xff,0x48,0xff,0xff,0xfb,0xff,0xff,0xff,
+     | !U\377[\012!\377H\377\377\373\377\377\377
+     | artifact_prefix='./'; Test unit written to ./crash-174060b18b1939c061d4c843bf0184c6f889a982
+     | Base64: IVX/Wwoh/0j///v///8=
+== summary c-asan-P3: 70 passed, 3 failed
+   failed: abi_test
+   failed: fuzz_run random 300
+   failed: libFuzzer 20000 runs
+# exit 1 after 16.603005703 s

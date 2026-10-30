@@ -1,0 +1,33 @@
+# machine cloud, 2026-10-30T14:01:49Z, plant P0, stage tsan-w1x4
+# $ bash -c for i in 1 2 3 4 5; do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/c-tsan/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done; done
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=513037 inner_s=0.389835 wall_s=0.397652
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.397652
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=555989 inner_s=0.359719 wall_s=0.368050
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.368050
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=575191 inner_s=0.347711 wall_s=0.358106
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.358106
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=420553 inner_s=0.475565 wall_s=0.484855
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.484855
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=510521 inner_s=0.391757 wall_s=0.401122
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.401122
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=500818 inner_s=0.399347 wall_s=0.416983
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.416983
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=542974 inner_s=0.368341 wall_s=0.374241
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.374241
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=521189 inner_s=0.383738 wall_s=0.390623
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.390623
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=595586 inner_s=0.335804 wall_s=0.340907
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.340907
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=526231 inner_s=0.380061 wall_s=0.389873
+metric: harness workload=w1 driver=uring workers=4 wall_s=0.389873
+# exit 0 after 4.148742822 s

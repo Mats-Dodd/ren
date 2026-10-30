@@ -1,0 +1,43 @@
+// `count()` and `count(f)` on every receiver (operators.md, "The
+// collection methods"): a cursor of the prelude's and one of the
+// program's, which a named cursor's copy counts, leaving it where it
+// was; `zip`'s; a `Map`'s pairs and a `Set`'s members; a predicate that
+// fails, and one that changes a `var` outside it.
+
+type Countdown = { n: Int }
+  fn next(inout self) -> Option<Int> =
+    if self.n <= 0 then None
+    else
+      self.n -= 1
+      Some(self.n)
+
+type Bad = ! Odd(n: Int)
+
+fn even(x: Int) -> Bool ! Bad =
+  if x == 7 then fail Odd(x) else x % 2 == 0
+
+fn main() uses Console =
+  let c = "héllo wörld".chars()
+  print(c.count())
+  print(c.count(fn(x) => x == "l"))
+  var d = Countdown { n: 10 }
+  print(d.count())
+  print(d.count(fn(x) => x % 3 == 0))
+  print(d.n)
+  print(&d.next())
+  print([1, 2, 3].zip(["a", "b"]).count())
+  print([1, 2, 3].count())
+  print([0, 0].count(fn(x) => x > 0))
+  print(Map.of([(1, "a"), (2, "b"), (3, "c")]).count(fn((k, _)) => k > 1))
+  print(Map.of([(1, "a")]).count())
+  print(Set.of(["x", "y"]).count(fn(s) => s == "x"))
+  print(Set.of(["x", "y"]).count())
+  print(attempt Countdown { n: 5 }.count(even))
+  print(attempt Countdown { n: 9 }.count(even))
+  var total = 0
+  print("abc".chars().count(fn(x) =>
+    total += 1
+    x != "b"))
+  print(total)
+  let words = ["one", "two", "three"]
+  print(words.join(" ").chars().count())

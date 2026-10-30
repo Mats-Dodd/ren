@@ -1,0 +1,51 @@
+# machine cloud, 2026-10-30T17:02:34Z, plant P2u, stage libfuzzer-release-safe
+# $ bash -c cd '/home/user/ren/experiments/native-lang/build/bugs-zig-fuzz/P2u' && '/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz' -max_total_time=120 -timeout=10 -seed=1 -max_len=4096 -print_final_stats=1 corpus
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x55b8602c7b90, 0x55b8602c8ab7), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x55b8602c8ab8,0x55b8602d7d28), 
+INFO:        0 files found in corpus
+ren zig panic: integer overflow
+==14180== ERROR: libFuzzer: deadly signal
+    #0 0x55b860158f05 in __sanitizer_print_stack_trace (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x13ef05) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #1 0x55b8600b2a1c in fuzzer::PrintStackTrace() (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x98a1c) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #2 0x55b860098aa7 in fuzzer::Fuzzer::CrashCallback() (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x7eaa7) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #3 0x7f837e44532f  (/lib/x86_64-linux-gnu/libc.so.6+0x4532f) (BuildId: a4a7992a8e66555c8141ab2a08a8465ff6e0ea65)
+    #4 0x7f837e49ec0b in __pthread_kill_implementation nptl/pthread_kill.c:43:17
+    #5 0x7f837e49ec0b in __pthread_kill_internal nptl/pthread_kill.c:78:10
+    #6 0x7f837e49ec0b in pthread_kill nptl/pthread_kill.c:89:10
+    #7 0x7f837e44527d in raise signal/../sysdeps/posix/raise.c:26:13
+    #8 0x7f837e4288fe in abort stdlib/abort.c:79:7
+    #9 0x55b860077b9d in root.renPanic /home/user/ren/experiments/native-lang/zig/src/root.zig:24:16
+    #10 0x55b860077c34 in debug.FullPanic((function 'renPanic')).integerOverflow /opt/zig/zig-x86_64-linux-0.17.0/lib/std/debug.zig:164:17
+    #11 0x55b8602146bd in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig
+    #12 0x55b860212f3b in replay.Fz.runW /home/user/ren/experiments/native-lang/zig/src/replay.zig:220:27
+    #13 0x55b860210875 in replay.fuzz /home/user/ren/experiments/native-lang/zig/src/replay.zig:301:23
+    #14 0x55b860210875 in drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:307:88
+    #15 0x55b86018cb25 in fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15
+    #16 0x55b86018c747 in LLVMFuzzerTestOneInput /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_target.c:5:63
+    #17 0x55b86009a074 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x80074) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #18 0x55b86009b2a1 in fuzzer::Fuzzer::ReadAndExecuteSeedCorpora(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x812a1) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #19 0x55b86009b897 in fuzzer::Fuzzer::Loop(std::vector<fuzzer::SizedFile, std::allocator<fuzzer::SizedFile>>&) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x81897) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #20 0x55b860088d8f in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x6ed8f) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #21 0x55b8600b3416 in main (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x99416) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+    #22 0x7f837e42a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #23 0x7f837e42a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #24 0x55b86007dd74 in _start (/home/user/ren/experiments/native-lang/bin/zig-release-safe-P2u/fuzz+0x63d74) (BuildId: 4a8640ba7126f327dcc6e8ccd73c9c5665ab070c)
+
+NOTE: libFuzzer has rudimentary signal handlers.
+      Combine libFuzzer with AddressSanitizer or similar for better crash reports.
+SUMMARY: libFuzzer: deadly signal
+MS: 0 ; base unit: 0000000000000000000000000000000000000000
+
+
+artifact_prefix='./'; Test unit written to ./crash-da39a3ee5e6b4b0d3255bfef95601890afd80709
+Base64: 
+stat::number_of_executed_units: 1
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              33
+# exit 77 after .140801188 s
+corpus
+crash-da39a3ee5e6b4b0d3255bfef95601890afd80709

@@ -1,0 +1,35 @@
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.94s
+     Running unittests src/lib.rs (rust/target/test-P5/debug/deps/ren_core-4c47910977ba924e)
+
+running 2 tests
+test deque::tests::empty_and_lifo ... ok
+test deque::tests::threads ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/loom_deque.rs (rust/target/test-P5/debug/deps/loom_deque-faeed03ebd2a87c1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/optable.rs (rust/target/test-P5/debug/deps/optable-f7e2b1316f890841)
+
+running 6 tests
+test basic ... ok
+test retract ... ok
+test full_then_slot_frees ... ok
+test stale_after_reuse ... ok
+test stop_cancels_pulled ... ok
+test threads_reply_from_elsewhere ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ren_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,5 @@
+== rust-tsan: /home/user/ren/experiments/native-lang/rust/build.sh tsan /home/user/ren/experiments/native-lang/build/rust-tsan
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3.65s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.06s
+built rust-tsan: language 3.79s, harness link 3.51s

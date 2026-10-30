@@ -1,0 +1,26 @@
+# machine cloud, 2026-10-30T14:37:06Z, plant P3, stage vg-memcheck
+# $ bash -c 
+    set -e
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/abi_test'
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/deque_stress' empty
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/deque_stress' lifo
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/deque_stress' stress 4 20000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/harness' w1 --driver epoll --workers 4 --n 20000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/harness' t_cancel --driver epoll --workers 4
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/harness' t_cancel --driver epoll --workers 1
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/harness' w3 --driver epoll --workers 1 --n 2000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P3/fuzz_run' --random 100 1
+ok   basic
+  FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE
+FAIL stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+# exit 1 after .565008475 s

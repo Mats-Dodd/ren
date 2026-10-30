@@ -5575,6 +5575,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "bytes"
+        },
+        {
+          "type": "SYMBOL",
           "name": "boolean"
         },
         {
@@ -5689,11 +5693,97 @@
       "value": "[0-9][0-9_]*\\.[0-9][0-9_]*"
     },
     "string": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "\""
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "escape_sequence"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "interpolation"
+                  },
+                  {
+                    "type": "IMMEDIATE_TOKEN",
+                    "content": {
+                      "type": "PREC",
+                      "value": 1,
+                      "content": {
+                        "type": "PATTERN",
+                        "value": "[^\"\\\\\\n]+"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "IMMEDIATE_TOKEN",
+              "content": {
+                "type": "STRING",
+                "value": "\""
+              }
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "_string_start"
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "_string_content"
+                  },
+                  {
+                    "type": "ALIAS",
+                    "content": {
+                      "type": "SYMBOL",
+                      "name": "_string_escape"
+                    },
+                    "named": true,
+                    "value": "escape_sequence"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "interpolation"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "SYMBOL",
+              "name": "_string_end"
+            }
+          ]
+        }
+      ]
+    },
+    "bytes": {
       "type": "SEQ",
       "members": [
         {
-          "type": "STRING",
-          "value": "\""
+          "type": "SYMBOL",
+          "name": "_bytes_start"
         },
         {
           "type": "REPEAT",
@@ -5702,32 +5792,23 @@
             "members": [
               {
                 "type": "SYMBOL",
-                "name": "escape_sequence"
+                "name": "_string_content"
               },
               {
-                "type": "SYMBOL",
-                "name": "interpolation"
-              },
-              {
-                "type": "IMMEDIATE_TOKEN",
+                "type": "ALIAS",
                 "content": {
-                  "type": "PREC",
-                  "value": 1,
-                  "content": {
-                    "type": "PATTERN",
-                    "value": "[^\"\\\\\\n]+"
-                  }
-                }
+                  "type": "SYMBOL",
+                  "name": "_string_escape"
+                },
+                "named": true,
+                "value": "escape_sequence"
               }
             ]
           }
         },
         {
-          "type": "IMMEDIATE_TOKEN",
-          "content": {
-            "type": "STRING",
-            "value": "\""
-          }
+          "type": "SYMBOL",
+          "name": "_string_end"
         }
       ]
     },
@@ -5741,8 +5822,17 @@
             "value": "\\"
           },
           {
-            "type": "PATTERN",
-            "value": "[nt\"\\\\]"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "PATTERN",
+                "value": "[nrt0\"\\\\]"
+              },
+              {
+                "type": "PATTERN",
+                "value": "u\\{[0-9a-fA-F]+\\}"
+              }
+            ]
           }
         ]
       }
@@ -5753,11 +5843,20 @@
         {
           "type": "ALIAS",
           "content": {
-            "type": "IMMEDIATE_TOKEN",
-            "content": {
-              "type": "STRING",
-              "value": "\\{"
-            }
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "IMMEDIATE_TOKEN",
+                "content": {
+                  "type": "STRING",
+                  "value": "\\{"
+                }
+              },
+              {
+                "type": "SYMBOL",
+                "name": "_hole_start"
+              }
+            ]
           },
           "named": true,
           "value": "interpolation_start"
@@ -5815,7 +5914,11 @@
               },
               {
                 "type": "PATTERN",
-                "value": "\\\\[nt'\\\\]"
+                "value": "\\\\[nrt0'\\\\]"
+              },
+              {
+                "type": "PATTERN",
+                "value": "\\\\u\\{[0-9a-fA-F]+\\}"
               }
             ]
           },
@@ -8194,6 +8297,30 @@
     {
       "type": "SYMBOL",
       "name": "_error_sentinel"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_string_start"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_bytes_start"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_string_content"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_string_escape"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_hole_start"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_string_end"
     }
   ],
   "inline": [],

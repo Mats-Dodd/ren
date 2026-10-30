@@ -233,6 +233,12 @@ type rt =
   | Buf_set_field of int * int * layout
       (** [Array_set_field_taking] once the array is known unique *)
   | Buf_check  (** [Array_check] of a length *)
+  | Array_peek of layout
+      (** [Array_get] not counted: the element is a part of the array, as a
+          field read is of its object, which Perceus counts again where it's
+          kept (rc.ml, [lent_reads]; compiler.md, "Bytes stage, part two",
+          "Step 4 (part 2), as built") *)
+  | Buf_peek of layout  (** [Buf_get] not counted: [Array_peek]'s, hoisted *)
   | Array_reserve of layout
       (** an empty array of these elements, with room for as many as the [Int]
           given; a [Word]'s descriptor after it says whether they're objects *)
@@ -271,6 +277,10 @@ type rt =
           panic as the interpreter does at their site; [After]'s, made after
           [Before]'s, doesn't check again, and has none, and is given the
           first half too, after the [Int] *)
+  | Str_view of sliced
+      (** a release build's [Slice (_, Range)] of a `Str` or `Bytes`, its root
+          not counted: a part of the value it's of, as a field read is (the
+          uncounted view, compiler.md, "Bytes stage, part two") *)
   | Splice of sliced
       (** a new owner: the first with its range from the first [Int] up to
           the second replaced by the last, what `&xs[a..b]` writes back *)
@@ -387,6 +397,17 @@ type rt =
   | Panic_str
       (** panic at its site with this [Str]: a failed `assert` of the
           prelude's, whose message shows values ([assert_message]) *)
+  | Str_find
+      (** `s.index(t)`'s offset: an [Int], where [t] first starts in [s], or
+          -1; `Bytes`' too *)
+  | Str_has of bool
+      (** `s.starts_with(t)`, or `s.ends_with(t)` if [true]: a [Bool];
+          `Bytes`' too *)
+  | Str_upper  (** `s.ascii_upper()`, as [Str_lower]; `Bytes`' too *)
+  | Line_col of bool
+      (** `s.line_col(at)`'s line, or its column if [true]: an [Int], from
+          1, the column in code points, which panics at its site if [at]
+          isn't in [s] or is inside a character *)
   | Show_int
   | Show_float
   | Show_bool

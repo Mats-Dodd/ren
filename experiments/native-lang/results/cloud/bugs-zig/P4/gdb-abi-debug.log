@@ -1,0 +1,6 @@
+ren zig panic: index out of bounds: index 1431655765, len 4096
+#5  0x000055555555f14a in root.renPanic (msg=..., ra=...)
+#6  0x00005555556dc4fa in debug.panicExtra__func_672 (ret_addr=..., format=..., args=...)
+#7  0x00005555556dc206 in debug.FullPanic((function 'renPanic')).outOfBounds (index=1431655765, len=4096)
+#8  0x0000555555710387 in core.deliver (c=0x5555557fab00, w=0, op=0x5555557fba50)
+#9  0x000055555570fdb5 in core.drainInbox (c=0x5555557fab00, w=0)

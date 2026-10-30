@@ -1,0 +1,10 @@
+   Compiling ren_core v0.1.0 (/tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/p5/a/core)
+error[E0594]: cannot assign to data in a `&` reference
+   --> core/src/sched.rs:432:19
+    |
+432 |                 { self.worker(v).stolen_from += 1; }
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot assign
+
+For more information about this error, try `rustc --explain E0594`.
+error: could not compile `ren_core` (lib) due to 1 previous error
+cargo exit 101

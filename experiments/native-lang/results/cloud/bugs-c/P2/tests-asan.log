@@ -1,0 +1,155 @@
+# machine cloud, 2026-10-30T15:15:42Z, plant P2, stage tests-asan
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=5 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/c-asan-P2
+== layout (c-asan-P2)
+PASS layout_check
+== abi (c-asan-P2)
+FAIL abi_test (exit 124)
+== deque (c-asan-P2)
+FAIL deque empty (exit 124)
+PASS deque lifo
+PASS deque stress
+== smoke (c-asan-P2)
+FAIL w1 epoll x1 (exit 124)
+FAIL w2 epoll x1 (exit 124)
+FAIL w3 epoll x1 (exit 124)
+FAIL w1 epoll x4 (exit 124)
+FAIL w2 epoll x4 (exit 124)
+FAIL w3 epoll x4 (exit 124)
+FAIL w1 epoll x8 (exit 124)
+FAIL w2 epoll x8 (exit 124)
+FAIL w3 epoll x8 (exit 124)
+FAIL w1 uring x1 (exit 124)
+FAIL w2 uring x1 (exit 124)
+FAIL w3 uring x1 (exit 124)
+FAIL w1 uring x4 (exit 124)
+FAIL w2 uring x4 (exit 124)
+FAIL w3 uring x4 (exit 124)
+FAIL w1 uring x8 (exit 124)
+FAIL w2 uring x8 (exit 124)
+FAIL w3 uring x8 (exit 124)
+== io (c-asan-P2)
+FAIL t_timer epoll x1 (exit 124)
+FAIL t_pipe epoll x1 (exit 124)
+FAIL t_tcp epoll x1 (exit 124)
+FAIL t_cancel epoll x1 (exit 124)
+FAIL t_block stop epoll x1 (exit 124)
+FAIL t_block kill epoll x1 (exit 124)
+FAIL t_timer epoll x4 (exit 124)
+FAIL t_pipe epoll x4 (exit 124)
+FAIL t_tcp epoll x4 (exit 124)
+FAIL t_cancel epoll x4 (exit 124)
+FAIL t_block stop epoll x4 (exit 124)
+FAIL t_block kill epoll x4 (exit 124)
+FAIL t_timer epoll x8 (exit 124)
+FAIL t_pipe epoll x8 (exit 124)
+FAIL t_tcp epoll x8 (exit 124)
+FAIL t_cancel epoll x8 (exit 124)
+FAIL t_block stop epoll x8 (exit 124)
+FAIL t_block kill epoll x8 (exit 124)
+FAIL t_timer uring x1 (exit 124)
+FAIL t_pipe uring x1 (exit 124)
+FAIL t_tcp uring x1 (exit 124)
+FAIL t_cancel uring x1 (exit 124)
+FAIL t_block stop uring x1 (exit 124)
+FAIL t_block kill uring x1 (exit 124)
+FAIL t_timer uring x4 (exit 124)
+FAIL t_pipe uring x4 (exit 124)
+FAIL t_tcp uring x4 (exit 124)
+FAIL t_cancel uring x4 (exit 124)
+FAIL t_block stop uring x4 (exit 124)
+FAIL t_block kill uring x4 (exit 124)
+FAIL t_timer uring x8 (exit 124)
+FAIL t_pipe uring x8 (exit 124)
+FAIL t_tcp uring x8 (exit 124)
+FAIL t_cancel uring x8 (exit 124)
+FAIL t_block stop uring x8 (exit 124)
+FAIL t_block kill uring x8 (exit 124)
+== replay (c-asan-P2)
+FAIL W4 replay w1 epoll record (exit 0)
+FAIL W4 replay w3 epoll record (exit 0)
+FAIL W4 replay t_cancel epoll record (exit 0)
+FAIL W4 replay t_timer epoll record (exit 0)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+FAIL W4 replay w1 uring record (exit 0)
+FAIL W4 replay w3 uring record (exit 0)
+FAIL W4 replay t_cancel uring record (exit 0)
+FAIL W4 replay t_timer uring record (exit 0)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (c-asan-P2)
+FAIL fuzz_run random 300 (exit 124)
+FAIL libFuzzer 20000 runs (exit 124)
+     | INFO: Running with entropic power schedule (0xFF, 100).
+     | INFO: Seed: 1
+     | INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x56157d47fc88, 0x56157d480baf), 
+     | INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x56157d480bb0,0x56157d48fe20), 
+     | ==28709== libFuzzer: run interrupted; exiting
+== summary c-asan-P2: 7 passed, 66 failed
+   failed: abi_test
+   failed: deque empty
+   failed: w1 epoll x1
+   failed: w2 epoll x1
+   failed: w3 epoll x1
+   failed: w1 epoll x4
+   failed: w2 epoll x4
+   failed: w3 epoll x4
+   failed: w1 epoll x8
+   failed: w2 epoll x8
+   failed: w3 epoll x8
+   failed: w1 uring x1
+   failed: w2 uring x1
+   failed: w3 uring x1
+   failed: w1 uring x4
+   failed: w2 uring x4
+   failed: w3 uring x4
+   failed: w1 uring x8
+   failed: w2 uring x8
+   failed: w3 uring x8
+   failed: t_timer epoll x1
+   failed: t_pipe epoll x1
+   failed: t_tcp epoll x1
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_block kill epoll x1
+   failed: t_timer epoll x4
+   failed: t_pipe epoll x4
+   failed: t_tcp epoll x4
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_block kill epoll x4
+   failed: t_timer epoll x8
+   failed: t_pipe epoll x8
+   failed: t_tcp epoll x8
+   failed: t_cancel epoll x8
+   failed: t_block stop epoll x8
+   failed: t_block kill epoll x8
+   failed: t_timer uring x1
+   failed: t_pipe uring x1
+   failed: t_tcp uring x1
+   failed: t_cancel uring x1
+   failed: t_block stop uring x1
+   failed: t_block kill uring x1
+   failed: t_timer uring x4
+   failed: t_pipe uring x4
+   failed: t_tcp uring x4
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_block kill uring x4
+   failed: t_timer uring x8
+   failed: t_pipe uring x8
+   failed: t_tcp uring x8
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+   failed: t_block kill uring x8
+   failed: W4 replay w1 epoll record
+   failed: W4 replay w3 epoll record
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_timer epoll record
+   failed: W4 replay w1 uring record
+   failed: W4 replay w3 uring record
+   failed: W4 replay t_cancel uring record
+   failed: W4 replay t_timer uring record
+   failed: fuzz_run random 300
+   failed: libFuzzer 20000 runs
+# exit 1 after 341.251892774 s

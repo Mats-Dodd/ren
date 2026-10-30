@@ -1,0 +1,13 @@
+== rust-debug-P2: /home/user/ren/experiments/native-lang/rust/build.sh debug /home/user/ren/experiments/native-lang/build/rust-debug-P2
+warning: unused import: `AtomicI64`
+ --> core/src/deque.rs:5:26
+  |
+5 | use crate::sync::{fence, AtomicI64, AtomicPtr, AtomicU64, Ordering::*};
+  |                          ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ren_core` (lib) generated 1 warning (run `cargo fix --lib -p ren_core` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+built rust-debug-P2: language 0.24s, harness link 2.65s

@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:05:58Z, plant P2u, stage build-release-safe
+# $ /home/user/ren/experiments/native-lang/build.sh zig release-safe P2u
+== zig-release-safe-P2u: /home/user/ren/experiments/native-lang/zig/build.sh release-safe /home/user/ren/experiments/native-lang/build/zig-release-safe-P2u
+built zig-release-safe-P2u: language 18.58s, harness link 2.78s
+# exit 0 after 21.386098299 s

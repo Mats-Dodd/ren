@@ -1,0 +1,7 @@
+// `s.line_col(at)` panics on an offset past the end (compiler.md, "Bytes
+// stage, part two", "Errors and panics").
+
+fn main() uses Console =
+  let text = "first\nsé😀cond\nthird"
+  print(text.line_col(23))
+  print(text.line_col(30))

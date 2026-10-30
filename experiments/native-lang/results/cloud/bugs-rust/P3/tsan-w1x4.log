@@ -1,0 +1,3 @@
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=618367 inner_s=0.323432 wall_s=0.325928
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.325928

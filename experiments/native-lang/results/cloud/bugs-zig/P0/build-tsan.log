@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:05:01Z, plant P0, stage build-tsan
+# $ /home/user/ren/experiments/native-lang/build.sh zig tsan
+== zig-tsan: /home/user/ren/experiments/native-lang/zig/build.sh tsan /home/user/ren/experiments/native-lang/build/zig-tsan
+built zig-tsan: language 4.20s, harness link 3.01s
+# exit 0 after 7.242077228 s

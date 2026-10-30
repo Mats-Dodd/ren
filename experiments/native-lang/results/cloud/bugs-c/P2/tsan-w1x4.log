@@ -1,0 +1,3 @@
+# machine cloud, 2026-10-30T15:27:05Z, plant P2, stage tsan-w1x4
+# $ bash -c for i in 1 2 3 4 5; do for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/c-tsan-P2/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done; done
+# exit 124 after 120.017051954 s

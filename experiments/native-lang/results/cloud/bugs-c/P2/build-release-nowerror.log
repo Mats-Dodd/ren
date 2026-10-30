@@ -1,0 +1,9 @@
+# machine cloud, 2026-10-30T14:34:30Z, plant P2, stage build-release-nowerror
+# $ env REN_C_WERROR=0 /home/user/ren/experiments/native-lang/build.sh c release P2
+== c-release-P2: /home/user/ren/experiments/native-lang/c/build.sh release /home/user/ren/experiments/native-lang/build/c-release-P2
+/home/user/ren/experiments/native-lang/c/dq.c:47:13: warning: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Wsign-compare]
+   47 |   if (b - t > a->cap - 1) a = grow(q, a, t, b);
+      |       ~~~~~ ^ ~~~~~~~~~~
+1 warning generated.
+built c-release-P2: language 2.12s, harness link 2.94s
+# exit 0 after 5.096734635 s

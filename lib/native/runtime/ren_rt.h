@@ -1339,6 +1339,19 @@ ren_obj *ren_str_of_code(int64_t n, const ren_site *site);
    a new string. */
 ren_obj *ren_strs_join(ren_obj *xs, ren_obj *sep);
 
+/* The rest of strings.md's table (compiler.md, "Bytes stage, part two",
+   step 5), each `Bytes`' too, and each only reading what it's given, so
+   a release build gives it a view (REN_SV_VIEW). `s.index(t)`: where [t]
+   first starts in [s], or -1. `s.starts_with(t)`, or `s.ends_with(t)` if
+   [suffix]. `s.ascii_upper()`: a new string, as [ren_str_lower]. And
+   `s.line_col(at)`'s line, or its column if [col], each from 1, the
+   column in code points, panicking as the interpreter does (builtins.ml,
+   [line_col]) if [at] isn't 0 to the length or is inside a character. */
+int64_t ren_str_find(ren_obj *s, ren_obj *t);
+bool ren_str_has(ren_obj *s, ren_obj *t, bool suffix);
+ren_obj *ren_str_upper(ren_obj *s);
+int64_t ren_line_col(ren_obj *s, int64_t at, bool col, const ren_site *site);
+
 /* `copy()`: [a] with a buffer of its own, counted again if it already
    has one (an owner), else a copy of its range. */
 ren_obj *ren_array_copied(ren_obj *a);
@@ -1723,6 +1736,17 @@ static inline ren_sv ren_sv_slice(ren_sv s, int64_t i, int64_t j, bool str,
                        0))
     ren_sv_slice_panic(s, i, j, str, site);
   ren_dup(s.s[0].o);
+  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+}
+/* The same, its root not counted: the uncounted view, a part of [s]
+   that the compiler counts where it's kept (compiler.md, "Bytes stage,
+   part two", "The uncounted view"). */
+static inline ren_sv ren_sv_view_slice(ren_sv s, int64_t i, int64_t j, bool str,
+                                       const ren_site *site) {
+  if (__builtin_expect(i > j || i < 0 || j > ren_sv_len(s) ||
+                           (str && !(ren_sv_boundary(s, i) && ren_sv_boundary(s, j))),
+                       0))
+    ren_sv_slice_panic(s, i, j, str, site);
   return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
 }
 

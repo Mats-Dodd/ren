@@ -1,0 +1,3 @@
+c/bugs.sh: line 22: 29545 Aborted                 "$@" >> "$log" 2>&1
+c/bugs.sh: line 22: 29556 Aborted                 "$@" >> "$log" 2>&1
+done P3: warn build tests valgrind fuzz

@@ -1,0 +1,8 @@
+# machine: cloud
+epoll run 72 rc=124
+epoll run 97 rc=124
+epoll 200 runs done
+uring run 22 rc=124
+uring run 23 rc=124
+uring run 174 rc=124
+uring 200 runs done

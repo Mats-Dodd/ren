@@ -1,0 +1,72 @@
+# machine: cloud -- VERIFY plant runs (vbugs.sh run)
+RATE c P0 deque_stress release failed 0/20 first: 
+RATE c P0 deque_stress tsan failed 0/10 first: 
+RATE c P0 w1x8 epoll release failed 0/10 first: 
+RATE c P1 deque_stress release failed 17/20 first: FAIL tests/deque_stress.c:85: dup == 0 && lost == 0 stress: rounds=10 n=200000 steals=1239176 duplicated=80639 lost=80639 deque_stress stress: FAIL 
+RATE c P1 deque_stress tsan failed 0/10 first: 
+RATE c P1 w1x8 epoll release failed 0/10 first: 
+RATE c P0 abi_test release failed 0/3 first: 
+RATE c P0 fuzz_run release failed 0/3 first: 
+RATE c P0 w3x4 uring release failed 0/3 first: 
+RATE c P0 abi_test tsan failed 0/3 first: 
+RATE c P3 abi_test release failed 3/3 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE c P3 fuzz_run release failed 0/3 first: 
+RATE c P3 w3x4 uring release failed 0/3 first: 
+RATE c P3 abi_test tsan failed 3/3 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE c P0 w1x4 tsan epoll failed 0/10 first: 
+RATE c P0 w1x4 tsan uring failed 0/5 first: 
+RATE c P0 w1x8 release epoll failed 0/10 first: 
+RATE c P0 deque_stress release failed 0/5 first: 
+RATE c P5 w1x4 tsan epoll failed 10/10 first: WARNING: ThreadSanitizer: data race (pid=32570) SUMMARY: ThreadSanitizer: data race /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/sched.c:165:27 in steal_any WARNING: ThreadSanitizer: data race (pid=32570) 
+RATE c P5 w1x4 tsan uring failed 5/5 first: WARNING: ThreadSanitizer: data race (pid=427) SUMMARY: ThreadSanitizer: data race /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/sched.c:165:27 in steal_any WARNING: ThreadSanitizer: data race (pid=427) 
+RATE c P5 w1x8 release epoll failed 0/10 first: 
+RATE c P5 deque_stress release failed 0/5 first: 
+RATE rust P0 deque_stress release failed 0/20 first: 
+RATE rust P0 deque_stress tsan failed 0/10 first: 
+RATE rust P0 w1x8 epoll release failed 0/10 first: 
+RATE rust P1 deque_stress release failed 13/20 first: FAIL tests/deque_stress.c:85: dup == 0 && lost == 0 stress: rounds=10 n=200000 steals=1318210 duplicated=92292 lost=92292 deque_stress stress: FAIL 
+RATE rust P1 deque_stress tsan failed 0/10 first: 
+RATE rust P1 w1x8 epoll release failed 0/10 first: 
+RATE rust P0 abi_test release failed 0/3 first: 
+RATE rust P0 fuzz_run release failed 0/3 first: 
+RATE rust P0 w3x4 uring release failed 0/3 first: 
+RATE rust P0 abi_test tsan failed 0/3 first: 
+RATE rust P3 abi_test release failed 3/3 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE rust P3 fuzz_run release failed 0/3 first: 
+RATE rust P3 w3x4 uring release failed 0/3 first: 
+RATE rust P3 abi_test tsan failed 3/3 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE rust P0 w1x4 tsan epoll failed 0/10 first: 
+RATE rust P0 w1x4 tsan uring failed 0/5 first: 
+RATE rust P0 w1x8 release epoll failed 0/10 first: 
+RATE rust P0 deque_stress release failed 0/5 first: 
+RATE rust P5 w1x4 tsan epoll failed 10/10 first: WARNING: ThreadSanitizer: data race (pid=4394) SUMMARY: ThreadSanitizer: data race /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/rust/core/src/sched.rs:433:21 in steal_any WARNING: ThreadSanitizer: data race (pid=4394) 
+RATE rust P5 w1x4 tsan uring failed 5/5 first: WARNING: ThreadSanitizer: data race (pid=4492) SUMMARY: ThreadSanitizer: data race /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/rust/core/src/sched.rs:433:21 in steal_any WARNING: ThreadSanitizer: data race (pid=4492) 
+RATE rust P5 w1x8 release epoll failed 0/10 first: 
+RATE rust P5 deque_stress release failed 0/5 first: 
+RATE zig P0 deque_stress release failed 0/20 first: 
+RATE zig P0 deque_stress tsan failed 0/10 first: 
+RATE zig P0 w1x8 epoll release failed 0/10 first: 
+RATE zig P1 deque_stress release failed 17/20 first: FAIL tests/deque_stress.c:85: dup == 0 && lost == 0 stress: rounds=10 n=200000 steals=1298720 duplicated=98913 lost=98913 deque_stress stress: FAIL 
+RATE zig P1 deque_stress tsan failed 0/10 first: 
+RATE zig P1 w1x8 epoll release failed 0/10 first: 
+RATE zig P0 abi_test release failed 0/3 first: 
+RATE zig P0 fuzz_run release failed 0/3 first: 
+RATE zig P0 w3x4 uring release failed 0/3 first: 
+RATE zig P0 abi_test tsan failed 0/3 first: 
+RATE zig P3 abi_test release failed 3/3 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE zig P3 fuzz_run release failed 0/3 first: 
+RATE zig P3 w3x4 uring release failed 0/3 first: 
+RATE zig P3 abi_test tsan failed 3/3 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE zig P0 w1x4 tsan epoll failed 0/10 first: 
+RATE zig P0 w1x4 tsan uring failed 0/5 first: 
+RATE zig P0 w1x8 release epoll failed 0/10 first: 
+RATE zig P0 deque_stress release failed 0/5 first: 
+RATE zig P5 w1x4 tsan epoll failed 10/10 first: WARNING: ThreadSanitizer: data race (pid=7655) SUMMARY: ThreadSanitizer: data race /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/zig/src/core.zig:562:45 in core.run WARNING: ThreadSanitizer: data race (pid=7655) 
+RATE zig P5 w1x4 tsan uring failed 5/5 first: WARNING: ThreadSanitizer: data race (pid=7757) SUMMARY: ThreadSanitizer: data race /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/zig/src/core.zig:419:27 in core.stealAny WARNING: ThreadSanitizer: data race (pid=7757) 
+RATE zig P5 w1x8 release epoll failed 0/10 first: 
+RATE zig P5 deque_stress release failed 0/5 first: 
+RATE c P3 abi_test asan failed 2/2 first:   FAIL tests/abi_test.c:218: reply(c, a, REN_DONE, 0x5A1E5A1E) == REN_RELEASE FAIL stale ok   cancel_race 
+RATE c P2 deque empty ubsan-int failed 1/1 first: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/dq.c:58:32: runtime error: unsigned integer overflow: 0 - 1 cannot be represented in type 'uint64_t' (aka 'unsigned long') 
+RATE c P2 deque stress ubsan-int failed 0/1 first: 
+
+[exited with code 0]

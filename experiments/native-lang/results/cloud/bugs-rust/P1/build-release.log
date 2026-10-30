@@ -1,0 +1,4 @@
+== rust-release-P1: /home/user/ren/experiments/native-lang/rust/build.sh release /home/user/ren/experiments/native-lang/build/rust-release-P1
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.01s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.01s
+built rust-release-P1: language 0.20s, harness link 3.18s

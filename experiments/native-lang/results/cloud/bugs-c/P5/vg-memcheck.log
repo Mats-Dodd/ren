@@ -1,0 +1,40 @@
+# machine cloud, 2026-10-30T14:43:01Z, plant P5, stage vg-memcheck
+# $ bash -c 
+    set -e
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/abi_test'
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/deque_stress' empty
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/deque_stress' lifo
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/deque_stress' stress 4 20000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/harness' w1 --driver epoll --workers 4 --n 20000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/harness' t_cancel --driver epoll --workers 4
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/harness' t_cancel --driver epoll --workers 1
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/harness' w3 --driver epoll --workers 1 --n 2000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P5/fuzz_run' --random 100 1
+ok   basic
+ok   stale
+ok   cancel_race
+ok   cancel_sent
+ok   retract
+ok   answer_now
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+ok   determinism
+deque_stress empty: ok
+deque_stress lifo: ok
+stress: rounds=4 n=20000 steals=4155 duplicated=0 lost=0
+deque_stress stress: ok
+result: w1 n=20000 sum=199990000 left=0
+metric: w1 tasks_per_s=217227 inner_s=0.092069 wall_s=0.131576
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.131576
+result: t_cancel a=2 b=2 c=2
+metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.097519
+result: t_cancel a=2 b=2 c=2
+metric: harness workload=t_cancel driver=epoll workers=1 wall_s=0.100155
+result: w3 n=2000 done=2000 csum=2d058ec95559bd65
+metric: w3 p50_ns=58903 p99_ns=134095 p999_ns=3195613 min_ns=40264 wall_s=0.341880 rtt_per_s=5850
+metric: harness workload=w3 driver=epoll workers=1 wall_s=0.341880
+fuzz_run: 100 random inputs ok
+# exit 0 after 75.452192722 s

@@ -1,0 +1,32 @@
+# machine: cloud -- VERIFY plant builds
+BUILD c-release ok
+BUILD c-tsan ok
+BUILD rust-release ok
+BUILD rust-tsan ok
+BUILD zig-release-fast ok
+BUILD zig-tsan ok
+BUILD c-release-P1 ok
+BUILD c-tsan-P1 ok
+BUILD rust-release-P1 ok
+BUILD rust-tsan-P1 ok
+BUILD zig-release-fast-P1 ok
+BUILD zig-tsan-P1 ok
+BUILD c-release-P3 ok
+BUILD c-tsan-P3 ok
+BUILD rust-release-P3 ok
+BUILD rust-tsan-P3 ok
+BUILD zig-release-fast-P3 ok
+BUILD zig-tsan-P3 ok
+BUILD c-release-P5 ok
+BUILD c-tsan-P5 ok
+BUILD rust-release-P5 ok
+BUILD rust-tsan-P5 ok
+BUILD zig-release-fast-P5 ok
+BUILD zig-tsan-P5 ok
+BUILD c-asan-P3 ok
+BUILD c-release-P2 FAILED rc=1: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/c/dq.c:47:13: error: comparison of integers of different signs: 'dq_i' (aka 'unsigned long') and 'int64_t' (aka 'long') [-Werror,-Wsign-compare] 1 error generated. 
+BUILD c-ubsan-int-P2 ok
+BUILD zig-release-fast-P2 FAILED rc=1: src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64' src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64' 
+BUILD zig-debug-P2 FAILED rc=1: src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64' src/dq.zig:66:39: error: incompatible types: 'u64' and 'i64' 
+
+[exited with code 0]

@@ -1,0 +1,285 @@
+# machine cloud, 2026-10-30T16:49:43Z, plant P2u, stage tests-debug
+# $ env WORKERS=1 4 8 DRIVERS=epoll uring TMO=10 /home/user/ren/experiments/native-lang/harness/test.sh /home/user/ren/experiments/native-lang/bin/zig-debug-P2u
+== layout (zig-debug-P2u)
+PASS layout_check
+== abi (zig-debug-P2u)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8668 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL abi_test (exit 134)
+     | ren zig panic: integer overflow
+== deque (zig-debug-P2u)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8673 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL deque empty (exit 134)
+     | ren zig panic: integer overflow
+PASS deque lifo
+PASS deque stress
+== smoke (zig-debug-P2u)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8712 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8717 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8722 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8727 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8732 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8738 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8744 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8749 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8754 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8760 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8765 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8770 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8775 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8781 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8786 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8791 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w1 uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8796 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w2 uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8802 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL w3 uring x8 (exit 134)
+     | ren zig panic: integer overflow
+== io (zig-debug-P2u)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8808 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8813 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8818 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8823 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8828 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8834 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill epoll x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8840 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8845 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8850 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8855 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8861 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8867 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill epoll x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8873 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8878 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8884 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8890 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8895 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8901 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill epoll x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8907 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8912 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8917 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8922 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8927 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8933 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill uring x1 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8939 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8944 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8949 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8955 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8961 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8968 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill uring x4 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8975 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_timer uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8981 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_pipe uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8986 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_tcp uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8991 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_cancel uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  8996 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block stop uring x8 (exit 134)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  9002 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL t_block kill uring x8 (exit 134)
+     | ren zig panic: integer overflow
+     | ren zig panic: integer overflow
+== replay (zig-debug-P2u)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9010 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w1 epoll record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9015 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w3 epoll record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9020 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_cancel epoll record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9025 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_timer epoll record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 87:  9030 Aborted                 timeout "$TMO" "$B/harness" w3 --driver "$d" --workers 1 --n 200 --record "$j" > /dev/null 2>&1
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35:  9034 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a flipped input byte epoll
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35:  9036 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a truncated journal epoll
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9038 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w1 uring record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9043 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay w3 uring record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9048 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_cancel uring record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 66:  9053 Aborted                 timeout "$TMO" "$rb/harness" "$wl" --driver "$d" --workers 1 --n "$n" --record "$j" > "$TMP/rec.out" 2>&1
+FAIL W4 replay t_timer uring record (exit 0)
+     | ren zig panic: integer overflow
+/home/user/ren/experiments/native-lang/harness/test.sh: line 87:  9058 Aborted                 timeout "$TMO" "$B/harness" w3 --driver "$d" --workers 1 --n 200 --record "$j" > /dev/null 2>&1
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35:  9062 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a flipped input byte uring
+/home/user/ren/experiments/native-lang/harness/test.sh: line 35:  9064 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+PASS replay refuses a truncated journal uring
+== fuzz (zig-debug-P2u)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:  9067 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL fuzz_run random 300 (exit 134)
+     | ren zig panic: integer overflow
+== summary zig-debug-P2u: 7 passed, 65 failed
+   failed: abi_test
+   failed: deque empty
+   failed: w1 epoll x1
+   failed: w2 epoll x1
+   failed: w3 epoll x1
+   failed: w1 epoll x4
+   failed: w2 epoll x4
+   failed: w3 epoll x4
+   failed: w1 epoll x8
+   failed: w2 epoll x8
+   failed: w3 epoll x8
+   failed: w1 uring x1
+   failed: w2 uring x1
+   failed: w3 uring x1
+   failed: w1 uring x4
+   failed: w2 uring x4
+   failed: w3 uring x4
+   failed: w1 uring x8
+   failed: w2 uring x8
+   failed: w3 uring x8
+   failed: t_timer epoll x1
+   failed: t_pipe epoll x1
+   failed: t_tcp epoll x1
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_block kill epoll x1
+   failed: t_timer epoll x4
+   failed: t_pipe epoll x4
+   failed: t_tcp epoll x4
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_block kill epoll x4
+   failed: t_timer epoll x8
+   failed: t_pipe epoll x8
+   failed: t_tcp epoll x8
+   failed: t_cancel epoll x8
+   failed: t_block stop epoll x8
+   failed: t_block kill epoll x8
+   failed: t_timer uring x1
+   failed: t_pipe uring x1
+   failed: t_tcp uring x1
+   failed: t_cancel uring x1
+   failed: t_block stop uring x1
+   failed: t_block kill uring x1
+   failed: t_timer uring x4
+   failed: t_pipe uring x4
+   failed: t_tcp uring x4
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_block kill uring x4
+   failed: t_timer uring x8
+   failed: t_pipe uring x8
+   failed: t_tcp uring x8
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+   failed: t_block kill uring x8
+   failed: W4 replay w1 epoll record
+   failed: W4 replay w3 epoll record
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_timer epoll record
+   failed: W4 replay w1 uring record
+   failed: W4 replay w3 uring record
+   failed: W4 replay t_cancel uring record
+   failed: W4 replay t_timer uring record
+   failed: fuzz_run random 300
+# exit 1 after 2.021944667 s

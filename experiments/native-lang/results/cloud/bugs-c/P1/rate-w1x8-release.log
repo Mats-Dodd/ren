@@ -1,0 +1,2 @@
+# machine cloud, 2026-10-30T15:57:04Z, plant P1, c-release-P1: ./harness w1 --driver epoll --workers 8 --n 1000000 x20
+result: w1x8-release c-release-P1 failed 0/20 first_fail_run=none total_s=58.132630490

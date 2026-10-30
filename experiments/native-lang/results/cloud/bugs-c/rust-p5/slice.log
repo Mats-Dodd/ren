@@ -1,0 +1,26 @@
+=== slice A
+error[E0594]: cannot assign to data in a `&` reference
+   --> core/src/sched.rs:423:17
+    |
+423 |                 self.worker(v).stolen_from += 1; // P5 plain
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot assign
+
+For more information about this error, try `rustc --explain E0594`.
+error: could not compile `ren_core` (lib) due to 1 previous error
+cargo exit 101
+=== slice B
+cargo exit 0
+=== slice C
+cargo exit 0
+=== slice D
+error: assigning to `&T` is undefined behavior, consider using an `UnsafeCell`
+   --> core/src/sched.rs:423:17
+    |
+423 |                 *(&self.worker(v).stolen_from as *const u64 as *mut u64) += 1; // P5 cast
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: for more information, visit <https://doc.rust-lang.org/book/ch15-05-interior-mutability.html>
+    = note: `#[deny(invalid_reference_casting)]` on by default
+
+error: could not compile `ren_core` (lib) due to 1 previous error
+cargo exit 101

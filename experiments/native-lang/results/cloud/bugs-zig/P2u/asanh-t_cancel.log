@@ -1,0 +1,27 @@
+# machine cloud, 2026-10-30T17:02:37Z, plant P2u, stage asanh-t_cancel
+# $ timeout 60 /home/user/ren/experiments/native-lang/bin/zig-asanh-P2u/harness t_cancel --driver epoll --workers 4
+AddressSanitizer:DEADLYSIGNAL
+=================================================================
+==14239==ERROR: AddressSanitizer: SEGV on unknown address (pc 0x5584342e9265 bp 0x7ff57d5fe670 sp 0x7ff57d5fe410 T4)
+==14239==The signal is caused by a READ memory access.
+==14239==Hint: this fault was caused by a dereference of a high value address (see register values below).  Disassemble the provided pc to learn which register was used.
+    #0 0x5584342e9265 in core.runTask /home/user/ren/experiments/native-lang/zig/src/core.zig:365:41
+    #1 0x5584342e9265 in core.run /home/user/ren/experiments/native-lang/zig/src/core.zig:580:20
+    #2 0x5584342e5ccc in epoll.run /home/user/ren/experiments/native-lang/zig/src/epoll.zig:308:27
+    #3 0x5584342e5ccc in drv.worker /home/user/ren/experiments/native-lang/zig/src/drv.zig:300:63
+    #4 0x5584342c28e0 in worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11
+    #5 0x55843427ed5c in asan_thread_start(void*) asan_interceptors.cpp.o
+    #6 0x7ff58229cb83 in start_thread nptl/pthread_create.c:447:8
+    #7 0x7ff582329ecb in clone3 misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+AddressSanitizer can not provide additional info.
+SUMMARY: AddressSanitizer: SEGV /home/user/ren/experiments/native-lang/zig/src/core.zig:365:41 in core.runTask
+Thread T4 created by T0 here:
+    #0 0x558434266be5 in pthread_create (/home/user/ren/experiments/native-lang/bin/zig-asanh-P2u/harness+0xc2be5) (BuildId: 489949a85020dbd46a24d1c0e7ba08bd85f3c73a)
+    #1 0x5584342c0c81 in main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11
+    #2 0x7ff58222a1c9 in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+    #3 0x7ff58222a28a in __libc_start_main csu/../csu/libc-start.c:360:3
+    #4 0x5584341e6424 in _start (/home/user/ren/experiments/native-lang/bin/zig-asanh-P2u/harness+0x42424) (BuildId: 489949a85020dbd46a24d1c0e7ba08bd85f3c73a)
+
+==14239==ABORTING
+# exit 1 after .109630252 s

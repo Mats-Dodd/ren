@@ -1,0 +1,6 @@
+# machine cloud, 2026-10-30T16:26:06Z, plant P3, stage asanh-w1x4
+# $ timeout 120 /home/user/ren/experiments/native-lang/bin/zig-asanh-P3/harness w1 --driver epoll --workers 4 --n 200000
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=120211 inner_s=1.663742 wall_s=1.665792
+metric: harness workload=w1 driver=epoll workers=4 wall_s=1.665792
+# exit 0 after 1.699176323 s

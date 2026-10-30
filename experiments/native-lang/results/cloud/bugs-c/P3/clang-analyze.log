@@ -1,0 +1,401 @@
+# machine cloud, 2026-10-30T15:54:29Z, clang 18 --analyze on every core file, plant P3
+drv_common.c:317:66: warning: The left operand of '>=' is a garbage value [core.UndefinedBinaryOperatorResult]
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |                                                                  ^
+drv_common.c:228:7: note: Assuming 'o' is non-null
+  228 |   if (!o) { drv_set_err(NULL, "ren_drv_new: NULL options"); return NULL; }
+      |       ^~
+drv_common.c:228:3: note: Taking false branch
+  228 |   if (!o) { drv_set_err(NULL, "ren_drv_new: NULL options"); return NULL; }
+      |   ^
+drv_common.c:229:7: note: Assuming field 'workers' is >= 1
+  229 |   if (o->workers < 1 || o->workers > 64) { drv_set_err(NULL, "ren_drv_new: workers %d out of range", o->workers); return NULL; }
+      |       ^~~~~~~~~~~~~~
+drv_common.c:229:7: note: Left side of '||' is false
+drv_common.c:229:25: note: Assuming field 'workers' is <= 64
+  229 |   if (o->workers < 1 || o->workers > 64) { drv_set_err(NULL, "ren_drv_new: workers %d out of range", o->workers); return NULL; }
+      |                         ^~~~~~~~~~~~~~~
+drv_common.c:229:3: note: Taking false branch
+  229 |   if (o->workers < 1 || o->workers > 64) { drv_set_err(NULL, "ren_drv_new: workers %d out of range", o->workers); return NULL; }
+      |   ^
+drv_common.c:231:7: note: Assuming 'd' is non-null
+  231 |   if (!d) abort();
+      |       ^~
+drv_common.c:231:3: note: Taking false branch
+  231 |   if (!d) abort();
+      |   ^
+drv_common.c:233:7: note: Assuming field 'steps' is not equal to 0
+  233 |   if (!d->o.steps) d->o.steps = 256;
+      |       ^~~~~~~~~~~
+drv_common.c:233:3: note: Taking false branch
+  233 |   if (!d->o.steps) d->o.steps = 256;
+      |   ^
+drv_common.c:235:7: note: Calling 'drv_recording'
+  235 |   if (drv_recording(d)) {
+      |       ^~~~~~~~~~~~~~~~
+drv_common.c:64:41: note: Assuming field 'record_fd' is < 0
+   64 | bool drv_recording(ren_drv *d) { return d->o.record_fd >= 0; }
+      |                                         ^~~~~~~~~~~~~~~~~~~
+drv_common.c:64:34: note: Returning without writing to 'd->wake_fd', which participates in a condition later
+   64 | bool drv_recording(ren_drv *d) { return d->o.record_fd >= 0; }
+      |                                  ^
+drv_common.c:235:7: note: Returning from 'drv_recording'
+  235 |   if (drv_recording(d)) {
+      |       ^~~~~~~~~~~~~~~~
+drv_common.c:235:3: note: Taking false branch
+  235 |   if (drv_recording(d)) {
+      |   ^
+drv_common.c:240:3: note: Control jumps to 'case 2:'  at line 242
+  240 |   switch (o->kind) {
+      |   ^
+drv_common.c:245:23: note: Calling 'drv_recording'
+  245 |     d->host.journal = drv_recording(d) ? host_journal_rec : NULL;
+      |                       ^~~~~~~~~~~~~~~~
+drv_common.c:64:46: note: Field 'record_fd' is < 0
+   64 | bool drv_recording(ren_drv *d) { return d->o.record_fd >= 0; }
+      |                                              ^
+drv_common.c:64:34: note: Returning without writing to 'd->wake_fd', which participates in a condition later
+   64 | bool drv_recording(ren_drv *d) { return d->o.record_fd >= 0; }
+      |                                  ^
+drv_common.c:245:23: note: Returning from 'drv_recording'
+  245 |     d->host.journal = drv_recording(d) ? host_journal_rec : NULL;
+      |                       ^~~~~~~~~~~~~~~~
+drv_common.c:245:23: note: '?' condition is false
+drv_common.c:247:18: note: Storing uninitialized value
+  247 |     d->wake_fd = malloc((size_t)o->workers * sizeof(int));
+      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_common.c:249:9: note: Assuming field 'ans' is non-null
+  249 |     if (!d->ans || !d->wake_fd || !d->wk) abort();
+      |         ^~~~~~~
+drv_common.c:249:9: note: Left side of '||' is false
+drv_common.c:249:20: note: Assuming field 'wake_fd' is non-null
+  249 |     if (!d->ans || !d->wake_fd || !d->wk) abort();
+      |                    ^~~~~~~~~~~
+drv_common.c:249:9: note: Left side of '||' is false
+  249 |     if (!d->ans || !d->wake_fd || !d->wk) abort();
+      |         ^
+drv_common.c:249:35: note: Assuming field 'wk' is non-null
+  249 |     if (!d->ans || !d->wake_fd || !d->wk) abort();
+      |                                   ^~~~~~
+drv_common.c:249:5: note: Taking false branch
+  249 |     if (!d->ans || !d->wake_fd || !d->wk) abort();
+      |     ^
+drv_common.c:250:25: note: 'w' is < field 'workers'
+  250 |     for (int32_t w = 0; w < o->workers; w++) d->wake_fd[w] = -1;
+      |                         ^
+drv_common.c:250:5: note: Loop condition is true.  Entering loop body
+  250 |     for (int32_t w = 0; w < o->workers; w++) d->wake_fd[w] = -1;
+      |     ^
+drv_common.c:250:25: note: Assuming 'w' is >= field 'workers'
+  250 |     for (int32_t w = 0; w < o->workers; w++) d->wake_fd[w] = -1;
+      |                         ^~~~~~~~~~~~~~
+drv_common.c:250:5: note: Loop condition is false. Execution continues on line 251
+  250 |     for (int32_t w = 0; w < o->workers; w++) d->wake_fd[w] = -1;
+      |     ^
+drv_common.c:251:5: note: Loop condition is true.  Entering loop body
+  251 |     for (int32_t w = 0; w < o->workers; w++) {
+      |     ^
+drv_common.c:253:11: note: Assuming the condition is true
+  253 |       if (d->wake_fd[w] < 0) { drv_set_err(NULL, "eventfd: %s", strerror(errno)); ren_drv_free(d); return NULL; }
+      |           ^~~~~~~~~~~~~~~~~
+drv_common.c:253:7: note: Taking true branch
+  253 |       if (d->wake_fd[w] < 0) { drv_set_err(NULL, "eventfd: %s", strerror(errno)); ren_drv_free(d); return NULL; }
+      |       ^
+drv_common.c:253:83: note: Calling 'ren_drv_free'
+  253 |       if (d->wake_fd[w] < 0) { drv_set_err(NULL, "eventfd: %s", strerror(errno)); ren_drv_free(d); return NULL; }
+      |                                                                                   ^~~~~~~~~~~~~~~
+drv_common.c:313:8: note: 'd' is non-null
+  313 |   if (!d) return;
+      |        ^
+drv_common.c:313:3: note: Taking false branch
+  313 |   if (!d) return;
+      |   ^
+drv_common.c:314:7: note: Assuming field 'kind' is not equal to REN_DRV_EPOLL
+  314 |   if (d->o.kind == REN_DRV_EPOLL) drv_epoll_free(d);
+      |       ^~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_common.c:314:3: note: Taking false branch
+  314 |   if (d->o.kind == REN_DRV_EPOLL) drv_epoll_free(d);
+      |   ^
+drv_common.c:315:7: note: Assuming field 'kind' is not equal to REN_DRV_URING
+  315 |   if (d->o.kind == REN_DRV_URING) drv_uring_free(d);
+      |       ^~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_common.c:315:3: note: Taking false branch
+  315 |   if (d->o.kind == REN_DRV_URING) drv_uring_free(d);
+      |   ^
+drv_common.c:316:10: note: Field 'wake_fd' is non-null
+  316 |   if (d->wake_fd)
+      |          ^
+drv_common.c:316:3: note: Taking true branch
+  316 |   if (d->wake_fd)
+      |   ^
+drv_common.c:317:25: note: Assuming 'w' is < field 'workers'
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |                         ^~~~~~~~~~~~~~~~
+drv_common.c:317:5: note: Loop condition is true.  Entering loop body
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |     ^
+drv_common.c:317:48: note: Taking false branch
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |                                                ^
+drv_common.c:317:43: note: The value 1 is assigned to 'w'
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |                                           ^~~
+drv_common.c:317:25: note: Assuming 'w' is < field 'workers'
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |                         ^~~~~~~~~~~~~~~~
+drv_common.c:317:5: note: Loop condition is true.  Entering loop body
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |     ^
+drv_common.c:317:66: note: The left operand of '>=' is a garbage value
+  317 |     for (int32_t w = 0; w < d->o.workers; w++) if (d->wake_fd[w] >= 0) close(d->wake_fd[w]);
+      |                                                    ~~~~~~~~~~~~~ ^
+1 warning generated.
+drv_epoll.c:378:24: warning: Use of memory after it is freed [unix.Malloc]
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |                        ^~~~~~~~~~~~~~~~~~~~
+drv_epoll.c:328:7: note: Assuming field 'epfd' is >= 0
+  328 |   if (e->epfd < 0) { drv_set_err(d, "epoll_create1: %s", strerror(errno)); return -1; }
+      |       ^~~~~~~~~~~
+drv_epoll.c:328:3: note: Taking false branch
+  328 |   if (e->epfd < 0) { drv_set_err(d, "epoll_create1: %s", strerror(errno)); return -1; }
+      |   ^
+drv_epoll.c:329:7: note: Assuming the condition is false
+  329 |   if (ep_ctl(e->epfd, EPOLL_CTL_ADD, d->wake_fd[w], EPOLLIN, WAKE_KEY) < 0) { drv_set_err(d, "epoll_ctl(eventfd): %s", strerror(errno)); return -1; }
+      |       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_epoll.c:329:3: note: Taking false branch
+  329 |   if (ep_ctl(e->epfd, EPOLL_CTL_ADD, d->wake_fd[w], EPOLLIN, WAKE_KEY) < 0) { drv_set_err(d, "epoll_ctl(eventfd): %s", strerror(errno)); return -1; }
+      |   ^
+drv_epoll.c:330:7: note: Assuming 'w' is not equal to 0
+  330 |   if (w == 0) drv_rec_drv(d);
+      |       ^~~~~~
+drv_epoll.c:330:3: note: Taking false branch
+  330 |   if (w == 0) drv_rec_drv(d);
+      |   ^
+drv_epoll.c:334:3: note: Loop condition is true.  Entering loop body
+  334 |   for (;;) {
+      |   ^
+drv_epoll.c:339:5: note: Loop condition is false. Execution continues on line 344
+  339 |     while (ren_poll_call(c, w, &k)) {         /* drain until false: the one signal */
+      |     ^
+drv_epoll.c:345:5: note: Loop condition is false. Execution continues on line 346
+  345 |     for (size_t i = 0; i < nb; i++) ep_submit(d, c, w, e, &batch[i]);
+      |     ^
+drv_epoll.c:346:9: note: Assuming 'r' is not equal to REN_FINISHED
+  346 |     if (r == REN_FINISHED && e->ninflight == 0) break;
+      |         ^~~~~~~~~~~~~~~~~
+drv_epoll.c:346:27: note: Left side of '&&' is false
+  346 |     if (r == REN_FINISHED && e->ninflight == 0) break;
+      |                           ^
+drv_epoll.c:347:9: note: 'r' is not equal to REN_FINISHED
+  347 |     if (r == REN_FINISHED) {                  /* after kill: nothing is in the kernel; drop the waits */
+      |         ^
+drv_epoll.c:347:5: note: Taking false branch
+  347 |     if (r == REN_FINISHED) {                  /* after kill: nothing is in the kernel; drop the waits */
+      |     ^
+drv_epoll.c:357:9: note: Assuming 'r' is not equal to REN_RUNNING
+  357 |     if (r == REN_RUNNING) { ts.tv_sec = 0; ts.tv_nsec = 0; tsp = &ts; }
+      |         ^~~~~~~~~~~~~~~~
+drv_epoll.c:357:5: note: Taking false branch
+  357 |     if (r == REN_RUNNING) { ts.tv_sec = 0; ts.tv_nsec = 0; tsp = &ts; }
+      |     ^
+drv_epoll.c:358:14: note: Assuming field 'nheap' is not equal to 0
+  358 |     else if (e->nheap) {
+      |              ^~~~~~~~
+drv_epoll.c:358:10: note: Taking true branch
+  358 |     else if (e->nheap) {
+      |          ^
+drv_epoll.c:360:11: note: Assuming 'dl' is >= 0
+  360 |       if (dl < 0) dl = 0;
+      |           ^~~~~~
+drv_epoll.c:360:7: note: Taking false branch
+  360 |       if (dl < 0) dl = 0;
+      |       ^
+drv_epoll.c:364:9: note: Assuming 'n' is >= 0
+  364 |     if (n < 0 && errno != EINTR) { drv_set_err(d, "epoll_pwait2: %s", strerror(errno)); free(batch); return -1; }
+      |         ^~~~~
+drv_epoll.c:364:15: note: Left side of '&&' is false
+  364 |     if (n < 0 && errno != EINTR) { drv_set_err(d, "epoll_pwait2: %s", strerror(errno)); free(batch); return -1; }
+      |               ^
+drv_epoll.c:365:21: note: Assuming 'i' is >= 'n'
+  365 |     for (int i = 0; i < n; i++) {
+      |                     ^~~~~
+drv_epoll.c:365:5: note: Loop condition is false. Execution continues on line 377
+  365 |     for (int i = 0; i < n; i++) {
+      |     ^
+drv_epoll.c:378:15: note: Field 'nheap' is not equal to 0
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |               ^
+drv_epoll.c:378:12: note: Left side of '&&' is true
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |            ^
+drv_epoll.c:378:24: note: Assuming 'now' is >= field 'deadline'
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_epoll.c:378:5: note: Loop condition is true.  Entering loop body
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |     ^
+drv_epoll.c:379:7: note: Calling 'ep_finish_op'
+  379 |       ep_finish_op(d, c, w, e, e->heap[0], REN_DONE, 0, 0, 0);
+      |       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_epoll.c:161:7: note: Assuming field 'dir' is not equal to 1
+  161 |   if (o->dir == 1 || o->dir == 2) {
+      |       ^~~~~~~~~~~
+drv_epoll.c:161:7: note: Left side of '||' is false
+drv_epoll.c:161:22: note: Assuming field 'dir' is not equal to 2
+  161 |   if (o->dir == 1 || o->dir == 2) {
+      |                      ^~~~~~~~~~~
+drv_epoll.c:161:3: note: Taking false branch
+  161 |   if (o->dir == 1 || o->dir == 2) {
+      |   ^
+drv_epoll.c:164:14: note: Assuming field 'dir' is not equal to 3
+  164 |   } else if (o->dir == 3) {
+      |              ^~~~~~~~~~~
+drv_epoll.c:164:10: note: Taking false branch
+  164 |   } else if (o->dir == 3) {
+      |          ^
+drv_epoll.c:169:3: note: Memory is released
+  169 |   free(o);
+      |   ^~~~~~~
+drv_epoll.c:379:7: note: Returning; memory was released via 5th parameter
+  379 |       ep_finish_op(d, c, w, e, e->heap[0], REN_DONE, 0, 0, 0);
+      |       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_epoll.c:378:15: note: Field 'nheap' is not equal to 0
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |               ^
+drv_epoll.c:378:12: note: Left side of '&&' is true
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |            ^
+drv_epoll.c:378:24: note: Use of memory after it is freed
+  378 |     while (e->nheap && e->heap[0]->deadline <= now)
+      |                        ^~~~~~~~~~~~~~~~~~~~
+drv_epoll.c:392:41: warning: Use of memory after it is freed [unix.Malloc]
+  392 |     while (e->head) { eop *o = e->head; ep_unlink_op(e, o); free(o); }
+      |                                         ^               ~
+drv_epoll.c:388:7: note: Assuming field 'wk' is non-null
+  388 |   if (!d->wk) return;
+      |       ^~~~~~
+drv_epoll.c:388:3: note: Taking false branch
+  388 |   if (!d->wk) return;
+      |   ^
+drv_epoll.c:389:23: note: Assuming 'w' is < field 'workers'
+  389 |   for (int32_t w = 0; w < d->o.workers; w++) {
+      |                       ^~~~~~~~~~~~~~~~
+drv_epoll.c:389:3: note: Loop condition is true.  Entering loop body
+  389 |   for (int32_t w = 0; w < d->o.workers; w++) {
+      |   ^
+drv_epoll.c:391:9: note: Assuming 'e' is non-null
+  391 |     if (!e) continue;
+      |         ^~
+drv_epoll.c:391:5: note: Taking false branch
+  391 |     if (!e) continue;
+      |     ^
+drv_epoll.c:392:5: note: Loop condition is true.  Entering loop body
+  392 |     while (e->head) { eop *o = e->head; ep_unlink_op(e, o); free(o); }
+      |     ^
+drv_epoll.c:392:61: note: Memory is released
+  392 |     while (e->head) { eop *o = e->head; ep_unlink_op(e, o); free(o); }
+      |                                                             ^~~~~~~
+drv_epoll.c:392:5: note: Loop condition is true.  Entering loop body
+  392 |     while (e->head) { eop *o = e->head; ep_unlink_op(e, o); free(o); }
+      |     ^
+drv_epoll.c:392:41: note: Use of memory after it is freed
+  392 |     while (e->head) { eop *o = e->head; ep_unlink_op(e, o); free(o); }
+      |                                         ^               ~
+2 warnings generated.
+drv_uring.c:233:10: warning: Use of memory after it is freed [unix.Malloc]
+  233 |     nx = o->next;
+      |          ^
+drv_uring.c:278:7: note: Assuming 'r0' is >= 0
+  278 |   if (r0 < 0) { drv_set_err(d, "io_uring_enable_rings: %s", strerror(-r0)); return -1; }
+      |       ^~~~~~
+drv_uring.c:278:3: note: Taking false branch
+  278 |   if (r0 < 0) { drv_set_err(d, "io_uring_enable_rings: %s", strerror(-r0)); return -1; }
+      |   ^
+drv_uring.c:281:7: note: Assuming 'w' is not equal to 0
+  281 |   if (w == 0) drv_rec_drv(d);
+      |       ^~~~~~
+drv_uring.c:281:3: note: Taking false branch
+  281 |   if (w == 0) drv_rec_drv(d);
+      |   ^
+drv_uring.c:285:3: note: Loop condition is true.  Entering loop body
+  285 |   for (;;) {
+      |   ^
+drv_uring.c:290:5: note: Loop condition is false. Execution continues on line 295
+  290 |     while (ren_poll_call(c, w, &k)) {
+      |     ^
+drv_uring.c:296:5: note: Loop condition is false. Execution continues on line 297
+  296 |     for (size_t i = 0; i < nb; i++) ur_submit(d, c, w, u, &batch[i]);
+      |     ^
+drv_uring.c:297:5: note: Calling 'ur_finish_closes'
+  297 |     ur_finish_closes(d, c, w, u);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drv_uring.c:232:3: note: Loop condition is true.  Entering loop body
+  232 |   for (uop *o = u->head, *nx; o; o = nx) {
+      |   ^
+drv_uring.c:234:9: note: Assuming field 'closing' is true
+  234 |     if (!o->closing || ur_fd_ops_in_kernel(u, o->fd) != 0) continue;
+      |         ^~~~~~~~~~~
+drv_uring.c:234:9: note: Left side of '||' is false
+drv_uring.c:234:5: note: Taking false branch
+  234 |     if (!o->closing || ur_fd_ops_in_kernel(u, o->fd) != 0) continue;
+      |     ^
+drv_uring.c:236:9: note: Assuming 'p' is null
+  236 |     if (p) *p = false;
+      |         ^
+drv_uring.c:236:5: note: Taking false branch
+  236 |     if (p) *p = false;
+      |     ^
+drv_uring.c:237:17: note: Assuming the condition is false
+  237 |     int64_t r = close((int)o->fd) < 0 ? -errno : 0;
+      |                 ^~~~~~~~~~~~~~~~~~~~~
+drv_uring.c:237:17: note: '?' condition is false
+drv_uring.c:240:5: note: Memory is released
+  240 |     free(o);
+      |     ^~~~~~~
+drv_uring.c:232:3: note: Loop condition is true.  Entering loop body
+  232 |   for (uop *o = u->head, *nx; o; o = nx) {
+      |   ^
+drv_uring.c:233:10: note: Use of memory after it is freed
+  233 |     nx = o->next;
+      |          ^~~~~~~
+drv_uring.c:348:41: warning: Use of memory after it is freed [unix.Malloc]
+  348 |     while (u->head) { uop *o = u->head; ur_unlink_op(u, o); free(o); }
+      |                                         ^               ~
+drv_uring.c:343:7: note: Assuming field 'wk' is non-null
+  343 |   if (!d->wk) return;
+      |       ^~~~~~
+drv_uring.c:343:3: note: Taking false branch
+  343 |   if (!d->wk) return;
+      |   ^
+drv_uring.c:344:23: note: Assuming 'w' is < field 'workers'
+  344 |   for (int32_t w = 0; w < d->o.workers; w++) {
+      |                       ^~~~~~~~~~~~~~~~
+drv_uring.c:344:3: note: Loop condition is true.  Entering loop body
+  344 |   for (int32_t w = 0; w < d->o.workers; w++) {
+      |   ^
+drv_uring.c:346:9: note: Assuming 'u' is non-null
+  346 |     if (!u) continue;
+      |         ^~
+drv_uring.c:346:5: note: Taking false branch
+  346 |     if (!u) continue;
+      |     ^
+drv_uring.c:347:9: note: Assuming field 'ring_ok' is false
+  347 |     if (u->ring_ok) io_uring_queue_exit(&u->ring);
+      |         ^~~~~~~~~~
+drv_uring.c:347:5: note: Taking false branch
+  347 |     if (u->ring_ok) io_uring_queue_exit(&u->ring);
+      |     ^
+drv_uring.c:348:5: note: Loop condition is true.  Entering loop body
+  348 |     while (u->head) { uop *o = u->head; ur_unlink_op(u, o); free(o); }
+      |     ^
+drv_uring.c:348:61: note: Memory is released
+  348 |     while (u->head) { uop *o = u->head; ur_unlink_op(u, o); free(o); }
+      |                                                             ^~~~~~~
+drv_uring.c:348:5: note: Loop condition is true.  Entering loop body
+  348 |     while (u->head) { uop *o = u->head; ur_unlink_op(u, o); free(o); }
+      |     ^
+drv_uring.c:348:41: note: Use of memory after it is freed
+  348 |     while (u->head) { uop *o = u->head; ur_unlink_op(u, o); free(o); }
+      |                                         ^               ~
+2 warnings generated.
+# 13.571755885 s, warnings: 5

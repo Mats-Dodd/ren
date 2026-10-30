@@ -28,6 +28,10 @@
         "named": true
       },
       {
+        "type": "bytes",
+        "named": true
+      },
+      {
         "type": "call_expression",
         "named": true
       },
@@ -510,6 +514,10 @@
             "named": true
           },
           {
+            "type": "bytes",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -651,6 +659,10 @@
           },
           {
             "type": "break",
+            "named": true
+          },
+          {
+            "type": "bytes",
             "named": true
           },
           {
@@ -862,6 +874,10 @@
             "named": true
           },
           {
+            "type": "bytes",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -1019,6 +1035,21 @@
     "fields": {}
   },
   {
+    "type": "bytes",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "escape_sequence",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "call_expression",
     "named": true,
     "fields": {
@@ -1046,6 +1077,10 @@
           },
           {
             "type": "break",
+            "named": true
+          },
+          {
+            "type": "bytes",
             "named": true
           },
           {
@@ -1659,6 +1694,10 @@
           },
           {
             "type": "break",
+            "named": true
+          },
+          {
+            "type": "bytes",
             "named": true
           },
           {
@@ -2608,6 +2647,10 @@
             "named": true
           },
           {
+            "type": "bytes",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -3116,6 +3159,10 @@
           },
           {
             "type": "break",
+            "named": true
+          },
+          {
+            "type": "bytes",
             "named": true
           },
           {
@@ -3850,6 +3897,10 @@
             "named": true
           },
           {
+            "type": "bytes",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -3979,6 +4030,10 @@
           },
           {
             "type": "break",
+            "named": true
+          },
+          {
+            "type": "bytes",
             "named": true
           },
           {
@@ -4411,6 +4466,10 @@
             "named": true
           },
           {
+            "type": "bytes",
+            "named": true
+          },
+          {
             "type": "call_expression",
             "named": true
           },
@@ -4810,6 +4869,10 @@
           },
           {
             "type": "break",
+            "named": true
+          },
+          {
+            "type": "bytes",
             "named": true
           },
           {

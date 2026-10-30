@@ -1,0 +1,81 @@
+// Literals (compiler.md, "Bytes stage, part two", step 5b; strings.md,
+// "Literals"): the escapes `\r`, `\0` and `\u{...}`, `b"..."` with `\x`,
+// `"""` strings, `#` raw strings and every form with the others, which
+// every build has to agree on, byte for byte. A `b"..."` is a static
+// owner, as a `Str` literal is, so the loop at the end, 10,000 of them,
+// allocates nothing: bench/strs.t counts its objects.
+
+fn codes(b: Bytes) -> Str =
+  var out = ""
+  var i = 0
+  while i < b.len()
+    if i > 0 then out += " "
+    out += show(b.u8(i))
+    i += 1
+  out
+
+fn main() uses Console =
+  // the escapes, in strings and character literals
+  print(codes("a\r\n\0\t\"\\".bytes()))
+  print(codes("\u{41}\u{e9}\u{65E5}\u{1F600}".bytes()))
+  print("\u{41}\u{e9}\u{65E5}\u{1F600}")
+  print(['\r', '\0', '\u{E9}', '\u{10FFFF}', '\''])
+
+  // bytes
+  let crlf = b"\r\n"
+  print(codes(crlf))
+  print(codes(b"\x00\x7F\x80\xff é"))
+  print(crlf == Bytes.of([13, 10]))
+  print(b"ok" == "ok".bytes())
+  print(b"".len())
+  print(attempt Str.from_utf8(b"caf\xC3\xA9"))
+  print(attempt Str.from_utf8(b"caf\xC3"))
+
+  // `"""`
+  let name = "Ren"
+  let json = """
+    {
+      "name": "\{name}",
+      "tags": ["a", "b"]
+    }
+    """
+  print(json)
+  print(json.byte_len())
+  let s = """
+      deeper \
+    joined
+
+    "quotes", \"""
+    """
+  print(s)
+  print("""
+    a line break at the end
+
+    """.byte_len())
+
+  // raw
+  print(#"\d{3}-\d{4} "\n" is two, \#t is one, \#{name}"#)
+  print(##"holds "# and \#{name}, but \##{name=}"##)
+  let doc = #"""
+    "\n" means newline. Ask \#{name}.
+    """#
+  print(doc)
+  print(codes(b#"\x41\#x41\#r"#))
+  let req = b"""
+    GET / HTTP/1.1\r
+    Host: example.com\r
+    \r
+
+    """
+  print(req.len())
+  print(codes(req[14..16]))
+  print(codes(b#"""
+    \r\#r
+    """#))
+
+  // a static owner: 10,000 compares allocate nothing
+  let end = "GET / HTTP/1.1\r\n".bytes()[14..16]
+  var n = 0
+  for _ in 0..10_000
+    if end == b"\r\n" then n += 1
+  print(n)

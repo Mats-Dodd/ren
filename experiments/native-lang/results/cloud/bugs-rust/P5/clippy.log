@@ -1,0 +1,46 @@
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+warning: manual implementation of `.is_multiple_of()`
+   --> core/src/sched.rs:669:26
+    |
+669 |             if s != 0 && s % self.k as u64 == 0 && self.local(w).last_poll != s {
+    |                          ^^^^^^^^^^^^^^^^^^^^^^ help: replace with: `s.is_multiple_of(self.k as u64)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#manual_is_multiple_of
+    = note: `-W clippy::manual-is-multiple-of` implied by `-W clippy::all`
+    = help: to override `-W clippy::all` add `#[allow(clippy::manual_is_multiple_of)]`
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> core/src/drv/uring.rs:193:60
+    |
+193 | pub unsafe fn new_rings(o: &ren_drv_opts, evfd: &[i32]) -> Result<(Box<[UnsafeCell<UrW>]>, bool), &'static CStr> {
+    |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#type_complexity
+    = note: `-W clippy::type-complexity` implied by `-W clippy::all`
+    = help: to override `-W clippy::all` add `#[allow(clippy::type_complexity)]`
+
+warning: large size difference between variants
+  --> core/src/drv/mod.rs:19:1
+   |
+19 | / pub enum Backend {
+20 | |     Epoll(Box<[UnsafeCell<epoll::EpW>]>),
+21 | |     Uring(Box<[UnsafeCell<uring::UrW>]>),
+22 | |     Replay(replay::Replay),
+   | |     ---------------------- the second-largest variant contains at least 112 bytes
+23 | |     Fuzz(UnsafeCell<replay::Fuzz>),
+   | |     ------------------------------ the largest variant contains at least 608 bytes
+24 | | }
+   | |_^ the entire enum is at least 616 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#large_enum_variant
+   = note: `-W clippy::large-enum-variant` implied by `-W clippy::all`
+   = help: to override `-W clippy::all` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+23 -     Fuzz(UnsafeCell<replay::Fuzz>),
+23 +     Fuzz(Box<UnsafeCell<replay::Fuzz>>),
+   |
+
+warning: `ren_core` (lib) generated 3 warnings (run `cargo clippy --fix --lib -p ren_core -- -W clippy::all` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.71s

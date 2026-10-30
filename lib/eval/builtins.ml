@@ -357,6 +357,35 @@ let to_int how f =
    `Str` stays UTF-8. There's no table of the rest of Unicode's cases
    yet. *)
 let lower s = String.map Char.lowercase_ascii s
+let upper s = String.map Char.uppercase_ascii s
+
+(* `s.line_col(at)`: the line [at] is on, counting `\n`s before it from
+   1, and its column, counting code points from the line's start from 1
+   (strings.md, "The API"). Panics if [at] isn't in [s], or is inside a
+   character, with a help naming the receiver, a `\002`. *)
+let line_col s at =
+  let n = String.length s in
+  if at < 0L || at > Int64.of_int n then
+    raise
+      (Panic
+         (Printf.sprintf "`line_col` %Ld is out of bounds for a string of length %d" at n));
+  let at = Int64.to_int at in
+  if not (boundary s at) then
+    raise
+      (Panic_help
+         {
+           msg = Printf.sprintf "`line_col` %d is inside a character" at;
+           help =
+             Printf.sprintf "the character it's in starts at `\002.char_floor(%d)`" at;
+         });
+  let line = ref 1 and col = ref 1 in
+  for i = 0 to at - 1 do
+    if s.[i] = '\n' then (
+      incr line;
+      col := 1)
+    else if Char.code s.[i] land 0xc0 <> 0x80 then incr col
+  done;
+  (!line, !col)
 
 (* ---- running one ---- *)
 
@@ -750,6 +779,43 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
       pure (function
         | [ VStr s; VStr prefix ] -> VBool (String.starts_with ~prefix s)
         | _ -> bug x)
+  (* the rest of strings.md's table, and `Bytes`' same names, which mean
+     the same (compiler.md, "Bytes stage, part two", step 5) *)
+  | Str_ends_with ->
+      pure (function
+        | [ VStr s; VStr suffix ] -> VBool (String.ends_with ~suffix s)
+        | _ -> bug x)
+  | Bytes_index ->
+      pure (function
+        | [ VBytes s; VBytes sub ] -> (
+            match find_from s sub 0 with
+            | Some i -> option "Some" [ int i ]
+            | None -> option "None" [])
+        | _ -> bug x)
+  | Bytes_starts_with ->
+      pure (function
+        | [ VBytes s; VBytes prefix ] -> VBool (String.starts_with ~prefix s)
+        | _ -> bug x)
+  | Bytes_ends_with ->
+      pure (function
+        | [ VBytes s; VBytes suffix ] -> VBool (String.ends_with ~suffix s)
+        | _ -> bug x)
+  | Bytes_split ->
+      pure (function
+        | [ VBytes s; VBytes sep ] ->
+            array_of_list (List.map (fun p -> VBytes p) (split s sep))
+        | _ -> bug x)
+  | Bytes_trim ->
+      pure (function [ VBytes s ] -> VBytes (String.trim s) | _ -> bug x)
+  | Str_ascii_upper -> pure (function [ VStr s ] -> VStr (upper s) | _ -> bug x)
+  | Bytes_ascii_upper ->
+      pure (function [ VBytes s ] -> VBytes (upper s) | _ -> bug x)
+  | Str_line_col ->
+      pure (function
+        | [ VStr s; VInt at ] ->
+            let line, col = line_col s at in
+            VTuple [ int line; int col ]
+        | _ -> bug x)
   (* this, then [s]: `+`, and `+=`, a copy here, which a native build
      makes in place when it can (compiler.md, "Bytes stage, part two",
      "Appending in place") *)
@@ -866,7 +932,7 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Array_copy | Str_copy | Bytes_copy ->
       pure (function [ v ] -> v | _ -> bug x)
   (* lowering writes each call out (lower.ml, [split_at]) *)
-  | Array_split_at | Str_split_at | Bytes_split_at -> bug x
+  | Array_split_at | Str_split_at | Bytes_split_at | Pulled_count | Pulled_count_by -> bug x
   | Str_ascii_lower -> pure (function [ VStr s ] -> VStr (lower s) | _ -> bug x)
   | Bytes_ascii_lower ->
       pure (function [ VBytes s ] -> VBytes (lower s) | _ -> bug x)

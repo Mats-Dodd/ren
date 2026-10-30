@@ -1,0 +1,4 @@
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=915693 duplicated=2 lost=2
+deque_stress stress: FAIL
+run 1 failed

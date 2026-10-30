@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T14:47:05Z, plant P5, stage fuzz-run-ubsan
+# $ timeout 600 /home/user/ren/experiments/native-lang/bin/c-ubsan-int-P5/fuzz_run --random 5000 7
+fuzz_run: 5000 random inputs ok
+# exit 0 after .187184722 s

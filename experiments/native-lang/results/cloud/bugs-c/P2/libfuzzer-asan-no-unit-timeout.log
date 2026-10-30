@@ -1,0 +1,16 @@
+# machine cloud, 2026-10-30T15:39:32Z, plant P2, stage libfuzzer-asan
+# $ bash -c cd '/home/user/ren/experiments/native-lang/build/bugs-c-fuzz/P2' && '/home/user/ren/experiments/native-lang/bin/c-asan-P2/fuzz' -max_total_time=300 -seed=1 -max_len=4096 -print_final_stats=1 corpus
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1
+INFO: Loaded 1 modules   (3879 inline 8-bit counters): 3879 [0x56261672cc88, 0x56261672dbaf), 
+INFO: Loaded 1 PC tables (3879 PCs): 3879 [0x56261672dbb0,0x56261673ce20), 
+INFO:        0 files found in corpus
+==3528== libFuzzer: run interrupted; exiting
+stat::number_of_executed_units: 1
+stat::average_exec_per_sec:     0
+stat::new_units_added:          0
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              32
+# exit 72 after 405.888535248 s
+corpus
+# killed by hand (SIGTERM) at 406 s: libFuzzer's default -timeout=1200 per unit; the first unit hung, so -max_total_time never got checked. Rerun with -timeout=10 in libfuzzer-asan.log

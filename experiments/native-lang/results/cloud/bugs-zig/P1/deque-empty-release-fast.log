@@ -1,0 +1,4 @@
+# machine cloud, 2026-10-30T16:15:39Z, plant P1, stage deque-empty-release-fast
+# $ timeout 20 /home/user/ren/experiments/native-lang/bin/zig-release-fast-P1/deque_stress empty
+deque_stress empty: ok
+# exit 0 after .011194361 s

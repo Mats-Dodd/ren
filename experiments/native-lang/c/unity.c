@@ -1,0 +1,10 @@
+/* unity.c: every C core file as one translation unit (build.sh e1). */
+#include "dq.c"
+#include "journal.c"
+#include "sched.c"
+#include "core.c"
+#include "layout.c"
+#include "drv_common.c"
+#include "drv_epoll.c"
+#include "drv_uring.c"
+#include "drv_replay.c"

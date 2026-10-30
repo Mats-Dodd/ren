@@ -1,0 +1,12 @@
+pingpong         base_clang       n=7 median=  15.87 min=  15.82 max=  16.65 ok=True
+pingpong         base_tcc         n=7 median=  41.40 min=  41.28 max=  41.57 ok=True
+pingpong         reg_clang        n=7 median=  16.13 min=  15.97 max=  16.19 ok=True
+pingpong         reg_nochk_clang  n=7 median=  15.89 min=  15.78 max=  16.04 ok=True
+pingpong         reg_noinl_clang  n=7 median=  15.87 min=  15.81 max=  15.95 ok=True
+pingpong         reg_tcc          n=7 median=  55.05 min=  54.03 max=  56.67 ok=True
+pingpong_nested  base_clang       n=7 median=  32.52 min=  32.37 max=  32.84 ok=True
+pingpong_nested  base_tcc         n=7 median= 116.83 min= 116.39 max= 117.81 ok=True
+pingpong_nested  reg_clang        n=7 median=  19.19 min=  19.10 max=  19.60 ok=True
+pingpong_nested  reg_nochk_clang  n=7 median=  18.92 min=  18.87 max=  18.99 ok=True
+pingpong_nested  reg_noinl_clang  n=7 median=  21.01 min=  20.67 max=  21.25 ok=True
+pingpong_nested  reg_tcc          n=7 median= 119.33 min= 118.51 max= 122.08 ok=True

@@ -57,7 +57,7 @@ fn main() uses Console =
 |};
   check_error
     {|
-fn main() uses Console = print('\r')
+fn main() uses Console = print('\q')
 |};
   check_error
     {|
@@ -66,11 +66,11 @@ fn main() uses Console = print('a)
   [%expect {|
     [10, 9, 92, 39, 34, 32]
     ()
-    error: `\r` isn't an escape
+    error: `\q` isn't an escape
       ┌─ test.ren:1:33
-    1 │ fn main() uses Console = print('\r')
+    1 │ fn main() uses Console = print('\q')
       │                                 ^^
-      help: the escapes in a character literal are `\n`, `\t`, `\'` and `\\`
+      help: the escapes in a character literal are `\n`, `\t`, `\r`, `\0`, `\'`, `\\`, which writes a backslash, and `\u{E9}`, a code point
     error: this character literal isn't closed
       ┌─ test.ren:1:32
     1 │ fn main() uses Console = print('a)

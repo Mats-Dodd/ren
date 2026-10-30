@@ -1,0 +1,64 @@
+# machine cloud, 2026-10-30T16:53:02Z, plant P1, stage rate-deque-debug
+# $ bash -c f=0; for i in $(seq 20); do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-debug-P1/deque_stress' stress 10 200000 > /tmp/ren-zig-bugs-P1-$$.out 2>&1 || { f=$((f+1)); tail -3 /tmp/ren-zig-bugs-P1-$$.out; }; done; rm -f /tmp/ren-zig-bugs-P1-$$.out; echo "failed $f/20"; [ $f = 0 ]
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=994480 duplicated=25 lost=25
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=937893 duplicated=3 lost=3
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=1022511 duplicated=38 lost=38
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=802386 duplicated=1 lost=1
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=898323 duplicated=14 lost=14
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=842526 duplicated=4 lost=3
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=853131 duplicated=4 lost=4
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=897644 duplicated=20 lost=20
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=978983 duplicated=266 lost=266
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=919391 duplicated=4 lost=4
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=965216 duplicated=35 lost=35
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=1027121 duplicated=6 lost=6
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=902714 duplicated=40 lost=40
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=893753 duplicated=24 lost=24
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=879903 duplicated=2 lost=2
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=898567 duplicated=18 lost=18
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=865754 duplicated=1 lost=1
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=1093386 duplicated=60 lost=60
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=987438 duplicated=83 lost=83
+deque_stress stress: FAIL
+FAIL tests/deque_stress.c:85: dup == 0 && lost == 0
+stress: rounds=10 n=200000 steals=954945 duplicated=72 lost=72
+deque_stress stress: FAIL
+failed 20/20
+# exit 1 after 11.905031719 s

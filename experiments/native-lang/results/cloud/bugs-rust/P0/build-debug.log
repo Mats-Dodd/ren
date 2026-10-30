@@ -1,0 +1,5 @@
+== rust-debug: /home/user/ren/experiments/native-lang/rust/build.sh debug /home/user/ren/experiments/native-lang/build/rust-debug
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+built rust-debug: language 0.70s, harness link 2.42s

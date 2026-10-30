@@ -1,0 +1,5 @@
+# machine: cloud -- VERIFY re-run log (build-rust-release.log), 2026-10-30
+== rust-release: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/rust/build.sh release /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/rust-release
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.01s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.01s
+built rust-release: language 0.18s, harness link 3.04s

@@ -1,0 +1,93 @@
+==================
+WARNING: ThreadSanitizer: data race (pid=13979)
+  Write of size 8 at 0x727400000908 by thread T2:
+    #0 steal_any /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:433:21 (harness+0xff9e9) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:684:26 (harness+0xff9e9)
+    #2 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113c0e) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #3 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113c0e)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113c0e)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Previous write of size 8 at 0x727400000908 by thread T3:
+    #0 steal_any /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:433:21 (harness+0xff9e9) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:684:26 (harness+0xff9e9)
+    #2 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113c0e) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #3 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113c0e)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113c0e)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Location is heap block of size 2560 at 0x727400000000 allocated by main thread:
+    #0 aligned_alloc <null> (harness+0x66244) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 alloc /home/user/ren/experiments/native-lang/rust/core/src/rt.rs:39:17 (harness+0x1014a6) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #2 __rust_alloc /home/user/ren/experiments/native-lang/rust/core/src/rt.rs:59:15 (harness+0x1014a6)
+    #3 alloc /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:158:9 (harness+0x1014a6)
+    #4 alloc_impl_runtime /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:335:73 (harness+0x1014a6)
+    #5 alloc_impl /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:457:9 (harness+0x1014a6)
+    #6 allocate /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:575:14 (harness+0x1014a6)
+    #7 try_allocate_in<alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:47 (harness+0x1014a6)
+    #8 with_capacity_in<alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15 (harness+0x1014a6)
+    #9 with_capacity_in<ren_core::sched::Worker, alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20 (harness+0x1014a6)
+    #10 with_capacity_in<ren_core::sched::Worker, alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:933:20 (harness+0x1014a6)
+    #11 with_capacity<ren_core::sched::Worker> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:529:9 (harness+0x1014a6)
+    #12 <ren_core::sched::Core>::start /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:541:22 (harness+0x1014a6)
+    #13 ren_start /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:26:5 (harness+0x114ffc) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #14 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xe56c0) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Thread T2 (tid=13984, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x66c9f) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Thread T3 (tid=13985, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x66c9f) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:433:21 in steal_any
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=13979)
+  Read of size 8 at 0x727400000688 by thread T3:
+    #0 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:653:41 (harness+0xff180) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113c0e) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #2 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113c0e)
+    #3 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113c0e)
+    #4 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Previous write of size 8 at 0x727400000688 by thread T4:
+    #0 steal_any /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:433:21 (harness+0xff9e9) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:684:26 (harness+0xff9e9)
+    #2 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113c0e) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #3 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113c0e)
+    #4 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113c0e)
+    #5 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Location is heap block of size 2560 at 0x727400000000 allocated by main thread:
+    #0 aligned_alloc <null> (harness+0x66244) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 alloc /home/user/ren/experiments/native-lang/rust/core/src/rt.rs:39:17 (harness+0x1014a6) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #2 __rust_alloc /home/user/ren/experiments/native-lang/rust/core/src/rt.rs:59:15 (harness+0x1014a6)
+    #3 alloc /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:158:9 (harness+0x1014a6)
+    #4 alloc_impl_runtime /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:335:73 (harness+0x1014a6)
+    #5 alloc_impl /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:457:9 (harness+0x1014a6)
+    #6 allocate /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/alloc.rs:575:14 (harness+0x1014a6)
+    #7 try_allocate_in<alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:485:47 (harness+0x1014a6)
+    #8 with_capacity_in<alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:453:15 (harness+0x1014a6)
+    #9 with_capacity_in<ren_core::sched::Worker, alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:187:20 (harness+0x1014a6)
+    #10 with_capacity_in<ren_core::sched::Worker, alloc::alloc::Global> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:933:20 (harness+0x1014a6)
+    #11 with_capacity<ren_core::sched::Worker> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:529:9 (harness+0x1014a6)
+    #12 <ren_core::sched::Core>::start /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:541:22 (harness+0x1014a6)
+    #13 ren_start /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:26:5 (harness+0x114ffc) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #14 main /home/user/ren/experiments/native-lang/harness/host_main.c:140:20 (harness+0xe56c0) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Thread T3 (tid=13985, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x66c9f) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+  Thread T4 (tid=13986, running) created by main thread at:
+    #0 pthread_create <null> (harness+0x66c9f) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+    #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 6a5d7bac002202a539691abc30718e21cf9a42e0)
+
+SUMMARY: ThreadSanitizer: data race /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:653:41 in <ren_core::sched::Core>::run
+==================
+ThreadSanitizer: reported 2 warnings
+result: w1 n=200000 sum=19999900000 left=0
+metric: w1 tasks_per_s=451070 inner_s=0.443391 wall_s=0.446268
+metric: harness workload=w1 driver=epoll workers=4 wall_s=0.446268

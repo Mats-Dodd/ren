@@ -1,0 +1,5 @@
+# machine cloud, 2026-10-30T16:54:24Z, plant P2u, stage w1x4-tsan
+# $ bash -c for d in epoll uring; do timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000 || exit $?; done
+ren zig panic: integer overflow
+bash: line 1: 11764 Aborted                 timeout 120 '/home/user/ren/experiments/native-lang/bin/zig-tsan-P2u/harness' w1 --driver $d --workers 4 --n 200000
+# exit 134 after .023968542 s

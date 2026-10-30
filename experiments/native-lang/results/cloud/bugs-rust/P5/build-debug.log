@@ -1,0 +1,7 @@
+== rust-debug-P5: /home/user/ren/experiments/native-lang/rust/build.sh debug /home/user/ren/experiments/native-lang/build/rust-debug-P5
+   Compiling libc v0.2.191
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.97s
+   Compiling ren_hot v0.1.0 (/home/user/ren/experiments/native-lang/rust/hot)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.67s
+built rust-debug-P5: language 3.79s, harness link 2.63s

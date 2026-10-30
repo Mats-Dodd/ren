@@ -1297,7 +1297,7 @@ and pulls env cx (a : expr) =
    after. What's pulled is recorded at [pulled_node] for lowering, which
    makes the block that pulls it, called on the caller's task (compiler.md,
    "Services stage", step 5). *)
-and pull_arg env cx ~name (a : expr) expected =
+and pull_arg env cx ?known ~name (a : expr) expected =
   let elem = fresh_var env.st in
   let at = pulled_node a.node in
   (* what the cursor's `next` fails with, the block that pulls it does, as
@@ -1329,7 +1329,13 @@ and pull_arg env cx ~name (a : expr) expected =
         given (cursor ~found:(fun p -> pulled (Cursor p)) ~meth_at:a.node ~fails env cx ~at place t)
       else if reveal env.st t <> TError then report env (arg_not_changed a.loc name)
   | _ -> (
-      let t = pulled_here env a (fun () -> infer env cx a) in
+      (* [known], a receiver's type, inferred already (a cursor's
+         `count()`, [cursor_count]) *)
+      let t =
+        match known with
+        | Some t -> t
+        | None -> pulled_here env a (fun () -> infer env cx a)
+      in
       let map_path = Path.prelude "Map" and set_path = Path.prelude "Set" in
       match reveal env.st t with
       | TCon (p, [ k; v ]) when p = map_path ->
@@ -2165,6 +2171,14 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
              | Some td -> dep_op_in env m.name td <> None
              | None -> false ->
           desc_method env cx e f r m i d args
+      (* `xs.count()`, with no predicate, of an `Array`, a `Map` or a
+         `Set`, whose `count(f)` takes one: how many there are, its `len()`
+         (operators.md, "The collection methods") *)
+      | Some (td, _), _
+        when m.name = "count" && args = [] && changed = None
+             && List.mem td.path
+                  [ Path.prelude "Array"; Path.prelude "Map"; Path.prelude "Set" ] ->
+          method_call env cx e f r m tr td (Option.get (op_in "len" td)) []
       | Some (td, o), _ -> method_call env cx ?changed e f r m tr td o args
       | None, TError -> nothing ()
       (* `x.hash()` of a type with no `hash` of its own, nor a field of
@@ -2196,6 +2210,13 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
             (variant_no_methods m.loc ~shown:(show (printer env) tr) ~ctor:c
                ~recv ~name:m.name);
           nothing ()
+      (* `c.count()` and `c.count(f)` of a cursor with no `count` of its
+         own: the items it gives, pulled as `for` pulls them *)
+      | None, (TCon _ as t)
+        when m.name = "count" && List.length args <= 1 && changed = None
+             && Option.bind (known_decl env t) (field_in m.name) = None
+             && cursor_of env t ->
+          cursor_count env cx e f r tr args
       | None, (TCon (p, _) as t)
         when Option.bind (known_decl env t) (field_in m.name) = None ->
           let td = Hashtbl.find env.types p in
@@ -2387,6 +2408,29 @@ and cursor_of env t =
 and pulled_here env (e : expr) f =
   Hashtbl.replace env.pulled_calls e.node ();
   Fun.protect ~finally:(fun () -> Hashtbl.remove env.pulled_calls e.node) f
+
+(* `c.count()` or `c.count(f)`, [f] the method, [r] a cursor of type
+   [tr] with no `count` of its own (operators.md, "The collection
+   methods": `count()` on every receiver, a cursor included): the
+   built-in `pulled_count(items)` or `pulled_count_by(items, f)`,
+   which no program names, [r] given as their pull parameter `items`, as
+   a temporary cursor is given to one (streams.md, rule 3), so a named
+   cursor's copy is counted and the cursor stays where it was. Lowering
+   pulls the receiver (lower.ml, [plain_call]). *)
+and cursor_count env cx (e : expr) (f : expr) (r : expr) tr args =
+  let x = if args = [] then Intrinsic.Pulled_count else Pulled_count_by in
+  let path = Intrinsic.path x in
+  (* a program never names it, so it's in no module's imports *)
+  if not (Hashtbl.mem env.globals path) then
+    Hashtbl.replace env.globals path (of_scheme env.st (Prelude.scheme x));
+  let tm = lookup env cx ~node:f.node f.loc (Global path) in
+  Hashtbl.replace cx.nodes f.node tm;
+  Hashtbl.replace cx.found f.node (Method_of path);
+  match repr tm with
+  | TFun (items :: ps, ret, errs, uses) ->
+      pull_arg env cx ~known:tr ~name:(Some "items") r items.ty;
+      apply env cx e ~name:(Some "count") ~callee:path f (TFun (ps, ret, errs, uses)) args
+  | _ -> TError
 
 (* `r.hash()`, [f] the method, [r] of type [tr], which has no `hash` of
    its own: the built-in `hash_of(r)` (compiler.md, "Bytes stage"), the

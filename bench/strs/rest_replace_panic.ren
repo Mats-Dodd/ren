@@ -1,0 +1,5 @@
+// `replace` of the empty string panics, as `split` of it does.
+
+fn main() uses Console =
+  print("abc".replace("b", ""))
+  print("abc".replace("", "-"))

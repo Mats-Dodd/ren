@@ -1,0 +1,317 @@
+== layout (rust-tsan-P4)
+PASS layout_check
+== abi (rust-tsan-P4)
+FAIL abi_test (exit 66)
+     |     #8 drop_glue<alloc::boxed::Box<ren_core::sched::Op, alloc::alloc::Global>> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:844:1 (abi_test+0xfb6be)
+     |     #9 drop<alloc::boxed::Box<ren_core::sched::Op, alloc::alloc::Global>> /root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/mem/mod.rs:1051:1 (abi_test+0xfb6be)
+     |     #10 on_cancel_done /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:472:9 (abi_test+0xfb6be)
+     |     #11 deliver /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:456:18 (abi_test+0xfb6be)
+     |     #12 <ren_core::sched::Core>::drain_inbox /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:478:18 (abi_test+0xfb6be)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (abi_test+0xfbb4d) (BuildId: 19e8b7e2e5269980d752fce6b5cbd21a6c2136cc)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (abi_test+0x1117c1) (BuildId: 19e8b7e2e5269980d752fce6b5cbd21a6c2136cc)
+     |     #15 t_determinism /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:483:5 (abi_test+0xe6ee3) (BuildId: 19e8b7e2e5269980d752fce6b5cbd21a6c2136cc)
+     |     #16 main /home/user/ren/experiments/native-lang/harness/tests/abi_test.c:505:5 (abi_test+0xe4375) (BuildId: 19e8b7e2e5269980d752fce6b5cbd21a6c2136cc)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     |   FAIL tests/abi_test.c:477: ren_poll_call(c, 0, &k1) && ren_poll_call(c, 0, &k2)
+     | FAIL determinism
+     | ThreadSanitizer: reported 3 warnings
+== deque (rust-tsan-P4)
+PASS deque empty
+PASS deque lifo
+PASS deque stress
+== smoke (rust-tsan-P4)
+PASS w1 epoll x1
+PASS w2 epoll x1
+PASS w3 epoll x1
+PASS w1 epoll x4
+PASS w2 epoll x4
+PASS w3 epoll x4
+PASS w1 epoll x8
+PASS w2 epoll x8
+PASS w3 epoll x8
+PASS w1 uring x1
+PASS w2 uring x1
+PASS w3 uring x1
+PASS w1 uring x4
+PASS w2 uring x4
+PASS w3 uring x4
+PASS w1 uring x8
+PASS w2 uring x8
+PASS w3 uring x8
+== io (rust-tsan-P4)
+PASS t_timer epoll x1
+PASS t_pipe epoll x1
+PASS t_tcp epoll x1
+FAIL t_cancel epoll x1 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113bce) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113bce)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113bce)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T1 (tid=32545, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=1 wall_s=0.111150
+FAIL t_block stop epoll x1 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113bce) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113bce)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113bce)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T2 (tid=32556, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=1 wall_s=0.147170
+PASS t_block kill epoll x1
+PASS t_timer epoll x4
+PASS t_pipe epoll x4
+PASS t_tcp epoll x4
+FAIL t_cancel epoll x4 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113bce) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113bce)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113bce)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T1 (tid=32597, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=4 wall_s=0.106070
+FAIL t_block stop epoll x4 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113bce) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113bce)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113bce)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T2 (tid=32610, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=4 wall_s=0.151578
+PASS t_block kill epoll x4
+PASS t_timer epoll x8
+PASS t_pipe epoll x8
+PASS t_tcp epoll x8
+FAIL t_cancel epoll x8 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113bce) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113bce)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113bce)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T1 (tid=32666, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=8 wall_s=0.108817
+FAIL t_block stop epoll x8 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x113bce) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::epoll::EpW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x113bce)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:272:31 (harness+0x113bce)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T2 (tid=32681, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=epoll workers=8 wall_s=0.130882
+PASS t_block kill epoll x8
+PASS t_timer uring x1
+PASS t_pipe uring x1
+PASS t_tcp uring x1
+FAIL t_cancel uring x1 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x1143d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::uring::UrW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x1143d5)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:273:31 (harness+0x1143d5)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T1 (tid=32724, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=1 wall_s=0.088449
+FAIL t_block stop uring x1 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x1143d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::uring::UrW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x1143d5)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:273:31 (harness+0x1143d5)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T2 (tid=317, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=1 wall_s=0.156870
+PASS t_block kill uring x1
+PASS t_timer uring x4
+PASS t_pipe uring x4
+PASS t_tcp uring x4
+FAIL t_cancel uring x4 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x1143d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::uring::UrW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x1143d5)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:273:31 (harness+0x1143d5)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T1 (tid=358, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=4 wall_s=0.105156
+FAIL t_block stop uring x4 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x1143d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::uring::UrW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x1143d5)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:273:31 (harness+0x1143d5)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T2 (tid=369, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=4 wall_s=0.145078
+PASS t_block kill uring x4
+PASS t_timer uring x8
+PASS t_pipe uring x8
+PASS t_tcp uring x8
+FAIL t_cancel uring x8 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x1143d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::uring::UrW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x1143d5)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:273:31 (harness+0x1143d5)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T1 (tid=421, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=8 wall_s=0.117866
+FAIL t_block stop uring x8 (exit 66)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (harness+0xff1dd) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (harness+0x1143d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #15 drive<ren_core::drv::uring::UrW> /home/user/ren/experiments/native-lang/rust/core/src/drv/linux.rs:34:17 (harness+0x1143d5)
+     |     #16 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:273:31 (harness+0x1143d5)
+     |     #17 worker_main /home/user/ren/experiments/native-lang/harness/host_main.c:41:11 (harness+0xe61ec) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     |   Thread T2 (tid=436, running) created by main thread at:
+     |     #0 pthread_create <null> (harness+0x66c9f) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     |     #1 main /home/user/ren/experiments/native-lang/harness/host_main.c:164:11 (harness+0xe58d5) (BuildId: 4971485d70c72745ebe5282851a2c8bbe4700201)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_block cancelled=4
+     | metric: harness workload=t_block driver=uring workers=8 wall_s=0.143621
+PASS t_block kill uring x8
+== replay (rust-tsan-P4)
+PASS W4 replay w1 epoll (11166 journal bytes, output identical)
+PASS W4 replay w3 epoll (3811330 journal bytes, output identical)
+FAIL W4 replay t_cancel epoll record (exit 0)
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=epoll workers=1 wall_s=0.112786
+PASS W4 replay t_timer epoll (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte epoll
+PASS replay refuses a truncated journal epoll
+PASS W4 replay w1 uring (11166 journal bytes, output identical)
+PASS W4 replay w3 uring (3811330 journal bytes, output identical)
+FAIL W4 replay t_cancel uring record (exit 0)
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | ThreadSanitizer: reported 1 warnings
+     | result: t_cancel a=2 b=2 c=2
+     | metric: harness workload=t_cancel driver=uring workers=1 wall_s=0.096650
+PASS W4 replay t_timer uring (3274 journal bytes, output identical)
+PASS replay refuses a flipped input byte uring
+PASS replay refuses a truncated journal uring
+== fuzz (rust-tsan-P4)
+/home/user/ren/experiments/native-lang/harness/test.sh: line 25:   556 Aborted                 timeout "$TMO" "$@" > "$TMP/out" 2>&1
+FAIL fuzz_run random 300 (exit 134)
+     |     #10 on_cancel_done /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:472:9 (fuzz_run+0xfe28e)
+     |     #11 deliver /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:456:18 (fuzz_run+0xfe28e)
+     |     #12 <ren_core::sched::Core>::drain_inbox /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:478:18 (fuzz_run+0xfe28e)
+     |     #13 <ren_core::sched::Core>::run /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:658:14 (fuzz_run+0xfe71d) (BuildId: 3054f7d8c1bfb72159a14c15ef5cf67aeab710fc)
+     |     #14 ren_run /home/user/ren/experiments/native-lang/rust/core/src/ffi.rs:34:13 (fuzz_run+0x105761) (BuildId: 3054f7d8c1bfb72159a14c15ef5cf67aeab710fc)
+     |     #15 <ren_core::drv::replay::Fuzz>::run_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:340:17 (fuzz_run+0x105761)
+     |     #16 actions /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:362:26 (fuzz_run+0x10632d) (BuildId: 3054f7d8c1bfb72159a14c15ef5cf67aeab710fc)
+     |     #17 <ren_core::drv::replay::Fuzz>::run /home/user/ren/experiments/native-lang/rust/core/src/drv/replay.rs:416:22 (fuzz_run+0x10632d)
+     |     #18 ren_drv_worker /home/user/ren/experiments/native-lang/rust/core/src/drv/mod.rs:275:40 (fuzz_run+0x113649) (BuildId: 3054f7d8c1bfb72159a14c15ef5cf67aeab710fc)
+     |     #19 fuzz_one /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_common.c:28:15 (fuzz_run+0xe5691) (BuildId: 3054f7d8c1bfb72159a14c15ef5cf67aeab710fc)
+     |     #20 main /home/user/ren/experiments/native-lang/harness/fuzz/fuzz_run.c:21:7 (fuzz_run+0xe54cd) (BuildId: 3054f7d8c1bfb72159a14c15ef5cf67aeab710fc)
+     | 
+     | SUMMARY: ThreadSanitizer: heap-use-after-free /home/user/ren/experiments/native-lang/rust/core/src/sched.rs:458:28 in deliver
+     | ==================
+     | fuzz: oracle failure (worker 0, finish 1): fuzz oracle failed at input byte 88: a reply to a pending call was not ACCEPTED
+== summary rust-tsan-P4: 56 passed, 16 failed
+   failed: abi_test
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_cancel epoll x8
+   failed: t_block stop epoll x8
+   failed: t_cancel uring x1
+   failed: t_block stop uring x1
+   failed: t_cancel uring x4
+   failed: t_block stop uring x4
+   failed: t_cancel uring x8
+   failed: t_block stop uring x8
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_cancel uring record
+   failed: fuzz_run random 300

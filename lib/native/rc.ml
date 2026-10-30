@@ -383,7 +383,9 @@ type kind =
       (** a borrowed parameter, an associated value or a descriptor a block's
           environment holds: someone else keeps it alive *)
   | Owned
-  | Part of int * int  (** a field of this group, at this slot *)
+  | Part of int * int
+      (** a field of this group, at this slot; or, at slot [-1], an element
+          of it or a view of it, which no drop keeps by its slot ([lent]) *)
   | View of int
       (** what this group, a mutable variable or a slot, holds now: the same
           object *)
@@ -457,7 +459,7 @@ let callee fi name =
 
 (* Which groups each variable is in, what each is, and which are parts or
    views of which. *)
-let analyze fns (f : fn) : info =
+let analyze ?(lent = fun _ -> false) fns (f : fn) : info =
   let slots = ref Ids.empty and mutables = ref Ids.empty in
   iter_stmts
     (fun s ->
@@ -547,6 +549,13 @@ let analyze fns (f : fn) : info =
                 define v Static
             (* a method's description, which its caller keeps alive *)
             | Arg_borrowed _ when not (changes v) -> define v Borrowed_param
+            (* an element read, or a slice of a release build's string,
+               that [lent_reads] lends: a part of what it's read from *)
+            | Runtime ((Array_get _ | Slice (_, Range)), Var x :: _, _)
+              when lent v.id ->
+                let gx = group fi x in
+                if gx.kind = Uncounted then define v Owned
+                else child v (Part (gx.gid, -1)) gx
             | Call _ ->
                 define v Owned;
                 Hashtbl.replace results v.id ()
@@ -969,7 +978,7 @@ let promote pl gid ~live ~transfer =
           if Ids.mem c live then
             match g.kind with
             | View _ when transfer && direct && not !took -> took := true
-            | Part (_, slot) when direct -> (
+            | Part (_, slot) when direct && slot >= 0 -> (
                 match count_var g with
                 | Some v when not (List.mem_assoc slot !parts) ->
                     parts := !parts @ [ (slot, v) ]
@@ -1031,7 +1040,7 @@ let rec dtree pl gid ~scope ~live ~transfer : dtree =
           if Ids.mem c live then
             match g.kind with
             | View _ when transfer && direct && not !took -> took := true
-            | Part (_, slot) when direct -> (
+            | Part (_, slot) when direct && slot >= 0 -> (
                 match count_var g with
                 | Some v when not (List.mem_assoc slot !parts) ->
                     parts := !parts @ [ (slot, v) ]
@@ -1043,7 +1052,7 @@ let rec dtree pl gid ~scope ~live ~transfer : dtree =
                after `r.q.p.x`, is the same object, its live parts
                counted again below *)
             | Part (_, slot), Some v
-              when direct && v.layout = Boxed
+              when direct && slot >= 0 && v.layout = Boxed
                    && Ids.mem v.id scope
                    && (not (shared_slot c slot))
                    && (not (List.exists (fun (s, _, _) -> s = slot) !nested))
@@ -1464,8 +1473,100 @@ let find_takes fi (body : block) =
   block body;
   (taken, !untouched)
 
-let place_fn fns (f : fn) : fn =
+(* The reads [place_fn] lends, by the variable each defines, as a field
+   read is lent (compiler.md, "Bytes stage, part two", "Step 4 (part 2),
+   as built"): a part of what it's read from, counted again only where
+   it's kept, or where what it's read from dies before it.
+
+   - A slice of a release build's `Str` or `Bytes`, two words: the
+     uncounted view. Its root is the value's root, which the value holds
+     while it's held, as an object holds its fields; nothing changes a
+     value's root or its bytes in its range while it's held, since an
+     append or a write in place takes the value ([takes], and
+     [changes_cell] for a cell's), which counts the view first.
+   - An element read of an array whose elements are objects or counted
+     structs, from an array that nothing in the function takes or moves
+     an element out of ([Array_take]), held by a variable that never
+     changes and isn't a view of one that does, nor a part of such a
+     view: so the element stays where it was while the array is held,
+     and the array is held while the element is read, or it's counted
+     first. That's what makes a field of an object a part, said of an
+     array. An array taken, by a write in place say, is left out: swap.ml
+     moves an element out of an array uncounted where it's written back,
+     which a part of it wouldn't see.
+
+   Either is lent only if its own variable never changes. Borrow inference
+   (borrow.ml, [consumed]) doesn't see these parts: a lent read that's
+   kept is counted again where it's kept, as an owned read was, and
+   doesn't make what it's read from owned. *)
+let lent_reads fns (f : fn) =
   let fi = analyze fns f in
+  let ssa (v : var) = not (Ids.mem v.id fi.mutables || Ids.mem v.id fi.slots) in
+  let taken = Hashtbl.create 16 in
+  let take (x : atom) =
+    match x with
+    | Var v -> (
+        match Hashtbl.find_opt fi.group_of v.id with
+        | Some g -> Hashtbl.replace taken g.gid ()
+        | None -> ())
+    | _ -> ()
+  in
+  iter_stmts
+    (fun s ->
+      List.iter take (fst (operands fi s));
+      match s with
+      | Let (_, Runtime (Array_take _, x :: _, _))
+      | Do (Runtime (Array_take _, x :: _, _)) ->
+          take x
+      | _ -> ())
+    f.body;
+  (* held by variables that never change, up to the object it's in *)
+  let rec settled g =
+    List.for_all ssa g.members
+    &&
+    match g.kind with
+    | Owned | Borrowed_param | Static -> true
+    | Part (p, _) -> settled (find_group fi p)
+    | Uncounted | View _ | Cell_view _ -> false
+  in
+  let lent = Hashtbl.create 16 in
+  iter_stmts
+    (fun s ->
+      match s with
+      | Let (v, Runtime (Slice ((Of_str | Of_bytes), Range), Var x :: _, _))
+        when ssa v && ssa x && is_struct v.layout && x.layout = v.layout ->
+          Hashtbl.replace lent v.id ()
+      | Let (v, Runtime (Array_get l, Var x :: _, _))
+        when ssa v
+             && (match l with Boxed | Struct (_, true) -> true | _ -> false)
+             && ssa x ->
+          let g = group fi x in
+          if (not (Hashtbl.mem taken g.gid)) && settled g then
+            Hashtbl.replace lent v.id ()
+      | _ -> ())
+    f.body;
+  fun id -> Hashtbl.mem lent id
+
+(* A lent read made what it is: an element not counted ([Array_peek]), or
+   the uncounted view ([Str_view]). *)
+let rec lend_reads fi (b : block) : block =
+  let part (v : var) =
+    match Hashtbl.find_opt fi.group_of v.id with
+    | Some { kind = Part (_, -1); _ } -> true
+    | _ -> false
+  in
+  List.map
+    (fun s ->
+      match s with
+      | Let (v, Runtime (Array_get l, xs, site)) when part v ->
+          Let (v, Runtime (Array_peek l, xs, site))
+      | Let (v, Runtime (Slice (s, Range), xs, site)) when part v ->
+          Let (v, Runtime (Str_view s, xs, site))
+      | s -> map_blocks (lend_reads fi) s)
+    b
+
+let place_fn fns (f : fn) : fn =
+  let fi = analyze ~lent:(lent_reads fns f) fns f in
   let next, _ = fresh_counters f in
   let slots_in_params =
     List.fold_left
@@ -1506,7 +1607,7 @@ let place_fn fns (f : fn) : fn =
         | _ -> None)
       f.params
   in
-  { f with body = kill pl ~scope:cx.defined params ~live @ body }
+  { f with body = lend_reads fi (kill pl ~scope:cx.defined params ~live @ body) }
 
 (* A struct made of a part, only read, then dropped, made of the part
    uncounted (a release build's `Str` field, read for a length or a byte,
@@ -1518,11 +1619,15 @@ let place_fn fns (f : fn) : fn =
    [p] is a part of holds it all along (rule B), so the count and the drop
    are a pair that does nothing, and go; [k] is then a part too, which Mem
    Lint checks as one. The block's inner pairs go first, so an outer
-   pair's interval holds none. *)
-let lend_parts ~lendable (b : block) : block =
-  let quiet k (s : stmt) =
+   pair's interval holds none. A call between is quiet too if it takes
+   nothing counted ([calm]) and [p] is a part of what only this function's
+   own variables that never change hold ([settled]): a callee can reach
+   what the function holds only through a cell, or what it's given. *)
+let lend_parts ~lendable ~calm ~settled (b : block) : block =
+  let quiet k p (s : stmt) =
     let uses_k xs = List.exists (fun x -> x = Var k) xs in
     match s with
+    | Let (_, Call (name, xs)) | Do (Call (name, xs)) -> settled p && calm name xs
     | Let (_, (Atom (Var x))) -> x.id <> k.id
     | Let (_, (Atom _ | Struct_get _ | Field _ | Arith _ | Neg _ | Compare _
               | Not _ | Tag_of _ | Obj_tag _ | Unpack _ | Pack _)) ->
@@ -1537,6 +1642,7 @@ let lend_parts ~lendable (b : block) : block =
     | Dup _ -> true
     | _ -> false
   in
+  let lent = ref false in
   let rec go (b : stmt list) =
     match b with
     | Dup (Var p) :: (Let (k, Make_struct xs) as mk) :: rest
@@ -1546,22 +1652,31 @@ let lend_parts ~lendable (b : block) : block =
               = [ Var p ] -> (
         let rec split acc = function
           | Drop (Var k') :: after when k'.id = k.id -> Some (List.rev acc, after)
-          | s :: after when quiet k s -> split (s :: acc) after
+          | s :: after when quiet k p s -> split (s :: acc) after
           | _ -> None
         in
         match split [] rest with
-        | Some (between, after) -> mk :: go (between @ after)
+        | Some (between, after) ->
+            lent := true;
+            mk :: go (between @ after)
         | None -> Dup (Var p) :: go (mk :: rest))
     | s :: rest -> s :: go rest
     | [] -> []
   in
-  go b
+  (* a pair whose interval held another, lent after it, is lent on the
+     next pass: `r.key.at(r.key.len() - 1)`'s outer key *)
+  let rec passes b =
+    lent := false;
+    let b = go b in
+    if !lent then passes b else b
+  in
+  passes b
 
 (* [lend_parts] over a function: a part [p] is lent so only if it's a
    field read, [Struct_get] or [Field], counted by that one [Dup] alone
    and kept by no [Free] or [Reset], so it holds no reference anywhere
    else, as Mem Lint sees it: a part whose count is 0. *)
-let lend_fn (f : fn) : fn =
+let lend_fn fns (f : fn) : fn =
   let parts = Hashtbl.create 16 and dups = Hashtbl.create 16 in
   let bump x = Hashtbl.replace dups x (1 + Option.value (Hashtbl.find_opt dups x) ~default:0) in
   iter_stmts
@@ -1577,7 +1692,60 @@ let lend_fn (f : fn) : fn =
   let lendable (p : var) =
     Hashtbl.mem parts p.id && Hashtbl.find_opt dups p.id = Some 1
   in
-  let rec block b = lend_parts ~lendable (List.map (map_blocks block) b) in
+  (* a call that takes nothing counted *)
+  let calm name xs =
+    match Hashtbl.find_opt fns name with
+    | None -> false
+    | Some (g : fn) ->
+        let modes = modes_of g in
+        List.length modes = List.length xs
+        && List.for_all2
+             (fun (x : atom) (m : mode) ->
+               m = Borrowed
+               || match x with Var v -> not (counted v.layout) | _ -> true)
+             xs modes
+  in
+  (* what each variable is made of, for [settled] *)
+  let defs = Hashtbl.create 64 and changes = Hashtbl.create 16 in
+  let bufs = Hashtbl.create 8 in
+  iter_stmts
+    (fun s ->
+      match s with
+      | Let (v, Runtime (Array_data, [ Var x ], _)) -> Hashtbl.replace bufs v.id x
+      | Let (v, r) -> Hashtbl.replace defs v.id r
+      | Set (v, _) | Decl v -> Hashtbl.replace changes v.id ()
+      | _ -> ())
+    f.body;
+  iter_stmts
+    (fun s ->
+      match s with
+      | Let (_, Addr m) -> Hashtbl.replace changes m.id ()
+      | _ -> ())
+    f.body;
+  let params = List.map (fun (v : var) -> v.id) f.params in
+  (* a variable that never changes, holding a value that's made, or read
+     from one that's settled, or a parameter's: never what a cell holds *)
+  let rec settled (v : var) =
+    (not (Hashtbl.mem changes v.id))
+    &&
+    match Hashtbl.find_opt defs v.id with
+    | None -> List.mem v.id params && (match v.layout with Cell _ -> false | _ -> true)
+    | Some r -> (
+        match r with
+        | Atom (Var x) | Struct_get (Var x, _) | Field (Var x, _, _)
+        | Runtime ((Array_peek _ | Str_view _), Var x :: _, _) ->
+            settled x
+        | Runtime (Buf_peek _, Var b :: _, _) -> (
+            match Hashtbl.find_opt bufs b.id with
+            | Some x -> settled x
+            | None -> false)
+        | Load _ | Env_get _ | Global _ | Arg _ | Arg_borrowed _ | Addr _ ->
+            false
+        | _ -> true)
+  in
+  let rec block b =
+    lend_parts ~lendable ~calm ~settled (List.map (map_blocks block) b)
+  in
   { f with body = block f.body }
 
 (* The program with its counting placed by Perceus: [prepare]d, and its
@@ -1590,6 +1758,6 @@ let program (p : program) : program =
     fns =
       List.map
         (fun f ->
-          lend_fn (place_fn fns f))
+          lend_fn fns (place_fn fns f))
         p.fns;
   }

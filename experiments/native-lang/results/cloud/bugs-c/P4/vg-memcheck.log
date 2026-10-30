@@ -1,0 +1,337 @@
+# machine cloud, 2026-10-30T14:40:04Z, plant P4, stage vg-memcheck
+# $ bash -c 
+    set -e
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/abi_test'
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/deque_stress' empty
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/deque_stress' lifo
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/deque_stress' stress 4 20000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/harness' w1 --driver epoll --workers 4 --n 20000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/harness' t_cancel --driver epoll --workers 4
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/harness' t_cancel --driver epoll --workers 1
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/harness' w3 --driver epoll --workers 1 --n 2000
+    timeout 300 valgrind -q --error-exitcode=99 '/home/user/ren/experiments/native-lang/bin/c-debug-P4/fuzz_run' --random 100 1
+ok   basic
+ok   stale
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A4: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bac858 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10C592: race (tests/abi_test.c:267)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A7: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bac85c is 12 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10C592: race (tests/abi_test.c:267)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7F5: deliver (core.c:152)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bac858 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10C592: race (tests/abi_test.c:267)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid free() / delete / delete[] / realloc()
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F832: deliver (core.c:153)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bac850 is 0 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10CA95: race (tests/abi_test.c:281)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10C592: race (tests/abi_test.c:267)
+==10323==    by 0x10A142: t_cancel_race (tests/abi_test.c:285)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+ok   cancel_race
+ok   cancel_sent
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A4: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10A2B4: t_retract (tests/abi_test.c:296)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bd7338 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10A2B4: t_retract (tests/abi_test.c:296)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10C1C4: caller_resume (tests/abi_test.c:95)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10A23B: t_retract (tests/abi_test.c:293)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A7: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10A2B4: t_retract (tests/abi_test.c:296)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bd733c is 12 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10A2B4: t_retract (tests/abi_test.c:296)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10C1C4: caller_resume (tests/abi_test.c:95)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10A23B: t_retract (tests/abi_test.c:293)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7F5: deliver (core.c:152)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10A2B4: t_retract (tests/abi_test.c:296)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4bd7338 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10A2B4: t_retract (tests/abi_test.c:296)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10C1C4: caller_resume (tests/abi_test.c:95)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10A23B: t_retract (tests/abi_test.c:293)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+ok   retract
+ok   answer_now
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A4: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10ABA2: t_stop (tests/abi_test.c:333)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4c01ed8 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10ABA2: t_stop (tests/abi_test.c:333)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10C1C4: caller_resume (tests/abi_test.c:95)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10A7D0: t_stop (tests/abi_test.c:323)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A7: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10ABA2: t_stop (tests/abi_test.c:333)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4c01edc is 12 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10ABA2: t_stop (tests/abi_test.c:333)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10C1C4: caller_resume (tests/abi_test.c:95)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10A7D0: t_stop (tests/abi_test.c:323)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7F5: deliver (core.c:152)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10ABA2: t_stop (tests/abi_test.c:333)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4c01ed8 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10ABA2: t_stop (tests/abi_test.c:333)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10C1C4: caller_resume (tests/abi_test.c:95)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10A7D0: t_stop (tests/abi_test.c:323)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+ok   stop
+ok   kill
+ok   budget
+ok   full
+ok   steal
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A4: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10BC4B: t_determinism (tests/abi_test.c:483)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4c6efd8 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10BC4B: t_determinism (tests/abi_test.c:483)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10BB1B: t_determinism (tests/abi_test.c:475)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7A7: deliver (core.c:150)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10BC4B: t_determinism (tests/abi_test.c:483)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4c6efdc is 12 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10BC4B: t_determinism (tests/abi_test.c:483)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10BB1B: t_determinism (tests/abi_test.c:475)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+==10323== Invalid read of size 4
+==10323==    at 0x10F7F5: deliver (core.c:152)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10BC4B: t_determinism (tests/abi_test.c:483)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Address 0x4c6efd8 is 8 bytes inside a block of size 144 free'd
+==10323==    at 0x484988F: free (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F793: deliver (core.c:146)
+==10323==    by 0x10F59A: drain_inbox (core.c:162)
+==10323==    by 0x10E1E6: ren_run (sched.c:196)
+==10323==    by 0x10BC4B: t_determinism (tests/abi_test.c:483)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323==  Block was alloc'd at
+==10323==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==10323==    by 0x10F234: xmalloc (core.c:10)
+==10323==    by 0x110580: ren_world (core.c:304)
+==10323==    by 0x10CCD7: race_root_resume (tests/abi_test.c:245)
+==10323==    by 0x10E761: run_task (sched.c:120)
+==10323==    by 0x10E3AC: ren_run (sched.c:216)
+==10323==    by 0x10BB1B: t_determinism (tests/abi_test.c:475)
+==10323==    by 0x1092F9: main (tests/abi_test.c:505)
+==10323== 
+ok   determinism
+# exit 99 after .598507562 s

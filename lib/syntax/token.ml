@@ -66,6 +66,9 @@ type t =
           [lex_string]) *)
   | STR_MID of string  (** its text between two holes *)
   | STR_TAIL of string  (** its text after its last hole *)
+  | BYTES of string
+      (** a bytes literal's bytes, `b"\r\n"`'s, its escapes undone: it has
+          no holes (lexer.ml, [lex_string]) *)
   | IDENT of string
   (* keywords *)
   | FN
@@ -180,6 +183,7 @@ let to_string = function
   | STR_TAIL s ->
       let q = show_str s in
       "}" ^ String.sub q 1 (String.length q - 1)
+  | BYTES s -> "b" ^ show_str s
   | IDENT s -> s
   | FN -> "fn"
   | PUB -> "pub"

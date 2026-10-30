@@ -1,0 +1,5 @@
+== rust-release: /home/user/ren/experiments/native-lang/rust/build.sh release /home/user/ren/experiments/native-lang/build/rust-release
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3.39s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.02s
+built rust-release: language 3.62s, harness link 3.36s

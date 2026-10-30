@@ -1,0 +1,38 @@
+--- /home/user/ren/experiments/native-lang/rust/core/src/sched.rs	2026-10-30 13:51:06.932449177 +0000
++++ sliceD/core/src/sched.rs	2026-10-30 14:16:06.866795851 +0000
+@@ -145,7 +145,7 @@
+     dq: Deque,
+     parked: AtomicI32,
+     steps: AtomicU64,
+-    stolen_from: AtomicU64,
++    stolen_from: u64,
+     inbox: Mpsc<Op>,
+     remote: Mpsc<CancelNode>,
+     local: UnsafeCell<Local>,
+@@ -420,7 +420,7 @@
+             }
+             let x = self.worker(v).dq.steal();
+             if x != EMPTY && x != ABORT {
+-                self.worker(v).stolen_from.fetch_add(1, Relaxed);
++                *(&self.worker(v).stolen_from as *const u64 as *mut u64) += 1; // P5 cast
+                 return x as *mut ren_task;
+             }
+         }
+@@ -530,7 +530,7 @@
+                 dq: Deque::new(c.deque_log2),
+                 parked: AtomicI32::new(0),
+                 steps: AtomicU64::new(0),
+-                stolen_from: AtomicU64::new(0),
++                stolen_from: 0,
+                 inbox: Mpsc::new(),
+                 remote: Mpsc::new(),
+                 local: UnsafeCell::new(Local {
+@@ -627,7 +627,7 @@
+         if me.parked.swap(0, AcqRel) == 1 {
+             self.idle.fetch_sub(1, Relaxed);
+         }
+-        self.local(w).stolen_seen = me.stolen_from.load(Relaxed);
++        self.local(w).stolen_seen = me.stolen_from;
+         if self.done.load(Acquire) != 0 {
+             return REN_FINISHED as i32;
+         }

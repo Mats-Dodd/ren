@@ -1,0 +1,3 @@
+# machine: cloud -- VERIFY re-run log (build-zig-release-fast-P3.log), 2026-10-30
+== zig-release-fast-P3: /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/zig/build.sh release-fast /tmp/claude-0/-home-user-ren/d65d9998-bee9-5cff-92bb-30baa48ec4a3/scratchpad/v/build/zig-release-fast-P3
+built zig-release-fast-P3: language 4.78s, harness link 2.97s

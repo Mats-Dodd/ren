@@ -322,6 +322,75 @@ static void ren_release(ren_todo_t *t, ren_obj *o) {
 #endif
 }
 
+/* [n] references to [o] dropped at once: an array's elements that hold
+   the same object one after another, as a release build's slices of one
+   input do (compiler.md, "Bytes stage, part two", "Step 4 (part 2), as
+   built"). One subtraction where the count stays above 0, and otherwise
+   [ren_release] [n] times, which is what it saves. */
+static void ren_release_n(ren_todo_t *t, ren_obj *o, int64_t n) {
+  if (n == 1) {
+    ren_release(t, o);
+    return;
+  }
+#if !defined(REN_RC_SHARED) && !defined(REN_RC_ATOMIC)
+  if (!ren_is_scalar(o) && o->rc > n) {
+#ifdef REN_STATS
+    ren_stats.drops += n;
+#endif
+    o->rc -= (int32_t)n;
+    return;
+  }
+#endif
+  for (int64_t i = 0; i < n; i++)
+    ren_release(t, o);
+}
+
+/* The objects an array's [n] elements at [e] hold, dropped: each run of
+   one object, as a release build's slices of one input make, at once.
+   Its loops are written out for elements of one and of two objects, a
+   `Str` and a record of two, which a general loop over the mask makes
+   several times slower. Out of line, so the C compiler's inlining of
+   the program's own code doesn't change with it. */
+__attribute__((noinline)) static void ren_release_elems(ren_todo_t *t, ren_obj *a,
+                                                        ren_val *e, int64_t n) {
+  int64_t k = ren_stride(a);
+  unsigned m = a->objs;
+  if (m == 0)
+    return;
+  ren_obj *run = NULL;
+  int64_t runs = 0;
+#define REN_RUN(x)                                                             \
+  do {                                                                         \
+    ren_obj *ren_x_ = (x);                                                     \
+    if (ren_x_ == run)                                                         \
+      runs++;                                                                  \
+    else {                                                                     \
+      if (runs > 0)                                                            \
+        ren_release_n(t, run, runs);                                           \
+      run = ren_x_;                                                            \
+      runs = 1;                                                                \
+    }                                                                          \
+  } while (0)
+  if (k == 1)
+    for (int64_t i = 0; i < n; i++)
+      REN_RUN(e[i].o);
+  else if ((m & (m - 1)) == 0) {
+    int s = __builtin_ctz(m);
+    for (int64_t i = 0; i < n; i++)
+      REN_RUN(e[i * k + s].o);
+  } else if (((m & (m - 1)) & ((m & (m - 1)) - 1)) == 0) { /* two */
+    int s0 = __builtin_ctz(m), s1 = __builtin_ctz(m & (m - 1));
+    for (int64_t i = 0; i < n; i++) {
+      REN_RUN(e[i * k + s0].o);
+      REN_RUN(e[i * k + s1].o);
+    }
+  } else
+    REN_ELEM_OBJS(a, e, n, x, REN_RUN(x));
+#undef REN_RUN
+  if (runs > 0)
+    ren_release_n(t, run, runs);
+}
+
 /* Free one object whose count reached 0, its children going on the
    list. */
 static void ren_free_one(ren_todo_t *t, ren_obj *o) {
@@ -352,7 +421,7 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
       bytes = (int64_t)size;
       break;
     }
-    REN_ELEM_OBJS(o, a->data, a->len, x, ren_release(t, x));
+    ren_release_elems(t, o, a->data, a->len);
     bytes = (int64_t)(sizeof(ren_array) + (size_t)a->cap * ren_elem_bytes(o));
     free(a->data);
     size = sizeof(ren_array);
@@ -1343,6 +1412,75 @@ ren_obj *ren_str_lower(ren_obj *s) {
     to[i] = c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
   }
   return o;
+}
+
+int64_t ren_str_find(ren_obj *s, ren_obj *t) {
+  int64_t n = ren_str_len(s), m = ren_str_len(t);
+  const char *d = ren_str_data(s), *p = ren_str_data(t);
+  if (m == 0)
+    return 0;
+  /* each place the first byte is, found by `memchr`, the rest compared */
+  for (int64_t i = 0; i + m <= n; i++) {
+    const char *at = memchr(d + i, p[0], (size_t)(n - m - i + 1));
+    if (at == NULL)
+      return -1;
+    i = at - d;
+    if (memcmp(at + 1, p + 1, (size_t)(m - 1)) == 0)
+      return i;
+  }
+  return -1;
+}
+
+bool ren_str_has(ren_obj *s, ren_obj *t, bool suffix) {
+  int64_t n = ren_str_len(s), m = ren_str_len(t);
+  return m <= n && memcmp(ren_str_data(s) + (suffix ? n - m : 0), ren_str_data(t),
+                          (size_t)m) == 0;
+}
+
+ren_obj *ren_str_upper(ren_obj *s) {
+  int64_t n = ren_str_len(s);
+  const char *from = ren_str_data(s);
+  ren_obj *o = ren_alloc_str(n);
+  char *to = ((ren_str *)o)->bytes;
+  for (int64_t i = 0; i < n; i++) {
+    char c = from[i];
+    to[i] = c >= 'a' && c <= 'z' ? (char)(c - ('a' - 'A')) : c;
+  }
+  return o;
+}
+
+int64_t ren_line_col(ren_obj *s, int64_t at, bool col, const ren_site *site) {
+  int64_t n = ren_str_len(s);
+  const unsigned char *d = (const unsigned char *)ren_str_data(s);
+  char msg[160];
+  if (at < 0 || at > n) {
+    snprintf(msg, sizeof msg,
+             "`line_col` %" PRId64 " is out of bounds for a string of length %" PRId64,
+             at, n);
+    ren_panic(site, msg);
+  }
+  if (!ren_boundary(s, at)) {
+    /* the help names `char_floor` on the string as it's written, a 0x02 */
+    char help[160];
+    snprintf(msg, sizeof msg, "`line_col` %" PRId64 " is inside a character", at);
+    snprintf(help, sizeof help,
+             "the character it's in starts at `\002.char_floor(%" PRId64 ")`", at);
+    ren_panic_help(site, msg, help);
+  }
+  /* the line: 1 and the `\n`s before [at]; the column: 1 and the code
+     points after the last of them, the bytes that aren't continuations */
+  int64_t k = 1;
+  if (!col) {
+    for (int64_t i = 0; i < at; i++)
+      k += d[i] == '\n';
+    return k;
+  }
+  int64_t from = at;
+  while (from > 0 && d[from - 1] != '\n')
+    from--;
+  for (int64_t i = from; i < at; i++)
+    k += (d[i] & 0xC0) != 0x80;
+  return k;
 }
 
 ren_obj *ren_array_copied(ren_obj *a) {

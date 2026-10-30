@@ -388,6 +388,56 @@ pub type Str = builtin
   // its characters, each a one-code-point `Str`, a slice of it: a cursor
   // (streams.md, "Data: cursors you keep")
   pub fn chars(self) -> Chars = Chars { s: self, pos: 0 }
+  // the rest of strings.md's table (compiler.md, "Bytes stage, part two",
+  // step 5), over `index`, `split` and slices, each a slice of this
+  // string where it gives one; `Bytes` has the same, meaning the same.
+  // whether `t` is in it
+  pub fn includes(self, t: Str) -> Bool = self.index(t).is_some()
+  // what's after `t`, if it starts with `t`
+  pub fn strip_prefix(self, t: Str) -> Option<Str> =
+    if self.starts_with(t) then Some(self[t.byte_len()..self.byte_len()]) else None
+  // what's before `t`, if it ends with `t`
+  pub fn strip_suffix(self, t: Str) -> Option<Str> =
+    if self.ends_with(t) then Some(self[0..self.byte_len() - t.byte_len()]) else None
+  // what's before the first `sep` and what's after it, if it's there
+  pub fn split_once(self, sep: Str) -> Option<(Str, Str)> =
+    match self.index(sep)
+      Some(i) => Some((self[0..i], self[i + sep.byte_len()..self.byte_len()]))
+      None => None
+  // its lines: the parts between each `\n`, without a `\r` before it,
+  // and no empty one after the last (Rust's `lines`)
+  pub fn lines(self) -> Array<Str> =
+    var out: Array<Str> = []
+    let parts = self.split("\n")
+    let last = parts.len() - 1
+    for i in 0..last
+      let line = parts[i]
+      let n = line.byte_len()
+      if n > 0 && line.bytes().u8(n - 1) == 13 then &out.push(line[0..n - 1])
+      else &out.push(line)
+    if not parts[last].is_empty() then &out.push(parts[last])
+    out
+  // the runs of it between ASCII whitespace, `trim`'s: none empty
+  pub fn fields(self) -> Array<Str> =
+    var out: Array<Str> = []
+    let b = self.bytes()
+    var start = -1
+    for i in 0..b.len()
+      if ascii_space(b.u8(i)) then
+        if start >= 0 then
+          &out.push(self[start..i])
+          start = -1
+      else if start < 0 then start = i
+    if start >= 0 then &out.push(self[start..b.len()])
+    out
+  // every `from` in it made `to`, left to right, none overlapping
+  pub fn replace(self, from: Str, to: Str) -> Str =
+    if from.is_empty() then lib_panic("`replace` needs a string to replace that isn't empty")
+    else self.split(from).join(to)
+
+// whether the byte `c` is ASCII whitespace, as `trim` takes it: a space,
+// `\t`, `\n`, form feed or `\r` (strings.md, "Characters")
+fn ascii_space(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 12 || c == 13
 
 // the characters of `s` from `pos`, each a slice of `s` one code point
 // long: what `s.chars()` gives
@@ -420,6 +470,49 @@ pub type Bytes = builtin
   // `at` it reports counts from `from`, where these bytes start in their
   // stream or file (strings.md, "Positions")
   pub fn cursor(self, from: Int = 0) -> ByteCursor = ByteCursor { b: self, pos: 0, base: from }
+  // `Str`'s search, split and trim names, meaning the same (compiler.md,
+  // "Bytes stage, part two", step 5)
+  pub fn includes(self, t: Bytes) -> Bool = self.index(t).is_some()
+  pub fn strip_prefix(self, t: Bytes) -> Option<Bytes> =
+    if self.starts_with(t) then Some(self[t.len()..self.len()]) else None
+  pub fn strip_suffix(self, t: Bytes) -> Option<Bytes> =
+    if self.ends_with(t) then Some(self[0..self.len() - t.len()]) else None
+  pub fn split_once(self, sep: Bytes) -> Option<(Bytes, Bytes)> =
+    match self.index(sep)
+      Some(i) => Some((self[0..i], self[i + sep.len()..self.len()]))
+      None => None
+  pub fn lines(self) -> Array<Bytes> =
+    var out: Array<Bytes> = []
+    let parts = self.split(Bytes.of([10]))
+    let last = parts.len() - 1
+    for i in 0..last
+      let line = parts[i]
+      let n = line.len()
+      if n > 0 && line.u8(n - 1) == 13 then &out.push(line[0..n - 1])
+      else &out.push(line)
+    if parts[last].len() > 0 then &out.push(parts[last])
+    out
+  pub fn fields(self) -> Array<Bytes> =
+    var out: Array<Bytes> = []
+    var start = -1
+    for i in 0..self.len()
+      if ascii_space(self.u8(i)) then
+        if start >= 0 then
+          &out.push(self[start..i])
+          start = -1
+      else if start < 0 then start = i
+    if start >= 0 then &out.push(self[start..self.len()])
+    out
+  // every `from` in it made `to`, left to right, none overlapping
+  pub fn replace(self, from: Bytes, to: Bytes) -> Bytes =
+    if from.len() == 0 then lib_panic("`replace` needs bytes to replace that aren't empty")
+    else
+      let parts = self.split(from)
+      var out = parts[0]
+      for i in 1..parts.len()
+        out += to
+        out += parts[i]
+      out
 
 // the 64 bits of `x` as the number they are unsigned, written out: `x`
 // if it isn't negative, else 2^64 + `x`, whose last digit is found by
@@ -1749,6 +1842,24 @@ let scheme (x : Intrinsic.t) =
   | Array_join -> fn [ read (array str); read str ] str
   (* fn(self: Str) -> Bytes: its UTF-8 *)
   | Str_bytes -> fn [ read str ] bytes
+  (* the rest of strings.md's table (compiler.md, "Bytes stage, part two",
+     step 5), `Bytes` with `Str`'s names. fn(self: Str, suffix: Str) ->
+     Bool *)
+  | Str_ends_with -> fn [ read str; read str ] bool
+  (* fn(self: Str) -> Str: `a` to `z` made `A` to `Z`, and nothing else *)
+  | Str_ascii_upper -> fn [ read str ] str
+  | Bytes_ascii_upper -> fn [ read bytes ] bytes
+  (* fn(self: Str, at: Int) -> (Int, Int): the line and column [at] is
+     at, from 1, the column in code points, panicking if [at] isn't 0 to
+     the length or is inside a character *)
+  | Str_line_col ->
+      fn [ read str; read int ] (Ty.tuple [ int; int ])
+  (* `Str`'s, of `Bytes` *)
+  | Bytes_index ->
+      fn [ read bytes; read bytes ] (Con (Path.prelude "Option", [ int ]))
+  | Bytes_starts_with | Bytes_ends_with -> fn [ read bytes; read bytes ] bool
+  | Bytes_split -> fn [ read bytes; read bytes ] (array bytes)
+  | Bytes_trim -> fn [ read bytes ] bytes
   (* fn(b: Bytes) -> Str ! InvalidUtf8(at: Int, incomplete: Bool): where
      the first byte that isn't part of a character is, and whether the
      end cut that character off *)
@@ -1835,6 +1946,29 @@ let scheme (x : Intrinsic.t) =
      seed, so the same on every run and in every build (walk.ml,
      [fixed_hash]) *)
   | Hash -> fn ~reqs:hashed [ read (Var 0) ] int
+  (* fn<T>(items: fn() -> Option<T>) -> Int, and fn<T>(items: fn() ->
+     Option<T>, f: fn(T) -> Bool) -> Int: how many items [items] gives,
+     and how many of them [f] is true of, failing with and using what
+     they do: a cursor's `c.count()` and `c.count(f)`, [items] the cursor
+     pulled (Infer_expr.cursor_count), which lowering writes out as a loop
+     (lower.ml, [pulled_count]) *)
+  | Pulled_count ->
+      scheme_of
+        (Fun
+           ( [ read (Fun ([], Con (Path.prelude "Option", [ Var 0 ]), open_row 0, open_row 1)) ],
+             int,
+             open_row 0,
+             open_row 1 ))
+  | Pulled_count_by ->
+      scheme_of
+        (Fun
+           ( [
+               read (Fun ([], Con (Path.prelude "Option", [ Var 0 ]), open_row 0, open_row 1));
+               read (Fun ([ read (Var 0) ], bool, open_row 0, open_row 1));
+             ],
+             int,
+             open_row 0,
+             open_row 1 ))
   (* fn<T>(what: Str) -> T: a panic, saying [what]: how a library's
      handlers refuse what they can't go on from, a send on a closed
      channel (std_lib.ml) *)
@@ -2249,7 +2383,10 @@ let reaches (x : Intrinsic.t) =
   | Int_wrapping_neg | Int_xor | Int_bit_and | Int_bit_or | Int_shl | Int_shr | Int_add | Int_sub | Int_mul | Int_div | Int_rem | Int_neg
   | Float_add | Float_sub | Float_mul | Float_div | Float_rem | Float_neg
   | Float_of | Float_round | Float_truncate | Float_sqrt | Str_ascii_lower | Bytes_ascii_lower | Bytes_add | Str_char_floor
-  | Str_char_ceil | Str_code | Str_of_code | Array_join | Hash ->
+  | Str_char_ceil | Str_code | Str_of_code | Array_join | Str_ends_with
+  | Str_ascii_upper | Str_line_col | Bytes_index | Bytes_starts_with
+  | Bytes_ends_with | Bytes_split | Bytes_trim | Bytes_ascii_upper | Hash
+  | Pulled_count | Pulled_count_by ->
       None
 
 (* Who can call it. Any program can, unless only the prelude's own
@@ -2286,7 +2423,7 @@ let caller (x : Intrinsic.t) =
       | Task_produce | Task_map_pull | Outbox_send | Inbox_take
       | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
-      | Sim_advance | Sim_alarm | Task_drain | Hash | Async_worker
+      | Sim_advance | Sim_alarm | Task_drain | Hash | Pulled_count | Pulled_count_by | Async_worker
       | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
       | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge
       | Family_enter | Family_post | Family_made
@@ -2414,6 +2551,8 @@ let fns : Intrinsic.t list =
     Task_random;
     Task_drain;
     Hash;
+    Pulled_count;
+    Pulled_count_by;
   ]
 
 (* ---- built-in types ----
@@ -2493,11 +2632,28 @@ let types =
           Str_char_floor;
           Str_char_ceil;
           Str_code;
+          Str_ends_with;
+          Str_ascii_upper;
+          Str_line_col;
         ]
       ~functions:[ Str_from_utf8; Str_from_utf8_lossy; Str_of_code ];
     t "Bytes"
       ~methods:
-        (Intrinsic.[ Bytes_len; Bytes_at; Bytes_copy; Bytes_split_at; Bytes_add; Bytes_ascii_lower ]
+        (Intrinsic.
+           [
+             Bytes_len;
+             Bytes_at;
+             Bytes_copy;
+             Bytes_split_at;
+             Bytes_add;
+             Bytes_ascii_lower;
+             Bytes_index;
+             Bytes_starts_with;
+             Bytes_ends_with;
+             Bytes_split;
+             Bytes_trim;
+             Bytes_ascii_upper;
+           ]
         @ List.map (fun a -> Intrinsic.Bytes_read a) Intrinsic.accesses
         @ List.map (fun a -> Intrinsic.Bytes_write a) Intrinsic.accesses
         @ Intrinsic.[ Bytes_set_var false; Bytes_set_var true ])

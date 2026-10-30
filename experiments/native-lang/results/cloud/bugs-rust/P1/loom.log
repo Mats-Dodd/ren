@@ -1,0 +1,95 @@
+   Compiling rustversion v1.0.23
+   Compiling find-msvc-tools v0.1.15
+   Compiling once_cell v1.21.4
+   Compiling shlex v2.0.1
+   Compiling libc v0.2.191
+   Compiling tracing-core v0.1.36
+   Compiling cc v1.10.0
+   Compiling regex-syntax v0.8.11
+   Compiling log v0.4.34
+   Compiling cfg-if v1.0.5
+   Compiling lazy_static v1.5.1
+   Compiling pin-project-lite v0.2.17
+   Compiling tracing v0.1.44
+   Compiling sharded-slab v0.1.7
+   Compiling thread_local v1.1.10
+   Compiling generator v0.8.11
+   Compiling regex-automata v0.4.18
+   Compiling tracing-log v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling smallvec v1.16.4
+   Compiling scoped-tls v1.0.1
+   Compiling ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling loom v0.7.2
+    Finished `release` profile [optimized + debuginfo] target(s) in 31.58s
+     Running tests/loom_deque.rs (rust/target/loom-P1/release/deps/loom_deque-eba7847ca26ec5a1)
+
+running 3 tests
+test take_vs_steal_last ... ok
+test two_thieves ... FAILED
+test steal_during_grow ... ok
+
+failures:
+
+---- two_thieves stdout ----
+
+thread 'two_thieves' (12744) panicked at core/tests/loom_deque.rs:24:5:
+assertion `left == right` failed: an item was lost or taken twice
+  left: [1, 2, 2]
+ right: [1, 2]
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panicking.rs:689:5
+   1: core::panicking::panic_fmt
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/panicking.rs:80:14
+   2: core::panicking::assert_failed_inner
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/panicking.rs:434:23
+   3: core::panicking::assert_failed::<alloc::vec::Vec<u64>, alloc::vec::Vec<u64>>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/panicking.rs:394:5
+   4: check
+             at ./tests/loom_deque.rs:24:5
+   5: {closure#0}
+             at ./tests/loom_deque.rs:81:9
+   6: {closure#0}<loom_deque::two_thieves::{closure_env#0}>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/model.rs:194:17
+   7: call_once<loom::model::{impl#0}::check::{closure_env#0}<loom_deque::two_thieves::{closure_env#0}>, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ops/function.rs:250:5
+   8: call_once<(), dyn core::ops::function::FnOnce<(), Output=()>, alloc::alloc::Global>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/alloc/src/boxed.rs:2275:9
+   9: {closure#0}
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/loom-0.7.2/src/rt/scheduler.rs:142:17
+  10: call_once<loom::rt::scheduler::spawn_thread::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ops/function.rs:250:5
+  11: {closure#0}<core::option::Option<alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output=()>, alloc::alloc::Global>>, (), loom::rt::scheduler::spawn_thread::{closure_env#0}>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/gen_impl.rs:357:21
+  12: call_once<generator::gen_impl::{impl#9}::init_code::{closure_env#0}<core::option::Option<alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output=()>, alloc::alloc::Global>>, (), loom::rt::scheduler::spawn_thread::{closure_env#0}>>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/stack/mod.rs:137:13
+  13: call_once
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/stack/mod.rs:119:9
+  14: {closure#0}
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/gen.rs:35:14
+  15: call_once<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/core/src/ops/function.rs:250:5
+  16: do_call<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panicking.rs:581:40
+  17: catch_unwind<(), generator::detail::gen::gen_init_impl::{closure_env#0}>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panicking.rs:544:19
+  18: catch_unwind<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /rustc/2d8144b7880597b6e6d3dfd63a9a9efae3f533d3/library/std/src/panic.rs:359:14
+  19: catch_unwind_filter<generator::detail::gen::gen_init_impl::{closure_env#0}, ()>
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/gen.rs:23:5
+  20: gen_init_impl
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/gen.rs:50:25
+  21: generator::detail::asm::gen_init
+             at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/generator-0.8.11/src/detail/x86_64_unix.rs:8:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    two_thieves
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p ren_core --test loom_deque`

@@ -827,6 +827,14 @@ let with_links items =
    a file's when it reads the file again. *)
 let char_literals : (Loc.t, string) Hashtbl.t = Hashtbl.create 16
 
+(* The bytes literals, `b"\r\n"`, by where each is, as each is written:
+   the call `"\r\n".bytes()` to everything after the parser
+   (parser.ml, [parse_primary]), whose literal holds the bytes, which a
+   `Str` literal never does elsewhere, and shown as written in a help
+   ([source]). As [char_literals], the lexer forgets a file's when it
+   reads the file again. *)
+let bytes_literals : (Loc.t, string) Hashtbl.t = Hashtbl.create 16
+
 (* The holes' expressions among an interpolated string's pieces. *)
 let holes ps = List.filter_map (function Hole e -> Some e | Lit _ -> None) ps
 
@@ -1609,6 +1617,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
   let rec go (e : Resolved.expr) =
     match e.kind with
     | Int _ when Hashtbl.mem char_literals e.loc -> Hashtbl.find char_literals e.loc
+    | Call _ when Hashtbl.mem bytes_literals e.loc -> Hashtbl.find bytes_literals e.loc
     | Int n -> Int64.to_string n
     | Float f -> show_float f
     | Bool b -> string_of_bool b

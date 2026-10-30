@@ -1,0 +1,230 @@
+# machine cloud (experiments/MACHINE-cloud.md), Measure step, 2026-10-30. cross builds
+## x86_64-linux-musl build log
+=== C (x86_64-linux-musl)
+/home/user/ren/experiments/native-lang/c/drv_epoll.c:363:13: error: call to undeclared function 'epoll_pwait2'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  363 |     int n = epoll_pwait2(e->epfd, (struct epoll_event *)(void *)evbuf, (int)(sizeof evbuf / EV_BYTES), tsp, NULL);
+      |             ^
+1 error generated.
+ar: /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-c/drv_epoll.o: No such file or directory
+error: /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-c/libren_core.a: file not found
+  link harness: 1
+error: /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-c/libren_core.a: file not found
+error: /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-c/libren_core.a: file not found
+error: /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-c/libren_core.a: file not found
+error: /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-c/libren_core.a: file not found
+jdump 
+=== Rust std (x86_64-unknown-linux-musl)
+    Finished `release` profile [optimized + debuginfo] target(s) in 5.90s
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by addr2line.44131c6058d6dbc8-cgu.0
+>>>               addr2line-af89486ed3e773ca.addr2line.44131c6058d6dbc8-cgu.0.rcgu.o:(core::ptr::drop_glue::<alloc::string::String>) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+>>> referenced by addr2line.44131c6058d6dbc8-cgu.0
+>>>               addr2line-af89486ed3e773ca.addr2line.44131c6058d6dbc8-cgu.0.rcgu.o:(addr2line::line::path_push) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+>>> referenced by alloc.rs:0 (library/alloc/src/alloc.rs:0)
+>>>               alloc-2ed17d6249ea70dc.alloc.64436a8fec759bdc-cgu.0.rcgu.o:(<alloc::string::String>::from_utf8_lossy) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+>>> referenced 90 more times
+  link harness: 1
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by addr2line.44131c6058d6dbc8-cgu.0
+>>>               addr2line-af89486ed3e773ca.addr2line.44131c6058d6dbc8-cgu.0.rcgu.o:(core::ptr::drop_glue::<alloc::string::String>) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by gimli.d67f5ffd3cba8a92-cgu.0
+>>>               gimli-321dd4ec90cb6b15.gimli.d67f5ffd3cba8a92-cgu.0.rcgu.o:(<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Owned, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>>::new_internal::<alloc::alloc::Global>) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by addr2line.44131c6058d6dbc8-cgu.0
+>>>               addr2line-af89486ed3e773ca.addr2line.44131c6058d6dbc8-cgu.0.rcgu.o:(core::ptr::drop_glue::<alloc::string::String>) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by addr2line.44131c6058d6dbc8-cgu.0
+>>>               addr2line-af89486ed3e773ca.addr2line.44131c6058d6dbc8-cgu.0.rcgu.o:(core::ptr::drop_glue::<alloc::string::String>) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-std/libren_core.a
+jdump 
+=== Rust nostd (x86_64-unknown-linux-musl)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4.60s
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by alloc.rs:0 (library/alloc/src/alloc.rs:0)
+>>>               alloc-2ed17d6249ea70dc.alloc.64436a8fec759bdc-cgu.0.rcgu.o:(alloc::fmt::format::format_inner) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-nostd/libren_core.a
+  link harness: 1
+ld.lld: error: undefined symbol: _Unwind_Resume
+>>> referenced by alloc.rs:0 (library/alloc/src/alloc.rs:0)
+>>>               alloc-2ed17d6249ea70dc.alloc.64436a8fec759bdc-cgu.0.rcgu.o:(alloc::fmt::format::format_inner) in archive /home/user/ren/experiments/native-lang/build/x-x86_64-linux-musl-rust-nostd/libren_core.a
+abi_test deque_stress jdump layout_check 
+=== Zig (x86_64-linux-musl)
+  zig build rc=0
+  link harness: 0
+abi_test deque_stress fuzz_run harness jdump layout_check 
+## x86_64-linux-musl tests
+== summary x-x86_64-linux-musl-c: 54 passed, 0 failed
+== summary x-x86_64-linux-musl-rust-std: 54 passed, 0 failed
+== summary x-x86_64-linux-musl-rust-nostd: 54 passed, 0 failed
+== summary x-x86_64-linux-musl-zig: 54 passed, 0 failed
+## aarch64-linux-musl build log
+=== C (aarch64-linux-musl)
+  link harness: 0
+abi_test deque_stress fuzz_run harness jdump layout_check 
+=== Rust std (aarch64-unknown-linux-musl)
+error: failed to run custom build command for `ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)`
+=== Rust nostd (aarch64-unknown-linux-musl)
+error: failed to run custom build command for `ren_core v0.1.0 (/home/user/ren/experiments/native-lang/rust/core)`
+=== Zig (aarch64-linux-musl)
+  zig build rc=0
+  link harness: 0
+abi_test deque_stress fuzz_run harness jdump layout_check 
+=== Rust std (aarch64-unknown-linux-musl)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.02s
+  link harness: 0
+abi_test deque_stress fuzz_run harness jdump layout_check 
+=== Rust nostd (aarch64-unknown-linux-musl)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.01s
+  link harness: 0
+abi_test deque_stress fuzz_run harness jdump layout_check 
+## aarch64 under qemu-aarch64-static 8.2.2 (DRIVERS=epoll WORKERS=1 4)
+== layout (qemu-aarch64-rust-nostd)
+== abi (qemu-aarch64-rust-nostd)
+== deque (qemu-aarch64-rust-nostd)
+== smoke (qemu-aarch64-rust-nostd)
+== io (qemu-aarch64-rust-nostd)
+== replay (qemu-aarch64-rust-nostd)
+== summary qemu-aarch64-rust-nostd: 29 passed, 0 failed
+== layout (qemu-aarch64-rust-std)
+== abi (qemu-aarch64-rust-std)
+== deque (qemu-aarch64-rust-std)
+== smoke (qemu-aarch64-rust-std)
+== io (qemu-aarch64-rust-std)
+== replay (qemu-aarch64-rust-std)
+== summary qemu-aarch64-rust-std: 29 passed, 0 failed
+== layout (qemu-aarch64-c)
+== abi (qemu-aarch64-c)
+== deque (qemu-aarch64-c)
+== smoke (qemu-aarch64-c)
+FAIL w1 epoll x1 (exit 255)
+FAIL w2 epoll x1 (exit 255)
+FAIL w3 epoll x1 (exit 255)
+FAIL w1 epoll x4 (exit 255)
+FAIL w2 epoll x4 (exit 255)
+FAIL w3 epoll x4 (exit 255)
+== io (qemu-aarch64-c)
+FAIL t_timer epoll x1 (exit 255)
+FAIL t_pipe epoll x1 (exit 255)
+FAIL t_tcp epoll x1 (exit 255)
+FAIL t_cancel epoll x1 (exit 255)
+FAIL t_block stop epoll x1 (exit 255)
+FAIL t_block kill epoll x1 (exit 255)
+FAIL t_timer epoll x4 (exit 255)
+FAIL t_pipe epoll x4 (exit 255)
+FAIL t_tcp epoll x4 (exit 255)
+FAIL t_cancel epoll x4 (exit 255)
+FAIL t_block stop epoll x4 (exit 255)
+FAIL t_block kill epoll x4 (exit 255)
+== replay (qemu-aarch64-c)
+FAIL W4 replay w1 epoll record (exit 0)
+FAIL W4 replay w3 epoll record (exit 0)
+FAIL W4 replay t_cancel epoll record (exit 0)
+FAIL W4 replay t_timer epoll record (exit 0)
+== summary qemu-aarch64-c: 7 passed, 22 failed
+   failed: w1 epoll x1
+   failed: w2 epoll x1
+   failed: w3 epoll x1
+   failed: w1 epoll x4
+   failed: w2 epoll x4
+   failed: w3 epoll x4
+   failed: t_timer epoll x1
+   failed: t_pipe epoll x1
+   failed: t_tcp epoll x1
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_block kill epoll x1
+   failed: t_timer epoll x4
+   failed: t_pipe epoll x4
+   failed: t_tcp epoll x4
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_block kill epoll x4
+   failed: W4 replay w1 epoll record
+   failed: W4 replay w3 epoll record
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_timer epoll record
+== layout (qemu-aarch64-zig)
+== abi (qemu-aarch64-zig)
+== deque (qemu-aarch64-zig)
+FAIL deque stress (exit 1)
+== smoke (qemu-aarch64-zig)
+FAIL w1 epoll x1 (exit 255)
+FAIL w2 epoll x1 (exit 255)
+FAIL w3 epoll x1 (exit 255)
+FAIL w1 epoll x4 (exit 255)
+FAIL w2 epoll x4 (exit 255)
+FAIL w3 epoll x4 (exit 255)
+== io (qemu-aarch64-zig)
+FAIL t_timer epoll x1 (exit 255)
+FAIL t_pipe epoll x1 (exit 255)
+FAIL t_tcp epoll x1 (exit 255)
+FAIL t_cancel epoll x1 (exit 255)
+FAIL t_block stop epoll x1 (exit 255)
+FAIL t_block kill epoll x1 (exit 255)
+FAIL t_timer epoll x4 (exit 255)
+FAIL t_pipe epoll x4 (exit 255)
+FAIL t_tcp epoll x4 (exit 255)
+FAIL t_cancel epoll x4 (exit 255)
+FAIL t_block stop epoll x4 (exit 255)
+FAIL t_block kill epoll x4 (exit 255)
+== replay (qemu-aarch64-zig)
+FAIL W4 replay w1 epoll record (exit 0)
+FAIL W4 replay w3 epoll record (exit 0)
+FAIL W4 replay t_cancel epoll record (exit 0)
+FAIL W4 replay t_timer epoll record (exit 0)
+== summary qemu-aarch64-zig: 6 passed, 23 failed
+   failed: deque stress
+   failed: w1 epoll x1
+   failed: w2 epoll x1
+   failed: w3 epoll x1
+   failed: w1 epoll x4
+   failed: w2 epoll x4
+   failed: w3 epoll x4
+   failed: t_timer epoll x1
+   failed: t_pipe epoll x1
+   failed: t_tcp epoll x1
+   failed: t_cancel epoll x1
+   failed: t_block stop epoll x1
+   failed: t_block kill epoll x1
+   failed: t_timer epoll x4
+   failed: t_pipe epoll x4
+   failed: t_tcp epoll x4
+   failed: t_cancel epoll x4
+   failed: t_block stop epoll x4
+   failed: t_block kill epoll x4
+   failed: W4 replay w1 epoll record
+   failed: W4 replay w3 epoll record
+   failed: W4 replay t_cancel epoll record
+   failed: W4 replay t_timer epoll record
+## x86-recorded journals replayed by aarch64 binaries under qemu
+x86 c-release w1 epoll -> aarch64 c: rc=0 same
+x86 c-release w1 epoll -> aarch64 rust-std: rc=0 same
+x86 c-release w1 epoll -> aarch64 rust-nostd: rc=0 same
+x86 c-release w1 epoll -> aarch64 zig: rc=0 same
+x86 c-release w1 uring -> aarch64 c: rc=0 same
+x86 c-release w1 uring -> aarch64 rust-std: rc=0 same
+x86 c-release w1 uring -> aarch64 rust-nostd: rc=0 same
+x86 c-release w1 uring -> aarch64 zig: rc=0 same
+x86 c-release w3 epoll -> aarch64 c: rc=0 same
+x86 c-release w3 epoll -> aarch64 rust-std: rc=0 same
+x86 c-release w3 epoll -> aarch64 rust-nostd: rc=0 same
+x86 c-release w3 epoll -> aarch64 zig: rc=0 same
+x86 c-release w3 uring -> aarch64 c: rc=0 same
+x86 c-release w3 uring -> aarch64 rust-std: rc=0 same
+x86 c-release w3 uring -> aarch64 rust-nostd: rc=0 same
+x86 c-release w3 uring -> aarch64 zig: rc=0 same
+x86 c-release t_cancel epoll -> aarch64 c: rc=0 same
+x86 c-release t_cancel epoll -> aarch64 rust-std: rc=0 same
+x86 c-release t_cancel epoll -> aarch64 rust-nostd: rc=0 same
+x86 c-release t_cancel epoll -> aarch64 zig: rc=0 same
+x86 c-release t_cancel uring -> aarch64 c: rc=0 same
+x86 c-release t_cancel uring -> aarch64 rust-std: rc=0 same
+x86 c-release t_cancel uring -> aarch64 rust-nostd: rc=0 same
+x86 c-release t_cancel uring -> aarch64 zig: rc=0 same
+x86 c-release t_timer epoll -> aarch64 c: rc=0 same
+x86 c-release t_timer epoll -> aarch64 rust-std: rc=0 same
+x86 c-release t_timer epoll -> aarch64 rust-nostd: rc=0 same
+x86 c-release t_timer epoll -> aarch64 zig: rc=0 same
+x86 c-release t_timer uring -> aarch64 c: rc=0 same
+x86 c-release t_timer uring -> aarch64 rust-std: rc=0 same
+x86 c-release t_timer uring -> aarch64 rust-nostd: rc=0 same
+x86 c-release t_timer uring -> aarch64 zig: rc=0 same
