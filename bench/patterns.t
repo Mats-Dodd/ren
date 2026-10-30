@@ -110,6 +110,22 @@ The keyword kernel of bench/native/keywords at a small size, whose
 `check` classifies every query by the chain and by the `match`, which
 must agree:
 
+Step 5, the review's: `match`es nested in guards and arms, and
+`keys.index` on keys that blocks take:
+
+  $ for f in nested index_blocks; do spec patterns/$f.ren; native patterns/$f.ren; done
+  patterns/nested.ren: as specified
+  patterns/nested.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/nested.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/nested.ren, release: the same, exit 0, objects live at exit 0
+  patterns/nested.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/nested.ren, ren run --release: the same
+  patterns/index_blocks.ren: as specified
+  patterns/index_blocks.ren, perceus: the same, exit 0, objects live at exit 0
+  patterns/index_blocks.ren, naive: the same, exit 0, objects live at exit 0
+  patterns/index_blocks.ren, release: the same, exit 0, objects live at exit 0
+  patterns/index_blocks.ren, tcc: the same, exit 0, objects live at exit 0
+  patterns/index_blocks.ren, ren run --release: the same
   $ native native/keywords/small.ren
   native/keywords/small.ren, perceus: the same, exit 0, objects live at exit 0
   native/keywords/small.ren, naive: the same, exit 0, objects live at exit 0

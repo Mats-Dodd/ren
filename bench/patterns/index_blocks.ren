@@ -1,0 +1,25 @@
+// `keys.index(s)` on keys a `let` binds, used directly, in a loop and in
+// blocks, which a release build lifts out with the keys a parameter:
+// the review's (compiler.md, "Step 5, the review"). Where every use is a
+// hashed `index` the array isn't made; where a block takes it, it is.
+
+fn count(xs: Array<Str>) -> Int =
+  let keys = ["a", "b", "c"]
+  var t = 0
+  for s in xs
+    t += keys.index(s).unwrap_or(-1)
+  t + xs.map(fn(s) => keys.index(s).unwrap_or(10)).sum()
+
+fn each(xs: Array<Str>, f: fn(Str) -> Int) -> Int =
+  var t = 0
+  for x in xs
+    t += try f(x)
+  t
+
+fn blocks(xs: Array<Str>) -> Int =
+  let keys = ["x", "y"]
+  each(xs, fn(s) => keys.index(s).unwrap_or(100))
+
+fn main() uses Console =
+  print(count(["a", "c", "z"]))
+  print(blocks(["x", "y", "q"]))

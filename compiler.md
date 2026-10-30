@@ -11732,7 +11732,8 @@ Chosen in step 2, as built:
 | 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
 | 2 | 81579bf | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
 | 3 | 3f5b8fe | the perfect hash: lib/native/phash.ml (gen_fixed.ml's generator with the six fixes, the 64-bit mix, the length switch, the C of a lookup); Mem's `Str_lookup`; emit_c.ml's lookups, numbered by their keys and written before the functions, and a static copy in each debug unit that uses one; to_mem.ml's switch on a string subject's literals, each branch knowing its literal (`keyed`, `can_be`); ren_rt.h's compares per build and the page check; test/test_phash.ml, the fuzz in OCaml and in C four ways, no disagreement, and the same tables twice; the keyword kernel's `one` set; RESULTS.md's numbers: the `match` 1.4× to 2.7× faster than Rust's on every set of two keys or more, 3.8× to 9.8× the chain (9× to 25× less the loop), a one-literal arm 5.5 ns against the chain's 7.1 | steps 4 and 5; NEON measured on arm64; a hashed column of a tuple's |
-| 4 | this commit | `keys.index(s)`: to_mem.ml's `call` lowers it, in a release build, on an array literal of string literals or a `let` of one, as `index_match`, the string `match` step 3 hashes, and a `let` only hashed `index`es read isn't made (`only_indexed`); examples/just's recipe choice and line classification as `match`es on lists and strings, its tests unchanged; stdlib.md's `index`; the keyword kernel's `index` form, at the `match`'s speed (RESULTS.md) | step 5 |
+| 4 | f3682f8 | `keys.index(s)`: to_mem.ml's `call` lowers it, in a release build, on an array literal of string literals or a `let` of one, as `index_match`, the string `match` step 3 hashes, and a `let` only hashed `index`es read isn't made (`only_indexed`); examples/just's recipe choice and line classification as `match`es on lists and strings, its tests unchanged; stdlib.md's `index`; the keyword kernel's `index` form, at the `match`'s speed (RESULTS.md) | step 5 |
+| 5 | this commit | the review (above): bench/patterns' nested.ren and index_blocks.ren, every build; the README's status and roadmap row; "Where this stage may differ" completed | the DAG's further columns and a length switch; NEON measured; language.md's table |
 
 ## Patterns stage
 
@@ -12187,6 +12188,89 @@ allocated for them.
   the keys then `keys.index(s)`, runs at the `match`'s speed, 5.6 to 9.1
   ns against 5.3 to 8.3 (RESULTS.md, "Step 4").
 
+### Step 5, the review
+
+**Soundness.**
+
+- **The over-read and the page check.** test_phash.ml puts every query
+  at the end of an `mmap`ed page whose next page no one may read, and
+  `""` at the start of that page, and runs 44,783 of them through four
+  builds: two words with cc and with tcc, `memcmp` asked for and under
+  AddressSanitizer. No disagreement and no fault. NEON, built for arm64
+  and run under qemu on the same queries, agrees with them all. A lookup
+  answers `""` on its length, so the empty string at a page's first byte
+  never loads. Sanitizer builds compare with `memcmp`, so nothing they
+  check over-reads.
+- **The empty string,** as a key and as a subject: sizes.ren's `edges`
+  and `only_empty`, strs.ren, guards.ren, the fuzz's `empty`,
+  `emptyonly` and `emptypair` sets and the random ones, which draw
+  empty keys. A length switch's case 0 compares no bytes.
+- **Slices bound from a subject that dies:** strs.ren keeps the tokens
+  of strings made and dropped in the call; a slice counts its root, and
+  Mem Lint, both countings and AddressSanitizer agree.
+- **Guards:** guards.ren takes every guard false and true across
+  literals and prefixes; nested.ren hashes `match`es inside guards' calls
+  and inside an arm. `keyed`, a branch's knowledge of its literal, is
+  each `match_`'s own, so an inner `match` can't see or change an outer
+  one's.
+- **The generator at its size edges:** 128 and 200 arms (a value table
+  of `int16_t`), keys of 1, 16, 17, 254, 255 and 300 bytes (a length
+  table of `uint16_t`, `memcmp` past 16), `{""}`, and sets that need the
+  mix and the length switch, in the interpreter, natively and in the
+  fuzz.
+- **`keys.index` on keys a block takes** (index_blocks.ren): a release
+  build lifts the block with the keys a parameter, which the elision of
+  a `let` sees as a use that isn't a hashed `index`, so the array is
+  made, and the block's `index` calls the method. Every build agrees.
+- **Mem Lint and the sanitizers** check every bench/patterns program in
+  every build (bench/patterns.t).
+
+**The spec.** Each of language.md's five rules holds, tested both ways
+in test_patterns.ml, and the synthesis's emitter fixes are each in
+phash.ml, each exercised by the fuzz. The "Done when"s:
+
+- **p1:** every form runs in `ren run`, every error fires with its help.
+- **p2:** every native build agrees with `ren run` on every program,
+  which arm a guard falls through to included.
+- **p3:** the fuzz finds no disagreement. On the brief's five sets the
+  `match` is faster than Rust's (1.4× to 2.7×). Against the chain it's
+  3.8× to 9.8×, beside the research's 5.5× to 8.3×: renkw and jsreserved
+  beat it; methods, headers and json24 fall short, by the about 5 ns
+  of Ren's loop over the queries that both forms pay (the `one` set
+  bounds it), which is most of a hashed lookup's time here and none of
+  the research's C. A one-literal arm, 5.5 ns, costs less than the
+  chain's 7.1.
+- **p4:** `keys.index` on a literal is the lookup in a release build, at
+  the `match`'s speed; the just's tests pass unchanged. The just isn't
+  native (it starts tasks), so "both builds" is `ren test` and the
+  journal tests bench/tasks.t and examples/just.t run, which pass.
+
+**Docs and tooling:** the README's status and roadmap row, this
+section, stdlib.md's `index`, the grammar, its corpus and highlights,
+and differential.py over bench/patterns. language.md's "What Ren has
+today" still says "none" for string and list patterns: this stage may
+not edit language.md, so the owner's to change.
+
+**What's left, by severity:**
+
+- **Medium, speed only:** the DAG is Maranget's at its first column (The
+  DAG, "What isn't built"): no length switch for arrays, and a string
+  column of a tuple's, `match (method, path)`, is a chain, not a lookup.
+  Every answer is right; a tuple's string column is slower than it
+  could be.
+- **Low:** NEON isn't measured, only built and run under qemu; the
+  owner's arm64 machine measures it.
+- **Low:** the length switch, the generator's last fallback, compares
+  each key with `memcmp`, not word compares as the brief says; it's
+  taken by 1 set in 132 of the fuzz's, none of the real ones.
+- **Cosmetic:** `--emit-c` numbers a lookup's keys in a comment over it,
+  but the `switch`'s cases aren't commented with their literals: Mem's
+  `Switch` has no place for a comment.
+- **Not this stage's:** test_deps.ml's "a read-only `Fs` can't write"
+  test fails in this container, which runs as root, at the stage's
+  first commit too; examples/net.t, whose journal records whether a
+  socket's read was ready, failed once under load and passed on reruns.
+
 ### Where this stage may differ
 
 Choices the documents don't make, made here:
@@ -12198,6 +12282,11 @@ Choices the documents don't make, made here:
 - **A `Str` sequence always has a rest;** without one it's a literal.
 - **`keys.index(s)` hashes a literal or a local `let` of one,** not a
   top-level `let`, which doesn't exist yet (`keys.index(s)`, above).
+- **The DAG switches on its first column only** (The DAG, "What isn't
+  built").
+- **The length switch compares with `memcmp`,** not words.
+- **A seventh key set, `one`,** in the keyword kernel, to measure a
+  one-literal arm against the chain.
 
 ### Progress log
 
