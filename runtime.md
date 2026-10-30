@@ -6,9 +6,9 @@ line says it:
 
 > **The language owns meaning; the runtime owns time, order and place.**
 
-> **Status:** proposed. It builds on [structured-actors.md](structured-actors.md)
+> **Status:** proposed. It builds on [concurrency.md](concurrency.md)
 > and the prior-art research in [research/runtime/SYNTHESIS.md](research/runtime/SYNTHESIS.md),
-> and it frames foundations.md decision 9 and native stage 13. Lock
+> and it frames foundations.md decision 9 and the runtime core stage. Lock
 > mechanics, memory and the record layout are
 > [compiler.md](compiler.md#the-runtime-model)'s.
 
@@ -59,7 +59,7 @@ through their verbs.
 ## One way to talk: a queue
 
 **The world is the outermost family.** Every wait in a family points
-outward ([structured-actors.md](structured-actors.md#no-deadlock-by-one-rule)),
+outward ([concurrency.md](concurrency.md#no-deadlock-by-one-rule)),
 and the world is where every chain of waits ends. So the core has one
 way for work to cross an owner: a `D.Call` pushed to a bounded queue.
 
@@ -101,17 +101,21 @@ released instance, which sampled actor is evicted, when a reply lands.
 `Sched.Call.Pick` from a seeded tape. A runtime is correct if it keeps
 the list; `sim` covers everything off it.
 
-## What's journaled: time and order, never place
+## What's journaled: time and order, and place only when it's read
 
 The core writes the journal, through the host's `journal` hook: each
 choice it made, each world call and its reply, each post. **Place isn't
-journaled, because no program can observe it:** which core ran a task,
-where a key lives, whether `at` moved the task or shipped each call.
-So a journal recorded on sixteen cores replays on one, by construction.
+journaled, because a program can't observe it unless it asks:** which
+core ran a task, where a key lives, whether `at` moved the task or
+shipped each call. So a journal recorded on sixteen cores replays on
+one, by construction.
 
-`Async.worker()` would leak place, so it's std's alone, for
-`striped(by: Worker)`, whose merge erases the split (decision 18's
-split law).
+**Asking is an observation, and observations are recorded.**
+`Async.worker()` is public, and its answer is journaled like any other
+choice the runtime made: `sim` draws it from the tape, and a replay
+gives it back. So `striped(by: Worker)` needs no privilege, and a user
+library may read the worker too. Its results may depend on it only as
+far as its merge erases it (decision 18's split law).
 
 ## Places
 
@@ -136,7 +140,7 @@ its call, so no frame needs to follow work anywhere.
 
 The host drives the core through nine functions, sketched in
 [SYNTHESIS.md §3](research/runtime/SYNTHESIS.md#3-revised-abi-sketch);
-names and signatures are stage 13's:
+names and signatures are the runtime core stage's:
 
 | Function | Does |
 |---|---|
@@ -170,7 +174,7 @@ names and signatures are stage 13's:
 ## Open
 
 - How `at` runs on shared-memory places under `per_core`, moving the
-  task or shipping each call: measured in 11b.
+  task or shipping each call: measured in the runtime core stage.
 - The core's own record layout, shared with the journal and the hosted
-  wire: stage 13.
+  wire: the runtime core stage.
 - A user-written scheduler: later, inside `trust`, against this page.

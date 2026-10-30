@@ -61,7 +61,7 @@ judged by the bars above.
    dependencies injected without a framework, middleware as handlers,
    the runtime chosen in `main`, and the whole server simulated from a
    journal recorded in production. Effect's model at native speed. It
-   needs tasks and many cores (11a, 11b), `Net`, HTTP and JSON.
+   needs tasks and many cores (11a and the runtime core), `Net`, HTTP and JSON.
 3. **A storage engine: the flagship.** A small key-value store, an LSM
    tree or a B-tree, tested by deterministic simulation as TigerBeetle
    and FoundationDB are: every disk and clock behind a dependency,

@@ -791,10 +791,8 @@ let new_env sink ~reachable (r : Resolve.t) =
     pulled_calls = Hashtbl.create 4;
     test_reported = Hashtbl.create 4;
     pinned_by = [];
+    in_sight = [];
     pin_ops = Hashtbl.create 4;
-    kept_pins = Hashtbl.create 4;
-    kept_own = Hashtbl.create 4;
-    kept_in = Hashtbl.create 4;
   }
 
 (* A function's parameters with defaults, by their places among the
@@ -802,29 +800,34 @@ let new_env sink ~reachable (r : Resolve.t) =
 let given_defaults ~method_ ds =
   if method_ then List.map (fun (i, n, l) -> (i - 1, n, l)) ds else ds
 
-(* ---- pinning (compiler.md, "Services stage", "Actors (step 7)") ----
+(* ---- rule 3 (compiler.md, "Services stage", "Step 10: structured
+   actors") ----
 
-   A keyed instance family's no-deadlock rules (foundations.md, decision
-   18) are checks on its pin, as decision 7's are on `Async`'s spawn: a
-   call that pins an instance for a block, inside a block that pins one
-   of the same family, could wait for a slot its own block holds, and one
-   inside a block of another family could close a cycle of waits. A
-   library over the family pins in its operations, `Shards.at`, or in a
-   member of its dependency, `Actors.at`; which operations do is found
-   here, before the module's bodies are checked, as the arms that call
-   one of the family's pins, or an operation that does, written there.
-   What a helper hides, the family checks as it runs (family.ml). *)
+   A keyed instance family's one no-deadlock rule (structured-actors.md,
+   rule 3) is a check on the calls that reach a family from inside a
+   block that holds one: an `at` block holds its family, and while it's
+   held, its code can't reach that family or one installed inside it, by
+   `at` or by `post`. A library over the family pins in its operations,
+   `Shards.enter`, or in a member of its dependency, `Actors.at`, and
+   posts in its operations, `Shards.send`, or in a member, `Actors.post`;
+   which operations do is found here, before the module's bodies are
+   checked, as the arms that call one of the family's pins or its post,
+   or an operation that does, written there. What a helper hides, the
+   family checks as it runs (family.ml's [held]). *)
 
-(* The module's operations whose arm pins ([env.pin_ops]), found as the
-   arms that call a function that pins, or one of these. *)
+(* The module's operations whose arm pins or posts ([env.pin_ops]), found
+   as the arms that call a function that does, or one of these. *)
 let pinning_ops env (fns : fn_def list) =
-  let rec calls_pin (e : expr) =
+  (* whether [e] calls something that reaches a family as [r] *)
+  let rec calls r (e : expr) =
     (match e.kind with
-    | Var (Global p) -> pins_for_a_block env p
-    | Var (Dep_op (p, op)) -> Hashtbl.mem env.pin_ops (p, op)
+    | Var (Global p) -> if r = Pins then pins_for_a_block env p else posts_to_a_family p
+    | Var (Dep_op (p, op)) -> Hashtbl.find_opt env.pin_ops (p, op) = Some r
     | _ -> false)
-    || List.exists calls_pin (Ast.children e)
+    || List.exists (calls r) (Ast.children e)
   in
+  (* a pin for a block first: it's checked as holding what it pins *)
+  let reaches e = if calls Pins e then Some Pins else if calls Posts e then Some Posts else None in
   let changed = ref true in
   while !changed do
     changed := false;
@@ -835,10 +838,12 @@ let pinning_ops env (fns : fn_def list) =
             List.iter
               (fun (a : handler_arm) ->
                 match a.arm_op with
-                | Dep_op (p, op)
-                  when (not (Hashtbl.mem env.pin_ops (p, op))) && calls_pin a.arm_impl ->
-                    Hashtbl.replace env.pin_ops (p, op) ();
-                    changed := true
+                | Dep_op (p, op) when not (Hashtbl.mem env.pin_ops (p, op)) -> (
+                    match reaches a.arm_impl with
+                    | Some r ->
+                        Hashtbl.replace env.pin_ops (p, op) r;
+                        changed := true
+                    | None -> ())
                 | _ -> ())
               arms
         | _ -> ())
@@ -1784,8 +1789,7 @@ let canonical env so_far (f : fn_def) =
         | Args xs -> Args xs
         | Pulls_block -> Pulls_block
         | Pulled p -> Pulled p
-        | For_param k -> For_param k
-        | Full_marked -> Full_marked)
+        | For_param k -> For_param k)
       (Hashtbl.find_opt cx.found id)
   in
   let nodes =

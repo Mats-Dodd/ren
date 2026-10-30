@@ -1,7 +1,7 @@
 # Structured actors: what the design changes
 
 An audit of every place in the repository the structured-actors design
-touches, made before writing `structured-actors.md`. Nothing here is
+touches, made before writing `concurrency.md`. Nothing here is
 edited yet. Line numbers are as of 2026-10-30.
 
 ## The design, in brief

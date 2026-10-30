@@ -306,9 +306,9 @@ any call is ([async.md](async.md)):
   A post's only errors are making the actor's, so a call posted must
   give `()` and fail with nothing, "`post` takes a call that gives `()`
   and can't fail, and `edit` can fail with `StoreDown`": its error would
-  have nowhere to go. `Full` is added to an `at`'s errors only where it's
-  written inside another family's `at`, where waiting could close a
-  cycle.
+  have nowhere to go. Nothing fails with `Full`: an `at` block can't
+  reach its own family or one installed inside it, so every wait points
+  outward and none can close a cycle.
 - **A `finally` of an actor can't fail,** since the task that evicts it
   isn't the one that used it: "`doc` is kept by a family, so its
   `finally` can't fail".

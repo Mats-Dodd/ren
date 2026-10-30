@@ -3089,12 +3089,16 @@ fn main() = ()
     35 │     try Docs.at(DocId(2)) fn() => Doc.text()
        │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        = `Docs.at` keeps the instance it pins for its block, and making another can wait for room in the family
-       help: finish with the first, then call the second; or post to it, which holds nothing
+       help: finish with the first, then call the second
     |}]
 
-let%expect_test "[s7 reject] an actor `at`-ing its own family" =
-  (* an actor names its own family to post to it (step 7b); it may never
-     pin one of its siblings *)
+let%expect_test "[s7 reject] an actor naming its own family is the `with` set's error" =
+  (* there's no mail, and no `at`, inside a family (structured-actors.md,
+     rule 3): an actor's `uses` are met from the `with`s outside the one
+     that installs its family, so `doc` naming `Docs` needs what nothing
+     outside installs, the `with` set's ordinary error (step 10a; it said
+     "`doc` is kept by `Docs`'s family, so it can't call `Docs.at`" when
+     an actor could post to its siblings) *)
   check_error
     {|
 type DocId = | DocId(n: Int)
@@ -3107,12 +3111,13 @@ fn main() uses Console, Random =
   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
 |};
   [%expect {|
-    error: `doc` is kept by `Docs`'s family, so it can't call `Docs.at`, which pins one of its siblings
-      ┌─ test.ren:6:13
-    6 │   poke() => Docs.at(DocId(2)) fn() => Doc.poke()
-      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-      = an actor's siblings are the other instances of `Docs`
-      help: post to it instead, which holds nothing
+    error: nothing installs `Docs` before `main`
+      ┌─ test.ren:7:4
+    7 │ fn main() uses Console, Random =
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
+    8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
+      │        ----------- installing this needs `Docs`
+      help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Docs`
     |}]
 
 let%expect_test "[s7 reject] an actor's handler takes one parameter, its key" =
@@ -3187,14 +3192,14 @@ fn main() uses Random =
       help: save in its operations, write-through, or flush before the family ends
     |}]
 
-let%expect_test "[s7 accept] `Full` where waiting could close a cycle" =
-  (* decision 18: a task that pins an actor may wait for a slot only in a
-     family installed outside the ones it pins; anywhere else `Full`,
-     which `Inners.at` inside `Outers.at`'s block can fail with. Here the
-     first task holds the only slot of `Inners`, installed inside
-     `Outers`, while the second, pinning one of `Outers`, asks for
-     another *)
-  run
+let%expect_test "[s7 reject] `at` of a family installed inside the one a block holds" =
+  (* rule 3 (structured-actors.md): a block of `Outers.at` holds
+     `Outers`, and inside it only families installed outside `Outers` can
+     be reached, so every wait points outward. It replaces decision 18's
+     `Full`, which this program gave when the first task held the only
+     slot of `Inners` while the second, pinning one of `Outers`, asked
+     for another (step 10a): the `with`s are in sight, so it's refused *)
+  check_error
     {|
 type Key = | Key(n: Int)
 dep Inner =
@@ -3218,11 +3223,15 @@ fn main() uses Console, Async, Random =
             Inner.poke()
         s.spawn fn() =>
           Outers.at(Key(1)) fn() =>
-            print(attempt Inners.at(Key(2)) fn() => Inner.poke())
+            Inners.at(Key(2)) fn() => Inner.poke()
 |};
   [%expect {|
-    Err(Full)
-    ()
+    error: `Inners.at` inside a block of `Outers.at` reaches `Inners`, installed inside `Outers`
+       ┌─ test.ren:23:13
+    23 │             Inners.at(Key(2)) fn() => Inner.poke()
+       │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = a block of `Outers.at` holds `Outers` until it ends: inside it, only families installed outside `Outers` can be reached, so every wait points outward
+       help: call `Inners.at` after the block, or reach `Inners` first and `Outers` inside its block
     |}]
 
 (* A third library over the family, written in a test: a family with a
@@ -3307,7 +3316,7 @@ fn main() =
     35 │       Counts.at(B) fn() => Count.add(1)
        │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
        = `Counts.at` keeps the instance it pins for its block, and making another can wait for room in the family
-       help: finish with the first, then call the second; or post to it, which holds nothing
+       help: finish with the first, then call the second
     |}]
 
 let%expect_test "[s7 accept] a journal of a run that evicts and remakes a key names each life, and replays" =
@@ -3478,7 +3487,6 @@ test "posts arrive in the order posted" =
   [%expect {|
     test.ren
       ✓ posts arrive in the order posted
-          `Logs`'s high-water mark: 3 posts queued at once
 
     1 passed, each under 1000 seeds
     [exit 0]
@@ -3531,8 +3539,10 @@ fn main() uses Console, Random =
     ()
     |}]
 
-let%expect_test "[s7 accept] an actor posts to its own family" =
-  run
+let%expect_test "[s7 reject] an actor that posts to its own family names it, which its `with` can't install" =
+  (* there's no mail inside a family (structured-actors.md, rule 3, step
+     10a): separate concerns are separate families, below *)
+  check_error
     {|
 type Key = | Key(n: Int)
 dep Peer =
@@ -3548,8 +3558,13 @@ fn main() uses Console, Random =
     Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
 |};
   [%expect {|
-    pong from Key(2)
-    ()
+    error: nothing installs `Peers` before `main`
+       ┌─ test.ren:10:4
+    10 │ fn main() uses Console, Random =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
+    11 │   with actors(peer) as Peers in
+       │        ------------ installing this needs `Peers`
+       help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Peers`
     |}]
 
 let%expect_test "[s7 reject] posting an operation that returns a value" =
@@ -3574,7 +3589,7 @@ fn main() = ()
        ┌─ test.ren:11:21
     11 │   Logs.post(Key(1), Log.Call.Line { at: 0 })
        │                     ^^^^^^^^^^^^^^^^^^^^^^^
-       help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
+       help: use its value inside the operation, or call it with `Logs.at`
     |}]
 
 let%expect_test "[s7 reject] posting an operation that can fail" =
@@ -3590,43 +3605,65 @@ fn main() = ()
        ┌─ test.ren:34:27
     34 │   try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
        │                           ^^^^^^^^^^^^^^^^^^^^^^^^
-       help: use the value, or handle the error, inside the operation, or make the call directly where its result is wanted
+       help: handle it inside the operation, or call it with `Docs.at`
     |}]
 
-let%expect_test "[s7 accept] two actors posting to each other past `mailbox:` don't deadlock while an outside poster waits" =
+let%expect_test "[s7 accept] actors posting outward past `mailbox:` wait for room in the key, beside an outside poster, and don't deadlock" =
+  (* across two families (step 10a; it was two actors of one family
+     posting to each other, whose posts never waited): each post waits
+     for room in `Logs`' key 0, whose bound is per key, and every wait
+     points outward, so it ends, and every post is delivered *)
   test ~seeds:200
     (pub_all
      {|
 type Key = | Key(n: Int)
+dep Kept =
+  add: fn()
+  total: fn() -> Int
+handler kept() for Kept =
+  var n = 0
+  add() => n += 1
+  total() => n
+dep Log =
+  noted: fn(from: Int)
+dep Logs = Actors<Key, Log>
+handler log(k: Key) for Log uses Kept =
+  noted(_) => Kept.add()
 dep Peer =
   ping: fn(left: Int)
-  noted: fn()
 dep Peers = Actors<Key, Peer>
-handler peer(k: Key) for Peer uses Peers =
+handler peer(k: Key) for Peer uses Logs =
   ping(left) =>
     let Key(n) = k
-    if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
-  noted() => ()
+    for i in 0..left
+      Logs.post(Key(0), Log.Call.Noted { from: n })
 
-test "siblings never wait; the outside does" =
-  with actors(peer, mailbox: 2) as Peers in
-    Async.scope fn(s) =>
-      s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 3 })
-      s.spawn fn() =>
-        for i in 0..5
-          Peers.post(Key(2), Peer.Call.Noted)
+test "posts wait for room in their key; the outside does too" =
+  with kept() in
+    with actors(log, mailbox: 2) as Logs in
+      with actors(peer, mailbox: 2) as Peers in
+        Async.scope fn(s) =>
+          s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 5 })
+          s.spawn fn() => Peers.post(Key(2), Peer.Call.Ping { left: 5 })
+          s.spawn fn() =>
+            for i in 0..5
+              Logs.post(Key(0), Log.Call.Noted { from: 0 })
+    assert Kept.total() == 15
 |});
   [%expect {|
     test.ren
-      ✓ siblings never wait; the outside does
-          `Peers`'s high-water mark: 2 posts queued at once
+      ✓ posts wait for room in their key; the outside does too
 
     1 passed, each under 200 seeds
     [exit 0]
     |}]
 
-let%expect_test "[s7 reject] a chain reaction panics past twice `mailbox:`, with the high-water mark" =
-  run_error
+let%expect_test "[s7 reject] a chain reaction can't be written: an actor that posts into its own family names it" =
+  (* research/actors-post/'s chain reaction, which panicked past twice
+     `mailbox:` while an actor could post to its siblings: with no mail
+     inside a family (step 10a), a chain is at most one hop per family,
+     outward (research/structured-actors/MODEL.md) *)
+  check_error
     {|
 type Key = | Key(n: Int)
 dep Peer =
@@ -3643,19 +3680,20 @@ fn main() uses Console, Random =
     Peers.post(Key(0), Peer.Call.Double { depth: 0 })
 |};
   [%expect {|
-    error: panic: `Peers` has 5 posts queued, past twice its `mailbox:` of 2
-      ┌─ test.ren:9:5
-    9 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
-      │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-      = in the task peers[Key(2)]#1
-      = the high-water mark: 5
-      = an instance that posts twice around a cycle grows its family's mail without end
+    error: nothing installs `Peers` before `main`
+       ┌─ test.ren:11:4
+    11 │ fn main() uses Console, Random =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
+    12 │   with actors(peer, mailbox: 2) as Peers in
+       │        ------------------------ installing this needs `Peers`
+       help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Peers`
     |}]
 
-let%expect_test "[s7 accept] a post from inside `at` while the mailbox is full and its target isn't live completes" =
-  (* research/actors-post/'s first counterexample, which the fixed rules
-     make complete: the post from inside `at` makes room by delivering *)
-  run
+let%expect_test "[s7 reject] a post to the family an `at` block holds" =
+  (* research/actors-post/'s first counterexample, which the old rules
+     made complete by letting the post's making go past `max:`: under
+     rule 3 (step 10a) the block holds `Docs`, so it can't post to it *)
+  check_error
     {|
 type Key = | Key(n: Int)
 dep Doc =
@@ -3673,98 +3711,88 @@ fn main() uses Console, Async, Random =
   print("done")
 |};
   [%expect {|
-    done
-    ()
+    error: `Docs.post` inside a block of `Docs.at` reaches the family its block holds
+       ┌─ test.ren:13:33
+    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
+       │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = a block of `Docs.at` holds `Docs` until it ends: inside it, only families installed outside `Docs` can be reached, so every wait points outward
+       help: call `Docs.post` after the block
     |}]
 
-let%expect_test "[s7 accept] a session looping an `at` operation that posts to a sibling is held at the edge" =
-  (* the second counterexample: every call from outside is metered, so
-     the index's mail never passes `mailbox:` plus one operation's posts *)
+let%expect_test "[s7 accept] a session looping an `at` operation that posts outward waits for room in that key" =
+  (* research/actors-post/'s second counterexample, across two families
+     (step 10a; it posted to a sibling, metered at the family's edge):
+     each edit's post waits for room in `Indexes`' key 0, at most 4, so
+     the session's mail is bounded, and every post arrives *)
   test ~seeds:100
     (pub_all
      {|
 type Key = | Key(n: Int)
+dep Kept =
+  add: fn()
+  total: fn() -> Int
+handler kept() for Kept =
+  var n = 0
+  add() => n += 1
+  total() => n
+dep Index =
+  changed: fn(from: Key)
+dep Indexes = Actors<Key, Index>
+handler index(k: Key) for Index uses Kept =
+  changed(_) => Kept.add()
 dep Doc =
   edit: fn()
-  changed: fn(from: Key)
 dep Docs = Actors<Key, Doc>
-handler doc(k: Key) for Doc uses Docs =
-  edit() => Docs.post(Key(0), Doc.Call.Changed { from: k })
-  changed(_) => ()
+handler doc(k: Key) for Doc uses Indexes =
+  edit() => Indexes.post(Key(0), Index.Call.Changed { from: k })
 
-test "the session's posts stay within the bound" =
-  with actors(doc, mailbox: 4) as Docs in
-    Docs.at(Key(1)) fn() =>
-      for i in 0..50
-        Doc.edit()
-    assert Docs.high_water() <= 5
+test "the session's posts wait for room, and all arrive" =
+  with kept() in
+    with actors(index, mailbox: 4) as Indexes in
+      with actors(doc) as Docs in
+        Docs.at(Key(1)) fn() =>
+          for i in 0..50
+            Doc.edit()
+    assert Kept.total() == 50
 |});
   [%expect {|
     test.ren
-      ✓ the session's posts stay within the bound
-          `Docs`'s high-water mark: 4 posts queued at once
+      ✓ the session's posts wait for room, and all arrive
 
     1 passed, each under 100 seeds
-    [exit 0]
-    |}]
-
-let%expect_test "[s7 accept] each family's high-water mark is reported" =
-  (* the most posts a family has queued at once (decision 18, "A chain
-     reaction panics": debug builds and `sim` report it, which is how one
-     is found before it panics): `ren test` says it under each test, the
-     most under any seed, and `high_water()` gives it to the program *)
-  test ~seeds:50
-    (pub_all
-     {|
-type Key = | Key(n: Int)
-dep Tally =
-  add: fn(n: Int)
-dep Tallies = Actors<Key, Tally>
-handler tally(k: Key) for Tally =
-  var total = 0
-  add(n) => total += n
-
-test "three posts queued before any is delivered" =
-  with actors(tally) as Tallies in
-    Tallies.post(Key(1), Tally.Call.Add { n: 1 })
-    Tallies.post(Key(1), Tally.Call.Add { n: 2 })
-    Tallies.post(Key(2), Tally.Call.Add { n: 3 })
-    assert Tallies.high_water() == 3
-|});
-  [%expect {|
-    test.ren
-      ✓ three posts queued before any is delivered
-          `Tallies`'s high-water mark: 3 posts queued at once
-
-    1 passed, each under 50 seeds
     [exit 0]
     |}]
 
 let%expect_test "[s7 accept] a run with posts replays from its journal" =
   (* a post is journaled as data, on the task that posted it, and what a
      delivery does under its instance's name: `ren replay` runs it again,
-     and recording it again writes the same journal, byte for byte *)
+     and recording it again writes the same journal, byte for byte. Its
+     actors post outward, to `Says` (step 10a; they posted to each other) *)
   in_folder
     [
       ( "main.ren",
         {|
 type Key = | Key(n: Int)
+dep Say =
+  say: fn(s: Str)
+dep Says = Actors<Key, Say>
+handler sayer(k: Key) for Say uses Console =
+  say(s) => print(s + " to " + show(k))
 dep Peer =
   ping: fn(left: Int)
-  say: fn(s: Str)
 dep Peers = Actors<Key, Peer>
-handler peer(k: Key) for Peer uses Peers, Console =
+handler peer(k: Key) for Peer uses Says, Console =
   ping(left) =>
-    let Key(n) = k
     print(show(k) + " " + show(left))
-    if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
-  say(s) => print(s + " to " + show(k))
+    Says.post(k, Say.Call.Say { s: "ping " + show(left) })
 
 fn main() uses Console, Random =
-  with actors(peer, max: 1) as Peers in
-    Peers.post(Key(1), Peer.Call.Ping { left: 3 })
-    Peers.post(Key(2), Peer.Call.Say { s: "hi there" })
-    Peers.at(Key(2)) fn() => Peer.say("hello")
+  with actors(sayer, max: 1) as Says in
+    with actors(peer, max: 1) as Peers in
+      Peers.post(Key(1), Peer.Call.Ping { left: 3 })
+      Peers.post(Key(2), Peer.Call.Ping { left: 2 })
+      Says.post(Key(2), Say.Call.Say { s: "hi there" })
+      Peers.at(Key(2)) fn() => Peer.ping(1)
 |}
       );
     ]
@@ -3778,56 +3806,73 @@ fn main() uses Console, Random =
          else "recorded again: different"));
   [%expect {|
     Key(1) 3
-    hi there to Key(2)
+    ping 3 to Key(1)
     Key(2) 2
-    hello to Key(2)
-    Key(1) 1
-    Key(2) 0
+    hi there to Key(2)
+    ping 2 to Key(2)
+    Key(2) 1
+    ping 1 to Key(2)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened peers parts 1
-    2 main made peers[Key(1)]#1
-    3 main posted peers[Key(1)] Ping { left: 3 }
-    4 main made peers[Key(2)]#1
-    5 main posted peers[Key(2)] Say { s: "hi there" }
-    6 peers[Key(1)]#1 Console.write("Key(1) 3")
-    7 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 2 }
-    8 peers[Key(2)]#1 Console.write("hi there to Key(2)")
-    9 peers[Key(2)]#1 Console.write("Key(2) 2")
-    10 peers[Key(2)]#1 posted peers[Key(1)] Ping { left: 1 }
-    11 main Console.write("hello to Key(2)")
-    12 peers[Key(1)]#1 Console.write("Key(1) 1")
-    13 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 0 }
-    14 peers[Key(2)]#1 Console.write("Key(2) 0")
-    15 main exit 0
+    1 main opened says parts 1
+    2 main opened peers parts 1
+    3 main made peers[Key(1)]#1
+    4 main posted peers[Key(1)] Ping { left: 3 }
+    5 peers[Key(1)]#1 Console.write("Key(1) 3")
+    6 peers[Key(1)]#1 made says[Key(1)]#1
+    7 peers[Key(1)]#1 posted says[Key(1)] Say { s: "ping 3" }
+    8 says[Key(1)]#1 Console.write("ping 3 to Key(1)")
+    9 main evicted peers[Key(1)]#1
+    10 main made peers[Key(2)]#1
+    11 main posted peers[Key(2)] Ping { left: 2 }
+    12 main evicted says[Key(1)]#1
+    13 main made says[Key(2)]#1
+    14 main posted says[Key(2)] Say { s: "hi there" }
+    15 peers[Key(2)]#1 Console.write("Key(2) 2")
+    16 peers[Key(2)]#1 posted says[Key(2)] Say { s: "ping 2" }
+    17 says[Key(2)]#1 Console.write("hi there to Key(2)")
+    18 says[Key(2)]#1 Console.write("ping 2 to Key(2)")
+    19 main Console.write("Key(2) 1")
+    20 main posted says[Key(2)] Say { s: "ping 1" }
+    21 says[Key(2)]#1 Console.write("ping 1 to Key(2)")
+    22 main exit 0
     Key(1) 3
-    hi there to Key(2)
+    ping 3 to Key(1)
     Key(2) 2
-    hello to Key(2)
-    Key(1) 1
-    Key(2) 0
-    replayed 6 calls
+    hi there to Key(2)
+    ping 2 to Key(2)
+    Key(2) 1
+    ping 1 to Key(2)
+    replayed 7 calls
     Key(1) 3
-    hi there to Key(2)
+    ping 3 to Key(1)
     Key(2) 2
-    hello to Key(2)
-    Key(1) 1
-    Key(2) 0
+    hi there to Key(2)
+    ping 2 to Key(2)
+    Key(2) 1
+    ping 1 to Key(2)
     # ren journal 3 · main.ren · deps: Console Random
-    1 main opened peers parts 1
-    2 main made peers[Key(1)]#1
-    3 main posted peers[Key(1)] Ping { left: 3 }
-    4 main made peers[Key(2)]#1
-    5 main posted peers[Key(2)] Say { s: "hi there" }
-    6 peers[Key(1)]#1 Console.write("Key(1) 3")
-    7 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 2 }
-    8 peers[Key(2)]#1 Console.write("hi there to Key(2)")
-    9 peers[Key(2)]#1 Console.write("Key(2) 2")
-    10 peers[Key(2)]#1 posted peers[Key(1)] Ping { left: 1 }
-    11 main Console.write("hello to Key(2)")
-    12 peers[Key(1)]#1 Console.write("Key(1) 1")
-    13 peers[Key(1)]#1 posted peers[Key(2)] Ping { left: 0 }
-    14 peers[Key(2)]#1 Console.write("Key(2) 0")
-    15 main exit 0
+    1 main opened says parts 1
+    2 main opened peers parts 1
+    3 main made peers[Key(1)]#1
+    4 main posted peers[Key(1)] Ping { left: 3 }
+    5 peers[Key(1)]#1 Console.write("Key(1) 3")
+    6 peers[Key(1)]#1 made says[Key(1)]#1
+    7 peers[Key(1)]#1 posted says[Key(1)] Say { s: "ping 3" }
+    8 says[Key(1)]#1 Console.write("ping 3 to Key(1)")
+    9 main evicted peers[Key(1)]#1
+    10 main made peers[Key(2)]#1
+    11 main posted peers[Key(2)] Ping { left: 2 }
+    12 main evicted says[Key(1)]#1
+    13 main made says[Key(2)]#1
+    14 main posted says[Key(2)] Say { s: "hi there" }
+    15 peers[Key(2)]#1 Console.write("Key(2) 2")
+    16 peers[Key(2)]#1 posted says[Key(2)] Say { s: "ping 2" }
+    17 says[Key(2)]#1 Console.write("hi there to Key(2)")
+    18 says[Key(2)]#1 Console.write("ping 2 to Key(2)")
+    19 main Console.write("Key(2) 1")
+    20 main posted says[Key(2)] Say { s: "ping 1" }
+    21 says[Key(2)]#1 Console.write("ping 1 to Key(2)")
+    22 main exit 0
     recorded again: the same bytes
     |}]
 

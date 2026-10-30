@@ -35,3 +35,8 @@ val core : Infer_handlers.core
    member that runs a block given the dependency a type variable names,
    `Actors.at` (compiler.md, "Services stage", "Actors (step 7)"). *)
 val pins_for_a_block : env -> Path.t -> bool
+
+(* Whether a function posts to a keyed instance family: the family's own
+   post, `Instances.post`, and `Actors.post` (compiler.md, "Services
+   stage", "Step 10: structured actors"). *)
+val posts_to_a_family : Path.t -> bool

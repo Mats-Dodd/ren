@@ -115,7 +115,6 @@ type t =
   | Family_visit
   | Family_idle
   | Family_edge
-  | Family_full
   | Family_enter
   | Family_post
   | Family_made
@@ -285,7 +284,6 @@ let path x =
   | Family_visit -> fn "family_visit"
   | Family_idle -> fn "family_idle"
   | Family_edge -> fn "family_edge"
-  | Family_full -> fn "family_full"
   | Family_enter -> fn "family_enter"
   | Family_post -> fn "family_post"
   | Family_made -> fn "family_made"

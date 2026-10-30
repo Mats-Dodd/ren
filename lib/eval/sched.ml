@@ -519,6 +519,21 @@ let shielded f =
           t.shield <- t.shield - 1;
           raise e)
 
+(* How deep in `finally`s the task running is. *)
+let shield () = match current () with Some t -> t.shield | None -> 0
+
+(* [f ()], seeing a cancel as code [depth] `finally`s deep does, however
+   deep the task is: the keyed instance family's drain, which runs in
+   its `with`'s `finally` but isn't shielded by it (family.ml, [close]),
+   sees one as the `with`'s body would. *)
+let shielded_at depth f =
+  match current () with
+  | None -> f ()
+  | Some t ->
+      let was = t.shield in
+      t.shield <- depth;
+      Fun.protect ~finally:(fun () -> t.shield <- was) f
+
 (* Ask [t] to stop, and return at once. It stops at its next dependency
    call, or now, if it's waiting, unless it's in a `finally`: then once
    its cleanup deadline passes. A task that hasn't run yet never runs. *)

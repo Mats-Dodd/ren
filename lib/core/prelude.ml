@@ -1014,9 +1014,8 @@ pub type Family<K, D> = builtin
 // it did, which `Instances.made` fails with
 pub type Pinned<D> = builtin
 
-// what a family counts: its live instances, those made and evicted, and
-// the most calls queued at once
-pub type InstanceCounts = { live: Int, made: Int, evicted: Int, high_water: Int }
+// what a family counts: its live instances, and those made and evicted
+pub type InstanceCounts = { live: Int, made: Int, evicted: Int }
 
 // the runtime's keyed instance family. Nothing installs it and no
 // `uses` names it: it's the runtime's, as the scheduler is, and only
@@ -1025,8 +1024,8 @@ pub type InstanceCounts = { live: Int, made: Int, evicted: Int, high_water: Int 
 // that reaches them, and keeps the family's handle in its state
 pub dep Instances =
   // a family of the instances `make` describes, one per key, in `parts`
-  // partitions of at most `cap` live instances each. Calls from outside
-  // it are metered against `mailbox` (step 7)
+  // partitions of at most `cap` live instances each, each key's mailbox
+  // holding at most `mailbox` posted calls
   pub fn open<K, D>(make: spawned fn(k: K) -> D, parts: Int, cap: Int, mailbox: Int) -> Family<K, D> =
     family_open(make, parts, cap, mailbox)
   // `c` as one operation of `k`'s instance, made first if it isn't
@@ -1070,20 +1069,20 @@ pub dep Instances =
   // operation pins with it, since its type can't name that error
   pub fn enter<K, D>(f: Family<K, D>, k: K, victim: fn(lru: Array<K>) -> Option<K>, body: fn() uses D) -> Pinned<D> =
     try family_enter(f, k, victim, body)
-  // puts `c` in `k`'s queue and returns: a task of the family's runs
+  // puts `c` in `k`'s mailbox and returns: a task of the family's runs
   // it, as one operation of `k`'s instance, after those queued before
   // it. The instance is made first if it isn't live, as `enter` makes
-  // it, what making it failed with kept in what it gives, for `made`,
-  // but never waits for room: past `cap` if none is evictable. A call
-  // from outside the family waits while its mailbox is full; one of an
-  // instance's own, to a sibling, never waits, and panics past twice
-  // `mailbox`
+  // it, what making it failed with kept in what it gives, for `made`;
+  // then it waits for room in `k`'s mailbox, and only there
   pub fn post<K, D>(f: Family<K, D>, k: K, c: Call<D, Unit, !>, victim: fn(lru: Array<K>) -> Option<K>) -> Pinned<D> =
     try family_post(f, k, c, victim)
   // fails as making the instance `enter` pinned did, if it failed
   pub fn made<D>(p: Pinned<(D ! ..e)>) ! ..e = try family_made(p)
-  // the family's end: the live instances' `finally`s, the last made's
-  // first
+  // the family's end: what's posted is delivered, then the live
+  // instances' `finally`s run, the last made's first; if the `with` that
+  // installs the handler that opened it is cancelled, what's running is
+  // cancelled, what's queued is dropped, and the `finally`s are given
+  // `Err(Cancelled)`
   pub fn close<K, D>(f: Family<K, D>) = family_close(f)
 
 // a call of an operation of whatever dependency `D` implements, which
@@ -1252,8 +1251,6 @@ pub dep Actors<K, D> =
   count: fn() -> Int
   made: fn() -> Int
   evicted: fn() -> Int
-  // the most posts queued at once
-  high_water: fn() -> Int
   // puts the call `c` in `k`'s mailbox, making its actor first if it
   // isn't live: what making it failed with, if it did. `post`'s step
   send: fn(k: K, c: Call<D, Unit, !>) -> Pinned<D>
@@ -1273,7 +1270,8 @@ pub dep Actors<K, D> =
   // now; the call is one that gives `()` and can't fail, run later as
   // one operation of `k`'s actor, after the posts this task made to it
   // before. It makes the actor if it isn't live, so what making it fails
-  // with is `post`'s, and it's all a post can fail with
+  // with is `post`'s, and it's all a post can fail with; then it waits
+  // for room in `k`'s mailbox, and only there
   pub fn post(k: K, c: Call<(D ! ..e), Unit, !>) ! ..e uses Actors<K, (D ! ..e)> =
     let p: Pinned<(D ! ..e)> = Actors.send(k, c)
     try Instances.made(p)
@@ -1292,11 +1290,11 @@ pub type Evict = | Lru
 // the actors of `h`, a handler whose one parameter is the key: at most
 // `max` live, the least recently released that nothing pins evicted to
 // make room past it, in `parts` partitions, each with `max / parts` of
-// them and its own order of release (one, below 64 a partition). Calls
-// from outside wait while `mailbox` posts are queued. `chaos: true`, a
-// test's, evicts at each call into the family the evictable actors
-// `Random` picks
-pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: Int = 10000, evict: Evict = Lru, chaos: Bool = false, parts: Int = 4) for Actors<K, D> uses Random =
+// them and its own order of release (one, below 64 a partition). Each
+// key's mailbox holds at most `mailbox` posts, which a post waits for
+// room in. `chaos: true`, a test's, evicts at each call into the family
+// the evictable actors `Random` picks
+pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: Int = 64, evict: Evict = Lru, chaos: Bool = false, parts: Int = 4) for Actors<K, D> uses Random =
   let n = partitions(max, parts)
   // the maker written here, so the instances are made with what's
   // installed where `actors` is
@@ -1328,7 +1326,6 @@ pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: In
   count() => Instances.counts(fam).live
   made() => Instances.counts(fam).made
   evicted() => Instances.counts(fam).evicted
-  high_water() => Instances.counts(fam).high_water
   send(k, c) =>
     shake(fam, chaos)
     Instances.post(fam, k, c, fn(lru: Array<K>) => victim(evict, lru))
@@ -2119,10 +2116,6 @@ let scheme (x : Intrinsic.t) =
      pinned block, before it takes the instance *)
   | Family_edge ->
       fn [ read (family (Var 0) (Var 1)); read (Fun ([], unit, Ty.closed, open_row 2)) ] unit
-  (* fn(on: Bool): whether the next pin of the task running may fail with
-     `Full`, which Lower says around a call Infer marked so (compiler.md,
-     "Services stage", "Actors (step 7)") *)
-  | Family_full -> fn [ read bool ] unit
   (* fn<K, D>(f: Family<K, D>, k: K, victim: fn(lru: Array<K>) ->
      Option<K>, body: fn() uses D) -> Pinned<D>: [Family_pin]'s, for a
      block that gives nothing and can't fail, what making the instance
@@ -2143,10 +2136,10 @@ let scheme (x : Intrinsic.t) =
              open_row 0,
              open_row 1 ))
   (* fn<K, D>(f: Family<K, D>, k: K, c: Call<D, (), !>, victim: fn(lru:
-     Array<K>) -> Option<K>) -> Pinned<D>: [c] put in [k]'s queue, its
-     instance made first as [Family_enter]'s is, but never waiting for
-     room, what making it failed with kept in what it gives (compiler.md,
-     "Services stage", "Actors (step 7)") *)
+     Array<K>) -> Option<K>) -> Pinned<D>: [c] put in [k]'s mailbox once
+     it has room, its instance made first as [Family_enter]'s is, what
+     making it failed with kept in what it gives (compiler.md, "Services
+     stage", "Actors (step 7)", "Step 10: structured actors") *)
   | Family_post ->
       scheme_of
         (Fun
@@ -2242,7 +2235,7 @@ let reaches (x : Intrinsic.t) =
   | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Task_random
   | Async_worker | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
-  | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge | Family_full
+  | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge
   | Family_enter | Family_post | Family_made | Family_kept
   | Call_first_hash | Call_add | Call_max | Call_min
   | Call_concat | Call_fold | Call_operations
@@ -2295,7 +2288,7 @@ let caller (x : Intrinsic.t) =
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
       | Sim_advance | Sim_alarm | Task_drain | Hash | Async_worker
       | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
-      | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge | Family_full
+      | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge
       | Family_enter | Family_post | Family_made
       | Call_first_hash | Call_add | Call_max
       | Call_min | Call_concat | Call_fold | Call_operations ) ) ->
@@ -2407,7 +2400,6 @@ let fns : Intrinsic.t list =
     Family_visit;
     Family_idle;
     Family_edge;
-    Family_full;
     Family_enter;
     Family_post;
     Family_made;

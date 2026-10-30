@@ -41,11 +41,16 @@ tell.
 
 ## The whole surface
 
+A program writes combinators over calls and streams, not tasks: the
+shape of the work decides its owner, and a tree is a call's
+([concurrency.md](concurrency.md)). `scope` and `spawn`, last below,
+are the layer std writes the combinators on.
+
 ```ren
-Async.scope fn(s) => s.spawn fn() => ...          // tasks started one at a time
-Async.scope(max: n) fn(s) => ...                  // spawn waits while n run
 Async.map(xs) fn(x) => ...                         // results, in order
 Async.each(xs) fn(x) => ...                        // no results
+Async.expand(roots, max: n) fn(x) => children      // work that finds more work
+Async.merge(a, b, cap: n) fn(items) => ...         // several streams, as they're ready
 Async.produce(cap: n, fn() => ...) fn(items) => ... // a producer task; its sends are a stream
 Async.map_pull(xs, fn(x) => ...) fn(results) => ... // map's results as a stream, in order
 Async.beside(fn() => task) fn() => ...             // a task beside the body, stopped when it ends
@@ -58,17 +63,20 @@ Async.until(fn() => cond)                          // in an operation: wait for 
 try release Next.get(id)                           // in an operation: let others in for one call
 Async.tick()                                       // let what can run, run
 Async.yield()                                      // let others go first
-Async.worker()                                     // the worker this task runs on
+Async.worker()                                     // the worker this task runs on, journaled
 with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at once
 with striped(h, by: Key(n: 16), merge: Sum) in     // h's instances, a call by its key
 with actors(doc, max: 50_000) as Docs in           // one actor per key, made on demand
+Async.scope fn(s) => s.spawn fn() => ...          // std's layer: tasks started one at a time
+Async.scope(max: n) fn(s) => ...                  // std's layer: spawn waits while n run
 ```
 
 | | Results | A failure |
 |---|---|---|
-| `Async.scope` | its body's | its tasks can't fail; the body's cancels them |
 | `Async.map` | a list, in order | cancels the rest |
 | `Async.each` | none | cancels the rest |
+| `Async.expand` | none | cancels the rest |
+| `Async.merge` | the body's | a source's ends the stream with it, after what it sent; the body's cancels the sources |
 | `Async.produce` | the body's | the producer's ends the stream with it, after what it sent; the body's cancels the producer |
 | `Async.map_pull` | the body's | a task's, or the source's, ends the stream with it, in its place |
 | `Async.both` | a pair | cancels the other |
@@ -76,28 +84,29 @@ with actors(doc, max: 50_000) as Docs in           // one actor per key, made on
 | `Async.timeout` | the body's | `! Timeout`, and the body is cancelled |
 | `Async.isolate` | the body's | a panic becomes `! Panicked(msg)` |
 | `Async.beside`, `Async.background` | the body's | a background task may fail: the first failure cancels the body and is the call's |
+| `Async.scope` | its body's | its tasks can't fail; the body's cancels them |
 
 `Async` is a dependency like `Clock`, so a signature says `uses Async`
-and the code says `Async.map`. Its two operations are `yield` and
-`tick`, and the rest are its functions, as `Fs.read_str` is one of
+and the code says `Async.map`. Its operations are `yield`, `tick` and
+`worker`, the last reached only through `striped(by: Worker)`, and the
+rest are its functions, as `Fs.read_str` is one of
 `Fs`'s. The blocks they take are transparent: their errors and
 dependencies flow into the caller, and their dependencies are found
 where they're written ([foundations.md](foundations.md#5-dependencies-are-found-where-a-block-is-written)).
 
-- **A scope starts tasks one at a time, and is anonymous.** `s.spawn`
-  starts one and gives nothing back, so a task is reachable only inside
-  the call that owns it. Waiting for two things is `both`, a first to
-  finish is `race`, and cancelling the last one inside a call, search
-  as you type, is `race(query, next_input)` in a loop. Work other calls
-  must reach by name, one refresh per user, is a family's, keyed by the
-  name ([structured-actors.md](structured-actors.md)). A scope that has
-  ended starts nothing: a task of an outer scope
-  that captured it and spawns into it panics, since the new task would
-  outlive it.
-- **Everything is bounded.** `spawn` waits while `max` of the scope's
-  tasks run, which is a server's backpressure, and `map` and `each` run
-  `max` at once. The default is std's, 64 in their signatures, so a
-  server writes `max: 10_000`.
+- **Combinators are the surface.** A server is `Async.each` over its
+  listener's connections; fan-out is `map`, `both` or `race`; a crawler
+  is `Async.expand`, which runs each item's call, feeds what it returns
+  back in, and is done when nothing is left (its name is open). Waiting
+  for two things is `both`, a first to finish is `race`, and cancelling
+  the last one inside a call, search as you type, is
+  `race(query, next_input)` in a loop. Work other calls must reach by
+  name, one refresh per user, is a family's, keyed by the name
+  ([concurrency.md](concurrency.md)).
+- **Everything is bounded.** `map`, `each` and `expand` run `max` at
+  once, which is a server's backpressure, and `merge` and `produce`
+  hold at most `cap` items. The default is std's, 64 in their
+  signatures, so a server writes `max: 10_000`.
 - **`map` and `each` take any pull argument,** as `for` does: a
   collection, by a snapshot of it; a temporary cursor as itself; a named
   cursor as `&r`, which the call changes in its place, so it goes on from
@@ -116,6 +125,20 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
   dependencies may run on every core; it's the same call either way.
 - **Wrappers are calls:** `Async.timeout(d) fn() => ...`, `Async.race`,
   and `retry(n, on: Tags)`. `with` installs only handlers.
+- **`merge` gives items from several streams as they're ready.** Its
+  sources must run at once, so each gets a producer task feeding one
+  bounded queue, `cap:`, and the call owns them, cancelled and waited
+  for when the body ends. `zip` and `chain` need no task: they pull on
+  the consumer's task ([streams.md](streams.md#concurrency-and-time)).
+- **`scope` and `spawn` are the layer std writes these on,** as `trust`
+  code is the layer under safe code. They stay public, since a program
+  may write a combinator std doesn't have (foundations.md, decision
+  20), but they're not how a program starts work. A scope is anonymous:
+  `s.spawn` starts a task and gives nothing back, so a task is reachable
+  only inside the call that owns it; `spawn` waits while `max` of the
+  scope's tasks run. A scope that has ended starts nothing: a task of
+  an outer scope that captured it and spawns into it panics, since the
+  new task would outlive it.
 - **A producer that needs a task runs in the consumer's scope.**
   `Async.produce(cap: Int = 16, f) fn(items) => ...` runs `f` on a task, which
   sends through a `Send<T>` dependency the call installs, not a channel
@@ -472,8 +495,8 @@ the flusher is cancelled, stops at its next call, and is waited for;
 then the `with`'s `finally` sends what's left. A `flush` holds the
 instance until it returns, so no sample is lost between
 `Exporter.send(pending)` and `pending = []`. A pool's order is the same:
-in `with pool() in Async.beside(health) fn() => Async.scope ...`, the
-scope's work drains, then the health check stops, then the pool's
+in `with pool() in Async.beside(health) fn() => Async.each(conns) ...`,
+the connections drain, then the health check stops, then the pool's
 `finally` runs.
 
 **`Async.background fn(bg) => body`** is `beside` for tasks the body
@@ -604,8 +627,7 @@ pub fn serve(addr: Addr) ! NetError uses Net, Clock, Console, Async =
 // `run_server()` runs `serve` there, handling what it fails with
 test "shutdown lets a request in flight finish" =
   with sim.net() in
-    try Async.scope fn(s) =>
-      s.spawn fn() => run_server()
+    try Async.beside(fn() => run_server()) fn() =>
       let c = try SimNet.connect(here())
       try Net.write(c, "slow".bytes())
       Clock.sleep(Duration.seconds(1))
@@ -617,32 +639,42 @@ test "shutdown lets a request in flight finish" =
 ### A crawler
 
 ```ren
-fn crawl(url: Str, depth: Int) =
-  if depth > 0 && Seen.claim(url) then
-    match attempt Web.get(url)
-      Err(_) => ()
+type Link = { url: Str, depth: Int }
+
+// the links to follow from `l`; a page that fails is skipped
+fn visit(l: Link) -> Array<Link> =
+  if l.depth > 0 && Seen.claim(l.url) then
+    match attempt Web.get(l.url)
+      Err(_) => []
       Ok(page) =>
         Send.send(page)
-        Async.each(page.links) fn(link) => crawl(link, depth - 1)
+        page.links.map(fn(u) => Link { url: u, depth: l.depth - 1 })
+  else []
+
+fn crawl(root: Str) =
+  Async.expand([Link { url: root, depth: 3 }], max: 16) fn(l) => visit(l)
 
 pub fn crawl_site(root: Str) -> Array<Str> uses Web, Async =
-  with seen_set(), sync.semaphore(16), sync.limit() over Web in
+  with seen_set() in
     var urls: Array<Str> = []
-    Async.produce(fn() => crawl(root, 3)) fn(pages) =>
+    Async.produce(fn() => crawl(root)) fn(pages) =>
       for p in pages
         &urls.push(p.url)
     urls.sort()
 ```
 
+- **Work that finds more work is `expand`.** It runs `visit` on each
+  link, feeds the links it returns back in, and is done when nothing is
+  left. The recursion is the tree, and `max: 16` bounds it where it
+  matters: 16 requests at once, however deep the crawl goes.
 - Each page is sent as it's found, through the `Send<Page>`
   `Async.produce` installs, to the body that collects them: nothing is
   gathered level by level.
 - `Seen.claim` is atomic without a lock (rule 3).
 - Skipping pages that fail is `attempt`, not a separate error policy.
-- The `each` inside an `each` is bounded where it matters: 16 requests at once,
-  however deep the crawl goes. `limit` is an `over any` handler with no
-  state, so it takes no lock, over a semaphore whose `acquire` waits in
-  `Async.until`.
+- [examples/crawler](examples/crawler) writes it as an `each` inside an
+  `each`, bounded by `sync.limit()` over a 16-permit semaphore, until
+  `expand` is built.
 
 ### The `just`, running independent recipes at once
 
@@ -741,8 +773,8 @@ and a background task's failure cancels the body and is its error. It runs, with
 - **One scheduler a run, and the runtime is its policy.** Every task is
   a fiber. `single` runs one thread in real time, first come first
   served; `sim` runs virtual time, choosing from a seeded tape;
-  `per_core`, the default, and `work_stealing` come with many cores
-  (stage 11b). The
+  `per_core`, the default, and `work_stealing` come with the runtime
+  core ([runtime.md](runtime.md)). The
   rules don't change with the runtime, only the cost, so code runs
   unchanged on any.
 - **No preemption.** A task runs until it waits. A long computation
@@ -776,7 +808,8 @@ and a background task's failure cancels the body and is its error. It runs, with
 | `Effect.all([a, b], { concurrency: 2 })` | `Async.both` |
 | `Effect.race` | `Async.race`, whose branches can't fail |
 | `Effect.timeout` | `Async.timeout` |
-| `Effect.forkScoped`, `FiberSet` | `Async.scope` and `s.spawn` |
+| `Stream.merge`, `Stream.mergeAll` | `Async.merge` |
+| `Effect.forkScoped`, `FiberSet` | `Async.scope` and `s.spawn`, the layer std's combinators are written on |
 | `Effect.makeSemaphore`, `withPermits` | `sync.semaphore(n)`, `sync.limit() over Dep` |
 | `Queue.bounded` | `sync.channel(n)` |
 | interruption, `onInterrupt`, `ensuring`, `acquireRelease` | `finally`, which sees `Err(Cancelled)` |
@@ -843,6 +876,10 @@ This document was first written before foundations.md, which changed it
 
 - **`Async.group(max:, drain:)` is `Async.scope(max:)`,** and a drain is
   the cleanup deadline after `accept_until` stops.
+- **Combinators are the surface, and `scope` is std's layer.** A server
+  is `Async.each` over its connections, a crawler `Async.expand`, and
+  several streams as they're ready `Async.merge`
+  ([concurrency.md](concurrency.md)).
 - **A handler has no task of its own.** `task =>` in a handler is gone;
   background work is a task beside the `with`'s body, `Async.beside` or
   `Async.background`, cancelled when the body ends. (Stage 11a built it
@@ -887,7 +924,7 @@ This document was first written before foundations.md, which changed it
   `weigh:`, `Lfu` beside `Lru`, and how `at` runs under `per_core`.
   There are no restart policies: a panic is a bug and ends the program,
   and an error is `attempt` or `retry` inside a task.
-- **Many cores** (stage 11b): `per_core`, `work_stealing` and `pinned`,
+- **Many cores** (the runtime core): `per_core`, `work_stealing` and `pinned`,
   arenas, `Mem.snapshot` and lock-free handlers.
 - **The rest of the simulation scheduler** (after 11a's `sim`): failing
   networks and disks, crashes, and checking every interleaving.

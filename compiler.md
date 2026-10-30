@@ -13173,6 +13173,138 @@ seeds).
 - **Low:** a `finally` that posts to its own key panics rather than
   queueing for the key's next life; decision 18 doesn't say which.
 
+### Step 10: structured actors
+
+concurrency.md (the owner's afed5a1) rewrites what steps 7a and 7b
+built: there's no mail inside a family, a post waits for room in its
+key's mailbox and only there, an `at` block holds its family, and a
+`with` drains when its body returns and cancels when it's cancelled
+(rules 2 to 4; research/structured-actors/MODEL.md checks them, and
+AUDIT.md lists what they touch). This section's earlier records are as
+they were built; where they say the edge's meter, a sibling's post, the
+panic past twice `mailbox:`, the high-water mark, `Full` or a post's
+making past `max:`, this step took them out. Step 10 is two halves:
+10a, the owner's items 1 to 4, rules 2 to 4 (below); 10b, items 5 to 8.
+
+**As built in 10a:**
+
+- **No mail inside a family.** family.ml's sibling path (`sibling`,
+  `edge`, the family's `mail` count and its `edge` waiters), the panic
+  past twice `mailbox:` (`Overflow`), the high-water mark (`high`,
+  `highs`, `Actors.high_water()`, `InstanceCounts.high_water`, and `ren
+  test`'s line under each test) are gone, and so is the opener's own
+  install in its maker's evidence (`installed_as`, the runner's
+  `sibling`) and Infer's exception for it (`kept_own`, `kept_in`): an
+  actor that names its own family in `uses` needs what nothing outside
+  its `with` installs, which is the `with` set's ordinary error,
+  "nothing installs `Docs` before `main`", with "installing this needs
+  `Docs`" at the item (Infer's install order counts what an item
+  installs as met, so it's this error, not "need each other"). So is
+  `kept_pins_own`, "`doc` is kept by `Docs`'s family, so it can't call
+  `Docs.at`", which that error covers.
+- **A post waits for room in its key's mailbox, and only there**
+  (`Family.post`): it makes its actor first, as `at` does, waiting for a
+  slot when the family is full and nothing's evictable (no more `pin
+  ~over`: delivery past `max:` is gone, since a key with mail always has
+  a live actor), then, holding it, waits while the key's mailbox holds
+  `mailbox` calls, woken as its delivery takes one off, or as the
+  delivery ends (a waiter then looks again, and starts another).
+  `mailbox:` is per key, `actors`' default 64; `Instances.open`'s
+  `mailbox` means the same. An operation called through `at` isn't
+  metered any more: `Family.metered` is `Family.entering`, which keeps a
+  task's posts before its own later calls of the actor (7b's
+  `ordered`) and the library's `at_edge`, `actors`' chaos, both skipped
+  for the family's own deliveries.
+- **A posted operation can't fail** is 7b's type rule on `post`'s
+  parameter, unchanged; its help now names both ways out where it's a
+  family's post, "handle it inside the operation, or call it with
+  `Docs.at`" (or "use its value inside the operation, ..."), through
+  the alias it's called by (Infer_expr's `post_at`). A third library's
+  `send` keeps the general help. The post makes its actor, so setup's
+  errors are the post's, as in 7b.
+- **Rule 3, statically** (Infer_expr's `pinning`, Infer_top's
+  `pinning_ops`): a call that pins for a block (`Docs.at`, `each`, an
+  operation whose arm pins, `Counts.at`) or posts (`Docs.post`, an
+  operation whose arm posts, `Counts.send`), inside a block one pins,
+  is refused when its family is the block's or installed inside it, as
+  far as the `with`s in sight tell (`env.in_sight`, what the `with`s
+  around the code in its own function install, innermost first, pushed
+  by Infer_handlers' `install` in install order): of two installed in
+  the function, the nearer is inside; one installed in it is inside one
+  its callers installed; of two its callers installed nothing's known,
+  which the run time checks. `at` in `at` of one family keeps its
+  message (help: "finish with the first, then call the second"); the
+  rest is "`Inners.at` inside a block of `Outers.at` reaches `Inners`,
+  installed inside `Outers`", or "`Docs.post` inside a block of
+  `Docs.at` reaches the family its block holds", with the note "a block
+  of `Outers.at` holds `Outers` until it ends: inside it, only families
+  installed outside `Outers` can be reached, so every wait points
+  outward". Handler arms get no new check: an actor's `uses` resolve
+  outside its family.
+- **Rule 3 at run time** (`Family.held`), where a helper hid it: the
+  machinery of 7a's `at` in `at`, the families a task pins for a block
+  and their open order (`num`), now checked at every pin for a block
+  and every post, whether or not it would wait, a panic said at the
+  program's call: "`Docs` is posted to inside a block that pins one of
+  its instances, ...", "a block that pins one of `Outers`'s instances
+  posts to `Inners`, installed inside it, ...". It replaces the pin
+  rule: `Full`, its marking (`Infer.Full_marked`, Lower's
+  `family_full` around a marked call, the `Family_full` intrinsic,
+  `Family.marked`) and "a task pinning `Outers` would wait for a slot
+  of `Inners`" are gone.
+- **Drain and cancel** (`Family.close`): a `with` whose body returns
+  drains as before, then runs the `finally`s, given `Ok(())`. The drain
+  isn't shielded by the `finally` it runs in: it sees a cancel as the
+  `with`'s body did (`Sched.shielded_at` the depth in `finally`s the
+  family was opened at, `shield`), so a `with` inside `Async.timeout`
+  is a drain with a limit. A cancelled `with`, or a drain cancelled
+  meanwhile, drops every key's queued mail, cancels the delivery tasks
+  (their operations stop at their next dependency call) and waits for
+  them, runs the `finally`s with `Err(Cancelled)` (the runner's
+  `finish ~cancelled`, which takes their `try r` going on cancelled as
+  their end), and then goes on cancelled. A striped family's `with`
+  ends the same way: its stripes' `finally`s see `Err(Cancelled)` when
+  it's cancelled, as any handler's do.
+
+**Chosen in step 10a** (where concurrency.md is silent):
+
+- **Rule 3's run-time check covers pins for a block and posts, not a
+  call of one operation** (`Instances.call`, `make`, `striped`'s): the
+  owner's list says `at` and `post`, and a stripe never waits for a
+  slot (all are made at the `with`). A block of `Docs.at` that calls an
+  operation of a plain handler, or a stripe, installed inside `Docs`,
+  whose arm `at`s `Docs` on another task, can still wait in a cycle (a
+  slot one way, the instance's lock the other); `sim` reports it as
+  every task waiting, as 11a's deadlocks are. The design's "a plain
+  handler is a family with one instance" would refuse it; that's a
+  wider rule than this step's, left for the owner.
+- **The `finally` that asks for its own key** (step 9's panic) is kept
+  as a backstop no program reaches: an instance's `finally` can reach
+  only families installed outside its own.
+- **`Instances.at_edge` keeps its name**, the block run at each call
+  into an instance through a block, `actors`' chaos; "edge" no longer
+  names a meter.
+- **"The cycle in one `with` set"** for an actor naming its own family
+  is the existing "nothing installs `Docs` before `main`", as it was
+  before 7b allowed it, not a new message.
+- **Tests that changed with the design:** the high-water test is gone
+  (the design, not a weaker test); s7's sibling posts are refusals (an
+  actor naming its own family, the chain reaction, a post from inside
+  `at` to its own family) or rewritten across two families (posts past
+  `mailbox:` beside an outside poster, the session that posts outward,
+  the replay with posts); `Full`'s test is rule 3's refusal; step 9's
+  "a key whose `finally` is running" now shows the post evicting 2 to
+  make 1 again, since a post's making waits for room; step 9's
+  `finally` posting to its own key is the `with` set's error. New, in
+  test/test_structured_actors.ml (`[s10 ...]`): a slow key holds up
+  only its own posters, a post's making waits for a slot, rule 3
+  statically and through a helper (by `at` and by `post`, to the family
+  and to one installed inside it), a cancelled `with` dropping queued
+  mail, a drain under `Async.timeout`, and a drain that ends with `Ok`.
+- **Measured:** examples/docs' thousand seeds take 9.8 s (10.2 s at
+  step 9); bench/services/lost_update's seed is still 4702, memory's
+  9904.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -13194,6 +13326,7 @@ seeds).
 | 8 | 4b150c4 | the milestone: a wiring provides an item by its alias, `actors(doc) as Docs` (infer_handlers.ml's `provided_as`, 7b's finding), with tests; examples/docs (moved from bench/services/docs), language.md §11's document server behind wirings, `documents(max, chaos)` and `live(dir)`, over a line protocol and an `Op` that appends, a store of files and one in memory, sessions over `sim.net()` that interleave, tests that every subscriber sees one order, that the store holds the final text, that a session off the protocol fails alone, and that the documents outlive the server; its tests under `documents(2, true)`, chaos, pass `ren test --seeds 1000` (about 10 s); bench/services/memory and lost_update (and fixed.ren) as the whole server with one change each; bench/tasks.t's `services_milestone` holds; test_services.ml's s8 on, with two wiring tests; step 3's and 7b's "Chosen" lists moved here from Stage 11a's section, where they'd landed; language.md's table | step 9, the review |
 | 9 (docs and tooling) | e9a5b44 | the docs and tooling lens ("Step 9, docs and tooling", above): async.md, stdlib.md, testing.md, handlers.md's journal, errors.md, the README, language.md's table; this section's "As built" notes, superseded choices marked, step 5's and 2b's "Chosen" lists, the `expire(now)` note, the progress log; examples/breaker's and examples/docs' READMEs; differential.py over bench/services' folders, corpus cases for background work, producers and generic calls, `release`'s highlight, Zed's `rev`; test_calls.ml's §11 test named for what it changes | foundations.md's `Doc.edit` in `at` (low, design) |
 | 9 (soundness) | 6df76e0 | the soundness lens: adversarial programs for wirings, services, the pipe, background work, `release`, `produce`, stripes and actors ("Step 9, soundness"); fixed: `with live, live`'s internal error, `provides` through a call of the same recursive group, two lives of one key while a `finally` runs, a family's handle leaving its handler, `family_kept` and `lib_panic` open to any library (the third library's `at` generic again), chaos at operations through `at` (`Instances.at_edge`), a wiring's errors naming its function, actors refused natively at `actors`; test/test_services_review.ml | the low items in "Step 9, soundness"; the spec and docs lenses |
+| 10a | 35b978d | structured actors, rules 2 to 4 ("Step 10: structured actors"): no mail inside a family (the sibling path, the edge's meter, the panic past twice `mailbox:`, the high-water mark and its `ren test` line, `Full` and the pin rule, delivery past `max:` gone; an actor naming its own family is the `with` set's error); `mailbox:` per key, default 64, every post waiting for room in its key's mailbox and only there; the post's refusal naming `Docs.at`; rule 3 on `at` blocks, by Infer where the `with`s are in sight and by the family at run time; a cancelled `with` cancelling what runs, dropping queued mail and giving the `finally`s `Err(Cancelled)`, and a drain that isn't shielded; test_services.ml's s7 sibling tests refusals or across two families, the high-water test gone; test/test_structured_actors.ml; testing.md, stdlib.md | step 10b: the owner's items 5 to 8, and AUDIT.md's rows left for it; the low item in "Chosen in step 10a" (a plain handler or stripe installed inside a family, reached from its `at` block) |
 
 ## Patterns stage
 

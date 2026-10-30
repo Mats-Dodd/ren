@@ -99,12 +99,6 @@ type 'l found_ =
           Lower makes the block that pulls it, named [name] as a lambda is
           (streams.md, rule 3) *)
   | For_param of int
-  | Full_marked
-      (** at a call's own node ([full_node]): a call that pins an instance of
-          a keyed instance family inside a block that pins one of another, so
-          it fails with `Full` where waiting for room could close a cycle,
-          which the family is told around it (compiler.md, "Services
-          stage", "Actors (step 7)") *)
       (** at a call of a handler `for D`'s own node ([for_node]): which of its
           scheme's variables is [D], whose type argument there is the
           implementation it's made for (compiler.md, "Services stage",
@@ -127,7 +121,6 @@ let default_node node i = -((node * 256) + i + 1)
 let pulled_node node = min_int + (node * 4)
 let next_node node = min_int + (node * 4) + 1
 let for_node node = min_int + (node * 4) + 2
-let full_node node = min_int + (node * 4) + 3
 
 (* A default, [lit], as the expression a call that leaves it out is
    given, at [loc]: a literal, or a variant written bare, a constructor of
@@ -333,25 +326,20 @@ type env = {
           by, innermost first: each by the dependency its library is
           installed as, `Docs`, with the call that pins it, as written,
           `Docs.at` (compiler.md, "Services stage", "Actors (step 7)") *)
-  pin_ops : (Path.t * string, unit) Hashtbl.t;
-      (** the module's operations an arm of whose pins an instance of a
-          family for a block, `Shards.at` ([pinning_ops]) *)
-  kept_pins : (Path.t, (string * string * Loc.t) list) Hashtbl.t;
-      (** each handler whose arms pin, by its function, with each family
-          they pin, the call as written and where: one a family keeps can't
-          pin its own *)
-  kept_own : (int * Loc.t, label list) Hashtbl.t;
-      (** by a call's node and place (a node is numbered within its
-          function), the needs a handler's call has only because of
-          the makers it's given, the handlers whose descriptions it keeps
-          ([Infer_expr.kept_needs]): where it's installed as one of those,
-          `actors(doc) as Docs` for a `doc` that uses `Docs`, that one is
-          its instances' siblings', which the family meets itself *)
-  kept_in : (Path.t, label list) Hashtbl.t;
-      (** the same, by the function the call is in: a wiring's link is
-          a function whose body is its item, which a `with` that lists
-          the wiring calls *)
+  mutable in_sight : label list;
+      (** what the `with`s around the code being checked, in its own
+          function, install, innermost first, in the order they're
+          installed: what rule 3 reads to tell a family installed inside
+          another (compiler.md, "Step 10: structured actors") *)
+  pin_ops : (Path.t * string, reach) Hashtbl.t;
+      (** the module's operations an arm of which pins an instance of a
+          family for a block, `Shards.at`, or posts to one, `Shards.send`
+          ([pinning_ops]) *)
 }
+
+(* How a call reaches a keyed instance family: pinning one of its
+   instances for a block, `Docs.at`, or posting to it, `Docs.post`. *)
+and reach = Pins | Posts
 
 (* A function of the group being checked, as the group's functions see
    it until the group is done (infer_top.ml, [setup]). Its type parameters

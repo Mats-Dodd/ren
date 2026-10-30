@@ -92,7 +92,6 @@ type t =
   | Family_visit
   | Family_idle
   | Family_edge
-  | Family_full
   | Family_enter
   | Family_post
   | Family_made

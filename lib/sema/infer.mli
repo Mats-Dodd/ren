@@ -104,11 +104,6 @@ type 'l found_ =
           block parameter `fn() -> Option<T>` as `for` takes it, and the name
           of the block Lower makes that pulls it (streams.md, rule 3) *)
   | For_param of int
-  | Full_marked
-      (** at a call's own node ([full_node]): one that pins an instance of a
-          keyed instance family inside a block that pins one of another, and
-          can fail with `Full` there, which lowering tells the family around
-          it (compiler.md, "Services stage", "Actors (step 7)") *)
       (** at a call of a handler `for D`'s own node ([for_node]): which of its
           scheme's variables is [D], whose type argument there is the
           implementation it's made for (compiler.md, "Services stage",
@@ -124,7 +119,6 @@ and pulled = Snapshot | Cursor of Path.t
 val pulled_node : int -> int
 val next_node : int -> int
 val for_node : int -> int
-val full_node : int -> int
 
 (* What lowering reads: the labels are dependencies with their type
    arguments, in canonical form, numbered as the function's scheme. *)

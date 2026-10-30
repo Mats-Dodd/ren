@@ -150,7 +150,9 @@ let%expect_test "[s9 accept] a key whose `finally` is running is made again only
   (* 1 is evicted to make room for 2 and its `finally` waits; a post to
      1 and an `at` of 1 meanwhile wait for it, rather than make a second
      life of 1 beside the first, whose setup would read what the first's
-     `finally` is still writing *)
+     `finally` is still writing. Once it's over, the post makes 1 again
+     by evicting 2, since a post's making waits for room as `at`'s does
+     (step 10a; it went past `max:`, so 2 lived on beside it) *)
   run
     {|
 import sim
@@ -200,20 +202,24 @@ fn main() uses Console, Random =
     finally 1 start, log a
     finally 1 end
     making 2
-    making 1
-    made 1
     made 2
-    at 1:
-    count 2 made 3
-    finally 1 start, log p
-    finally 1 end
     finally 2 start, log b
     finally 2 end
+    making 1
+    made 1
+    at 1:
+    count 1 made 3
+    finally 1 start, log p
+    finally 1 end
     ()
     |}]
 
-let%expect_test "[s9 reject] an instance's `finally` that posts to its own key panics, not hangs" =
-  run_error
+let%expect_test "[s9 reject] an instance's `finally` can't post to its own key: its handler can't name its own family" =
+  (* it panicked, rather than hang, while an actor could name its own
+     family; with no mail inside a family (step 10a) it's the `with`
+     set's error, and family.ml's panic is a backstop no program
+     reaches *)
+  check_error
     {|
 type DocId = | DocId(n: Int)
 
@@ -235,12 +241,13 @@ fn main() uses Console, Random =
     Docs.at(DocId(2)) fn() => Doc.poke()
 |};
   [%expect {|
-    poked DocId(1)
-    finally DocId(1)
-    error: panic: `docs[DocId(1)]#1`'s `finally` asks for the instance it ends, which is made again only once it's over
-      ┌─ test.ren:9:5
-    9 │     Docs.post(id, Doc.Call.Poke)
-      │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    error: nothing installs `Docs` before `main`
+       ┌─ test.ren:15:4
+    15 │ fn main() uses Console, Random =
+       │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
+    16 │   with actors(doc, max: 1) as Docs in
+       │        ------------------- installing this needs `Docs`
+       help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Docs`
     |}]
 
 (* ---- a family's handle stays in the handler that opened it ---- *)
