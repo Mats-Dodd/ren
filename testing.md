@@ -144,10 +144,9 @@ $ ren test --only "two deposits" --seed 3815     # the same failure, exactly
   kept only in memory loses its text under some seed, and `--seed`
   evicts the same way again (examples/docs). There's no `ren test
   --chaos`.
-- **High-water marks.** Under each test whose actors were posted to,
-  `ren test` reports each family's most posts queued at once over its
-  seeds, "`Docs`'s high-water mark: 4 posts queued at once"; a post past
-  twice a family's `mailbox:` panics with it.
+- **Queue depths.** `sim` and debug builds report each key's queue
+  depth, the most posts queued at once, so a key whose mail backs up is
+  found; a post waits only for room in its key's `mailbox:`.
 
 ### Test items
 

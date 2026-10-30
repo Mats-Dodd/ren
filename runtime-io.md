@@ -108,7 +108,7 @@ try Fs.write_then_sync(file, offset, bytes)
  user code sees      Fs    Net    Clock    Random    Console    Os    Alloc    Async
                        \     |      |        |         |       /
  runtime handler        ring: io_uring · epoll · kqueue · IOCP · sim
-                        requires Unsafe; installed once, before main
+                        requires Unsafe; one per program, installed by main
 ```
 
 | Capability | Covers |
@@ -159,8 +159,8 @@ This is the format question from the README's roadmap. Taking the shape from the
 
 The standard library is written in Ren on top of a small set of primitives: submit an operation (read, write, open, accept, connect, timer, cancel), wait for completions, get random bytes, plus the basics of `Str` and `Bytes`.
 
-- **Until stage 13,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
-- **From stage 13,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output.
+- **Until the runtime core,** the primitives are OCaml, built on Eio, so the interpreter already uses the right model.
+- **From the runtime core,** the primitives and the rest of the runtime (fibers, the scheduler, reference counting, the allocator, the journal) are C, emitted alongside the compiler's output. The core does no I/O itself: drivers answer its calls ([runtime.md](runtime.md)).
 
 Everything above the primitives carries over unchanged from the interpreter to native code. Only the primitives are rewritten.
 
@@ -182,7 +182,8 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 8** | `Fs`, `Os` and `Proc` as dependency types, with real implementations and in-memory ones: `Fs` on `Unix` and `mem_fs`, `Os.args` and `test_os`, `Proc.run` and `test_proc` (done) |
 | **Stage 10** | the journal entry format |
 | **Stage 11a** | `Net`; fibers and `Async`; cancellation that waits (done in the interpreter: `Async`'s tasks are OCaml effects, and `Net`, `Clock` and `Proc.run` wait on `Unix.select` and timers, not a ring). Still to come from this row: the ring, batched submission, linked operations, and leased buffers returned to the pool when their count reaches zero |
-| **Stage 13** | the runtime and primitives in C: io_uring, epoll, kqueue and IOCP backends; TLS through rustls; a monotonic `Clock.instant` |
+| **Runtime core** | the runtime and primitives in C: the core of [runtime.md](runtime.md), with io_uring and kqueue drivers |
+| **Stage 13** | epoll and IOCP drivers; TLS through rustls; a monotonic `Clock.instant` |
 | **Stage 15** | registered buffers for code without `Alloc` |
 | **Stage 17** | the ring replaced wholesale by the simulator; replay from journal entries |
 | **After 1.0** | kTLS; finer capabilities; WASI |

@@ -8,7 +8,7 @@ line says it:
 
 > **Status:** proposed. It builds on [structured-actors.md](structured-actors.md)
 > and the prior-art research in [research/runtime/SYNTHESIS.md](research/runtime/SYNTHESIS.md),
-> and it frames foundations.md decision 9 and native stage 13. Lock
+> and it frames foundations.md decision 9 and the runtime core stage. Lock
 > mechanics, memory and the record layout are
 > [compiler.md](compiler.md#the-runtime-model)'s.
 
@@ -136,7 +136,7 @@ its call, so no frame needs to follow work anywhere.
 
 The host drives the core through nine functions, sketched in
 [SYNTHESIS.md §3](research/runtime/SYNTHESIS.md#3-revised-abi-sketch);
-names and signatures are stage 13's:
+names and signatures are the runtime core stage's:
 
 | Function | Does |
 |---|---|
@@ -170,7 +170,7 @@ names and signatures are stage 13's:
 ## Open
 
 - How `at` runs on shared-memory places under `per_core`, moving the
-  task or shipping each call: measured in 11b.
+  task or shipping each call: measured in the runtime core stage.
 - The core's own record layout, shared with the journal and the hosted
-  wire: stage 13.
+  wire: the runtime core stage.
 - A user-written scheduler: later, inside `trust`, against this page.

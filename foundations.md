@@ -14,7 +14,11 @@ record, [language.md](language.md): decision 18 is new, 3 is reframed,
 [formats.md](formats.md): decision 19 is new, and explicit layout is no
 longer open; then decision 20, what the language owns and what std
 owns, which moved `actors` and `striped` into std over a runtime
-primitive, the keyed instance family (decision 18). language.md is the
+primitive, the keyed instance family (decision 18). On 2026-10-30 it
+took [structured-actors.md](structured-actors.md), which changed the bet
+and decisions 7, 9 and 18, and [runtime.md](runtime.md), which states
+the runtime decision 9 installs; [Staging](#staging) gained the runtime
+core. language.md is the
 language a program is written in, data, services, the pipe and
 collections; this record is how it runs. It reverses parts of [deps.md](deps.md),
 [handlers.md](handlers.md), [async.md](async.md) and
@@ -164,8 +168,8 @@ Four rules make that sound, and each is checked from signatures:
 - **C. A spawned block captures by reference only the variables of the
   frame that calls `Async.scope`.** Everything else is copied: loop
   variables inside the scope, a helper's locals and parameters.
-- **D. A scope and a task handle are blocks too.** They can't be stored
-  or returned.
+- **D. A scope is a block too.** It can't be stored or returned, and
+  it hands back no task.
 
 The check is **fully static**. Swift checks exclusivity at run time only
 for escaping closures, class properties and globals, and Ren has none of
@@ -478,21 +482,23 @@ with Async.pinned() in hot_loop()               // this subtree stays on one thr
 with sim.scheduler(seed) in serve()             // tests
 ```
 
-- **The rules don't change with the runtime.** Every program is checked
-  against many cores, so code runs unchanged on any runtime, and only the
-  cost differs. Libraries never name one.
-- **The cost follows the runtime.** Nothing is marked shared where no
-  task can run on another thread, so counts stay plain and locks are
-  skipped. Release specializes for the runtime `main` installs, so under
+- **The language owns meaning; the runtime owns time, order and
+  place.** The rules don't change with the runtime. Every program is
+  checked against many cores, so code runs unchanged on any runtime,
+  and only the cost differs. Libraries never name one.
+- **One runtime per program,** installed by `main`; `Async.pinned()` is
+  the only nesting. Release specializes for it, so under
   `Async.single()` the atomic paths aren't compiled at all.
-- **The world follows it too.** The real `Fs` and `Net` get their event
-  source, io_uring, kqueue or a thread pool, from the runtime.
 - **`per_core` is the default.** Each core runs its own scheduler and
-  tasks don't move between cores; a family's keys have home cores, so
-  a post is one push to a core's queue (decision 18). It's a cost, not
-  a meaning, and the runtime is swappable, so measurements may move it.
-- v1 ships `single`, `work_stealing`, `per_core` and `sim`. A runtime
-  written by users would be a later interface inside `trust`.
+  tasks don't move between cores; a family's keys have home cores
+  (decision 18). It's a cost, not a meaning.
+- **What a runtime is, is [runtime.md](runtime.md):** its interface, a
+  core that does no I/O over three nouns, tasks, instances and queues
+  of `D.Call`s, which compiled code reaches only through their verbs;
+  its contract, the orders the language promises, with `sim` exploring
+  every other; and its places. v1 ships `single`, `per_core`,
+  `work_stealing` and `sim`. A runtime written by users would be a
+  later interface inside `trust`.
 
 ### 10. Many cores
 
@@ -509,7 +515,7 @@ happen, with nothing to annotate.
   its task is parked, so across threads it costs what a plain lock does
   uncontended, about 5 to 20 ns. **The queue is fair, not first in first
   out:** the runtime chooses who gets the instance next, and no waiter
-  is passed over without bound, so 11b may let a running task take it
+  is passed over without bound, so the runtime may let a running task take it
   before a parked one, as Go's mutex does. `sim` chooses among the
   waiters and the arrivals from its tape, so no program can come to
   rely on an order. So state read before a dependency call
@@ -580,7 +586,7 @@ happen, with nothing to annotate.
   keeps, and leave the state counted plainly, since only the task
   holding the instance reaches it, as a Rust `Mutex<T>` needs only
   `T: Send`. The lean is toward the edge; experiment K3 decides, before
-  11b builds marking ([Staging](#staging)).
+  the runtime core builds marking ([Staging](#staging)).
 - **Or it's built in an arena** (below), the explicit tool for big data
   read from every core.
 
@@ -1140,8 +1146,9 @@ the family, with fixed keys.
   first parameter has a `key` to one stripe by it, read through the
   derived walk from the call's arguments. `by: Worker` gives each
   worker a stripe and sends an operation to the caller's, which it
-  learns from `Async.worker()`, a scheduler operation any library can
-  call.
+  learns from `Async.worker()`, a scheduler operation that's std's
+  alone, since it would let a program see place
+  ([runtime.md](runtime.md#whats-journaled-time-and-order-never-place)).
 - An operation with no key runs on every stripe. If it returns `()`,
   that's all; if it returns a value, the results are folded with
   `merge:`, left to right in stripe order: `Sum`, `Max`, `Min`,
@@ -1160,7 +1167,7 @@ the family, with fixed keys.
   at least two virtual workers, so tests see it.
 - It replaces `sync.keyed(n, h)` as 11a built it.
 
-**On many cores, decided now so 11b only adds.**
+**On many cores, decided now so the runtime core only adds.**
 
 - **Operations are calls, not messages.** An operation runs as if in its
   caller's task. There's no `Send` bound: every value can cross, marked,
@@ -1360,6 +1367,12 @@ keyword: the language gives "errors on the header", std gives
   named.
 - **First in first out on a busy instance.** Waiters are served fairly,
   in an order the runtime picks.
+- **Task handles.** A scope is anonymous: no task joined or cancelled
+  from a handle, and no `s.replace`. Two things at once are `both` or
+  `race`, and work other calls must reach is a family's (decision 7).
+- **Mail inside a family.** Actors of one family can't post to each
+  other, so no relays, gossip or ping-pong between them; separate
+  concerns are separate families (decision 18).
 - **Interfaces over data.** A data interface was a `dep` with stateless
   handlers, `Shape`; it's an ADT, or a generic function that takes a
   block ([language.md §3](language.md#3-generic-code-no-user-defined-interfaces)).
@@ -1371,8 +1384,9 @@ keyword: the language gives "errors on the header", std gives
 - **Not Koka:** no heap-allocated continuations for general effects.
 - **Not Go:** no shared memory between tasks, no unstructured goroutines,
   no preemption.
-- **Not Erlang:** no heap per task, no copied messages, no supervisor
-  trees in the language. Its actors are kept, addressed by key, with
+- **Not Erlang:** no heap per task, no copied messages, no supervisors
+  or restart policies, no messages between actors of one family, and no
+  mailbox without a bound. Its actors are kept, addressed by key, with
   `post` as its send; but an operation is a call that returns, not a
   message.
 - **Not Effect:** no effects as values, no fiber interpreter.
@@ -1401,7 +1415,8 @@ and 32-bit references as the default.
 | A dependency can't take type parameters | Generic dependencies |
 | `Async.limit` and the recorder are built in | `over any` handlers in Ren; the journal itself is the runtime's record (decision 11) |
 | `Async.group(max:)` | `Async.scope(max:)` |
-| A handler can run a `task =>` that lives as long as its `with` (async.md) | `Async.beside(task) fn() => body` inside the `with`, whose task's failure cancels the body |
+| A task's handle, `t.join()` and `t.cancel()`, from `s.start`; `s.replace(key)` (async.md) | Anonymous scopes: `both`, `race`, or a family keyed by the name |
+| An actor posts to its siblings, metered at the family's edge (decision 18 as first written) | No mail inside a family; a per-key `mailbox:` bound every post waits on || A handler can run a `task =>` that lives as long as its `with` (async.md) | `Async.beside(task) fn() => body` inside the `with`, whose task's failure cancels the body |
 | A cancelled `Proc.run` kills its program | It kills the program's whole process group, `kill: Tree`, unless `kill: Child` |
 | `par_map` | `Async.map` over a block with no dependencies |
 | Preemption at loop back-edges (async.md) | None |
@@ -1585,9 +1600,9 @@ and 32-bit references as the default.
      stripes made on their own worker; K4, an eviction's `finally` not
      stalling other keys in its partition.
 7. **The `just`, natively,** in two parts. The `just` as written runs
-   its recipes at once, and tasks are native only with item 10, so the
-   concurrent `just` built natively is item 10's "Done when", not this
-   item's.
+   its recipes at once, and tasks are native only with item 8, the
+   runtime core, so the concurrent `just` built natively is item 11's
+   "Done when", not this item's.
 
    **7a. Strings and bytes at Rust's speed.** Byte and string code
    (2.6 to 2.8× Rust's time at the start), the inline slice and the
@@ -1629,30 +1644,41 @@ and 32-bit references as the default.
    fast as Rust's `match`. `ren review` with
    its "this is data" hint, and `ren profile`'s suggestions, come
    after.
-8. **11b, many cores.** `per_core`, `work_stealing` and `pinned`; the
-   runtime model of [compiler.md](compiler.md#the-runtime-model): the
-   shared mark and atomic counts on shared objects, a heap per thread
-   with frees returned to the heap they came from, the current heap a
-   pointer each task holds; arenas, sealed when shared, with copy-in;
-   `Mem.snapshot` and its reclamation; lock-free handlers with `Atomic`
-   fields; `striped` and `actors` on many cores as decision 18 says,
-   with fair handoff, home cores, sampled eviction and marking as K3
-   decided. **Phase two
-   of the experiments:** the prototypes' questions again on the real
-   runtime, a check that journals recorded on many cores replay on one,
-   and a server benchmark against Go and Rust.
-9. **11c, generators** and the stream library on them.
-10. **Native, stages 13 and 14.** The task frame allocator; the build
-   notes; the front half run per module in parallel; release built with
-   clang -O2 per module in parallel, cached by content. Specialization
-   per block and per handler, and most of the memory work, are built
-   (item 2), and dispatch with `--explain-dispatch` (item 3). **Done
-   when**, among the rest, the `just` as written, its recipes at once,
-   builds natively and its tests pass against the native build (item
-   7's "Done when", moved here with tasks).
+8. **The runtime core,** its own stage, merging 11b's many cores with
+   stage 13's task work. The core of [runtime.md](runtime.md), which
+   does no I/O: `single` and `sim` first, then `per_core`; a kqueue
+   driver and an io_uring driver; compiled code reaching the core only
+   through the three nouns' verbs; the task frame allocator. With it,
+   from 11b: `work_stealing` and `pinned`; the runtime model of
+   [compiler.md](compiler.md#the-runtime-model): the shared mark and
+   atomic counts on shared objects, a heap per thread with frees
+   returned to the heap they came from, the current heap a pointer each
+   task holds; arenas, sealed when shared, with copy-in; `Mem.snapshot`
+   and its reclamation; lock-free handlers with `Atomic` fields;
+   `striped` and `actors` on many cores as decision 18 says, with fair
+   handoff, home cores, sampled eviction and marking as K3 decided.
+   **Phase two of the experiments:** the prototypes' questions again on
+   the real runtime, a check that journals recorded on many cores
+   replay on one, and a server benchmark against Go and Rust. **Its
+   conformance test:** the interpreter is the reference, and a
+   program's journal under `sim` from the native core matches the
+   interpreter's, byte for byte, across many seeds.
+9. **11c, generators,** built natively on the core from the start, and
+   the stream library on them.
+10. **Stage 12, the standard library,** designed generally, not for any
+   one program ([stdlib.md](stdlib.md)).
+11. **Native, stages 13 and 14.** The build notes; the front half run
+   per module in parallel; release built with clang -O2 per module in
+   parallel, cached by content. Specialization per block and per
+   handler, and most of the memory work, are built (item 2), and
+   dispatch with `--explain-dispatch` (item 3). **Done when**, among the
+   rest, the `just` as written, its recipes at once, builds natively and
+   its tests pass against the native build (item 7's "Done when", moved
+   here).
 
-The interpreter runs tasks on OCaml effects throughout, so 10c to 11c
-need no native code.
+The interpreter runs tasks on OCaml effects throughout, so the stages
+before the runtime core need no native tasks; from it on, tasks and
+generators are built natively too.
 
 ## Open questions
 

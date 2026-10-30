@@ -58,7 +58,7 @@ Async.until(fn() => cond)                          // in an operation: wait for 
 try release Next.get(id)                           // in an operation: let others in for one call
 Async.tick()                                       // let what can run, run
 Async.yield()                                      // let others go first
-Async.worker()                                     // the worker this task runs on
+Async.worker()                                     // std's alone: the worker, for striped(by: Worker)
 with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at once
 with striped(h, by: Key(n: 16), merge: Sum) in     // h's instances, a call by its key
 with actors(doc, max: 50_000) as Docs in           // one actor per key, made on demand
@@ -741,8 +741,8 @@ and a background task's failure cancels the body and is its error. It runs, with
 - **One scheduler a run, and the runtime is its policy.** Every task is
   a fiber. `single` runs one thread in real time, first come first
   served; `sim` runs virtual time, choosing from a seeded tape;
-  `per_core`, the default, and `work_stealing` come with many cores
-  (stage 11b). The
+  `per_core`, the default, and `work_stealing` come with the runtime
+  core ([runtime.md](runtime.md)). The
   rules don't change with the runtime, only the cost, so code runs
   unchanged on any.
 - **No preemption.** A task runs until it waits. A long computation
@@ -887,7 +887,7 @@ This document was first written before foundations.md, which changed it
   `weigh:`, `Lfu` beside `Lru`, and how `at` runs under `per_core`.
   There are no restart policies: a panic is a bug and ends the program,
   and an error is `attempt` or `retry` inside a task.
-- **Many cores** (stage 11b): `per_core`, `work_stealing` and `pinned`,
+- **Many cores** (the runtime core): `per_core`, `work_stealing` and `pinned`,
   arenas, `Mem.snapshot` and lock-free handlers.
 - **The rest of the simulation scheduler** (after 11a's `sim`): failing
   networks and disks, crashes, and checking every interleaving.
