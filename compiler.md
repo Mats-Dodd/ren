@@ -10516,6 +10516,13 @@ ast.ml gains, each a constructor the compiler then points at every
   a handler's arm `Call_arm of param list * expr`, the `call(c:
   D.Call)` clause (step 6), beside `over any`'s `call =>`, which stays.
 
+**As built,** three of these differ, each recorded in its step's
+"Chosen" list below: a link is `Pipe { subject; step }`, `step` the call
+with a `Piped` first argument (step 1); an item's `from` is the list of
+wirings it came through (step 2); and a concrete `Doc.Call` takes no type
+arguments, generic code's `D.Call<R ! E>` being the prelude's `Call<D,
+R, E>` (steps 6a and 7b).
+
 The tree-sitter grammar gains `pipe_expression` (with `pipe_step`
 children, each with an optional `try`/`attempt` field), `release_
 expression`, and `wiring_definition` with `provides`, `uses`, `errors`
@@ -11016,6 +11023,12 @@ Neither is native: `ren build` refuses them as it refuses `Async.scope`
 (to_mem.ml's `tasks_not_native`, which gains `beside` and
 `background`).
 
+**As built (step 3).** `background`'s `bg` is a `Background<! E>`, a
+builtin type whose argument is the error set its spawned blocks may fail
+with, not a `Scope`; a task's `context` stays, since the run time's check
+needs it; a task outside a `with` that reaches nothing it installs
+outlives it. "Chosen in step 3", below.
+
 ### `release`, deadlocks and `Proc.run(kill:)` (step 4)
 
 Decision 10: "`release` lets go for one call. `try release
@@ -11054,6 +11067,15 @@ scheduling point; `arm_retake` is `Sched.holding`'s queueing, back to
 the depth it had. With no other task, and natively, both do nothing,
 and the writes and reads give back what they wrote: a plain call
 (decided after the draft; bench/services/release).
+
+**As built (step 4).** `release` covers `next.op(...)` as well as
+`D.op(...)`; it's a scheduling point only where the instance is shared
+with a spawned task, as an operation's call is, so `arm_release` and
+`arm_retake` aren't among `Intrinsic.waits` and a function that writes
+`release` needn't use `Async`; a task keeps what it has let go of,
+`task.let_go`, which the panics' "holding" leaves out; and `sim`'s fair
+choice applies only while it isn't following a recording. "Chosen in
+step 4", below.
 
 **Decision 2's row, narrowed** (excl.ml). Today a `Dep_call` in an arm
 is a change of all the handler's state for the call (Excl's `Dep_call`
@@ -11436,6 +11458,21 @@ None of it is native: to_mem refuses the `family_*` intrinsics, said at
 the program's call that reached them (as a std panic is), "`striped`
 uses the keyed instance family, which isn't native yet".
 
+**As built (steps 6a, 7a and 7b).** The listing above is the design; the
+prelude's `Instances` differs in its signatures, each recorded in its
+step's "Chosen" list below. It's a dependency with members and no
+operations, since an operation can't be generic yet: `open(make: spawned
+fn(k: K) -> D, parts, cap, mailbox) -> Family<K, D>`, what making an
+instance fails with carried by a description, `Family<K, (D ! ..e)>`,
+not a third parameter; `pin`, with `enter`, `made` and `visit` beside it
+for a library's operations, whose types can't name setup's errors;
+`post(f, k, c, victim) -> Pinned<D>`; `call(f, k, c)` and `make` for
+`striped`; `evictable(f)` and `idle(f, d)` in place of
+`evictable(f, idle:)`; and `counts` an `InstanceCounts`.
+`Async.worker()` draws a task's worker the first time it asks, not at
+its spawn. A family's partition count is its journal's `opened` line,
+not the header's `parts:`.
+
 ### `D.Call` (step 6)
 
 What's decided 6; decision 18, "A call is a typed value"; decision 7's
@@ -11519,6 +11556,16 @@ type Doc.Call<R ! E> =        // written by the compiler, not by a program
   handle the error, inside the operation, or make the call directly
   where its result is wanted". It's no rule written for `actors`: any
   function with a `D.Call<()>` parameter says the same.
+
+**As built (steps 6a and 7b).** A concrete `Doc.Call` takes no type
+arguments: the checker gives it a row of the cases it may be a call of,
+and generic code's `D.Call<R ! E>`, the prelude's `Call<D, R, E>`,
+unifies with it by closing that row to the cases whose operations give R
+and fail with at most E, not by a GADT's refinement; `Doc.Call<R ! E>`
+written of a dependency's own calls is refused. A `match` on a `call`
+clause's call refines its result in each arm. The fold members are
+`sum`, `max`, `min`, `concat` and `fold(m, a, b)`, and the operations as
+data are the prelude's `operations(h)`, not `D.Call.operations`.
 
 ### Stripes (step 6)
 
@@ -11624,6 +11671,13 @@ in the arm, on a call of `Instances`, as step 4's rule asks.)
   stripes would serialize. Sound by decision 10: the arm's only state is
   `let`s, which `release` writes back and reads again unchanged.
 - **The journal** names a stripe by the one rule, `hits[3]#1`.
+
+**As built (step 6b).** `striped` writes no `release`: its instance keeps
+no `var`, so it isn't exclusive and its callers never queue on it. A key
+goes to stripe `((h % n) + n) % n`, a first argument of any type being a
+key; the folds are `c.sum`, `c.max`, `c.min`, `c.concat` and `c.fold(m,
+a, b)`; its checks at the `with` read `operations(h)`; and `sync.keyed`
+is "`sync` has no public `keyed`". "Chosen in step 6b", below.
 
 `sync.keyed`, `Sync_keyed`, `VKeyed`, `VKeys` and their sites go (The
 inventory), and `sync` has no `keyed`: "`sync` has no `keyed`" is the
@@ -11738,6 +11792,14 @@ The panic's words name the alias the family is installed as, by the
 one rule: "`Peers` has 5 posts queued, past twice its `mailbox:` of 2",
 the high-water mark on the line after.
 
+**As built (steps 7a and 7b).** `at`, `each` and `post` are members of
+`Actors`, generic functions over its operations `enter`, `visit` and
+`send`, since an operation can't be generic and its block can't fail;
+`Actors<K, D>` takes two type arguments, an alias's `! E` being `D`'s,
+`Actors<DocId, (Doc ! StoreDown)>`; `actors`' maker is `h: spawned fn(k:
+K) -> D`; and a family has `max(1, min(parts, max / 64))` partitions.
+"Chosen in step 7a" and "Chosen in step 7b", below.
+
 ### Journal version 3 (step 7)
 
 Decided after the draft: the family adds made, evicted and posted
@@ -11777,6 +11839,12 @@ names"); that's version 3, and recorded journals are recorded again.
   help, record it again (journal.ml's `version_1_said` becomes
   `old_version_said`). examples/just/tests/build.journal is recorded
   again.
+
+**As built (step 7a).** A family's partitions are an `opened` line, `main
+opened docs parts 1`, since a family opens after the header is written,
+and the header has no `parts:`; teardown writes no `evicted` lines; a
+test that replays a journal passes over the family's lines; and the
+recorded journals had no family, so only their headers' version changed.
 
 ### Native
 
@@ -12077,19 +12145,6 @@ fit the code, each to revisit if a step finds it wrong:
 - **A wiring a test splits is `pub`.** language.md §5's test splits a
   private `core`, but a test sees what an importer sees (testing.md),
   so in a test the split wiring is `pub`, its `uses` written.
-- **A service's state is its handler's, given to each member as
-  parameters** (step 2b (state)): a `var` `inout`, a `let` by value,
-  each written with its type or a literal, the state first, as a
-  handler's; the state can't call a member. One record of the state
-  passed `inout` was the other way, but a record type needs its fields'
-  types written all the same, and every member would read `st.n`
-  instead of `n`.
-- **A service is installed with its parentheses,** `Kv()` when it takes
-  nothing, as a handler is; `Kv` alone where a `with` lists it is the
-  same call.
-- **A member used as a value is refused,** rather than made a closure
-  over the shared arguments: §4 says members call each other, and a
-  block that calls one says the same.
 - **Two parser errors language.md §8 doesn't list:** a trailing block on
   a step that isn't the last ("decided after the draft" allows one only
   in the last link), and a field of a value as a step (Resolve's, since
@@ -12112,7 +12167,8 @@ fit the code, each to revisit if a step finds it wrong:
   first out, so `ren run`'s output doesn't change.
 - **`release` is a word only before a name on its line,** so the
   operation `Semaphore.release()` and arms named `release` stay.
-- **A pull parameter is a mode, `xs: pull T`,** checked as a `for`'s
+- *Superseded by step 5's choice, a block parameter `fn() -> Option<T>`:*
+  **A pull parameter is a mode, `xs: pull T`,** checked as a `for`'s
   subject; Lower makes every pull argument a step block, so the
   interpreter's `task_map` and `task_each` take one kind of source.
 - **`Events.items()` gives a cursor type, `sync.Items<T>`,** whose
@@ -12134,6 +12190,7 @@ fit the code, each to revisit if a step finds it wrong:
   `evict_idle`) is the library's. `evictable(idle: d)` gives the time
   half, so `actors` needs no `Clock`.
 - **A family is a `Family<K, D ! E>` handle kept in its opener's state,**
+  (as built `Family<K, (D ! ..e)>`, step 7a)
   a number, not an instance; a call after `close` panics.
 - **The family's maker parameter carries three checks** any library
   over it gets (a `finally` that can't fail, the cycle rule's exception
@@ -12146,7 +12203,9 @@ fit the code, each to revisit if a step finds it wrong:
   D.Call, a, b) => ...`, called by `striped` as a method,
   `m.call(c, a, b)`: the design says the clause folds two results for
   `c` and is silent on how it gets them.
-- **The built-in folds are `D.Call` members,** `c.add`, `c.max`, `c.min`
+- *Superseded by step 6a's choice, `sum`, `max`, `min`, `concat` and
+  `fold`, and `operations(h)`:* **The built-in folds are `D.Call`
+  members,** `c.add`, `c.max`, `c.min`
   and `c.concat`, and the install check reads `D.Call.operations`,
   since `striped`'s clause can't name a call's result type: the
   declarations as data, decision 20 rule 3.
@@ -12154,7 +12213,8 @@ fit the code, each to revisit if a step finds it wrong:
   has a default (§2) and decision 18 gives no default fold; `striped`'s
   setup refuses it, at the `with`, where a keyless operation gives a
   value. It's a value of std's `Fold`, not a rule in the checker.
-- **`striped` and `actors` `release` their own instance** in each arm
+- *Superseded for `striped` by step 6b's choice, which writes none:*
+  **`striped` and `actors` `release` their own instance** in each arm
   that pins or posts, else every caller would queue on the library's
   one instance; `release` (step 4) is what any library over the family
   writes.
@@ -12182,6 +12242,15 @@ fit the code, each to revisit if a step finds it wrong:
   journal, research/actors-post/'s model.
 - **`Full` is added statically only where the `at` is lexically inside
   another family's `at`;** a helper's `at` gets the run time's rule.
+- **A design note for the owner: language.md §11's `expire(now)`.**
+  §11 says a keyless operation runs on every stripe, and its `expire(now)`
+  sweep is meant to; but `striped` routes by "an operation whose first
+  parameter has a `key`", and every value has its derived `key`, so as
+  built `expire(now)` goes to one stripe by `now` (step 6b's choice) and
+  `hit(...) -> ()` isn't parsed. test_calls.ml's run of §11's lines
+  writes `expire()` and `hit(path: Path)`, and says so in its name. A
+  per-operation way to say "keyless" (or keying only on a declared key
+  type) is the design's to decide.
 - **The milestone's stand-ins** (the brief's risk; decided after the
   draft): language.md's `conn.ops()` is a framed reader and
   `text.apply(op)` an editing model, which the formats and strings
@@ -12314,6 +12383,23 @@ Chosen in step 2, as built:
   where a block's dependencies are found, so they stay, with a note that
   a helper that only installs is better a wiring.
 
+Chosen in step 2b, as built (they sat among the specification's choices
+above until step 9):
+
+- **A service's state is its handler's, given to each member as
+  parameters** (step 2b (state)): a `var` `inout`, a `let` by value,
+  each written with its type or a literal, the state first, as a
+  handler's; the state can't call a member. One record of the state
+  passed `inout` was the other way, but a record type needs its fields'
+  types written all the same, and every member would read `st.n`
+  instead of `n`.
+- **A service is installed with its parentheses,** `Kv()` when it takes
+  nothing, as a handler is; `Kv` alone where a `with` lists it is the
+  same call.
+- **A member used as a value is refused,** rather than made a closure
+  over the shared arguments: §4 says members call each other, and a
+  block that calls one says the same.
+
 Chosen in step 3, as built:
 
 - **A task's `context` stays,** though "Background work" says it goes:
@@ -12438,6 +12524,8 @@ Chosen in step 4, as built:
 - **The circuit breaker is examples/breaker,** in bench/tasks.t and THE
   CHECKS; bench/services/breaker_held is it without `release`, whose
   "a slow answer doesn't hold up a fast one" a seed fails.
+Chosen in step 5, as built (step 4's list held them until step 9):
+
 - **A pull parameter is a block parameter `fn() -> Option<T>`,** not a
   new mode `pull T` (step 5 as specified): streams.md's rule 3 says a
   pull parameter "takes what `for` takes", a block as itself, and its
@@ -12900,6 +12988,66 @@ Chosen in step 8, as built:
   high-water mark there: language.md's server calls its actors through
   `at` alone.
 
+Step 9, docs and tooling (the review's third lens):
+
+- **The documents say what's built.** async.md: its status, its surface
+  (`release`, `Async.worker()`, `striped`, `actors`), rule 3 and "What
+  changed" with `release`, a paragraph on `release` under "Shared state
+  is a handler", the deadlock panic's holdings, `Async.until`'s waiter
+  chosen by `single` in order or by `sim` fairly, `actors` beside
+  `striped`, `Proc.run`'s process group, `sim`'s fair choice and two
+  workers, chaos and high-water marks, journal names, examples/breaker
+  and examples/docs, and actors' open items under "Later" (its
+  background section and its "Later" line on streams were right after
+  steps 3 and 5). stdlib.md: its status, a table of what's built
+  (`Async`'s producers and `worker`, `release`, `Proc.run(kill:)`,
+  `sync`'s `items()`, `striped`, `actors`, `Instances`, `D.Call`) and a
+  roadmap row. testing.md: its status, `sim`'s fair choice, `release` as
+  a scheduling point, two virtual workers, chaos through `actors(doc,
+  chaos: true)`, high-water marks, journal version 3, a roadmap row.
+  handlers.md's journal section said version 2 under a version 3
+  header: now version 3, its `Proc.run` line with `Tree`, the family's
+  lines, versions 1 and 2 refused. errors.md: "Errors that come from
+  elsewhere" (`try release`, a background failure, a producer's through
+  `items`, setup's through `Actors<K, D> ! E`, `post`'s, `Full`, a
+  `finally` that can't fail). The README: the status's stage list,
+  `release`, `Proc.run(kill:)`, actors, `post` and the milestone; the
+  roadmap's services row done; rule 3 with `release`. language.md's
+  table: the patterns stage's row (it said "none"), `Instances`' and
+  `actors`' members, `try Doc.edit(op)` inside `at`. operators.md was
+  right.
+- **This section:** an "As built" note at the end of each part whose
+  specification the build departed from (The AST, background work,
+  `release`, the family, `D.Call`, stripes, actors, journal version 3),
+  each pointing at its step's "Chosen" list; the superseded choices of
+  "Where this stage may differ" marked; step 5's choices under a heading
+  of their own (they sat under step 4's), and step 2b's moved there from
+  the specification's list; the design note on §11's `expire(now)`; the
+  progress log's step 8 hash, the macOS fix's row, and the blank line
+  that split the table removed. test_calls.ml's run of §11's `striped`
+  lines is named for what it changes, not "as written".
+- **Examples' READMEs:** examples/breaker and examples/docs have one,
+  as the others do; examples/checkout's was right.
+- **Tooling:** differential.py read only bench/services' top level, so
+  the milestone's variants (`lost_update`, `memory`, `breaker_held`)
+  weren't compared; it reads every folder now (1999 programs, 0 the
+  compiler parses that the grammar doesn't). The corpus gains
+  `Background<! ..e>`, `beside`, `background` and `produce` with `for p
+  in try items` (tasks.txt), and generic code's `Call<(D ! ..e), Unit,
+  !>`, `D.Call<Int, ! Bad>`, `uses D` and `Docs.post(...)` (calls.txt);
+  every other form had a case (pipe.txt: `|>` and `.` continuation
+  lines; wiring.txt; service.txt, state included; release.txt, variant,
+  field and operation defaults; calls.txt, `Doc.Call.Case { .. }` and
+  the clauses; actors.txt, the alias's `! E` and a maker). The
+  highlight test asserts `release`. Zed's `extension.toml` named a
+  commit from before the pipe, so Zed built a grammar without any of
+  this stage's forms: it names 4b150c4 now; its README's outline line
+  names services and wirings.
+- **Left:** foundations.md decision 18's `try Docs.at(id) fn() =>
+  Doc.edit(op)` (low: Ren only where `edit` can't fail; with §11's
+  `edit ... ! StoreDown` the block writes `try Doc.edit(op)`, as
+  examples/docs does), not edited, foundations.md being design.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -12911,14 +13059,15 @@ Chosen in step 8, as built:
 | 3 | d5f31e2 | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
 | 4 | bb005eb | `release` through the whole pipeline: the word in `parse_unary`, `Release` (ast.ml), Infer's check and Excl's (outside an operation), Lower's write-back, `arm_release`, the call in a `Finally` with `arm_retake` and the reads again (`Lower.released`), `Sched.let_go`, `retake`, `take_back`, natively nothing (bench/services/release in the loops); decision 2's row narrowed in excl.ml (`Lets_go`: `release` and `Async.until`, and block parameters' calls); the deadlock and cycle panics naming what each task holds (`waits_of`); `sim`'s fair choice in `released`; defaults that are variants written bare, a one-field variant's field default, an operation's parameters' defaults; `Kill`, `Proc.run(kill:)`, lib/eval/ren_spawn.c, the group killed, `SimProc.kills()`; examples/breaker and bench/services/breaker_held (bench/tasks.t); the journals' `Proc.run` lines; tree-sitter's `release_expression`, defaults, corpus (release.txt), highlights; test_services.ml's s4 all on; language.md's table, deps.md, testing.md | steps 5 to 9; the review's `release` programs (state read across it, `release` inside `until`'s condition) |
 | 2b | 827ff7e | `service`, a dependency and its one implementation written once (language.md §4), through the whole pipeline: `parse_service` (`service` a word before a capitalized name) and `kv.Kv(...)` in the parser, `Service` (ast.ml); Resolve's `service_items`, exactly a `dep`, a handler named as the service is and a private function per member, `Kv.get`, taking the service's parameters first, its `uses` the service's; a member's calls of another, the shared parameters passed on, recursion and chains included (infer_expr.ml's `Piped` after them); `installed`, `service_named` and the three errors of the brief with help, and a member passed as a value, a member's `Kv.get(...)`, an operation's untyped parameter, no `pub fn`, state among members; a member's need past the service's `uses` reported once, at the member (infer_declared.ml, infer_msg.ml's `service_undeclared`); test/test_service.ml's s2b (a test installs a service and replaces it with a test handler; a service in a wiring; another module's; the `uses` bound pinned); natively, bench/services/service in the `same`, `release` and `tcc_same` loops; tree-sitter's `service_definition` and the module's constructor, the corpus (service.txt), the highlights and Zed's outline; examples/checkout and examples/server without a private function's `uses` (no example moved to `service`: checkout's `Orders` and `Discounts` are ports, the ledger's `Sql` keeps state and has `transaction()` over it, the server's `Line` keeps a `finally`); language.md's table, the README, deps.md. Built in parallel with step 3, from 84ac5d3 | a service's state (`var`s among the members: "Where this stage may differ"); steps 3 to 9 |
-
 | 2b (state) | 81a56a1 | a service's state (language.md §4, rule 4): `let`, `var` and `finally` lines first (`parse_service`, `sstate`), the handler's state as written, failing with the service's `! E`; each member given the state after the parameters, a `var` `inout` and a `let` by value (`service_items`, `passes`), an arm passing `&n`, a member passing its own on; the state's type written or a literal's; a state that calls a member, a state taken apart and a state after a function refused with help; test_service.ml's state tests (a `var` counter and a list changed by members calling each other recursively, setup failing under `try with`, a test handler in its place, a block calling a member); natively bench/services/service's `Kv` with state and a `finally`; tree-sitter's `state` and `finally` in a service (service.txt); language.md's table, deps.md | steps 5 to 9 |
 | 5 | 1f11d2c | pull arguments: a parameter `fn() -> Option<T>` takes what `for` takes (Infer_expr's `pull_param`, `pulls`, `pull_arg`; Lower's `pull_block`, at `Infer.pulled_node`), `Async.map` and `Async.each` over one, pulled on the caller's task only when a slot frees (eval.ml's `all_of` asks for each call as there's room, `Sched.room`), `&r` a write held for the call (excl.ml, as any `&`); `for x in [try] f` over a block (`block_subject`, `block_loop`); a cursor's `next` that uses a dependency or fails (`cursor`, `next_call` at `Infer.next_node`); `Chan<T>`'s `items()` and `Items<T>` in std_lib.ml's `sync`, a member function through an alias resolved (Resolve's `alias_of`, `through`) and run with the alias's implementation (Infer's `through_alias`, Lower's `rebound`), "is pulled where it's written"; `Send<T>`, `Async.produce` and `Async.map_pull` in the prelude over `task_produce`, `task_map_pull`, `outbox_send` and `inbox_take` (sched.ml's streams, eval.ml), a stream given to a block failing with its function's errors (`streams_given`), unmarked calls of those last (solve.ml), defaults before the blocks given last; refused natively (to_mem.ml, bench/build.t); test_services.ml's s5 all on, with a test of each under `--seeds 1000`; examples/crawler on `Async.produce`, examples/server on `Async.each` over its connections; async.md (surface, table, server, crawler, "Later"), stdlib.md, language.md's table, the README | steps 6 to 9; the review's `produce` programs (a producer failing while the body is blocked, a body that breaks at `cap`); `for x in try &r` over a named cursor that can fail |
 | 6a | 261287d | the runtime half: lib/eval/family.ml, the keyed instance family (partitions, pins, the order of release, lives, names by the one rule, eviction with its `finally` on the evicting task, teardown in reverse creation order), reached through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`) over `family_*` intrinsics that Core Lint lets only its members call (`Prelude.runtime_of`); `D.Call` for every dependency whose operations are all data (Resolve's `call_types`, `Doc.Call.Edit { op }` three-part paths in the parser and tree-sitter, `X.Call` as a type, "`Docs.Call` needs every operation of `Docs` to be data"); the `call(c)` clause and a merge's `call(c, a, b)`, checked once with a refined skolem result (`Types.refined`, Infer_handlers.call_clause) and copied per operation (Lower's `clause_ops`); handlers `for D`, made per dependency (`For_param`, Lower's `for_call`); generic code's `Call<D, R, E>` and its members `first_hash`, `sum`, `max`, `min`, `concat`, `fold`, and `operations(h)`; handler parameters with defaults; `Async.worker()` (sched.ml); the family refused natively (to_mem.ml); test/test_calls.ml; language.md's table | step 6b: `striped` in Ren, `sync.keyed` removed; step 7: `pin`, `post`, queues, the meter, setup's errors, `victim`, journal version 3, `D.Call<R ! E>` |
 | 6b | 04d0347 | `striped` in the prelude, plain Ren over the family's `Instances`, `Async.worker()` and `Call`'s members: `By` (`Key(n: Int = 16)`, `Worker`), `Fold<D>` (`Unmerged`, `Sum`, `Max`, `Min`, `Concat`, `Custom(m)`), its checks at the `with` reading `operations(h)`, a keyless call on every stripe folded left to right; `sync.keyed` removed with `Sync_keyed`, `VKeyed`, `VKeys` and their sites, its tests moved to test_services.ml as `striped`'s; test_services.ml's s6 all on, the split law failing under seed 5671; language.md §11's `striped` lines run (test_calls.ml); bench/services/refused as specified, natively refused; async.md, deps.md, handlers.md, language.md's table, the README | step 7: `actors`, `pin`, `post`, journal version 3; the review's stripes program (a merge whose result depends on stripe order) |
 | 7a | 07434ed | `actors` in the prelude, plain Ren over the family: `Actors<K, D>` with `at` and `each` as members over the operations `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`; `actors(h: spawned fn(k: K) -> D, max, mailbox, evict: Lru, chaos, parts)`; the alias's `! E`; the family's `pin` for a block with a library's `victim`, `visit`, `enter`/`made`, `idle`, setup's errors as the family's, waiters sharing them, a cancelled setup retried; the no-deadlock rules static and at run time, `Full`; `finally` can't fail; partitions; chaos; journal version 3 (`opened`, `made`, `evicted`), replayed; test_services.ml's s7 tests but `post`'s on, test/test_actors.ml; tree-sitter's alias errors (corpus actors.txt); language.md's table | step 7b: `post`, the per-key queues and their delivery tasks, the edge's meter and high-water mark, a sibling's post and an actor naming its own family, teardown draining, research/actors-post/'s counterexamples; s7's `post` tests |
 | 7b | e8c9e02 | `post`: `Actors.post(k, c)` over the operation `send` and `Instances.post` (`family_post`), its parameter generic code's `Call<D, (), !>`; a concrete call's type carrying which operations it may be a call of (Types.calls; Unify's `known_call`; `D.Call<R ! E>` written in generic code; refused of a dependency's own), the refusal "`post` takes a call that gives `()` and can't fail, and ..." for any such parameter; the family's per-key queues, delivery tasks in a scope of its own named by their instance, a post making its actor past the cap when none is evictable, mail keeping an instance from eviction, the edge's meter for posts and for operations through `at`, a task's posts before its own later calls of the actor, a sibling's post never waiting and panicking past twice `mailbox:` with the high-water mark, the family's end draining before the `finally`s; an actor naming its own family in `uses` (Infer's `kept_own`, the opener's install in its maker's evidence); journal `posted` lines, keys written as journal values, delivery tasks' names read back; `ren test`'s high-water mark; test_services.ml's s7 `post` tests on, with the high-water mark, a replay of a run with posts, and a third library that posts; language.md's table | step 8; a wiring that lists `actors(...) as Docs` (7a's, below) |
-| 8 | this commit | the milestone: a wiring provides an item by its alias, `actors(doc) as Docs` (infer_handlers.ml's `provided_as`, 7b's finding), with tests; examples/docs (moved from bench/services/docs), language.md §11's document server behind wirings, `documents(max, chaos)` and `live(dir)`, over a line protocol and an `Op` that appends, a store of files and one in memory, sessions over `sim.net()` that interleave, tests that every subscriber sees one order, that the store holds the final text, that a session off the protocol fails alone, and that the documents outlive the server; its tests under `documents(2, true)`, chaos, pass `ren test --seeds 1000` (about 10 s); bench/services/memory and lost_update (and fixed.ren) as the whole server with one change each; bench/tasks.t's `services_milestone` holds; test_services.ml's s8 on, with two wiring tests; step 3's and 7b's "Chosen" lists moved here from Stage 11a's section, where they'd landed; language.md's table | step 9, the review |
+| 4 (macOS) | 9eb2e07 | `Proc.run`'s C stub builds on macOS: lib/eval/ren_spawn.c's close-on-exec pipe made with `pipe` and `fcntl` where there's no `pipe2` (Linux keeps `pipe2`) | none |
+| 8 | 4b150c4 | the milestone: a wiring provides an item by its alias, `actors(doc) as Docs` (infer_handlers.ml's `provided_as`, 7b's finding), with tests; examples/docs (moved from bench/services/docs), language.md §11's document server behind wirings, `documents(max, chaos)` and `live(dir)`, over a line protocol and an `Op` that appends, a store of files and one in memory, sessions over `sim.net()` that interleave, tests that every subscriber sees one order, that the store holds the final text, that a session off the protocol fails alone, and that the documents outlive the server; its tests under `documents(2, true)`, chaos, pass `ren test --seeds 1000` (about 10 s); bench/services/memory and lost_update (and fixed.ren) as the whole server with one change each; bench/tasks.t's `services_milestone` holds; test_services.ml's s8 on, with two wiring tests; step 3's and 7b's "Chosen" lists moved here from Stage 11a's section, where they'd landed; language.md's table | step 9, the review |
+| 9 (docs and tooling) | this commit | the docs and tooling lens ("Step 9, docs and tooling", above): async.md, stdlib.md, testing.md, handlers.md's journal, errors.md, the README, language.md's table; this section's "As built" notes, superseded choices marked, step 5's and 2b's "Chosen" lists, the `expire(now)` note, the progress log; examples/breaker's and examples/docs' READMEs; differential.py over bench/services' folders, corpus cases for background work, producers and generic calls, `release`'s highlight, Zed's `rev`; test_calls.ml's §11 test named for what it changes | foundations.md's `Doc.edit` in `at` (low, design) |
 
 ## Patterns stage
 

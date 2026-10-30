@@ -286,6 +286,33 @@ its `finally`, commits, or rolls back when the body failed and passes the
 error on with `try r` ([handlers.md](handlers.md),
 [examples/ledger](examples/ledger)).
 
+## Errors that come from elsewhere
+
+Some calls fail with what other code failed with, and each is marked as
+any call is ([async.md](async.md)):
+
+- **`try release Next.get(id)`:** `release` covers one call, and the
+  marker covers that call, as it would without `release`.
+- **A background task's failure** is the body's: `attempt
+  Async.beside(fn() => try keep_lease()) fn() => work()` is
+  `Err(LeaseLost)` when the lease is lost, and the body is cancelled.
+- **A producer's failure** ends its stream: `items` gives what was sent
+  first, then fails with it, so the body loops `for p in try items`, and
+  where the producer can't fail, `items` can't, and a `try` there is
+  "nothing here can fail".
+- **What making an actor fails with** is written on its family,
+  `dep Docs = Actors<DocId, Doc> ! StoreDown`, and is what `Docs.at` and
+  `Docs.post` fail with: `try Docs.at(id) fn() => try Doc.edit(op)`.
+  A post's only errors are making the actor's, so a call posted must
+  give `()` and fail with nothing, "`post` takes a call that gives `()`
+  and can't fail, and `edit` can fail with `StoreDown`": its error would
+  have nowhere to go. `Full` is added to an `at`'s errors only where it's
+  written inside another family's `at`, where waiting could close a
+  cycle.
+- **A `finally` of an actor can't fail,** since the task that evicts it
+  isn't the one that used it: "`doc` is kept by a family, so its
+  `finally` can't fail".
+
 ## Nothing is dropped
 
 A statement whose value isn't `()` is an error: a returned value can't be

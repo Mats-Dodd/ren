@@ -11,6 +11,10 @@ for everything that isn't a specification. What runs today, `test`,
 > types, private items and the choice of world. Stage 10b runs what needs
 > the journal: a journal as a test, `replay(file)` and `ren test --keep`,
 > and the console's effects shown as they happen, `:reload` and `:spec`.
+> Stage 11a runs tests' tasks on `sim`, and the services stage adds its
+> fair choice, `release` as a scheduling point, two virtual workers,
+> chaos eviction through `actors(h, chaos: true)`, families' high-water
+> marks, and journal version 3, which names a family's instances.
 > Property tests come with the standard library in stage 12. See
 > [Roadmap](#roadmap).
 
@@ -119,6 +123,31 @@ $ ren test --only "two deposits" --seed 3815     # the same failure, exactly
   `Random`. `--sim` is accepted, and changes nothing.
 - **A test whose `uses` names `Async`** gets `Async.single()`, in real
   time, as one that names `Clock` gets the real clock.
+- **The choice is fair.** Where an instance is let go of, `sim` wakes
+  every waiter whose `Async.until` holds and every caller queued for it,
+  and the first the tape runs takes it, an arriving caller included; so
+  a test that passes only when callers are served in the order they
+  queued fails under some seed. (`single` stays first in first out.)
+- **`release` is a scheduling point,** where the instance is one another
+  task can reach: `try release Next.get(id)` lets other callers in for
+  that call, so a value an operation read before it and writes after it
+  is a lost update a seed finds; the fix, reading it again after, holds
+  under every seed (examples/breaker). A deadlock's panic names what
+  each waiting task holds.
+- **Two virtual workers.** `Async.worker()` is 0 or 1 under `sim`, each
+  task's drawn from the tape the first time it asks, so a
+  `striped(h, by: Worker)` whose result depends on which stripe a call
+  went to fails under some seed (the split law).
+- **Chaos is the program's, not a flag.** A test installs
+  `actors(doc, chaos: true)`, which evicts, at each call into the
+  family, the evictable actors `Random` picks, from the tape: a document
+  kept only in memory loses its text under some seed, and `--seed`
+  evicts the same way again (examples/docs). There's no `ren test
+  --chaos`.
+- **High-water marks.** Under each test whose actors were posted to,
+  `ren test` reports each family's most posts queued at once over its
+  seeds, "`Docs`'s high-water mark: 4 posts queued at once"; a post past
+  twice a family's `mailbox:` panics with it.
 
 ### Test items
 
@@ -371,6 +400,13 @@ test "a recorded run of build replays" =
   header names, so the others are the test implementations, and a
   `with` can install them too. [examples/just](examples/just) has one,
   `tests/build.journal`.
+- **The runtime's families are in it too** (journal version 3): a
+  family's `opened` line with its partitions, and `made`, `evicted` and
+  `posted` lines, each on the task that did it, an instance named where
+  its family is installed, by its key and its life, `docs[DocId(7)]#3`,
+  and a delivery's calls under that name. A replay checks each where it
+  comes, and a test that replays a journal passes over them. A version 1
+  or 2 journal is refused, with the help to record it again.
 - **A bug report is a file.** `ren run --record bug.journal` records the
   run that went wrong, and `ren test --keep bug.journal` moves it to
   `tests/` and writes the test for it, to read and edit like any other.
@@ -556,6 +592,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests (done, stage 10b) |
 | **native slice** | every binary `ren build` makes compared with `ren run`, under ASan and UBSan, with no object left alive, in both counting modes and the release build, and H1's allocations and H3's counts; `ren run --release` against `ren run` on the whole test suite (done; the timings in bench/native/RESULTS.md) |
 | **11a** | `ren test --sim --seeds` on the `sim` runtime (done, step 5: `sim.scheduler`, `sim.clock()`, `--seeds` and `--seed`); journals as tests with a schedule prefix |
+| **services** | `sim`'s fair choice, `release` as a scheduling point, two virtual workers, chaos eviction as `actors`' parameter, families' high-water marks, journal version 3; a lost update split over two operations of one actor found by seed (done, in the interpreter) |
 | **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz`; schedules from 11a's `sim` in the choice sequence |
 | **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |
 

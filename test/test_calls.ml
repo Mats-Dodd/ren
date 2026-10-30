@@ -341,7 +341,7 @@ fn main() uses Console =
 
 (* ---- step 6b: `striped`, plain Ren in the prelude over the family ---- *)
 
-let%expect_test "language.md §11's `striped` lines, as written" =
+let%expect_test "language.md §11's `striped` lines, with `hit`'s result unwritten and `expire` keyless" =
   (* stand-ins for what §11 leaves out: `serve`, `sessions`, `books` and
      their merge, a `Table` an `Array`; and `expire` takes no `now`, since
      an operation with a first parameter goes to one stripe by it

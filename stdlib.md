@@ -4,7 +4,7 @@
 
 This doc covers what ships with Ren: which modules are in the standard library, which are left to packages, the types every library has to agree on, and the conventions that keep the ecosystem testable. How the runtime talks to the operating system is in [runtime-io.md](runtime-io.md).
 
-> **Status:** design. Nothing here runs yet beyond the prelude types used by the interpreter, and `Clock`, `Random` and `Console` with their test implementations (stage 7, [deps.md](deps.md)). Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
+> **Status:** design. Nothing here runs yet beyond the prelude types used by the interpreter, `Clock`, `Random` and `Console` with their test implementations (stage 7, [deps.md](deps.md)), the world's thin slice (`Fs`, `Os`, `Proc`, `Net`), and what tasks need: `Async`, `sync` and `sim` (stage 11a), and the services stage's `striped`, `actors`, `Instances`, `Send` and `Async`'s producers (Part 5's "Concurrency and resilience"). Decisions marked *proposed* are recommendations, not settled; see [Open questions](#open-questions).
 
 ---
 
@@ -347,7 +347,20 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 | MySQL, Redis clients | std.x | useful, not universal |
 | Kafka, NATS, cloud SDKs | out | vendor churn; they implement the infrastructure types instead |
 
-**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it. Many stateful things are kept by the runtime's keyed instance family, which a library reaches through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`), routing by key or by `Async.worker()`, and each dependency's calls as data, `Doc.Call` (compiler.md, "Services stage").
+**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it. What's built, in the interpreter:
+
+| Where | What |
+|---|---|
+| the prelude's `Async` | `scope`, `map` and `each` over any pull argument (a collection, a cursor, `&r`, a block `fn() -> Option<T>`, a channel's `items()`), `produce(cap: 16, f) fn(items) => ...`, whose `f` sends through the `Send<T>` it installs, `Send.send(x)`, `map_pull(src, max: 64, f) fn(results) => ...`, `beside`, `background`, `both`, `race`, `timeout`, `isolate`, `until`, `tick`, `yield`, and `worker()`, the worker a task runs on (0 under `single`, 0 or 1 under `sim`) |
+| `release` | a word, not a function: `try release Next.get(id)` in an operation lets go of its instance for that one call ([async.md](async.md#shared-state-is-a-handler)) |
+| the prelude's `Proc` | `run(cmd, args, kill: Kill = Tree)`: a cancel kills the program's process group, or with `Child` the program alone; `sim.proc()`'s `SimProc.kills()` says which |
+| `sync` | `channel(cap)` for `Chan<T>`, whose ordinary function `items()` is a cursor that receives, `Events.items()` through an alias; `semaphore(n)`, `limit() over any`, `batcher()` |
+| the prelude's `striped` | `striped(h, by: Key(n: 16) \| Worker, merge: Sum \| Max \| Min \| Concat \| Custom(m))`: `h`'s instances under fixed keys, a call with a first argument routed by its hash or by `Async.worker()`, one with none run on every stripe and folded by `merge:`, refused at the `with` where a fold is needed and missing |
+| the prelude's `actors` | `actors(h, max: 10_000, mailbox: 10_000, evict: Lru, chaos: false, parts: 4)` for `Actors<K, D>`, `dep Docs = Actors<DocId, Doc> ! StoreDown`: `Docs.at(k) fn() => ...`, `Docs.post(k, Doc.Call.Edit { op })`, `evict(k)`, `evict_idle(d)`, `each`, `count()`, `made()`, `evicted()`, `high_water()`; `chaos: true` evicts what `Random` picks at each call |
+| the prelude's `Instances` | the runtime's keyed instance family, which `striped` and `actors` are written over and any library can be: `open`, `pin`, `enter`, `visit`, `call`, `post`, `make`, `made`, `keys`, `evictable`, `idle`, `evict`, `counts`, `close`; ambient, so no `uses` names it |
+| each dependency's `D.Call` | its calls as data, `Doc.Call.Edit { op }`, written by the compiler; generic code's `D.Call<R ! E>` is the prelude's `Call<D, R, E>`, with `first_hash`, `sum`, `max`, `min`, `concat` and `fold`, and `operations(h)` the operations as data |
+
+All of it is interpreter-only but `release`, which is a plain call natively; `ren build` refuses the rest as it refuses `Async.scope` (compiler.md, "Services stage").
 
 **Observability:** `trace`, `log`, `metrics`, the flight recorder and the OTLP exporter, all std. Logging is the trace stream, so there's no Go-style split between `log` and `slog`. A Prometheus exporter goes in `std.x`.
 
@@ -439,6 +452,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Stage 9** | operators; `Map` and `Set` ([operators.md](operators.md)) |
 | **Stage 10** | handlers `over` a dependency, like `transaction() over Sql`; journal fixtures for tests |
 | **Stage 11a** | `Net` and `Async` ([async.md](async.md)); `channel`; fault-injecting fakes; buffers leased from a pool for `Net` |
+| **Services** | `striped` and `actors` in the prelude over the runtime's `Instances`; `Async.produce`, `Async.map_pull`, `Send<T>`, `Async.worker()`, `Async.beside` and `Async.background`; `Chan<T>`'s `items()`; `Proc.run(kill:)` (done, in the interpreter) |
 | **Stage 12** | `Decimal`, a language number type, and its `d` suffix; `Secret<T>`; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); cursors over files, sockets and SQL rows; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
 | **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |

@@ -220,3 +220,136 @@ fn store(k: Int) ! DbDown uses Sql =
               (dependency
                 (type_identifier)))
             (number)))))))
+
+================================================================================
+background work beside a body, and a producer's stream pulled with `try`
+================================================================================
+
+pub fn background<T>(body: fn(bg: Background<! ..e>) -> T) -> T ! ..e uses Async =
+  try task_background(body)
+
+fn shop() uses Async =
+  Async.beside(fn() => refresher()) fn() =>
+    serve()
+  try Async.background fn(bg) =>
+    bg.spawn fn() => try keep_lease()
+  try Async.produce(cap: 4, fn() => Send.send(1)) fn(items) =>
+    for p in try items
+      print(p)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (type_parameters
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (function_type
+          (function_type_parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (error_set
+                  (named_row
+                    (identifier))))))
+          (named_type
+            (type_name
+              (type_identifier))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (error_set
+      (named_row
+        (identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (try_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (call_expression
+        (item_expression
+          (type_name
+            (type_identifier))
+          (identifier))
+        (arguments
+          (lambda
+            (parameters)
+            (call_expression
+              (identifier)
+              (arguments))))
+        (lambda
+          (parameters)
+          (block
+            (call_expression
+              (identifier)
+              (arguments)))))
+      (try_expression
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (block
+              (method_call_expression
+                (identifier)
+                (identifier)
+                (lambda
+                  (parameters)
+                  (try_expression
+                    (call_expression
+                      (identifier)
+                      (arguments)))))))))
+      (try_expression
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (named_argument
+              (identifier)
+              (number))
+            (lambda
+              (parameters)
+              (call_expression
+                (item_expression
+                  (type_name
+                    (type_identifier))
+                  (identifier))
+                (arguments
+                  (number)))))
+          (lambda
+            (parameters
+              (parameter
+                (identifier)))
+            (block
+              (for_statement
+                (identifier)
+                (try_expression
+                  (identifier))
+                (block
+                  (call_expression
+                    (identifier)
+                    (arguments
+                      (identifier))))))))))))

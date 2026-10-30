@@ -112,3 +112,162 @@ handler one<D>(h: D) for D uses Async =
             (identifier)
             (number)
             (identifier)))))))
+
+================================================================================
+calls: generic code's calls, and a description that fails to start
+================================================================================
+
+pub fn post(k: K, c: Call<(D ! ..e), Unit, !>) ! ..e uses Actors<K, (D ! ..e)> =
+  let p: Pinned<(D ! ..e)> = Actors.send(k, c)
+  try Instances.made(p)
+
+fn kinds(a: D.Call<Int>, b: D.Call<Int, ! Bad>, c: Doc.Call) uses D = ()
+
+fn main() uses Docs =
+  try Docs.post(DocId(1), Doc.Call.Edit { op: Append("a") })
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (parenthesized_type
+              (implementation_type
+                (type_name
+                  (type_identifier))
+                (error_set
+                  (named_row
+                    (identifier)))))
+            (named_type
+              (type_name
+                (type_identifier)))
+            (error_set)))))
+    (error_set
+      (named_row
+        (identifier)))
+    (uses_clause
+      (dependency
+        (type_identifier)
+        (type_arguments
+          (named_type
+            (type_name
+              (type_identifier)))
+          (parenthesized_type
+            (implementation_type
+              (type_name
+                (type_identifier))
+              (error_set
+                (named_row
+                  (identifier))))))))
+    (block
+      (let_statement
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (parenthesized_type
+              (implementation_type
+                (type_name
+                  (type_identifier))
+                (error_set
+                  (named_row
+                    (identifier)))))))
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (identifier)
+            (identifier))))
+      (try_expression
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (identifier))))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))
+            (error_set
+              (error_tag
+                (type_identifier))))))
+      (parameter
+        (identifier)
+        (variant_type
+          (type_name
+            (type_identifier))
+          (type_identifier))))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (unit))
+  (function_definition
+    (identifier)
+    (parameters)
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (block
+      (try_expression
+        (call_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (arguments
+            (constructor_expression
+              (constructor_ref
+                (type_identifier))
+              (constructor_arguments
+                (number)))
+            (constructor_expression
+              (constructor_ref
+                (calls_type
+                  (type_name
+                    (type_identifier))
+                  (type_identifier))
+                (type_identifier))
+              (field_initializer
+                (identifier)
+                (constructor_expression
+                  (constructor_ref
+                    (type_identifier))
+                  (constructor_arguments
+                    (string)))))))))))

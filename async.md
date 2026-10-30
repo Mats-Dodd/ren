@@ -9,10 +9,16 @@ kernel is in [runtime-io.md](runtime-io.md).
 
 > **Status:** built in the interpreter, `ren run` and `ren test`, with
 > the standard library's `sim` and `sync` (stage 11a, steps 1 to 8, reviewed in step 9); the
-> sequential parts build natively too. This document follows
-> foundations.md, decisions 2 and 7 to 11, which replaced the first
-> version of this design ("What changed", below). What each step built
-> is in [compiler.md](compiler.md#stage-11a).
+> sequential parts build natively too. The services stage added
+> background work beside a body (`Async.beside`, `Async.background`),
+> `release`, pull arguments, `Async.produce` and `Async.map_pull`,
+> channels as dependencies, `Async.worker()`, `sim`'s fair choice, and
+> `striped` and `actors` over the runtime's keyed instance family, all in
+> the interpreter, `release` with no other task natively too. This
+> document follows foundations.md, decisions 2 and 7 to 11, which
+> replaced the first version of this design ("What changed", below).
+> What each step built is in [compiler.md](compiler.md#stage-11a) and
+> [compiler.md](compiler.md#services-stage).
 
 Ren's concurrency is [Effect](https://effect.website/)'s, written in
 direct style. `T ! E uses R` is already Effect's `Effect<A, E, R>`, so
@@ -50,9 +56,13 @@ Async.race(fn() => a, fn() => b)                   // the first to finish
 Async.timeout(d) fn() => ...                       // ! Timeout
 Async.isolate fn() => ...                          // ! Panicked(msg)
 Async.until(fn() => cond)                          // in an operation: wait for its state
+try release Next.get(id)                           // in an operation: let others in for one call
 Async.tick()                                       // let what can run, run
 Async.yield()                                      // let others go first
+Async.worker()                                     // the worker this task runs on
 with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at once
+with striped(h, by: Key(n: 16), merge: Sum) in     // h's instances, a call by its key
+with actors(doc, max: 50_000) as Docs in           // one actor per key, made on demand
 ```
 
 | | Results | A failure |
@@ -124,7 +134,8 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
    stderr and the journal. It's never dropped silently, and it never
    joins the error type.
 3. **A handler's state is touched by one operation at a time,** until it
-   returns or waits in `Async.until`.
+   returns, waits in `Async.until`, or lets go for one call with
+   `release`.
 4. **Everything has a limit.**
 
 ### A spawned task can't fail
@@ -234,14 +245,30 @@ fn deposit(n: Int) uses Account =
 - **What it costs:** one slow call, an fsync, serializes that handler's
   operations. A handler that wants its calls to overlap splits an
   operation in two, "reserve" and "complete", as `sync.semaphore`'s
-  `acquire` and `release` are.
+  `acquire` and `release` are, or lets go of its instance for the slow
+  call, below.
+- **`release` lets go for one call.** `try release Backend.fetch(id)`,
+  written in an operation on a call of a dependency installed outside
+  it, lets other callers in while that call runs, then takes the
+  instance back, queueing like any caller. The arm's state is written
+  back before it and read again after, so `failures += 1` after it counts
+  what other callers counted meanwhile; but a value read before it and
+  written after it is stale, a lost update that `sim` finds by a seed,
+  since it switches tasks there (examples/breaker). With no other task,
+  and natively, it's a plain call. A plain dependency call in an arm
+  holds none of the arm's state, so an actor can loop over a reader kept
+  in its state while each step calls another service; `release`,
+  `Async.until` and a block parameter's call are where the state can
+  change, so a borrow of it across one is refused.
 - **No deadlock waiting for an instance.** An operation can only call
   handlers installed outside it, so a task takes instances inner to
   outer and waits for instances can't form a cycle. Waits of other
   kinds, `Async.until` or a channel inside an operation, can
   (foundations.md, decision 10). A block passed to an operation gets its dependencies only from
   its parameter's type, so it can't call back into the instance running
-  it.
+  it. A task taking an instance it already holds panics rather than
+  hangs, and when every task waits, the panic names what each one
+  holds, ``holding `A` (a.go)``.
 - **The exclusion is skipped where nothing can race.** An instance no
   spawned task can reach, or whose handler keeps no state, takes no
   lock, so a program with no tasks pays nothing.
@@ -251,8 +278,10 @@ fn deposit(n: Int) uses Account =
 **`Async.until(cond)` is the one way to wait,** written in an
 operation. The condition reads only the handler's state. If it doesn't
 hold, the operation lets go of the instance and waits, and the condition
-is checked again each time the instance is released; the runtime
-resumes the first waiter whose condition holds. No wakeup can be lost,
+is checked again each time the instance is released; `single` resumes
+the first waiter whose condition holds, and `sim` wakes every waiter
+whose condition holds and every queued caller, and gives the instance to
+whichever of them, or of the callers arriving, its tape runs first. No wakeup can be lost,
 and there's no `if` where a `while` belongs. The condition is a block
 written in the call; it uses no dependency, and can't fail, since it's
 checked where the instance is released, by whichever task releases it:
@@ -302,6 +331,19 @@ overlap, and runs one with no key on every stripe, folding what they
 give with `merge:`; `by: Worker` sends a call to the stripe of the
 worker it runs on, `Async.worker()`.
 
+Many stateful things of one kind, one per key, are the prelude's
+`actors`, plain Ren over the same family (language.md §11): `dep Docs =
+Actors<DocId, Doc> ! StoreDown`, `with actors(doc, max: 50_000) as
+Docs`, and `try Docs.at(id) fn() => try Doc.edit(op)` runs the block
+with `id`'s actor installed as `Doc`, made on demand from its handler's
+setup, whose errors are `at`'s. Past `max:` the least recently released
+actor is evicted, its `finally` run on the caller's task.
+`Docs.post(k, Doc.Call.Edit { op })` is Erlang's cast, a call queued for
+`k`'s actor and delivered in order by a task of the family's, and
+`chaos: true` evicts, at each call into the family, what `Random` picks,
+which is how a test finds a document that lives only in memory
+(examples/docs).
+
 ```ren
 with sync.semaphore(16), sync.limit() over Web in crawl(root, 3)
 
@@ -350,7 +392,11 @@ and Ren has a rule for each way.
 - **It waits.** Cancelling a call waits until the kernel lets go of its
   buffer ([runtime-io.md](runtime-io.md#cancelling-waits-for-the-kernel)).
   Cancelling a `Proc.run` kills the program, then waits for it to exit,
-  so a cancelled build never leaves processes behind.
+  so a cancelled build never leaves processes behind: with `kill: Tree`,
+  the default, it starts in a process group of its own and the whole
+  group is killed, so `sh -c "sleep 5; true"` leaves no `sleep`;
+  `kill: Child` kills the program alone, for one that reads the
+  terminal.
 - **A timeout never reports `Timeout` for work that finished.** Once the
   body has finished and its `finally` is running, the timeout waits for
   it and returns its result. Without that, a timeout during a commit
@@ -474,9 +520,13 @@ real time.
   be flaky.
 - **`ren test --seeds 1000`** runs each test under 1,000 different
   schedules. The scheduler changes the order only at dependency calls
-  on shared state and where tasks wait, the only places the order can
-  matter. A failing seed is printed, and `ren test --seed 7412` replays
-  it exactly.
+  on shared state and where tasks wait, `release` included, the only
+  places the order can matter, and a released instance goes to whichever
+  waiter or arrival the tape runs first. A failing seed is printed, and
+  `ren test --seed 7412` replays it exactly.
+- **Two virtual workers.** Under `sim`, `Async.worker()` is 0 or 1,
+  each task's drawn from the tape the first time it asks, so `striped(h, by: Worker)`'s routing
+  is too; under `single` it's 0.
 
 ```
 $ ren test --seeds 200
@@ -496,7 +546,10 @@ the clock in its virtual time, which `ren test` installs for `Clock`;
 `sim.net()` is a network in memory, which it installs for `Net`; and
 `sim.proc(runs)` is programs that take virtual time, each its `Run`'s
 `takes`, two tasks' at once, with `SimProc.killed()` the ones cancelled
-while they ran.
+while they ran and `SimProc.kills()` how each was to be killed. Eviction
+under chaos is a parameter of `actors`, `chaos: true`, whose draws are
+`Random`'s, so a seed replays them; `ren test` knows nothing of it, and
+reports each family's high-water mark, the most posts queued at once.
 
 This brings forward the first part of the simulation scheduler from stage
 15. The rest of it (simulated networks and disks that fail, crashes, and
@@ -510,7 +563,11 @@ they needed. Each is in `examples/`, with its tests, which pass under
 [examples/crawler](examples/crawler), [examples/just](examples/just),
 [examples/transfer](examples/transfer) and
 [examples/refresh](examples/refresh); [examples/net.t](examples/net.t)
-runs a server on the real `Net` and sends it SIGTERM.
+runs a server on the real `Net` and sends it SIGTERM. The services stage
+added two: [examples/breaker](examples/breaker), a circuit breaker that
+lets go of its instance while the backend answers, and
+[examples/docs](examples/docs), language.md §11's document server, its
+documents actors, tested under a thousand seeds with chaos eviction.
 
 ### A server that shuts down gracefully
 
@@ -693,6 +750,9 @@ and a background task's failure cancels the body and is its error. It runs, with
   survives edits that move lines.
 - **The journal names the task of each call,** and records each poll
   that brought completions, so a run on `single` replays exactly. A
+  family's instances are named by one rule, where it's installed, the
+  key and the life, `docs[DocId(7)]#3`, with lines for each one made,
+  evicted and posted to (journal version 3). A
   journal as a test follows its recorded order while it can, then the
   seeded tape takes over ([handlers.md](handlers.md#the-journal)).
 - **Many cores, later.** Values a task shares are marked shared and
@@ -717,7 +777,7 @@ and a background task's failure cancels the body and is its error. It runs, with
 | interruption, `onInterrupt`, `ensuring`, `acquireRelease` | `finally`, which sees `Err(Cancelled)` |
 | `Layer.scoped` with `forkScoped` | `Async.beside` or `Async.background` inside the `with` |
 | `Ref`, `SynchronizedRef` | handler state |
-| `Layer`, `provide` | `with`, `over` |
+| `Layer`, `provide` | `with`, `over`, and a wiring, a named set of them |
 | `TestClock` | virtual time in every test |
 
 Left out on purpose:
@@ -783,8 +843,10 @@ This document was first written before foundations.md, which changed it
 - **Operations don't interleave.** Another task's operation could once
   run on a handler at each dependency call, and a warning caught state
   read before a call and written after it. Now an operation keeps its
-  instance until it returns or waits in `Async.until`, so that warning,
-  and the README's `cached` race it caught, are gone.
+  instance until it returns, waits in `Async.until` or lets go for one
+  call with `release`, so that warning, and the README's `cached` race
+  it caught, are gone; a stale read across a `release` is a seed's to
+  find.
 - **`Async.limit(n) over Dep` is `sync.limit()` over a
   `sync.semaphore(n)`,** in Ren.
 - **No `par_map`, and no preemption.**
@@ -815,6 +877,9 @@ This document was first written before foundations.md, which changed it
   blocks and a channel's `items()` are pulled today.
 - **Restart policies,** like Erlang's supervisors. Until then, it's
   `attempt` or `retry` inside a task.
+- **Actors' open items** (foundations.md, decision 18): `Docs.at_all(keys)`,
+  a panic in an actor contained by `Async.isolate`, `expire:` and
+  `weigh:`, `place:`, and `Lfu` beside `Lru`.
 - **Many cores** (stage 11b): `work_stealing`, `per_core` and `pinned`,
   arenas, `Mem.snapshot` and lock-free handlers.
 - **The rest of the simulation scheduler** (after 11a's `sim`): failing

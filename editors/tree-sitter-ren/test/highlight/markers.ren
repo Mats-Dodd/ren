@@ -377,6 +377,12 @@ fn checkout(cart: Cart) -> Int ! Empty =
 //     ^ namespace
 //              ^ function
 
+// `release` lets go of the handler's instance for one call
+handler breaker() for Breaker uses Backend =
+  fetch(id) => try release Backend.fetch(id)
+//             ^ keyword.failure
+//                 ^ keyword
+
 // a hole in a string is code, between braces of its own; a character
 // literal is an `Int`
 fn label(n: Int) -> Str = "n: \{n + 1}" + show('a')

@@ -1,7 +1,8 @@
 # Ren for Zed
 
-Highlighting, an outline (each type's members under it, and each group's
-tests), indentation, vim text objects (`af`/`if` a function or a test,
+Highlighting, an outline (each type's members under it, a service's
+functions under it, wirings beside functions, and each group's tests),
+indentation, vim text objects (`af`/`if` a function or a test,
 `ac`/`ic` a type), a ▶ beside `fn main` that runs the program, and one
 beside each test and group run that runs it. The grammar is
 [editors/tree-sitter-ren](../tree-sitter-ren), which mirrors the

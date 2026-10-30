@@ -552,12 +552,14 @@ trace is for reading, and replay doesn't need them.
 1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, ...\n")
 2 main Os.args() → ["build"]
 3 main Console.error("echo base")
-4 main Proc.run("sh", ["-c", "echo base"]) → Ok(0)
+4 main Proc.run("sh", ["-c", "echo base"], Tree) → Ok(0)
 ...
 9 main exit 0
 ```
 
-That's version 2, stage 11a's (compiler.md, "Journal version 2"): a
+That's version 3, the services stage's, which is stage 11a's version 2
+(compiler.md, "Journal version 2") with the lines of the runtime's
+instance families, below: a
 number, the task that made the call, `main` or a spawned task's path
 (`main/run_all:0`), the call, and what it gave after `→`, left out when
 it's `()` or `Ok(())`; the last line is how the run ended, `exit 0`,
@@ -582,8 +584,14 @@ polls and is strict about every entry's task and order, so a concurrent
 run replays byte for byte. A test that replays a journal answers each
 task's calls from its own entries, compares each task's outputs with its
 own, and runs in the recorded order while it can, its schedule prefix,
-before the seeded tape takes over. A version 1 journal, from before
-11a, is refused, with how to record it again. The header names the
+before the seeded tape takes over. Version 3 adds what the runtime's
+keyed instance families do, each on the task that did it
+(compiler.md, "Services stage", "Journal version 3"): `main opened docs
+parts 1`, `main made docs[DocId(1)]#1`, `main/main:0 evicted
+docs[DocId(1)]#1` and `posted docs[Key(2)] Ping { left: 2 }`, an
+instance named where its family is installed, by its key and its life,
+and the calls a delivered post makes under that name. A version 1 or 2
+journal is refused, with how to record it again. The header names the
 program from the journal's folder, or absolutely if that's more than
 two folders up, and the dependencies `main` uses. What follows is where it's going;
 [Where 10b differed](#where-10b-differed) says what isn't there yet.
