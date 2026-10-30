@@ -2494,3 +2494,179 @@ void ren_console_error(ren_obj *line);
    recursion, then flush stdout and print the statistics, if they're on.
    What `main` returns. */
 int ren_run(void (*program)(void));
+
+/* ---- string patterns (compiler.md, "Patterns stage") ----
+
+   A string `match`'s tests, which read a `Str` only through its
+   accessors. A literal arm is its length, then its bytes; a prefix or
+   suffix arm, `"Bearer " ..token`, a length at least the two pieces',
+   then each piece where it goes. The pieces are valid UTF-8, so a slice
+   between them is cut on character boundaries. No `memcmp` is given
+   no bytes: an empty string's data may be no pointer at all. */
+
+#ifdef REN_UNIT
+/* a unit includes no system header (above) */
+int memcmp(const void *a, const void *b, size_t n);
+#endif
+
+static inline bool ren_pat_bytes(const char *d, const char *lit, int64_t n) {
+  return n == 0 || memcmp(d, lit, (size_t)n) == 0;
+}
+
+/* the tests on a string's bytes and length, wherever they're kept */
+static inline bool ren_pat_is_at(const char *d, int64_t len, const char *lit,
+                                 int64_t n) {
+  return len == n && ren_pat_bytes(d, lit, n);
+}
+
+static inline bool ren_pat_affix_at(const char *d, int64_t n, const char *pre,
+                                    int64_t a, const char *suf, int64_t b) {
+  return n >= a + b && ren_pat_bytes(d, pre, a) &&
+         ren_pat_bytes(d + n - b, suf, b);
+}
+
+static inline bool ren_pat_is(ren_obj *s, const char *lit, int64_t n) {
+  return ren_pat_is_at(ren_str_data(s), ren_str_len(s), lit, n);
+}
+
+static inline bool ren_pat_affix(ren_obj *s, const char *pre, int64_t a,
+                                 const char *suf, int64_t b) {
+  return ren_pat_affix_at(ren_str_data(s), ren_str_len(s), pre, a, suf, b);
+}
+
+/* the same on a release build's two words (representation B) */
+static inline bool ren_sv_pat_is(ren_sv v, const char *lit, int64_t n) {
+  return ren_pat_is_at(ren_sv_data(v), ren_sv_len(v), lit, n);
+}
+
+static inline bool ren_sv_pat_affix(ren_sv v, const char *pre, int64_t a,
+                                    const char *suf, int64_t b) {
+  return ren_pat_affix_at(ren_sv_data(v), ren_sv_len(v), pre, a, suf, b);
+}
+
+/* A string `match`'s literals looked up through a perfect hash
+   (phash.ml): the lookup finds the one slot a string can be, and
+   [ren_ph_eq16] compares the string, [n] bytes, 1 to 16, with the key
+   in it, [key] 16 bytes with zeros after its own, and [w] the same as
+   two words, the first byte the lowest. Each build compares its own
+   way, and all give the same answer (compiler.md, "Patterns stage",
+   "The generator"):
+
+   - with the sanitizers, or REN_PH_MEMCMP, `memcmp`, which reads only
+     the string's bytes;
+   - on arm64 with clang, NEON: 16 bytes loaded and masked to [n];
+   - otherwise, tcc's debug builds among them, two 8-byte words, masked
+     and compared as integers.
+
+   The last two read 16 bytes from [s], past a short string's end. The
+   page check makes that safe for bytes from anywhere: 16 bytes at [s]
+   are read only where they stay in [s]'s 4 KiB page, which is mapped,
+   since [s]'s first byte is; otherwise NEON reads the 16 bytes that end
+   where the page does and shifts them down, and the words are copied
+   from the string's own [n] bytes. Nothing is padded. A lookup never
+   compares `""`: its length says. */
+
+#if defined(__GNUC__) || defined(__TINYC__)
+#define REN_PH_ALIGNED __attribute__((aligned(16)))
+#else
+#define REN_PH_ALIGNED
+#endif
+
+#if !defined(REN_PH_MEMCMP) && defined(__SANITIZE_ADDRESS__)
+#define REN_PH_MEMCMP 1
+#endif
+#if !defined(REN_PH_MEMCMP) && defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) || \
+    __has_feature(thread_sanitizer)
+#define REN_PH_MEMCMP 1
+#endif
+#endif
+#if !defined(REN_PH_MEMCMP) && defined(__BYTE_ORDER__) && \
+    __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define REN_PH_MEMCMP 1 /* the words are little-endian */
+#endif
+
+#if defined(REN_PH_MEMCMP)
+
+static inline bool ren_ph_eq16(const char *s, uint64_t n, const uint8_t *key,
+                               const uint64_t *w) {
+  (void)w;
+  return memcmp(s, key, (size_t)n) == 0;
+}
+
+#elif defined(__aarch64__) && defined(__clang__)
+
+#include <arm_neon.h>
+
+/* row n: 0 to n - 1, then 0x80, which a table lookup makes 0 */
+static const uint8_t ren_ph_masks[17][16] REN_PH_ALIGNED = {
+#define REN_PH_ROW(n)                                                          \
+  {0 < n ? 0 : 128,   1 < n ? 1 : 128,   2 < n ? 2 : 128,   3 < n ? 3 : 128,   \
+   4 < n ? 4 : 128,   5 < n ? 5 : 128,   6 < n ? 6 : 128,   7 < n ? 7 : 128,   \
+   8 < n ? 8 : 128,   9 < n ? 9 : 128,   10 < n ? 10 : 128, 11 < n ? 11 : 128, \
+   12 < n ? 12 : 128, 13 < n ? 13 : 128, 14 < n ? 14 : 128, 15 < n ? 15 : 128}
+    REN_PH_ROW(0),  REN_PH_ROW(1),  REN_PH_ROW(2),  REN_PH_ROW(3),
+    REN_PH_ROW(4),  REN_PH_ROW(5),  REN_PH_ROW(6),  REN_PH_ROW(7),
+    REN_PH_ROW(8),  REN_PH_ROW(9),  REN_PH_ROW(10), REN_PH_ROW(11),
+    REN_PH_ROW(12), REN_PH_ROW(13), REN_PH_ROW(14), REN_PH_ROW(15),
+    REN_PH_ROW(16)
+#undef REN_PH_ROW
+};
+
+/* Lemire's page-safe load: 16 bytes at [s], unless that crosses a page,
+   then the 16 that end where the page does, shifted down */
+static inline uint8x16_t ren_ph_load(const char *s, uint64_t n) {
+  uintptr_t a = (uintptr_t)s;
+  uintptr_t off = a & 4095;
+  if (__builtin_expect(off <= 4080, 1)) return vld1q_u8((const uint8_t *)s);
+  uintptr_t o = off > 4096 - n ? 0 : off - 4080;
+  uint8x16_t raw = vld1q_u8((const uint8_t *)(a - o));
+  uint8x16_t idx = vaddq_u8(vld1q_u8(ren_ph_masks[16]), vdupq_n_u8((uint8_t)o));
+  return vqtbl1q_u8(raw, idx);
+}
+
+static inline bool ren_ph_eq16(const char *s, uint64_t n, const uint8_t *key,
+                               const uint64_t *w) {
+  (void)w;
+  uint8x16_t in = vqtbl1q_u8(ren_ph_load(s, n), vld1q_u8(ren_ph_masks[n]));
+  uint8x16_t eq = vceqq_u8(in, vld1q_u8(key));
+  uint8x8_t nar = vshrn_n_u16(vreinterpretq_u16_u8(eq), 4);
+  return vget_lane_u64(vreinterpret_u64_u8(nar), 0) == ~0ULL;
+}
+
+#else
+
+/* the first [n] bytes of a 16-byte key, as two words */
+#define REN_PH_LO(n) ((n) >= 8 ? ~0ULL : (1ULL << (8 * (n))) - 1)
+#define REN_PH_HI(n)                                                           \
+  ((n) <= 8 ? 0ULL : (n) >= 16 ? ~0ULL : (1ULL << (8 * ((n) - 8))) - 1)
+static const uint64_t ren_ph_lo[17] = {
+    REN_PH_LO(0),  REN_PH_LO(1),  REN_PH_LO(2),  REN_PH_LO(3),  REN_PH_LO(4),
+    REN_PH_LO(5),  REN_PH_LO(6),  REN_PH_LO(7),  REN_PH_LO(8),  REN_PH_LO(9),
+    REN_PH_LO(10), REN_PH_LO(11), REN_PH_LO(12), REN_PH_LO(13), REN_PH_LO(14),
+    REN_PH_LO(15), REN_PH_LO(16)};
+static const uint64_t ren_ph_hi[17] = {
+    REN_PH_HI(0),  REN_PH_HI(1),  REN_PH_HI(2),  REN_PH_HI(3),  REN_PH_HI(4),
+    REN_PH_HI(5),  REN_PH_HI(6),  REN_PH_HI(7),  REN_PH_HI(8),  REN_PH_HI(9),
+    REN_PH_HI(10), REN_PH_HI(11), REN_PH_HI(12), REN_PH_HI(13), REN_PH_HI(14),
+    REN_PH_HI(15), REN_PH_HI(16)};
+#undef REN_PH_LO
+#undef REN_PH_HI
+
+static inline bool ren_ph_eq16(const char *s, uint64_t n, const uint8_t *key,
+                               const uint64_t *w) {
+  (void)key;
+  uint64_t a, b;
+  if (((uintptr_t)s & 4095) <= 4080) {
+    memcpy(&a, s, 8);
+    memcpy(&b, s + 8, 8);
+  } else {
+    unsigned char t[16] = {0};
+    memcpy(t, s, (size_t)n);
+    memcpy(&a, t, 8);
+    memcpy(&b, t + 8, 8);
+  }
+  return ((a & ren_ph_lo[n]) == w[0]) & ((b & ren_ph_hi[n]) == w[1]);
+}
+
+#endif

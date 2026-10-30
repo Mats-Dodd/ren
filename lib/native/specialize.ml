@@ -322,7 +322,8 @@ and map_pat f (p : C.pattern) : C.pattern =
     | PRecord (t, ps) -> PRecord (t, List.map (map_pat f) ps)
     | POr ps -> POr (List.map (map_pat f) ps)
     | PAs (q, v) -> PAs (map_pat f q, f v)
-    | (PWild | PInt _ | PBool _) as k -> k
+    | (PStr_rest _ | PArray _) as k -> C.map_seq ~pat:(map_pat f) ~var:f k
+    | (PWild | PInt _ | PBool _ | PStr _) as k -> k
   in
   { p with pkind }
 
@@ -734,7 +735,14 @@ let rec pattern env (p : C.pattern) : C.pattern * env =
       | POr (first :: rest) ->
           let first = go first in
           POr (first :: List.map (fun q -> fst (pattern !env q)) rest)
-      | (PWild | PInt _ | PBool _ | POr []) as k -> k
+      | (PStr_rest _ | PArray _) as k ->
+          C.map_seq ~pat:go
+            ~var:(fun v ->
+              let v = cvar !env v in
+              env := in_scope !env v;
+              v)
+            k
+      | (PWild | PInt _ | PBool _ | PStr _ | POr []) as k -> k
     in
     { p with pkind; pty = ty !env p.pty }
   in

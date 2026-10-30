@@ -2056,3 +2056,117 @@ scalar fields, toward 1.25× Rust's memory; a stackless free walk for
 binary-trees, whose time is half freeing; H6's backend and cache; and
 for tasks, frozen handler state and a per-thread heap with delayed
 frees.
+
+## Patterns stage: the keyword kernel (compiler.md, "Patterns stage")
+
+bench/native/keywords: identifiers classified against a key set, 65,536
+queries a round, 90% keys and 10% near misses (a key with `_` added or
+its last byte made `#`), the sets of research/perfect-hash/code/keys:
+Ren's 35 keywords (`renkw`), JS's 45 reserved words (`jsreserved`), 9
+HTTP methods, 20 header names, 24 JSON field names. gen.py writes the
+Ren (an `==` chain per set, and from step 1 a `match` of literal arms),
+its Rust twin (a plain `match`, rmatch.rs's shape) and its Go twin (a
+`switch`); all three build the same queries from one LCG and print the
+same check.
+
+**Machine:** `cloud` (experiments/MACHINE-cloud.md): Intel Xeon @ 2.10
+GHz, 4 vCPUs, a KVM guest with shared cores. rustc 1.97 `-C
+opt-level=3 -C codegen-units=1`, Go 1.24, Ren release with gcc 13 `-O2`
+(cc). The research's numbers are hand-written C on an M4 Max; compare
+these with each other and with its ratios, never its nanoseconds.
+
+**Method:** `R=200 sh build.sh <out>` then `R=200 python3 -I measure.py
+<out> 11 <out>.jsonl`: each binary at 200 rounds and at 0, the two
+forms and the twins interleaved and rotated, 11 runs each; a lookup is
+(median at 200 − median at 0) / (200 × 65,536), and the range is the 11
+runs' least and most at 200 less the median at 0. A lookup includes the
+loop that walks the queries, which is each language's own: Ren's
+counts each `Str` it reads.
+
+### The baseline (step 0): Ren's `==` chain
+
+ns per lookup, median (least to most):
+
+| set | keys | Ren chain | Rust `match` | Go `switch` | chain / Rust |
+|---|---:|---:|---:|---:|---:|
+| renkw | 35 | 57.4 (55.4 to 59.8) | 19.4 (18.0 to 21.5) | 27.6 (26.4 to 30.5) | 3.0 |
+| jsreserved | 45 | 66.3 (62.4 to 74.2) | 22.3 (21.4 to 26.3) | 26.7 (25.7 to 28.6) | 3.0 |
+| methods | 9 | 25.6 (24.4 to 29.5) | 16.4 (15.4 to 18.0) | 15.8 (15.1 to 19.7) | 1.6 |
+| headers | 20 | 25.3 (24.3 to 28.3) | 12.6 (11.8 to 14.2) | 13.6 (13.2 to 14.6) | 2.0 |
+| json24 | 24 | 28.5 (27.5 to 30.5) | 11.4 (10.1 to 12.5) | 12.2 (11.7 to 12.9) | 2.5 |
+
+The chain is a function per set, `if s == "fn" then 0 else if ...`,
+each `==` a call of `ren_str_eq`. Its emitted C, release, is 317 KB per
+set's program (most of it the runtime's and the prelude's; `wc -c` of
+`build.sh`'s `<set>-chain.c`).
+
+### Step 3: the perfect hash
+
+The same kernel, the same machine and method (`R=200 sh build.sh
+<out>`; `R=200 python3 -I measure.py <out> 11`), with each set's `match`
+of literal arms (`<set>_match`), which a release build looks up through
+phash.ml's hash and the two-word compare (x86 has no NEON; ren_rt.h's
+"string patterns"), beside its `==` chain, and a seventh set, `one`, of
+the single key `v1`, whose `match` stays a chain: a length test and a
+compare. ns per lookup, median (least to most):
+
+| set | keys | Ren chain | Ren `match` | Rust `match` | Go `switch` | chain / `match` | Rust / Ren `match` |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| renkw | 35 | 63.9 (60.9 to 68.8) | 7.3 (6.8 to 8.7) | 19.1 (18.5 to 21.8) | 27.4 (26.1 to 30.4) | 8.8 | 2.6 |
+| jsreserved | 45 | 78.8 (76.5 to 82.2) | 8.1 (7.4 to 8.9) | 22.0 (20.4 to 24.4) | 27.4 (26.1 to 29.2) | 9.8 | 2.7 |
+| methods | 9 | 26.6 (25.0 to 29.6) | 6.6 (6.3 to 9.2) | 16.6 (15.8 to 18.7) | 16.3 (15.3 to 19.9) | 4.0 | 2.5 |
+| headers | 20 | 27.7 (25.9 to 29.9) | 7.3 (6.7 to 8.9) | 13.2 (12.1 to 19.7) | 15.0 (13.3 to 16.8) | 3.8 | 1.8 |
+| json24 | 24 | 29.7 (29.1 to 32.8) | 7.8 (7.6 to 11.6) | 10.8 (10.2 to 12.3) | 12.2 (11.8 to 13.3) | 3.8 | 1.4 |
+| one | 1 | 7.1 (7.0 to 8.7) | 5.5 (5.0 to 7.0) | 2.2 (2.0 to 3.2) | 3.2 (2.9 to 4.0) | 1.3 | 0.4 |
+
+- **Against Rust's `match`:** Ren's `match` is faster on every set of
+  two keys or more, 1.4× (json24) to 2.7× (jsreserved). On `one` it's
+  2.5 times slower, as the chain is: what's left there is the loop, not
+  the compare (below).
+- **Against the chain:** 3.8× to 9.8×, against the research's 5.5× to
+  8.3×. Each lookup here includes Ren's walk over the queries, a call
+  and the reading of each `Str` from the array, which `one` bounds: its
+  `match` is a length test and an inline compare, so about 5 ns of its
+  5.5 is that loop, which neither form avoids. Less 5 ns each, the chain
+  takes 22 to 74 ns and the `match` 1.6 to 3.1, 9× to 25×. The ratios
+  that fall short of the research's, methods, headers and json24, are
+  the sets whose chain is shortest, where the shared 5 ns is most of
+  the `match`'s time.
+- **A one-literal arm:** 5.5 ns against the chain's 7.1, so it costs no
+  more than the chain did (`ren_pat_is` inline against a call of
+  `ren_str_eq`).
+- **Code size:** bench/patterns/lexer.ren, release, 211,937 bytes of C
+  with step 2's chain, 220,296 with the hash: 8.4 KB for its lookup,
+  the two position tables (512 bytes), the slot, length and value tables
+  and the keys, 16 bytes and two words a slot, 64 slots.
+- **NEON** wasn't measured: this machine is x86, whose release builds
+  take the two-word compare. The NEON form is built for arm64 (clang
+  18 `--target=aarch64-linux-gnu`, which picks it: `tbl` instructions in
+  the assembly) and run under qemu on test_phash.ml's 44,783 queries,
+  each at the end of a page with a guard page after it: it agrees with
+  the two-word form on every one (compiler.md, "Step 3, as built").
+
+### Step 4: `keys.index(s)` on a constant
+
+The kernel's third form, `<set>_index`: `let keys = [...]` then `match
+keys.index(s)`, `Some(i) => i`, `None => -1`, which a release build
+lowers to the same lookup as the `match` (compiler.md, "Step 4, as
+built"), its array never made. Same machine and method, a later run of
+all three forms and the twins (`R=200 sh build.sh <out>`; `R=200
+python3 -I measure.py <out> 11`), ns per lookup, median (least to
+most):
+
+| set | Ren chain | Ren `match` | Ren `keys.index` | Rust `match` | Go `switch` |
+|---|---:|---:|---:|---:|---:|
+| renkw | 66.3 (63.1 to 67.9) | 8.0 (7.1 to 11.1) | 7.5 (7.2 to 10.1) | 20.3 (18.8 to 24.6) | 28.5 (27.2 to 30.8) |
+| jsreserved | 80.8 (77.0 to 85.3) | 7.8 (7.5 to 11.2) | 7.9 (7.1 to 9.9) | 22.9 (21.1 to 25.3) | 27.9 (26.2 to 30.0) |
+| methods | 26.7 (25.7 to 29.3) | 6.9 (6.1 to 9.3) | 6.9 (6.4 to 8.8) | 17.0 (15.7 to 18.6) | 16.0 (15.5 to 17.3) |
+| headers | 27.8 (26.2 to 30.9) | 7.5 (6.8 to 8.5) | 9.1 (7.9 to 10.4) | 12.8 (11.7 to 14.5) | 14.8 (13.8 to 17.0) |
+| json24 | 30.9 (28.7 to 31.8) | 8.3 (7.6 to 10.8) | 7.9 (7.3 to 9.4) | 12.7 (10.7 to 14.3) | 12.7 (11.6 to 14.3) |
+| one | 7.4 (6.8 to 9.3) | 5.3 (5.0 to 6.8) | 5.6 (5.4 to 7.4) | 2.2 (1.9 to 3.2) | 3.2 (3.0 to 4.1) |
+
+`keys.index` runs at the `match`'s speed, within the spread on every
+set but headers, where it's 1.6 ns slower (ranges 7.9 to 10.4 against
+6.8 to 8.5): the `Option` it makes and the `match` on it, which the
+direct `match` doesn't have. This run repeats step 3's within its
+spread.

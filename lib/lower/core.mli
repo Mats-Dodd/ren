@@ -414,6 +414,20 @@ and pattern_kind =
   | PAs of pattern * var
       (** [p as x]: what [p] matches, the whole bound to [x] too (compiler.md,
           "Data stage", "`as`") *)
+  | PStr of string  (** ["GET"]: a `Str` equal to it *)
+  | PStr_rest of { prefix : string; rest : var option; suffix : string }
+      (** ["Bearer " ..token]: a `Str` that starts with [prefix] and ends
+          with [suffix], at least as long as the two, [rest] bound to the
+          slice between them, if it's named (compiler.md, "Patterns
+          stage") *)
+  | PArray of { front : pattern list; rest : rest; back : pattern list }
+      (** [[first, ..rest]]: an `Array` of the length [front] and [back]
+          have between them, or with a [rest], at least that long, its
+          middle bound to a slice of it if it's named *)
+
+(* An array pattern's rest: none, a fixed length; or `..`, bound or
+   not. *)
+and rest = No_rest | Rest of var option
 
 (* Where a function came from. The specializer makes the others, each
    from what the program wrote (specialize.ml). *)
@@ -641,3 +655,15 @@ val show : expr -> string
    b)]. A plain print, the default, shows none of these. *)
 val fn_sexp : ?types:bool -> fn_def -> sexp
 val show_fn : ?types:bool -> fn_def -> string
+
+(* A string or array pattern's kind with each of its pieces mapped by
+   [pat] and its rest's variable by [var], left to right; any other kind
+   as it is. For the passes that walk patterns. *)
+val map_seq :
+  pat:(pattern -> pattern) -> var:(var -> var) -> pattern_kind -> pattern_kind
+
+(* The pieces of an array pattern, in order; none of any other. *)
+val seq_pieces : pattern_kind -> pattern list
+
+(* The variable a string or array pattern's rest is bound to. *)
+val seq_rest : pattern_kind -> var list

@@ -1,0 +1,70 @@
+// A keyword lexer's kernel (compiler.md, "Patterns stage"): identifiers
+// scanned out of source text, each classified against Ren's keywords by
+// a `match` with a literal arm a keyword, which the perfect hash serves.
+
+fn keyword(s: Str) -> Int =
+  match s
+    "fn" => 0
+    "pub" => 1
+    "let" => 2
+    "var" => 3
+    "inout" => 4
+    "for" => 5
+    "while" => 6
+    "break" => 7
+    "todo" => 8
+    "in" => 9
+    "if" => 10
+    "then" => 11
+    "else" => 12
+    "true" => 13
+    "false" => 14
+    "type" => 15
+    "dep" => 16
+    "match" => 17
+    "import" => 18
+    "as" => 19
+    "uses" => 20
+    "opaque" => 21
+    "self" => 22
+    "not" => 23
+    "fail" => 24
+    "try" => 25
+    "attempt" => 26
+    "orelse" => 27
+    "with" => 28
+    "handler" => 29
+    "over" => 30
+    "finally" => 31
+    "test" => 32
+    "group" => 33
+    "assert" => 34
+    _ => -1
+
+fn letter(c: Int) -> Bool = c == 95 || c >= 97 && c <= 122 || c >= 65 && c <= 90
+
+// the count of each keyword in [src], and of other identifiers, last
+fn counts(src: Str) -> Array<Int> =
+  var n: Array<Int> = []
+  for _ in 0..36
+    &n.push(0)
+  let p = src.bytes()
+  var i = 0
+  while i < p.len()
+    if letter(p.at(i)) then
+      var j = i + 1
+      while j < p.len() && letter(p.at(j))
+        j += 1
+      let k = keyword(src[i..j])
+      let at = if k < 0 then 35 else k
+      n[at] = n[at] + 1
+      i = j
+    else i += 1
+  n
+
+fn main() uses Console =
+  let src = "fn main() uses Console =\n  let x = if true then 1 else 2\n  for i in xs\n    match i\n      _ => fail Nope\n  var self_ = try attempt orelse with handler over finally test group assert opaque\n  pub type dep import as not todo break while inout\n  letter fns iff elsewhere"
+  var all = ""
+  for _ in 0..50
+    all = all + src + "\n"
+  print(counts(all))

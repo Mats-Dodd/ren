@@ -146,6 +146,8 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
   | Str_len -> ([ str ], Int)
   | Str_concat | Str_concat_taking -> ([ str; str ], str)
   | Str_eq -> ([ str; str ], Bool)
+  | Str_is _ | Str_affix _ -> ([ str ], Bool)
+  | Str_lookup _ -> ([ str ], Int)
   | Str_box -> ([ str ], Boxed)
   | Str_unbox -> ([ Boxed ], str)
   | Slice (s, Range) -> ([ of_ s; Int; Int ], of_ s)

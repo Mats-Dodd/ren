@@ -1135,6 +1135,8 @@ and parse_single p : pattern =
       Diag.error (loc p)
         ~help:"match the error in an arm of its own, `fail Tag(...) => ...`"
         "a `fail` pattern can't be inside another pattern"
+  | STR _ | STR_HEAD _ | DOTDOT -> parse_str_pattern p start
+  | LBRACKET -> parse_list_pattern p start
   | LPAREN -> (
       advance p;
       let first = parse_pattern p in
@@ -1150,6 +1152,107 @@ and parse_single p : pattern =
           finish (PTuple ps)
       | _ -> fail_expected p "`,` or `)`")
   | _ -> fail_expected p "a pattern"
+
+(* A sequence's rest, at `..`: `..name`, which binds the middle, or `..`
+   alone, which ignores it (compiler.md, "Patterns stage", "The
+   grammar"). *)
+and parse_rest p : ident rest =
+  let start = loc p in
+  expect p DOTDOT;
+  let rname =
+    match peek p with
+    | IDENT x when (not (is_upper x)) && x <> "_" -> Some (ident p)
+    | _ -> None
+  in
+  { rname; rloc = Loc.span start (last_loc p) }
+
+(* The error for a second rest in one pattern. *)
+and two_rests (r : ident rest) =
+  Diag.error r.rloc
+    ~help:"to cut at a separator, use `split` or `split_once` on the value"
+    "a pattern has one `..` at most"
+
+(* A `Str` pattern: string literals side by side, and at most one rest
+   among them, `"Bearer " ..token`, `..stem ".json"`, `"<" ..inner ">"`;
+   [middle] if its rest was read already. Without a rest it's one
+   literal, the pieces joined: `"a" "b"` is `"ab"`. *)
+and parse_str_pattern ?middle p start =
+  let front = ref [] and back = ref [] and middle = ref middle in
+  let rec pieces () =
+    match peek p with
+    | STR s ->
+        let at = loc p in
+        advance p;
+        let q = mk_pattern p at (PStr s) in
+        if !middle = None then front := q :: !front else back := q :: !back;
+        pieces ()
+    | STR_HEAD _ ->
+        Diag.error (loc p)
+          ~help:"match the fixed text, and bind the rest with `..name`"
+          "a string pattern can't have holes"
+    | DOTDOT -> (
+        let r = parse_rest p in
+        match !middle with
+        | Some _ -> two_rests r
+        | None ->
+            middle := Some r;
+            pieces ())
+    | IDENT _ | INT _ | FLOAT _ | LPAREN | LBRACKET | LBRACE | TRUE | FALSE ->
+        Diag.error (loc p)
+          ~help:"bind the middle with `..name`, and test the rest in the arm"
+          "the pieces of a string pattern are string literals"
+    | _ -> ()
+  in
+  pieces ();
+  let front = List.rev !front and back = List.rev !back in
+  match (!middle, front, back) with
+  | None, _, _ ->
+      let text =
+        String.concat ""
+          (List.map (fun (q : pattern) -> match q.pkind with PStr s -> s | _ -> "") front)
+      in
+      mk_pattern p start (PStr text)
+  | Some { rname = Some x; rloc }, [], [] ->
+      Diag.error rloc
+        ~help:(Printf.sprintf "bind it with a name: `%s`" x.name)
+        (Printf.sprintf "`..%s` alone is the whole value" x.name)
+  | Some { rname = None; rloc }, [], [] ->
+      Diag.error rloc ~help:"write `_`" "`..` alone matches anything"
+  | Some _, _, _ ->
+      mk_pattern p start (PSeq { front; middle = !middle; back; bracketed = false })
+
+(* An `Array` pattern, in brackets: element patterns, and at most one
+   rest among them, `[first, ..rest]`, `[..init, last]`, `[a, .., z]`.
+   An element is any pattern; one that starts with `..` and goes on with
+   a string is a `Str` pattern, `["v" ..n, ..]`'s first is too. *)
+and parse_list_pattern p start =
+  expect p LBRACKET;
+  let front = ref [] and back = ref [] and middle = ref None in
+  let element p =
+    if peek p = DOTDOT then (
+      let at = loc p in
+      let r = parse_rest p in
+      match (peek p, !middle) with
+      | (STR _ | STR_HEAD _), _ ->
+          let q = parse_str_pattern ~middle:r p at in
+          if !middle = None then front := q :: !front else back := q :: !back
+      | _, Some _ -> two_rests r
+      | _, None -> middle := Some r)
+    else
+      let q = parse_pattern p in
+      if !middle = None then front := q :: !front else back := q :: !back
+  in
+  ignore (sep_list p ~close:RBRACKET element);
+  let front = List.rev !front and back = List.rev !back in
+  (match (!middle, front, back) with
+  | Some { rname = Some x; rloc }, [], [] ->
+      Diag.error rloc
+        ~help:(Printf.sprintf "bind it with a name: `%s`" x.name)
+        (Printf.sprintf "`[..%s]` alone is the whole array" x.name)
+  | Some { rname = None; rloc }, [], [] ->
+      Diag.error rloc ~help:"write `_`" "`..` alone matches anything"
+  | _ -> ());
+  mk_pattern p start (PSeq { front; middle = !middle; back; bracketed = true })
 
 (* A record pattern's fields, in braces: `{ id, lines: ls, .. }`, each
    `f: p` or `f` alone, which binds `f`, then `..`, last and alone, which
@@ -1340,7 +1443,8 @@ and parse_block p =
 and parse_stmt p =
   match (peek p, peek2 p) with
   | LET, IDENT x when (not (is_upper x)) && peek3 p <> DOT -> parse_let p
-  | LET, (IDENT _ | LPAREN | LBRACE | INT _ | MINUS | TRUE | FALSE | FLOAT _) ->
+  | LET, (IDENT _ | LPAREN | LBRACE | INT _ | MINUS | TRUE | FALSE | FLOAT _
+         | LBRACKET | STR _ | DOTDOT) ->
       (* `let (k, v) = pair`, `let { id, .. } = order`, `let Team(n) = p
          else fail NotTeam`: a pattern, which Exhaust checks always
          matches, or has an `else` if it might not *)

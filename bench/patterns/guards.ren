@@ -1,0 +1,19 @@
+// Guards (rule 5): a guarded arm that fails falls through to the next
+// arm that can match, past literals to prefix arms and `_`, and a
+// guarded arm ahead of a literal it matches is tested first.
+
+fn f(s: Str, g: Int) -> Str =
+  match s
+    "a" ..x if g == 1 => "guarded prefix " + x
+    "ab" => "literal ab"
+    "ab" .. if g == 2 => "guarded ab.."
+    "a" ..x => "prefix " + x
+    "x" if g == 3 => "guarded x"
+    "x" => "literal x"
+    "" if g == 4 => "guarded empty"
+    _ => "any " + s
+
+fn main() uses Console =
+  for g in 0..5
+    for s in ["ab", "abc", "a", "x", "", "b"]
+      print(show(g) + " " + s + ": " + f(s, g))

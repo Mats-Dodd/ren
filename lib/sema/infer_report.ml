@@ -73,7 +73,13 @@ let rec binders (p : pattern) =
   | POr ps -> List.concat_map binders ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
       List.concat_map (fun (_, q) -> binders q) fs.fpats
-  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
+  | PSeq q ->
+      List.concat_map binders q.front
+      @ (match q.middle with
+        | Some { rname = Some b; rloc } -> [ (b, rloc) ]
+        | _ -> [])
+      @ List.concat_map binders q.back
+  | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> []
 
 (* How to explain a mismatch with an expected type, passed down along with
    it: [msg] words the error, [help] suggests a fix and [labels] point at

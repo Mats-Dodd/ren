@@ -1,0 +1,47 @@
+// The review's (compiler.md, "Step 5, the review"): hashed string
+// `match`es whose guards call hashed `match`es, one inside an arm of
+// another, and a list pattern whose elements are string patterns.
+
+fn inner(s: Str) -> Bool =
+  match s
+    "b" | "c" => true
+    _ => false
+
+fn again(s: Str) -> Bool =
+  match s
+    "a" | "z" => true
+    _ => false
+
+fn empty_or_x(s: Str) -> Bool =
+  match s
+    "" | "x" => true
+    _ => false
+
+fn f(s: Str, t: Str) -> Str =
+  match s
+    "a" if again(s) && t == "go" => "a, go"
+    "a" => "a"
+    "b" if inner(t) => "b, " + t
+    "b" | "c" => "b or c"
+    "d" ..rest if not empty_or_x(rest) => "d then " + rest
+    _ =>
+      match t
+        "go" | "stop" => "other, " + t
+        _ => "other"
+
+fn words(xs: Array<Str>) -> Str =
+  match xs
+    ["GET" | "HEAD", "/" ..path] => "read " + path
+    ["PUT", "/" ..path, ..rest] => "write " + path + " " + show(rest.len())
+    [] => "none"
+    _ => "unknown"
+
+fn main() uses Console =
+  for s in ["a", "b", "c", "d", "dx", "dy", "e"]
+    for t in ["go", "c", "stop"]
+      print(s + " " + t + ": " + f(s, t))
+  print(words(["GET", "/index"]))
+  print(words(["HEAD", "/"]))
+  print(words(["PUT", "/a", "x", "y"]))
+  print(words(["PUT", "a"]))
+  print(words([]))

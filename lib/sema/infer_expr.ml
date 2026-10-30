@@ -1347,7 +1347,11 @@ and pattern_binders (p : pattern) =
       List.concat_map pattern_binders ps
   | PRecord (_, fs) | PCon_named (_, fs) ->
       List.concat_map (fun (_, q) -> pattern_binders q) fs.fpats
-  | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> []
+  | PSeq q ->
+      List.concat_map pattern_binders q.front
+      @ Option.to_list (Option.bind q.middle (fun r -> r.rname))
+      @ List.concat_map pattern_binders q.back
+  | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> []
 
 (* Where [e] first changes one of [bs], and which: an assignment to it, or
    a `&` of it. *)
@@ -4012,7 +4016,7 @@ and bind_fail env cx errs (p : pattern) =
   | PFail_any | PFail_in _ -> ()
   | POr ps -> alternatives env cx ps (bind_fail env cx errs)
   | PWild | PVar _ | PInt _ | PBool _ | PCon _ | PCon_named _ | PTuple _
-  | PRecord _ | PAs _ ->
+  | PRecord _ | PAs _ | PStr _ | PSeq _ ->
       (* the parser combines only `fail` patterns *)
       bind_pattern env cx TError p
 
@@ -4136,6 +4140,32 @@ and bind_pattern ?(binding = false) env cx t (p : pattern) =
             ~expected:t ~msg:pattern_for ?help;
           List.iter2 (bind_pattern env cx) parts ps
       | PRecord (name, fs) -> record_pattern ~binding env cx t p name fs
+      | PStr _ -> ignore (str_pattern env cx t p)
+      | PSeq q when q.bracketed ->
+          (* `[first, ..rest]`: each piece an element, the rest an array
+             of them (compiler.md, "Patterns stage", "Typing") *)
+          let elem = fresh_var env.st in
+          unify_at env p.ploc ~found:(array elem) ~expected:t
+            ~msg:(fun _ x ->
+              Printf.sprintf "a list pattern matches an `Array`, but this is `%s`" x)
+            ~help:"take it apart as what it is, or bind it to a name";
+          List.iter (bind_pattern env cx elem) (Ast.seq_pieces q);
+          Option.iter
+            (fun r ->
+              Option.iter
+                (fun (b : binder) -> Hashtbl.replace cx.locals b.id (array elem))
+                r.rname)
+            q.middle
+      | PSeq q ->
+          (* `"Bearer " ..token`: each piece a literal, the rest a `Str` *)
+          if str_pattern env cx t p then (
+            List.iter (bind_pattern env cx str) (Ast.seq_pieces q);
+            Option.iter
+              (fun r ->
+                Option.iter
+                  (fun (b : binder) -> Hashtbl.replace cx.locals b.id str)
+                  r.rname)
+              q.middle)
       | POr ps -> alternatives env cx ps (bind_pattern env cx t)
       | PAs (q, b) ->
           (* the whole of what's matched, which of a by-name constructor's
@@ -4156,6 +4186,23 @@ and bind_pattern ?(binding = false) env cx t (p : pattern) =
           (* a `fail` pattern is a whole arm's (the parser says so), and
              [infer_match] binds it with [bind_fail] *)
           ())
+
+(* A string pattern [p] matched against [t], a `Str`: no `Bytes`
+   patterns (language.md, "List patterns and string patterns", rule 1),
+   so a `Bytes` subject is an error of its own, with its help. Whether
+   it's matched as a `Str`. *)
+and str_pattern env cx t (p : pattern) =
+  ignore cx;
+  match repr t with
+  | TCon (b, []) when b = Path.prelude "Bytes" ->
+      report env
+        (Diag.make p.ploc
+           ~help:"read it with a format, or match `Str.from_utf8(b)` first"
+           "a string pattern matches a `Str`, but this is `Bytes`");
+      false
+  | _ ->
+      unify_at env p.ploc ~found:str ~expected:t ~msg:pattern_for;
+      true
 
 (* `Rect { w, h: tall }`, `Rect { w, .. }`, a by-name constructor's
    pattern matched against [t]: the constructor found as a positional

@@ -2926,6 +2926,35 @@ and pattern cx (p : pattern) : C.pattern =
         in
         PAs (pattern cx q, bind cx b whole)
     | PTuple ps -> PTuple (List.map (pattern cx) ps)
+    | PStr s -> PStr s
+    | PSeq q when q.bracketed ->
+        let rest : C.rest =
+          match q.middle with
+          | None -> No_rest
+          | Some r -> Rest (Option.map (fun b -> bind cx b pty) r.rname)
+        in
+        PArray
+          {
+            front = List.map (pattern cx) q.front;
+            rest;
+            back = List.map (pattern cx) q.back;
+          }
+    | PSeq q ->
+        (* the literal pieces on each side of the rest, as one *)
+        let text ps =
+          String.concat ""
+            (List.map
+               (fun (p : pattern) -> match p.pkind with PStr s -> s | _ -> "")
+               ps)
+        in
+        PStr_rest
+          {
+            prefix = text q.front;
+            rest =
+              Option.map (fun b -> bind cx b pty)
+                (Option.bind q.middle (fun r -> r.rname));
+            suffix = text q.back;
+          }
     | PCon_named (_, fs) -> (
         (* the positional constructor, a pattern for every field, in
            declaration order, `_` for one left out *)
@@ -3170,7 +3199,10 @@ and free (e : C.expr) =
         bind v
     | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps) ->
         List.iter pat ps
-    | PWild | PInt _ | PBool _ -> ()
+    | (PStr_rest _ | PArray _) as k ->
+        List.iter pat (C.seq_pieces k);
+        List.iter bind (C.seq_rest k)
+    | PWild | PInt _ | PBool _ | PStr _ -> ()
   in
   go e;
   List.filter (fun (v : C.var) -> not (Ids.mem v.id !bound)) !used
@@ -3258,7 +3290,10 @@ let max_binder (f : fn_def) =
         see b
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pat ps
     | PRecord (_, fs) | PCon_named (_, fs) -> List.iter (fun (_, q) -> pat q) fs.fpats
-    | PWild | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
+    | PSeq q ->
+        List.iter pat (Ast.seq_pieces q);
+        Option.iter (fun (r : _ Ast.rest) -> Option.iter see r.rname) q.middle
+    | PWild | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> ()
   in
   List.iter (fun (p : Resolved.param) -> see p.pname) f.params;
   go f.body;

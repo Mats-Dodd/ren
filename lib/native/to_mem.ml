@@ -1697,9 +1697,14 @@ let bind env (v : C.var) m = { env with vars = Vars.add v.id m env.vars }
 (* The variables a pattern binds, each once. *)
 let rec pattern_vars (p : C.pattern) =
   match p.pkind with
-  | PWild | PInt _ | PBool _ -> []
+  | PWild | PInt _ | PBool _ | PStr _ -> []
   | PVar v -> [ v ]
   | PAs (p, v) -> pattern_vars p @ [ v ]
+  | PStr_rest { rest; _ } -> Option.to_list rest
+  | PArray { front; rest; back } ->
+      List.concat_map pattern_vars front
+      @ (match rest with Rest (Some v) -> [ v ] | _ -> [])
+      @ List.concat_map pattern_vars back
   | PCon (_, _, ps) | PTag (_, ps) | PTuple ps | PRecord (_, ps) ->
       List.concat_map pattern_vars ps
   | POr (p :: _) -> pattern_vars p
@@ -2006,6 +2011,80 @@ let rec calm (e : C.expr) =
 
 let is_index (e : C.expr) = match e.kind with Local _ | Int _ -> true | _ -> false
 
+(* ---- `keys.index(s)` on a constant (compiler.md, "Patterns stage") ----
+
+   A release build's `keys.index(s)`, where [keys] is an array literal
+   of string literals, written there or bound by a `let`, is the `match`
+   of [s] with an arm for each key, `Some` of its first index, and `None`
+   for the rest: a string `match`, which the perfect hash looks up. A
+   `let` of an array is never changed (a `var` is a cell), so its keys
+   are the literal's wherever it's used. *)
+
+(* The keys of the array literals of string literals each `let` of the
+   function being lowered binds, by the variable. *)
+let literal_keys : (int, string list) Hashtbl.t = Hashtbl.create 8
+
+let literal_strs (e : C.expr) =
+  match e.kind with
+  | Array xs ->
+      let strs = List.filter_map (fun (x : C.expr) -> match x.kind with Str s -> Some s | _ -> None) xs in
+      if List.length strs = List.length xs then Some strs else None
+  | _ -> None
+
+(* Whether every use of [v] in [e] is as the receiver of a call that
+   [hashed] says is a hashed `index`: then a release build never reads
+   it, and its array isn't made. *)
+let rec only_indexed hashed (v : C.var) (e : C.expr) =
+  match e.kind with
+  | Local u -> u.id <> v.id
+  | Call (f, (Value { kind = Local u; _ } :: rest as args), _) when u.id = v.id ->
+      hashed f args && List.for_all (function C.Value a -> only_indexed hashed v a | Ref u -> u.id <> v.id) rest
+  | Call (f, args, _) ->
+      only_indexed hashed v f
+      && List.for_all (function C.Value a -> only_indexed hashed v a | Ref u -> u.id <> v.id) args
+  | Assign (u, a) -> u.id <> v.id && only_indexed hashed v a
+  | _ -> List.for_all (only_indexed hashed v) (C.children e)
+
+(* Whether [p] is the prelude's `Array.index`, or a copy of it. *)
+let index_path = Path.member (Path.prelude "Array") "index"
+
+let rec is_array_index fns (p : Path.t) =
+  p = index_path
+  ||
+  match Hashtbl.find_opt fns p with
+  | Some ({ origin = Copy q; _ } : C.fn_def) -> is_array_index fns q
+  | _ -> false
+
+(* Whether a call of [f] with [args] is a hashed `keys.index(s)`, given
+   its keys are a literal's. *)
+let hashed_index cx (f : C.expr) (args : C.arg list) =
+  match (f.kind, args) with
+  | Global (p, _, _, _), [ _; Value s ] -> s.ty = Ty.str && is_array_index cx.fns p
+  | _ -> false
+
+(* The `match` that's `keys.index(s)`, of type [e]'s. *)
+let index_match (e : C.expr) keys (s : C.expr) : C.expr =
+  let mk kind ty : C.expr = { kind; ty; loc = e.loc } in
+  let option = Path.prelude "Option" in
+  let firsts =
+    List.fold_left (fun acc k -> if List.mem k acc then acc else acc @ [ k ]) [] keys
+  in
+  let index k =
+    let rec go i = function x :: rest -> if x = k then i else go (i + 1) rest | [] -> 0 in
+    go 0 keys
+  in
+  let arm pkind body : C.arm = { pat = { pkind; pty = Ty.str; ploc = e.loc }; guard = None; body } in
+  mk
+    (Match
+       ( s,
+         List.map
+           (fun k ->
+             arm (PStr k)
+               (mk (Con (option, "Some", [ mk (Int (Int64.of_int (index k))) Ty.int ])) e.ty))
+           firsts
+         @ [ arm PWild (mk (Con (option, "None", [])) e.ty) ] ))
+    e.ty
+
 let rec same (a : C.expr) (b : C.expr) =
   match (a.kind, b.kind) with
   | Local x, Local y -> x.id = y.id
@@ -2080,7 +2159,15 @@ and expr_at fs env (e : C.expr) : atom =
      of what it covers *)
   | Covered { body; result; after } ->
       expr fs env { e with kind = Let (result, body, after) }
+  | Let (v, value, body)
+    when fs.cx.release && v.ty = Ty.array Ty.str && literal_strs value <> None
+         && only_indexed (hashed_index fs.cx) v body ->
+      (* keys only a hashed `index` reads, which reads them here, so
+         their array isn't made (see [index_match]) *)
+      Hashtbl.replace literal_keys v.id (Option.get (literal_strs value));
+      expr fs env body
   | Let (v, value, body) ->
+      Option.iter (Hashtbl.replace literal_keys v.id) (literal_strs value);
       let x = expr fs env value in
       let m = fresh fs v.name (lay v.ty) in
       emit fs (Let (m, Atom x));
@@ -3061,6 +3148,18 @@ and reaches_family cx (p : Path.t) =
 and call fs env (e : C.expr) (f : C.expr) args ev =
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
+  let keys (a : C.arg) =
+    match a with
+    | Value { kind = Local v; ty; _ } when ty = Ty.array Ty.str ->
+        Hashtbl.find_opt literal_keys v.id
+    | Value a -> literal_strs a
+    | Ref _ -> None
+  in
+  match (f.kind, args) with
+  | Global (p, _, _, _), [ recv; Value s ]
+    when cx.release && s.ty = Ty.str && is_array_index cx.fns p && keys recv <> None ->
+      expr fs env (index_match e (Option.get (keys recv)) s)
+  | _ ->
   match f.kind with
   | Global (p, _, _, _) when starts_tasks cx.fns p ->
       (* said before its blocks are compiled, which hold a `Scope` *)
@@ -4539,6 +4638,23 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
      bound to it has matched *)
   let boxes = Hashtbl.create 4 in
   let pending = ref [] in
+  (* What a string or list pattern read to test or bind, owned: an
+     array's elements and a rest's slice (compiler.md, "Patterns stage").
+     Each is dropped where its pattern's tests end, on the paths that
+     fall through to the next arm, and on the way to an arm, after its
+     names are counted: [temps] holds those of the path being tested. *)
+  let temps = ref [] in
+  (* The literal a string subject is, where a lookup's switch says so,
+     in that branch: its literal and prefix tests are then known here,
+     and not made (see [dispatch]) *)
+  let keyed = ref None in
+  (* whether the string [w] has [prefix] and [suffix], at least as long
+     as the two: what [ren_pat_affix] says of it *)
+  let affix w prefix suffix =
+    String.length w >= String.length prefix + String.length suffix
+    && String.starts_with ~prefix w
+    && String.ends_with ~suffix w
+  in
   let arm_env vars = List.fold_left (fun env (v, m) -> bind env v m) env vars in
   let no_arm = new_site cx e.loc in
   (* the arm [a] has matched, its pattern's names bound to [vars]: count
@@ -4569,6 +4685,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
       (fun (_, (m : var)) -> if not (List.memq m made) then dup fs (Var m))
       vars;
     let go () =
+      List.iter (fun t -> drop_now fs (Var t)) !temps;
       List.iter
         (fun x ->
           match x with Var v when counted v.layout -> drop_now fs x | _ -> ())
@@ -4662,7 +4779,125 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
             in
             emit fs (If (c, block fs inner, []))
         in
+        (* [ts], owned, read for what [f] tests: dropped where it ends,
+           and on the way to an arm (see [temps]) *)
+        let holding ts f =
+          let saved = !temps in
+          temps := ts @ saved;
+          f ();
+          temps := saved;
+          List.iter (fun t -> drop_now fs (Var t)) ts
+        in
+        let temp name l rhs =
+          let v = fresh fs name l in
+          emit fs (Let (v, rhs));
+          v
+        in
+        let site () = new_site cx p.ploc in
+        let key = match !keyed with Some (y, w) when y = x -> Some w | _ -> None in
         match p.pkind with
+        | PStr s when key <> None -> if key = Some s then rest_then ()
+        | PStr s -> check (Runtime (Str_is s, [ x ], None))
+        | PStr_rest { prefix; suffix; _ }
+          when Option.fold ~none:false ~some:(fun w -> not (affix w prefix suffix)) key ->
+            ()
+        | PStr_rest { prefix; rest = None; suffix } ->
+            if key <> None then rest_then ()
+            else check (Runtime (Str_affix (prefix, suffix), [ x ], None))
+        | PStr_rest { prefix; rest = Some v; suffix } ->
+            (* the middle, cut where the pieces end: on character
+               boundaries, since the pieces are valid UTF-8, so it's cut
+               as `Bytes` are, unchecked (ren_rt.h, [ren_str_slice]) *)
+            let c =
+              if key <> None then Bool true
+              else
+                borrowed fs "$test" Bool
+                  (Runtime (Str_affix (prefix, suffix), [ x ], None))
+            in
+            emit fs
+              (If
+                 ( c,
+                   block fs (fun () ->
+                       let n = borrowed fs "$len" Int (Runtime (Str_len, [ x ], None)) in
+                       let b = Int64.of_int (String.length suffix) in
+                       let j = borrowed fs "$to" Int (Arith (Sub, n, Int b, site ())) in
+                       let a = Int64.of_int (String.length prefix) in
+                       (* the subject's own layout: one word, or a release
+                          build's two (representation B) *)
+                       let r =
+                         temp "$rest" (atom_layout x)
+                           (Runtime (Slice (Of_bytes, Range), [ x; Int a; j ], Some (site ())))
+                       in
+                       holding [ r ] (fun () ->
+                           emit fs (Set (slot vars v, Var r));
+                           rest_then ())),
+                   [] ))
+        | PArray { front; rest = middle; back } ->
+            (* the length, then each element a piece tests, read where
+               the length says it is, and the middle, a slice *)
+            let f = List.length front and b = List.length back in
+            let n = borrowed fs "$len" Int (Runtime (Array_len, [ x ], None)) in
+            let fits =
+              borrowed fs "$fits" Bool
+                (Compare
+                   ( (if middle = No_rest then Eq else Ge),
+                     n,
+                     Int (Int64.of_int (f + b)) ))
+            in
+            emit fs
+              (If
+                 ( fits,
+                   block fs (fun () ->
+                       let read (q : C.pattern) i =
+                         match q.pkind with
+                         | PWild -> None
+                         | _ ->
+                             let l = element cx (layout_at fs q.ploc q.pty) in
+                             (* in bounds: the length test above *)
+                             Some (q, temp "$elem" l (Runtime (Array_get l, [ x; i ], None)))
+                       in
+                       let firsts =
+                         List.mapi (fun i q -> read q (Int (Int64.of_int i))) front
+                       in
+                       let lasts =
+                         List.mapi
+                           (fun k (q : C.pattern) ->
+                             match q.pkind with
+                             | PWild -> None
+                             | _ ->
+                                 let i =
+                                   borrowed fs "$at" Int
+                                     (Arith (Sub, n, Int (Int64.of_int (b - k)), site ()))
+                                 in
+                                 read q i)
+                           back
+                       in
+                       let pieces = List.filter_map Fun.id (firsts @ lasts) in
+                       let mid =
+                         match middle with
+                         | Rest (Some v) ->
+                             let j =
+                               borrowed fs "$to" Int
+                                 (Arith (Sub, n, Int (Int64.of_int b), site ()))
+                             in
+                             let r =
+                               temp "$rest" Boxed
+                                 (Runtime
+                                    ( Slice (Of_array_elems, Range),
+                                      [ x; Int (Int64.of_int f); j ],
+                                      Some (site ()) ))
+                             in
+                             [ (v, r) ]
+                         | Rest None | No_rest -> []
+                       in
+                       holding
+                         (List.map snd pieces @ List.map snd mid)
+                         (fun () ->
+                           List.iter (fun (v, r) -> emit fs (Set (slot vars v, Var r))) mid;
+                           test ~known vars
+                             (List.map (fun (q, t) -> (q, Var t)) pieces @ rest)
+                             k)),
+                   [] ))
         | PWild -> rest_then ()
         | PVar v -> set (slot vars v) rest_then
         | PAs (q, v) ->
@@ -4761,9 +4996,52 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
     | PAs (q, _) -> can_match tag q
     | _ -> true
   in
+  (* the literals of a string `match`'s arms, each once, in order *)
+  let rec literals (p : C.pattern) =
+    match p.pkind with
+    | PStr s -> [ s ]
+    | POr ps -> List.concat_map literals ps
+    | PAs (q, _) -> literals q
+    | _ -> []
+  in
+  let keys =
+    List.fold_left
+      (fun acc ((a : C.arm), _, _) ->
+        acc @ List.filter (fun w -> not (List.mem w acc)) (literals a.pat))
+      [] arms
+  in
+  (* whether a pattern can match the literal [w], and one that's none of
+     the literals ([None]): decided here, as the interpreter would *)
+  let rec can_be key (p : C.pattern) =
+    match (p.pkind, key) with
+    | PStr s, Some w -> s = w
+    | PStr _, None -> false
+    | PStr_rest { prefix; suffix; _ }, Some w -> affix w prefix suffix
+    | POr ps, _ -> List.exists (can_be key) ps
+    | PAs (q, _), _ -> can_be key q
+    | _ -> true
+  in
   let dispatch =
     block fs (fun () ->
         match (parts, subjects, ctors cx s.ty) with
+        | None, [ x ], _ when s.ty = Ty.str && List.length keys >= 2 ->
+            (* a string `match` with two literals or more: each looked up
+               at once, through a perfect hash, then a switch on which it
+               is (compiler.md, "Patterns stage", "The DAG"). The branch
+               of a literal holds, in order, the arms that can match it,
+               decided here, so first match is kept, guards that fail
+               falling through to the next arm that can match; the
+               default holds those that can match a string no literal is *)
+            let i = borrowed fs "$key" Int (Runtime (Str_lookup keys, [ x ], None)) in
+            let branch key =
+              block fs (fun () ->
+                  keyed := Option.map (fun w -> (x, w)) key;
+                  try_arms ~known:None
+                    (List.filter (fun ((a : C.arm), _, _) -> can_be key a.pat) arms);
+                  keyed := None)
+            in
+            emit fs
+              (Switch (i, List.mapi (fun n w -> (n, branch (Some w))) keys, branch None))
         | None, [ x ], Some cs
           when List.exists
                  (fun ((a : C.arm), _, _) ->
@@ -4824,6 +5102,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
    parameters first, a descriptor for each of its type variables and one
    for each of its requirements, then its evidence. *)
 let fn cx here (f : C.fn_def) : Mem.fn =
+  Hashtbl.reset literal_keys;
   with_words cx (List.length f.tys) (fun () ->
       let fs =
         {

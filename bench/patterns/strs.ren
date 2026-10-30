@@ -1,0 +1,47 @@
+// String patterns (compiler.md, "Patterns stage"): literals, prefixes,
+// suffixes, both, `..` ignored, `""`, cuts beside multi-byte characters,
+// and slices bound from a subject that's gone by the time they're used.
+
+fn arg(a: Str) -> Str =
+  match a
+    "-h" | "--help" => "help"
+    "--out=" ..path => "out " + path
+    "--" ..flag => "unknown " + flag
+    "" => "empty"
+    _ => "file " + a
+
+fn ext(name: Str) -> Str =
+  match name
+    ..stem ".json" => "json " + stem
+    ..stem ".ren" => "ren " + stem
+    "<" ..inner ">" => "tag " + inner
+    _ => "none"
+
+fn token(h: Str) -> Str =
+  match h
+    "Bearer " ..t => t
+    _ => "-"
+
+fn made(n: Int) -> Str =
+  var s = "Bearer "
+  for i in 0..n
+    s = s + show(i)
+  s
+
+fn main() uses Console =
+  for a in ["-h", "--help", "--out=x.txt", "--out=", "--v", "--", "", "main.ren", "-"]
+    print(arg(a))
+  for n in ["a.json", ".json", "b.ren", "<em>", "<>", "<", "x"]
+    print(ext(n))
+  // a slice of a string made and dropped in the call
+  var kept: Array<Str> = []
+  for n in 0..4
+    &kept.push(token(made(n)))
+  print(kept)
+  // beside multi-byte characters
+  for s in ["été", "é", "日本語", "naïve"]
+    match s
+      "é" ..rest => print("é then " + rest)
+      ..init "語" => print(init + " then 語")
+      "na" ..mid "ve" => print("mid " + mid + " " + show(mid.byte_len()))
+      _ => print("other " + s)

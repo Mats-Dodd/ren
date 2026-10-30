@@ -1,0 +1,6 @@
+import bench
+
+fn main() uses Console =
+  bench.check(4096)
+  bench.run("renkw", false, 1000, 2)
+  bench.run("headers", true, 1000, 2)

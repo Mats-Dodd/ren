@@ -258,3 +258,155 @@ fn f(o: Option<Int>, ps: Array<Plan>) -> Int ! Missing =
           (fail_expression
             (type_identifier))))
       (identifier))))
+
+================================================================================
+string literal patterns, prefixes and suffixes
+================================================================================
+
+fn arg(a: Str) -> Str =
+  match a
+    "-h" | "--help" => "help"
+    "--out=" ..path => path
+    ..stem ".json" => stem
+    "<" ..inner ">" => inner
+    "--" .. => "flag"
+    "a" "b" => "ab"
+    _ => a
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (match_expression
+        (identifier)
+        (match_arm
+          (or_pattern
+            (string)
+            (string))
+          (string))
+        (match_arm
+          (string_pattern
+            (string)
+            (sequence_rest
+              (identifier)))
+          (identifier))
+        (match_arm
+          (string_pattern
+            (sequence_rest
+              (identifier))
+            (string))
+          (identifier))
+        (match_arm
+          (string_pattern
+            (string)
+            (sequence_rest
+              (identifier))
+            (string))
+          (identifier))
+        (match_arm
+          (string_pattern
+            (string)
+            (sequence_rest))
+          (string))
+        (match_arm
+          (string_pattern
+            (string)
+            (string))
+          (string))
+        (match_arm
+          (wildcard)
+          (identifier))))))
+
+================================================================================
+list patterns, with a rest and nested
+================================================================================
+
+fn f(xs: Array<Str>) -> Int =
+  match xs
+    [] => 0
+    [first, ..rest] => 1
+    [..init, last] => 2
+    [a, .., z] => 3
+    ["v1" | "v2", "keys", k] => 4
+    ["v" ..n, ..] as all => 5
+  let [a, b] = xs else fail Short
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))))
+    (named_type
+      (type_name
+        (type_identifier)))
+    (block
+      (match_expression
+        (identifier)
+        (match_arm
+          (list_pattern)
+          (number))
+        (match_arm
+          (list_pattern
+            (identifier)
+            (sequence_rest
+              (identifier)))
+          (number))
+        (match_arm
+          (list_pattern
+            (sequence_rest
+              (identifier))
+            (identifier))
+          (number))
+        (match_arm
+          (list_pattern
+            (identifier)
+            (sequence_rest)
+            (identifier))
+          (number))
+        (match_arm
+          (list_pattern
+            (or_pattern
+              (string)
+              (string))
+            (string)
+            (identifier))
+          (number))
+        (match_arm
+          (as_pattern
+            (list_pattern
+              (string_pattern
+                (string)
+                (sequence_rest
+                  (identifier)))
+              (sequence_rest))
+            (identifier))
+          (number)))
+      (let_statement
+        (list_pattern
+          (identifier)
+          (identifier))
+        (identifier)
+        (let_else
+          (fail_expression
+            (type_identifier)))))))

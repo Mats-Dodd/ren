@@ -1473,6 +1473,30 @@ and pattern env sc (p : pattern) t =
   | PBool _ ->
       same env loc "a `Bool` pattern" t Ty.bool;
       sc
+  | PStr _ ->
+      same env loc "a `Str` pattern" t Ty.str;
+      sc
+  | PStr_rest { rest; _ } ->
+      same env loc "a `Str` pattern" t Ty.str;
+      Option.fold ~none:sc
+        ~some:(fun (v : var) ->
+          same env loc ("the rest `" ^ v.name ^ "`") v.ty Ty.str;
+          add v sc)
+        rest
+  | PArray { front; rest; back } -> (
+      (* each piece an element, the rest an array of them *)
+      match reveal env t with
+      | Con (p, [ elem ]) when p = Path.prelude "Array" ->
+          let sc = List.fold_left (fun sc sub -> pattern env sc sub elem) sc front in
+          let sc =
+            match rest with
+            | Rest (Some v) ->
+                same env loc ("the rest `" ^ v.name ^ "`") v.ty t;
+                add v sc
+            | Rest None | No_rest -> sc
+          in
+          List.fold_left (fun sc sub -> pattern env sc sub elem) sc back
+      | t' -> fail env loc (sprintf "a list pattern matches a `%s`" (show t')))
   | PCon (path, c, ps) ->
       let targs, k =
         match t with

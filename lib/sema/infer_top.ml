@@ -99,7 +99,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
   let rec pattern_ (p : Resolved.pattern) =
     pattern p;
     match p.pkind with
-    | PWild | PVar _ | PInt _ | PBool _ | PFail_any | PFail_in _ -> ()
+    | PWild | PVar _ | PInt _ | PBool _ | PStr _ | PFail_any | PFail_in _ -> ()
+    | PSeq q -> List.iter pattern_ (Ast.seq_pieces q)
     | PAs (q, _) -> pattern_ q
     | PCon (_, ps) | PFail (_, ps) | POr ps | PTuple ps -> List.iter pattern_ ps
     | PRecord (_, fs) | PCon_named (_, fs) ->

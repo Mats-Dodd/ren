@@ -409,3 +409,14 @@ pub service Kv(c: Cfg) uses Http =
 fn install() = with kv.Kv(cfg) in run()
 //                  ^ namespace
 //                     ^ constructor
+
+// string and list patterns: literals are strings, a rest's `..` an
+// operator
+fn route(segs: Array<Str>) -> Str =
+  match segs
+    ["v1", ..rest] => "v1"
+//   ^ string
+//         ^ operator
+    ["--out=" ..path] => path
+//            ^ operator
+    _ => ""

@@ -1,0 +1,5 @@
+import bench
+
+// the size build.sh times, once: build.sh writes its own main for each
+// set, form and number of rounds
+fn main() uses Console = bench.run("renkw", true, 65536, 1)

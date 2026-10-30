@@ -76,6 +76,27 @@ let zero (l : layout) =
 
 (* [s] as a C string literal: a byte that isn't printable ASCII as an
    octal escape, and `?` escaped, so nothing reads as a trigraph. *)
+(* The perfect-hash lookups of the program, by their keys, each with its
+   number, in the order they're first emitted, and its C (phash.ml):
+   made as the functions are, and written before them. *)
+let lookups : (string list, int * string) Hashtbl.t = Hashtbl.create 8
+
+let lookup keys =
+  match Hashtbl.find_opt lookups keys with
+  | Some (n, _) -> sprintf "ren_ph%d" n
+  | None ->
+      let n = Hashtbl.length lookups in
+      let name = sprintf "ren_ph%d" n in
+      let ks = Array.of_list keys in
+      Hashtbl.replace lookups keys (n, Phash.c ~name ks (Phash.plan ks));
+      name
+
+(* Each lookup's C, by its name, in order. *)
+let lookup_defs () =
+  Hashtbl.fold (fun _ (n, c) acc -> (n, c) :: acc) lookups []
+  |> List.sort compare
+  |> List.map (fun (n, c) -> (sprintf "ren_ph%d" n, c))
+
 let c_string s =
   let b = Buffer.create (String.length s + 2) in
   Buffer.add_char b '"';
@@ -354,6 +375,16 @@ let rec runtime ?result rt args site_arg =
       | Str_len when svx 0 -> Some (sprintf "ren_sv_len(%s)" (a 0))
       | Str_data when svx 0 -> Some (sprintf "((void*)ren_sv_data(%s))" (a 0))
       | Str_eq when svx 0 -> Some (sprintf "ren_sv_eq(%s, %s)" (a 0) (a 1))
+      | Str_is s when svx 0 ->
+          Some (sprintf "ren_sv_pat_is(%s, %s, %d)" (a 0) (c_string s) (String.length s))
+      | Str_affix (p, s) when svx 0 ->
+          Some
+            (sprintf "ren_sv_pat_affix(%s, %s, %d, %s, %d)" (a 0) (c_string p)
+               (String.length p) (c_string s) (String.length s))
+      | Str_lookup ks when svx 0 ->
+          Some
+            (sprintf "%s(ren_sv_data(%s), (uint64_t)ren_sv_len(%s))" (lookup ks) (a 0)
+               (a 0))
       | Str_concat when svx 0 ->
           Some (sprintf "ren_sv_concat(%s, %s)" (a 0) (a 1))
       | Str_concat_taking when svx 0 ->
@@ -584,6 +615,12 @@ let rec runtime ?result rt args site_arg =
             s.sid
       | _ -> sprintf "ren_str_concat_taking(%s, %s, NULL)" (a 0) (a 1))
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
+  | Str_is s -> sprintf "ren_pat_is(%s, %s, %d)" (a 0) (c_string s) (String.length s)
+  | Str_affix (p, s) ->
+      sprintf "ren_pat_affix(%s, %s, %d, %s, %d)" (a 0) (c_string p)
+        (String.length p) (c_string s) (String.length s)
+  | Str_lookup ks ->
+      sprintf "%s(ren_str_data(%s), (uint64_t)ren_str_len(%s))" (lookup ks) (a 0) (a 0)
   (* slices (ren_rt.c, "slices"): a `Str`'s and `Bytes`' are strings, a
      `Str`'s checked not to cut a character *)
   | Slice (Of_array_elems, Range) ->
@@ -1926,6 +1963,9 @@ type parts = {
       (** each associated value's name, and what declares it in another
           unit than the one [data] is in *)
   fns : (fn * string) list;  (** each function and its C *)
+  lookups : (string * string) list;
+      (** each perfect-hash lookup's name and its C, static: its tables
+          and its function (phash.ml) *)
   run : string;  (** [ren_program] and [main] *)
 }
 
@@ -1978,6 +2018,7 @@ let parts ~restrict ~release ~site_pieces (p : program) =
   dispatch := if release then Some (Dispatch.make p) else None;
   dsites := Array.of_list p.dsites;
   Hashtbl.reset made_tags;
+  Hashtbl.reset lookups;
   let b = Buffer.create 65536 in
   let add = Buffer.add_string b in
   List.iteri
@@ -2193,6 +2234,7 @@ let parts ~restrict ~release ~site_pieces (p : program) =
     protos;
     externs;
     fns;
+    lookups = lookup_defs ();
     run = Buffer.contents b;
   }
 
@@ -2219,6 +2261,7 @@ let program ?(restrict = false) ?(release = false)
   add "\n";
   List.iter (fun (_, proto) -> add proto) ps.protos;
   add "\n";
+  List.iter (fun (_, c) -> add c) ps.lookups;
   List.iter (fun (_, c) -> add c) ps.fns;
   add ps.run;
   Buffer.contents b
@@ -2316,6 +2359,8 @@ let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
       let n = sprintf "ren_decl_%d" i in
       Hashtbl.replace decls n (sprintf "extern const ren_decl %s;\n" n))
     p.decls;
+  (* a lookup is static, its own in each unit that uses it *)
+  List.iter (fun (n, c) -> Hashtbl.replace decls n c) ps.lookups;
   let unit body =
     let b = Buffer.create (String.length body + 4096) in
     Buffer.add_string b "#define REN_UNIT\n#include \"ren_rt.h\"\n\n";

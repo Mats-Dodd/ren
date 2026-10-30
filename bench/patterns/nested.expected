@@ -1,0 +1,27 @@
+a go: a, go
+a c: a
+a stop: a
+b go: b or c
+b c: b, c
+b stop: b or c
+c go: b or c
+c c: b or c
+c stop: b or c
+d go: other, go
+d c: other
+d stop: other, stop
+dx go: other, go
+dx c: other
+dx stop: other, stop
+dy go: d then y
+dy c: d then y
+dy stop: d then y
+e go: other, go
+e c: other
+e stop: other, stop
+read index
+read 
+write a 2
+unknown
+none
+exit 0

@@ -12864,6 +12864,570 @@ Chosen in step 7a, as built:
 | 7a | 07434ed | `actors` in the prelude, plain Ren over the family: `Actors<K, D>` with `at` and `each` as members over the operations `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`; `actors(h: spawned fn(k: K) -> D, max, mailbox, evict: Lru, chaos, parts)`; the alias's `! E`; the family's `pin` for a block with a library's `victim`, `visit`, `enter`/`made`, `idle`, setup's errors as the family's, waiters sharing them, a cancelled setup retried; the no-deadlock rules static and at run time, `Full`; `finally` can't fail; partitions; chaos; journal version 3 (`opened`, `made`, `evicted`), replayed; test_services.ml's s7 tests but `post`'s on, test/test_actors.ml; tree-sitter's alias errors (corpus actors.txt); language.md's table | step 7b: `post`, the per-key queues and their delivery tasks, the edge's meter and high-water mark, a sibling's post and an actor naming its own family, teardown draining, research/actors-post/'s counterexamples; s7's `post` tests |
 | 7b | this commit | `post`: `Actors.post(k, c)` over the operation `send` and `Instances.post` (`family_post`), its parameter generic code's `Call<D, (), !>`; a concrete call's type carrying which operations it may be a call of (Types.calls; Unify's `known_call`; `D.Call<R ! E>` written in generic code; refused of a dependency's own), the refusal "`post` takes a call that gives `()` and can't fail, and ..." for any such parameter; the family's per-key queues, delivery tasks in a scope of its own named by their instance, a post making its actor past the cap when none is evictable, mail keeping an instance from eviction, the edge's meter for posts and for operations through `at`, a task's posts before its own later calls of the actor, a sibling's post never waiting and panicking past twice `mailbox:` with the high-water mark, the family's end draining before the `finally`s; an actor naming its own family in `uses` (Infer's `kept_own`, the opener's install in its maker's evidence); journal `posted` lines, keys written as journal values, delivery tasks' names read back; `ren test`'s high-water mark; test_services.ml's s7 `post` tests on, with the high-water mark, a replay of a run with posts, and a third library that posts; language.md's table | step 8; a wiring that lists `actors(...) as Docs` (7a's, below) |
 
+## Patterns stage
+
+List patterns and string patterns, and a string `match` lowered to a
+perfect hash: language.md, "List patterns and string patterns", its
+five rules; research/perfect-hash/synthesis.md, "Staging", items 1 and
+2; foundations.md, Staging, item 7b, part one (briefs/stage-patterns.md).
+Six steps, each green on its own:
+
+0. **This specification,** the keyword baseline and the tests.
+1. **The front end and the interpreter:** string literal patterns and
+   sequence patterns parsed, resolved, typed and checked (exhaust.ml),
+   run by `ren run`; the grammar and Zed.
+2. **Natively, as chains:** the decision DAG, each literal a length
+   test and `memcmp`, prefix and suffix tests, `..name` a slice.
+3. **The perfect hash:** lib/native/phash.ml, the compares and the
+   page check in ren_rt.h, the fuzz.
+4. **`keys.index(s)` on a constant, and using it:** examples/just.
+5. **A review.**
+
+The interpreter matches directly, with no hash: it's the meaning
+(decision 20, rule 4). Every build agrees with it on which arm runs,
+what each name binds, every error and panic, and `keys.index`'s
+result; bench/patterns.t checks that in every build.
+
+### Decided
+
+Recorded from the brief; not reopened here.
+
+- **Prefix and suffix patterns ship with literals** (synthesis, owner
+  decision 1).
+- **The page check, never padding** (decision 2).
+- **`keys.index(s)` on a build-time constant lowers to the hash**
+  (decision 3, option a), here only for an array literal of string
+  literals, in release builds (see `keys.index(s)`, below, on why not a
+  top-level `let`).
+- **A decision DAG with join points,** not a backtracking automaton
+  (decision 4).
+- **No case folding in the language** (decision 5).
+- **`[..init, last]` stays** (decision 6).
+- **One rest per pattern,** no `Bytes` patterns, no regex.
+- **A covered arm is an error;** Ren has no warnings.
+
+### The tests
+
+test/test_patterns.ml is the specification in the interpreter, with
+`until "p1"` ... `until "p4"` as test_data.ml's `until "sN"`
+(helpers.ml): a test still to land holds its target, `~want` for a
+program that runs or `~says` for an error's headline and help, and its
+`[%expect]` holds today's output after `(until pN)`. The step that lands
+it writes it plainly. bench/patterns.t runs bench/patterns/'s programs:
+each through `ren run` against its `.expected` ("as specified" or "not
+yet"), and, once step 2 lands them, natively: debug with Perceus's and
+the naive counting, release, each under AddressSanitizer and UBSan,
+tcc, and `ren run --release`, all printing what `ren run` prints with
+no object alive at the end. Step 3 adds the fuzz (test/test_phash.ml)
+and step 4 `keys.index`.
+
+What they cover: every form on `Array` and `Str`; nested in tuples,
+records, constructors, or-patterns and `as`; slices bound and used
+after the subject is gone; `..` beside multi-byte characters; each
+error below; exhaustiveness and covered arms, accepted and refused;
+guards falling through past literals to prefix arms and `_`; `""` as a
+key and as a subject; keys of 1, 16, 17 and 255 bytes; 128 and 200 arms;
+and the research's adversarial sets, which the generator can't hash.
+
+### The grammar
+
+```
+pattern   ::= ... | STRING | str_seq | "[" [ elems ] "]"
+str_seq   ::= piece* rest piece*          (at least one piece)
+            | piece piece+                (adjacent literals: one literal)
+piece     ::= STRING                      (no holes)
+rest      ::= ".." [ IDENT ]
+elems     ::= elem ("," elem)* [","]
+elem      ::= pattern | rest              (one rest at most)
+```
+
+- **A `Str` sequence has no brackets:** `"Bearer " ..token`, `..stem
+  ".json"`, `"<" ..inner ">"`, `"--" ..`. Its pieces are string
+  literals, juxtaposed; two literals side by side are one, `"a" "b"` is
+  `"ab"`. The parser reads one when a pattern starts with a string or
+  `..` and a string or `..` follows.
+- **An `Array` sequence is in brackets:** `[]`, `[p, q]`, `[first,
+  ..rest]`, `[..init, last]`, `[a, .., z]`. An element can be any
+  pattern, a `Str` sequence too: `["v" ..ver, ..]`. `"a" ..x` inside
+  brackets with no comma is one element.
+- `..` inside a record pattern's braces keeps its meaning, the fields
+  left out; inside a constructor's parentheses it stays an error.
+- A string with holes, `"a\{x}"`, isn't a pattern.
+
+### The AST
+
+ast.ml's `pattern_kind` gains two constructors:
+
+- `PStr of string`, a string literal, `"GET"`;
+- `PSeq of ('b, 't) seq`, where `seq = { front : pattern list; middle :
+  'b rest option; back : pattern list; bracketed : bool }` and `'b rest
+  = { rname : 'b option; rloc : Loc.t }`: the pieces before the rest,
+  the rest (`..name` binds, `..` ignores, none is a fixed length) and
+  the pieces after. `bracketed` says which: an `Array` sequence, or a
+  `Str` one, whose pieces are each a `PStr` and which always has a rest
+  (a `Str` sequence without one is a literal, merged by the parser into
+  a `PStr`).
+
+Core's `pattern_kind` gains three, which Lower makes of those:
+
+- `PStr of string`;
+- `PStr_rest of { prefix : string; rest : var option; suffix : string }`:
+  the literal pieces before and after concatenated;
+- `PArray of { front : pattern list; rest : rest; back : pattern list }`,
+  `rest = No_rest | Rest of var option`.
+
+`..name` binds the middle through the slice operation that exists
+today: in the interpreter `Builtins.slice_value v k (len - m)`; natively
+the `Slice` runtime call of `x[k..len - m]`, so it costs what a slice
+costs and gets bytes part two's representation with it. On `Str` the
+cuts are at the ends of valid UTF-8 pieces matched in place, so they
+fall on character boundaries and binding never checks or panics; the
+native build binds through the unchecked cut (`Slice` with the check
+proved, as `split_once`'s halves are), the interpreter through the
+same function, which finds the boundary at once.
+
+### Typing
+
+- `PStr` is a `Str`. A `Str` sequence is a `Str`, and its rest is a
+  `Str`.
+- An `Array` sequence of element type `T` is `Array<T>`, each element
+  pattern a `T`, its rest an `Array<T>`.
+- **A `Bytes` subject with a string pattern** is an error (below), not
+  a mismatch: no `Bytes` patterns (rule 1).
+- An or-pattern's alternatives bind the same names at the same types,
+  today's rule, now reached by `..name` too.
+
+### Coverage
+
+exhaust.ml's spaces gain two shapes, and its constructors one owner.
+
+**Arrays: lengths are constructors** (rustc's slice-pattern
+splitting). At a column whose patterns are array sequences, let `L` be
+the larger of the longest fixed length plus one and the largest `P +
+S`, where `P` and `S` are the most pieces any pattern with a rest has
+in front and at the back. The column's constructors are `[n]` for each
+`n < L`, with `n` fields, and `[L..]`, with `P + S` fields: the first
+`P` elements and the last `S`, which don't overlap since a value of it
+has at least `L >= P + S`. A pattern of fixed length `n` is `[n]`; one
+with a rest, `f` in front and `b` at the back, is the or-pattern of
+`[n]` for each `f + b <= n < L`, its middle elements wild, and of
+`[L..]`, its `f` front pieces then `P - f` wilds, `S - b` wilds then its
+`b` back pieces. Those constructors are complete, so `[]`, `[_]` and
+`[_, _, ..]` cover every array (`L = 2`, `[0]`, `[1]`, `[2..]`), and a
+missing one prints as `[_, _]` or `[_, _, ..]`. `L` is computed at each
+column from its rows and the vector being tested, and the expansion is
+done there, so the rest of Maranget's algorithm is unchanged.
+
+**Strings: an infinite family.** A `Str` pattern is a constructor of a
+type with too many values to list, as an `Int` is, so the family is
+never complete: a string `match` needs `_` or a binding, and the
+missing arm prints as `_`. A literal `w` is the string pattern `(w, w,
+exact)`; a sequence is `(prefix, suffix, at least |prefix| + |suffix|)`.
+
+**One string pattern covers another** (rule 5) when its prefix is a
+prefix of the other's, its suffix a suffix of the other's, and its
+minimum length no longer; a literal covers only itself. So `"a" ..`
+covers `"ab"` and `"ab" ..`, `"a" ..x "a"` doesn't cover `"a"` (minimum
+2 against 1), and `.. "s"` covers `"is"`. Specializing a string column
+by a pattern keeps the rows whose pattern covers it, and the wild ones;
+the rest drop out. An arm with nothing useful left is "this arm can
+never match", today's error, so a covered arm is an error. This is
+pairwise on purpose: a union of string patterns never covers a pattern
+none of them covers alone, which is true of literals and of prefixes
+over an infinite alphabet, and what rule 5 says.
+
+**Why looking up every literal of a column first is first match.** At
+a node of the DAG with a string column, the lowering hashes the subject
+into the set of the column's literals before testing any prefix arm.
+Say the subject is `w`, a literal of arm `j`. Every arm `i` before `j`
+that can match `w` is still tested before `j`: the branch for `w` holds,
+in order, exactly the arms whose column pattern matches `w`, which the
+compiler decides at build time by checking each prefix and suffix
+pattern against `w`. So the hash never skips an arm, guarded or not; it
+only removes tests whose answer is known. If `w` is no literal, the
+literal arms can't match and the default branch holds the others, in
+order. Rule 5 is what makes this the fast case: an unguarded arm before
+`j` that matches `w` would cover `j` (a literal's only string is `w`), so
+in a program that compiles every arm before `j` in `w`'s branch is
+guarded, and almost always there are none.
+
+### The DAG
+
+Native `match` (to_mem.ml's `match_`) is a decision DAG over the
+subject's columns: one, or a tuple's parts written in the `match`.
+
+- **Tag switch:** the tag of a sum, today's.
+- **Hash lookup:** a string column with two literals or more: the
+  subject looked up in their set once, then a switch on the literal's
+  number, a jump table.
+- **Prefix test, suffix test:** a length test and a fixed compare each.
+- **Length test:** an array's length against its pattern's pieces,
+  `==` without a rest, `>=` with one.
+- **Element and field tests:** today's, an element read from an array
+  at its index from the front or the back.
+- **Guard:** an arm's `if`, falling through on false to the rest of
+  that branch's arms.
+- **Join point:** each arm's body is a join, `Joins`, emitted once
+  however many branches reach it.
+
+A switch's branch keeps the arms that can match it, in order, decided
+at build time, and knows what the switch decided, so that test is
+never emitted again in it; below the switch a branch tests its arms'
+patterns in order, each a chain of the tests above. `--emit-c` shows
+each lookup as a call of its `ren_ph<N>`, whose comment numbers its
+keys, and the `switch` on the number it gives, a `case` for each.
+
+**What isn't built** (Progress log, step 2): the switch is on one
+subject, a sum's tag or a string's literals, not on a tuple's columns
+one after another, and an array's length is tested per arm, not
+switched on; so this is Maranget's tree at its first column, with the
+rest of each branch a chain, not the whole tree. Every arm's body is
+shared, but a test below the switch is emitted once in each branch that
+needs it.
+
+### The generator
+
+lib/native/phash.ml is research/perfect-hash/verify/fuzz/gen_fixed.ml
+ported, with the six emitter fixes:
+
+1. the value table is sized by the arm count (`int8_t`, `int16_t`,
+   `int32_t`);
+2. the length table by the longest key (`uint8_t` up to 254, else
+   `uint16_t`, else `uint32_t`), its empty-slot sentinel one more than
+   any length;
+3. a "last byte" position with `""` a key is guarded, `n > 0 ? A[s[n -
+   1]] : 0`;
+4. the key table is at least 16 bytes wide, `{""}` too;
+5. sanitizer builds compare with `memcmp`, so no `no_sanitize` is
+   needed;
+6. the `""` slot answers on the length test alone, with no load.
+
+**The budget:** up to 4 byte positions (the best single one; `{0,
+last}`; pairs and triples of the best 12; then greedily), table sizes
+from `next_pow2(n)` doubling to `min(512, 8 * next_pow2(n))`, values
+below `max(32, M)`. That bounds the work at about `positions × tables ×
+values × n` steps, milliseconds for 200 keys, and needs no clock. With
+no hash within it, the generator tries **the 64-bit mix**: the first 8
+bytes and the last 8 (zero-padded) xored with the length, multiplied by
+each of 16 fixed odd constants, the top bits a slot in a table of
+`next_pow2(n)` doubled up to `8 * next_pow2(n)`. With none of those, the
+lookup is a **length switch** and, within a length, compares one key
+after another (`memcmp`), rustc's shape.
+
+**Its output** is static const C data beside the lookup function: the
+position tables `uint8_t A<i>[256]`, `len[M]`, `val[M]`, the keys as
+`uint8_t key[M][W]` aligned to 16, and the two-word form's `w0[M]` and
+`w1[M]`. Each table is named by the lookup's number in the program.
+
+**Determinism.** The generator reads only the keys, in arm order: no
+hash table's iteration order reaches its output (gen_fixed.ml's
+symbol order breaks ties by position and byte) and nothing reads the
+time, so the same keys always give byte-identical tables and builds
+are reproducible. test_phash.ml checks that two runs agree.
+
+**The compare per build,** each giving the same answer:
+
+| build | compare |
+|---|---|
+| release, clang, arm64 | NEON: the 16 bytes behind the page check, masked by `vqtbl1q`, compared with `vceqq` |
+| debug (tcc), and any other target | two 8-byte words behind the page check, masked, compared as integers |
+| sanitizers (`__SANITIZE_ADDRESS__`, `REN_PH_MEMCMP`) | `memcmp` |
+
+Keys over 16 bytes compare their slot with `memcmp` in every build.
+**The page check** (decision 2): a 16-byte load at `s` is made only
+when it stays in `s`'s 4 KiB page; otherwise the 16 bytes ending at the
+page's end are loaded and shifted down (NEON), or the key's `n` bytes
+are copied into a zeroed buffer (the two-word form). No padding is
+promised. `""` never loads.
+
+### `keys.index(s)`
+
+`keys.index(s)` (prelude's `Array.index`) where `keys` is an array
+literal of string literals, written as the receiver or bound by a `let`
+in scope that nothing reassigns (a `let` can't be), in a release build,
+lowers to the same lookup: `Some(i)` of the first `i` with `keys[i] ==
+s`, else `None`. A key that's repeated keeps its first index. Debug
+builds call the method as written, with the same result. A shape's
+field names wait for `T.shape` (stage 12).
+
+**Not a top-level `let`:** the brief names "a top-level `let` bound to
+an array literal of string literals" as the case that exists now, but
+Ren has no top-level `let` yet; it lands in stage 12 with build-time
+evaluation (README's roadmap, row 12; shapes.md). Building it here
+would be stage 12's work, so this stage takes the build-time constants
+that exist: a literal, directly or through a local `let`. The top-level
+`let` reaches the same lowering once it exists, since Lower sees through
+it to the literal.
+
+### Errors
+
+Each is a refusal test in test_patterns.ml.
+
+```
+error: `..rest` alone is the whole value                            (parser)
+  help: bind it with a name: `rest`
+
+error: `[..xs]` alone is the whole array                            (parser)
+  help: bind it with a name: `xs`
+
+error: `..` alone matches anything                                  (parser)
+  help: write `_`
+
+error: a pattern has one `..` at most                               (parser)
+  help: to cut at a separator, use `split` or `split_once` on the value
+
+error: the pieces of a string pattern are string literals           (parser)
+  help: bind the middle with `..name`, and test the rest in the arm
+
+error: a string pattern can't have holes                            (parser)
+  help: match the fixed text, and bind the rest with `..name`
+
+error: a string pattern matches a `Str`, but this is `Bytes`        (Infer)
+  help: read it with a format, or match `Str.from_utf8(b)` first
+
+error: a list pattern matches an `Array`, but this is `Int`         (Infer)
+  help: take it apart as what it is, or bind it to a name
+
+error: `x` is bound in `"a" ..x` but not in `"b"`                   (Infer, today's)
+error: this `match` doesn't handle every `Str`                       (Exhaust, today's)
+  help: add a `_ =>` arm to cover the remaining values:
+error: this `match` doesn't handle every `Array`                (Exhaust, today's)
+  help: add the missing arms, or a `_ =>` arm for the rest:   [_, _, ..] => todo
+error: this arm can never match                                      (Exhaust, today's)
+  help: the arms above already match everything this one does
+```
+
+### Step 2, as built: natively, as chains
+
+to_mem.ml's `match_` tests each arm's pattern in order, as it did,
+with three new tests:
+
+- **A literal,** `"GET"`: `Str_is`, a runtime call that compares the
+  length, then the bytes (ren_rt.h, `ren_pat_is`).
+- **A prefix or suffix,** `"Bearer " ..token`: `Str_affix`, the length
+  at least the two pieces', then each piece where it goes
+  (`ren_pat_affix`). A named rest is then a slice, `Slice (Of_bytes,
+  Range)` from the prefix's end to the suffix's start: cut as `Bytes`
+  are, without the character check, since the cuts are where valid
+  UTF-8 pieces end (rule 2). Its bounds are in range by the length
+  test.
+- **A list,** `[a, ..rest, z]`: `Array_len` against the pieces' count,
+  `==` without a rest and `>=` with one, then each element a piece tests
+  read with `Array_get` at its index from the front, or from the back at
+  `len - b + k`, unchecked, since the length test holds; and a named rest
+  a `Slice (Of_array_elems, Range)`.
+
+**What's read is owned.** `Array_get` counts the element again, and a
+slice is a new header, so each is owned by the matcher, not borrowed as
+a field is. `temps` holds those of the path being tested: each is
+dropped where its pattern's tests end, which is where the paths that
+don't match fall through, and on the way to an arm, after the names
+bound to it are counted (`matched`'s `go`). A name bound to one is set
+to it, then counted where the arm matches, as a field's name is; the
+drop on the way leaves the name the one reference the arm owns. A
+guard that fails drops the names, falls through, and the temps are
+dropped there. Mem Lint checks it on every path, and so do both
+countings and the sanitizers (bench/patterns.t).
+
+**The literal is in the call.** `Str_is` and `Str_affix` carry their
+literals, which emit_c.ml writes as C string literals; nothing is
+allocated for them.
+
+### Step 3, as built: the perfect hash
+
+- **lib/native/phash.ml** is gen_fixed.ml's generator, with the six
+  fixes (the spec's list) and the two fallbacks. `Phash.plan` gives a
+  `Hash` (positions, tables, slots), a `Mix` (a constant and slots) or
+  `Lengths`; `Phash.c` writes its lookup's C; `Phash.lookup` answers as
+  the C does, for the fuzz.
+- **Mem's `Str_lookup of string list`** gives the number of the key a
+  `Str` is, or -1. emit_c.ml numbers each distinct key list as it meets
+  it, `ren_ph<N>`, and writes each lookup's C before the functions; in a
+  debug build's units each lookup is a static definition that a unit
+  using it includes, as it declares what else it uses.
+- **The switch** (to_mem.ml's `dispatch`): a `match` of one `Str`
+  subject with two literals or more looks the subject up once, then
+  `switch`es on the number. The branch of the literal `w` holds, in
+  order, the arms whose pattern can match `w`, decided at build time
+  (`can_be`), and knows the subject is `w` (`keyed`), so its literal and
+  prefix tests aren't made, only a rest's slice is cut. The default
+  branch holds the arms that can match a string none of the literals
+  is. One literal stays a chain: a length test and a compare (the
+  research's 0.36 ns against the hash's 0.53).
+- **The compare** is in ren_rt.h's "string patterns", per build, as the
+  spec says: `memcmp` under the sanitizers (`__SANITIZE_ADDRESS__`, or
+  clang's `__has_feature`) or with `-DREN_PH_MEMCMP`, and on a big-endian
+  target; NEON on arm64 with clang; two masked words otherwise, tcc's
+  debug builds and x86 release among them. The two over-reading forms
+  load 16 bytes only where they stay in the string's page.
+- **The fuzz,** test/test_phash.ml: the research's adversarial sets and
+  120 random ones (2 to 200 keys, 0 to 40 bytes, over 2 letters to any
+  byte), each looked up with every key, four near misses of each and 200
+  random strings: in OCaml through `Phash.lookup`, and in C through the
+  lookups phash.ml writes, compiled four ways (two words with cc and
+  with tcc, `memcmp` with `-DREN_PH_MEMCMP` and under AddressSanitizer),
+  each query copied to the end of an `mmap`ed page whose next page no
+  one may read, and `""` at the start of that page. No disagreement;
+  129 sets hash, 2 take the mix, 1 the length switch. Two runs give the
+  same C.
+- **`--emit-c`** shows each lookup's keys, numbered, in a comment over
+  its function, the numbers the `switch` has a `case` for.
+- **NEON, not measured, but run:** on x86 the release build takes the
+  two-word compare. test_phash.ml's harness, built with clang 18
+  `--target=aarch64-linux-gnu` (which picks NEON: `tbl` in its
+  assembly) and run under qemu-aarch64 on the same 44,783 queries, each
+  against its guard page, answers as the two-word form does on every
+  one. That needs a cross toolchain dune doesn't have, so it was run by
+  hand (`apt install gcc-aarch64-linux-gnu qemu-user-static`).
+- **The numbers** are bench/native/RESULTS.md's "Step 3: the perfect
+  hash".
+
+### Step 4, as built: `keys.index(s)`, and using it
+
+- **The lowering** is in to_mem.ml's `call`, in a release build: a call
+  of the prelude's `Array.index`, or of a copy of it (`is_array_index`
+  follows a copy's `origin`), whose receiver is an array literal of
+  string literals, written there or a local a `let` bound to one
+  (`literal_keys`), and whose argument is a `Str`, is lowered as
+  `index_match`: the Core `match` of the argument with an arm for each
+  key, the first time it's written, giving `Some` of that index, and
+  `_ => None`. That's a string `match`, so with two keys or more it's
+  the lookup and switch of step 3, and a key list a `match` has too
+  shares its tables. A `let` of such a literal whose every use is a
+  hashed `index` (`only_indexed`) isn't made at all, so the lookup
+  allocates nothing.
+- **Debug builds** call the method as written. `ren run --release` runs
+  the specialized Core, which still calls it: the rewrite is the native
+  lowering's, so the interpreter is the meaning it's checked against
+  (bench/patterns.t's index.ren, every build, and the keyword kernel's
+  `run_index`, whose sums are the chain's).
+- **Not a top-level `let`,** which Ren doesn't have yet (`keys.index(s)`,
+  above).
+- **examples/just:** `main` finds the recipe to run with a `match` on
+  the args and the recipes, `([named, ..], _)`, `([], [first, ..])`,
+  `([], [])`, where it tested `args.len()` and indexed; `Justfile.parse`
+  classifies a line with a `match` on the trimmed line and the line,
+  `("", _) | ("#" .., _)` for blank and comment lines, `(_, " " .. |
+  "\t" ..)` for an indented one, where it chained `starts_with`. Its 21
+  tests pass unchanged, and bench/tasks.t's runs of it print what they
+  did. The just isn't native (it starts tasks), so its code size is the
+  lexer kernel's (step 3).
+- **stdlib.md** says when `index` is hashed.
+- **The numbers:** the keyword kernel's `<set>_index` form, a `let` of
+  the keys then `keys.index(s)`, runs at the `match`'s speed, 5.6 to 9.1
+  ns against 5.3 to 8.3 (RESULTS.md, "Step 4").
+
+### Step 5, the review
+
+**Soundness.**
+
+- **The over-read and the page check.** test_phash.ml puts every query
+  at the end of an `mmap`ed page whose next page no one may read, and
+  `""` at the start of that page, and runs 44,783 of them through four
+  builds: two words with cc and with tcc, `memcmp` asked for and under
+  AddressSanitizer. No disagreement and no fault. NEON, built for arm64
+  and run under qemu on the same queries, agrees with them all. A lookup
+  answers `""` on its length, so the empty string at a page's first byte
+  never loads. Sanitizer builds compare with `memcmp`, so nothing they
+  check over-reads.
+- **The empty string,** as a key and as a subject: sizes.ren's `edges`
+  and `only_empty`, strs.ren, guards.ren, the fuzz's `empty`,
+  `emptyonly` and `emptypair` sets and the random ones, which draw
+  empty keys. A length switch's case 0 compares no bytes.
+- **Slices bound from a subject that dies:** strs.ren keeps the tokens
+  of strings made and dropped in the call; a slice counts its root, and
+  Mem Lint, both countings and AddressSanitizer agree.
+- **Guards:** guards.ren takes every guard false and true across
+  literals and prefixes; nested.ren hashes `match`es inside guards' calls
+  and inside an arm. `keyed`, a branch's knowledge of its literal, is
+  each `match_`'s own, so an inner `match` can't see or change an outer
+  one's.
+- **The generator at its size edges:** 128 and 200 arms (a value table
+  of `int16_t`), keys of 1, 16, 17, 254, 255 and 300 bytes (a length
+  table of `uint16_t`, `memcmp` past 16), `{""}`, and sets that need the
+  mix and the length switch, in the interpreter, natively and in the
+  fuzz.
+- **`keys.index` on keys a block takes** (index_blocks.ren): a release
+  build lifts the block with the keys a parameter, which the elision of
+  a `let` sees as a use that isn't a hashed `index`, so the array is
+  made, and the block's `index` calls the method. Every build agrees.
+- **Mem Lint and the sanitizers** check every bench/patterns program in
+  every build (bench/patterns.t).
+
+**The spec.** Each of language.md's five rules holds, tested both ways
+in test_patterns.ml, and the synthesis's emitter fixes are each in
+phash.ml, each exercised by the fuzz. The "Done when"s:
+
+- **p1:** every form runs in `ren run`, every error fires with its help.
+- **p2:** every native build agrees with `ren run` on every program,
+  which arm a guard falls through to included.
+- **p3:** the fuzz finds no disagreement. On the brief's five sets the
+  `match` is faster than Rust's (1.4× to 2.7×). Against the chain it's
+  3.8× to 9.8×, beside the research's 5.5× to 8.3×: renkw and jsreserved
+  beat it; methods, headers and json24 fall short, by the about 5 ns
+  of Ren's loop over the queries that both forms pay (the `one` set
+  bounds it), which is most of a hashed lookup's time here and none of
+  the research's C. A one-literal arm, 5.5 ns, costs less than the
+  chain's 7.1.
+- **p4:** `keys.index` on a literal is the lookup in a release build, at
+  the `match`'s speed; the just's tests pass unchanged. The just isn't
+  native (it starts tasks), so "both builds" is `ren test` and the
+  journal tests bench/tasks.t and examples/just.t run, which pass.
+
+**Docs and tooling:** the README's status and roadmap row, this
+section, stdlib.md's `index`, the grammar, its corpus and highlights,
+and differential.py over bench/patterns. language.md's "What Ren has
+today" still says "none" for string and list patterns: this stage may
+not edit language.md, so the owner's to change.
+
+**What's left, by severity:**
+
+- **Medium, speed only:** the DAG is Maranget's at its first column (The
+  DAG, "What isn't built"): no length switch for arrays, and a string
+  column of a tuple's, `match (method, path)`, is a chain, not a lookup.
+  Every answer is right; a tuple's string column is slower than it
+  could be.
+- **Low:** NEON isn't measured, only built and run under qemu; the
+  owner's arm64 machine measures it.
+- **Low:** the length switch, the generator's last fallback, compares
+  each key with `memcmp`, not word compares as the brief says; it's
+  taken by 1 set in 132 of the fuzz's, none of the real ones.
+- **Cosmetic:** `--emit-c` numbers a lookup's keys in a comment over it,
+  but the `switch`'s cases aren't commented with their literals: Mem's
+  `Switch` has no place for a comment.
+- **Not this stage's:** test_deps.ml's "a read-only `Fs` can't write"
+  test fails in this container, which runs as root, at the stage's
+  first commit too; examples/net.t, whose journal records whether a
+  socket's read was ready, failed once under load and passed on reruns.
+
+### Where this stage may differ
+
+Choices the documents don't make, made here:
+
+- **Adjacent literals are one,** `"a" "b"` is `"ab"`: the grammar of
+  rule 1 juxtaposes pieces, and nothing gives two literals side by side
+  another meaning.
+- **Covering is pairwise** (Coverage): a union never covers.
+- **A `Str` sequence always has a rest;** without one it's a literal.
+- **`keys.index(s)` hashes a literal or a local `let` of one,** not a
+  top-level `let`, which doesn't exist yet (`keys.index(s)`, above).
+- **The DAG switches on its first column only** (The DAG, "What isn't
+  built").
+- **The length switch compares with `memcmp`,** not words.
+- **A seventh key set, `one`,** in the keyword kernel, to measure a
+  one-literal arm against the chain.
+
+### Progress log
+
+| step | commit | done | left |
+|---|---|---|---|
+| 0 | 230aa07 | this section: the AST and Core forms, coverage (lengths as constructors, the `Str` family, the pairwise covered-arm rule and why hashing literals first keeps first match), the DAG's nodes, the generator's budget, output and determinism, the compare per build, every error; the keyword baseline (bench/native/keywords, its Rust and Go twins, RESULTS.md "Patterns stage"); test/test_patterns.ml, every test behind `until "p1"`; bench/patterns.t over bench/patterns/ (gen.py's key sets computed in Python), `index.ren` already as specified in `ren run`, every other program `not yet` | steps 1 to 5; `keys.index` takes a literal, not a top-level `let`, which doesn't exist yet |
+| 1 | 933b988 | the front end and the interpreter: `PStr` and `PSeq` (ast.ml), parsed by `parse_str_pattern` and `parse_list_pattern` with `parse_rest`, adjacent literals joined, `let [a, ..] = xs else ...`; Resolve binds a rest's name in place; inference types a list pattern as `Array<T>` and a string one as `Str`, a `Bytes` subject its own error (`str_pattern`); exhaust.ml's `Seq` and `Str` spaces, `lengths` splitting a column's lengths, `covers` and `specialize_str`, the missing arm `[_, _, ..]`; Core's `PStr`, `PStr_rest` and `PArray` (`map_seq`, `seq_pieces`, `seq_rest` for the passes that walk patterns), Core Lint's checks of them; eval.ml's matcher, a rest bound through `Builtins.slice_value`; every p1 test on; tree-sitter's `string_pattern`, `list_pattern` and `sequence_rest`, the corpus, a highlight, differential.py over bench/patterns; bench/patterns.t's programs as specified in `ren run`. Natively a string or list pattern is refused (`unsupported`) until step 2 | steps 2 to 5; language.md's table still says "none" for string and list patterns, and this stage may not edit it |
+| 2 | 81579bf | natively, as chains: to_mem.ml's `match_` tests `PStr` with `Str_is`, `PStr_rest` with `Str_affix` and a rest's slice cut unchecked (`Slice (Of_bytes, Range)`), `PArray` with a length test, its elements read by `Array_get` and its rest a slice, all owned and dropped through `temps`; Mem's `Str_is` and `Str_affix`, Mem Lint's signatures, ren_rt.h's "string patterns" section (`ren_pat_is`, `ren_pat_affix`, no `memcmp` of no bytes); bench/patterns.t's programs native in every build, and the keyword kernel's `match` forms (bench/native/keywords). The first run of the checks found `memcmp` undeclared in a debug build's units, which include no system header: the section declares it under `REN_UNIT`. examples/net.t, whose journal records whether a socket's read was ready, failed once under load and passed on 4 reruns | steps 3 to 5; of the DAG, a length switch and a switch on a tuple's columns after the first (The DAG, "What isn't built") |
+| 3 | 3f5b8fe | the perfect hash: lib/native/phash.ml (gen_fixed.ml's generator with the six fixes, the 64-bit mix, the length switch, the C of a lookup); Mem's `Str_lookup`; emit_c.ml's lookups, numbered by their keys and written before the functions, and a static copy in each debug unit that uses one; to_mem.ml's switch on a string subject's literals, each branch knowing its literal (`keyed`, `can_be`); ren_rt.h's compares per build and the page check; test/test_phash.ml, the fuzz in OCaml and in C four ways, no disagreement, and the same tables twice; the keyword kernel's `one` set; RESULTS.md's numbers: the `match` 1.4× to 2.7× faster than Rust's on every set of two keys or more, 3.8× to 9.8× the chain (9× to 25× less the loop), a one-literal arm 5.5 ns against the chain's 7.1 | steps 4 and 5; NEON measured on arm64; a hashed column of a tuple's |
+| 4 | f3682f8 | `keys.index(s)`: to_mem.ml's `call` lowers it, in a release build, on an array literal of string literals or a `let` of one, as `index_match`, the string `match` step 3 hashes, and a `let` only hashed `index`es read isn't made (`only_indexed`); examples/just's recipe choice and line classification as `match`es on lists and strings, its tests unchanged; stdlib.md's `index`; the keyword kernel's `index` form, at the `match`'s speed (RESULTS.md) | step 5 |
+| 5 | 3da6198 | the review (above): bench/patterns' nested.ren and index_blocks.ren, every build; the README's status and roadmap row; "Where this stage may differ" completed | the DAG's further columns and a length switch; NEON measured; language.md's table |
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

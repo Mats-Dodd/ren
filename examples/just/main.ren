@@ -13,11 +13,11 @@ import sim.{Run, SimProc}
 // test sees what an importer sees
 pub fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console, Async =
   let j = try Justfile.parse(try Fs.read_str(Path.of("justfile")))
-  let args = Os.args()
   let name =
-    if args.len() > 0 then args[0]
-    else if j.recipes().len() > 0 then j.recipes()[0].name
-    else fail NoRecipes
+    match (Os.args(), j.recipes())
+      ([named, ..], _) => named
+      ([], [first, ..]) => first.name
+      ([], []) => fail NoRecipes
   try run_all(j, try plan.levels(j, name))
 
 // Each level's recipes at once, eight at most, one level after another:
