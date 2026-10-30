@@ -3,6 +3,9 @@ let
   # Keep the compiler and every library in the same package scope.
   ocaml = pkgs.ocaml-ng.ocamlPackages_5_5.ocaml.overrideAttrs {
     version = "5.5.2";
+    # This is an upstream stable release. Avoid running the compiler's entire
+    # upstream testsuite during contributor setup; CI runs Ren's full suite.
+    doCheck = false;
     src = pkgs.fetchurl {
       url = "https://caml.inria.fr/pub/distrib/ocaml-5.5/ocaml-5.5.2.tar.xz";
       hash = "sha256-VQPhuq2LYl2jXx/nHUdVgBT6NiU65fGiLMOhj6sEHg0=";

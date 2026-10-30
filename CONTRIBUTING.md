@@ -105,7 +105,9 @@ bash tools/bootstrap-devenv.sh
 The devenv module input is pinned to a release in `devenv.yaml`; change it
 when upgrading the CLI/module release. The CLI itself comes from the locked
 nixpkgs input. `nix/ocaml.nix` contains stable-release overrides ahead of
-nixpkgs; remove them when the package collection catches up. Update source
+nixpkgs; remove them when the package collection catches up. The compiler
+package skips OCaml's own upstream tests during installation; `ren-check`
+still runs the full Ren suite, native comparisons and sanitizers. Update source
 hashes along with versions, and preserve a consistent OCaml package scope.
 
 For a tree-sitter upgrade, update its exact npm version and lockfile,
