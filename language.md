@@ -1459,9 +1459,12 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   10_000, whose one
   parameter is the key. What else it needs comes from the `with` set, as
   for any item.
-- **An actor can't `at` its own family,** only `post` to it (below).
-  Anything else would be a cycle in one `with` set, which is already an
-  error, and it's what keeps waits from closing a cycle.
+- **An actor can't reach its own family,** by `at` or `post`: that
+  would be a cycle in one `with` set, which is already an error.
+  Separate concerns are separate families, and an actor reaches only
+  families installed outside its own. Likewise a `Docs.at` block can't
+  reach `Docs`, or a family installed inside it. So every wait points
+  outward, and waits can't close a cycle.
 - **Each operation takes the actor for one call**, as every handler's
   operation does (foundations.md decision 10), and the `at` block keeps
   it from being evicted. So a read and a write in two operations race,
@@ -1471,11 +1474,18 @@ fn session(conn: Conn) ! StoreDown | Closed uses Docs =
   returns: a message, which is data, a `Doc.Call`, the call value the
   compiler writes for every dependency. `post` takes a call whose
   result is `()` with no errors, an ordinary type rule; the post itself makes the actor, as
-  `at` does, so it fails only with setup's errors. An actor posts to its
-  siblings by naming its family in `uses`. Every call from outside, a
-  post or an `at`, waits while the family's mail is over its `mailbox:`
-  bound; a sibling's post never waits, and past twice the bound it
-  panics, as runaway recursion does.
+  `at` does, so it fails only with setup's errors. A post waits only for
+  room in its key's mailbox, `mailbox:` (64 by default), so a slow key
+  holds up only its own posters.
+- **A family's `with` owns its mail.** When its body returns it delivers
+  what's queued, then ends; if it's cancelled, queued mail is dropped.
+  So a test that wants posted work finished ends the family's `with`
+  and asserts after it. Work outlives its call only this way, as data
+  posted to a family reached by name; a task never does
+  ([structured-actors.md](structured-actors.md)).
+- **`Docs.at_all([a, b]) fn() => ...` holds several keys,** in sorted
+  order, and `Docs.at(a)` inside it names which one `Doc` means: moving
+  text between two documents is one block.
 
 The rest, setup, eviction, periodic work, deadlock and what `sim` does,
 is in [foundations.md decision 18](foundations.md#18-actors-and-stripes).
@@ -1509,7 +1519,7 @@ Every knob on `actors` and `striped` is an ADT from the standard
 library, as §2 says a rule should be:
 
 ```ren
-actors(doc, max: 50_000, evict: Lru)              // or Lfu
+actors(doc, max: 50_000, evict: Lru)              // sampled; or Lfu
 actors(doc, chaos: true)                           // a test's: evicts what Random picks
 striped(sessions(ttl), merge: Concat)              // Sum, Max, Min, Concat
 striped(books(), by: Key(n: 64), merge: Custom(book_merge()))  // the rare kind the menu lacks

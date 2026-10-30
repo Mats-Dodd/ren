@@ -9,7 +9,8 @@ is what makes cancellation, errors and ordering compose, and that
 are how work runs after a function returns, and makes both rules of the
 language.
 
-> **Status:** proposed, not yet applied. It revises
+> **Status:** decided, and applied to the docs; the interpreter follows
+> in the services stage's step 10. It revises
 > [async.md](async.md), [foundations.md](foundations.md)'s bet and
 > decisions 7, 9 and 18, and [language.md §11](language.md#11-many-stateful-things-data-or-actors).
 > Everything that changes, in the docs, the interpreter and the tests,

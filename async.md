@@ -43,7 +43,6 @@ tell.
 
 ```ren
 Async.scope fn(s) => s.spawn fn() => ...          // tasks started one at a time
-let t = s.start fn() => ...                       // and its handle: t.join(), t.cancel()
 Async.scope(max: n) fn(s) => ...                  // spawn waits while n run
 Async.map(xs) fn(x) => ...                         // results, in order
 Async.each(xs) fn(x) => ...                        // no results
@@ -85,12 +84,14 @@ and the code says `Async.map`. Its two operations are `yield` and
 dependencies flow into the caller, and their dependencies are found
 where they're written ([foundations.md](foundations.md#5-dependencies-are-found-where-a-block-is-written)).
 
-- **A scope starts tasks one at a time.** `s.spawn` starts one, and
-  `s.start` starts one and gives its handle, `t`, which can `t.join()`
-  it, for what it returned, or `t.cancel()` it. `s.replace(key) fn() => ...` cancels the task already
-  running under that key first, and waits for it: one refresh per user,
-  say. Two tasks replacing one key at once still leave one task under
-  it. A scope that has ended starts nothing: a task of an outer scope
+- **A scope starts tasks one at a time, and is anonymous.** `s.spawn`
+  starts one and gives nothing back, so a task is reachable only inside
+  the call that owns it. Waiting for two things is `both`, a first to
+  finish is `race`, and cancelling the last one inside a call, search
+  as you type, is `race(query, next_input)` in a loop. Work other calls
+  must reach by name, one refresh per user, is a family's, keyed by the
+  name ([structured-actors.md](structured-actors.md)). A scope that has
+  ended starts nothing: a task of an outer scope
   that captured it and spawns into it panics, since the new task would
   outlive it.
 - **Everything is bounded.** `spawn` waits while `max` of the scope's
@@ -189,9 +190,8 @@ runs only reads what it captures (foundations.md, decision 2):
   block parameter on to `Async.map` marks it, `f: concurrent fn(T) ->
   U`, and one that spawns it, `body: spawned fn()`. A public signature
   says it; a private one is inferred.
-- **A scope and a task's handle are blocks too.** They're passed and
-  used, never stored or returned, so nothing can reach a task after its
-  scope.
+- **A scope is a block too.** It's passed and used, never stored or
+  returned, so nothing can reach a task after its scope.
 
 ### Shared state is a handler
 
@@ -336,10 +336,13 @@ Many stateful things of one kind, one per key, are the prelude's
 Actors<DocId, Doc> ! StoreDown`, `with actors(doc, max: 50_000) as
 Docs`, and `try Docs.at(id) fn() => try Doc.edit(op)` runs the block
 with `id`'s actor installed as `Doc`, made on demand from its handler's
-setup, whose errors are `at`'s. Past `max:` the least recently released
-actor is evicted, its `finally` run on the caller's task.
+setup, whose errors are `at`'s. Past `max:` the least recently used of a
+few sampled actors is evicted, and the caller waits for its `finally`.
 `Docs.post(k, Doc.Call.Edit { op })` is Erlang's cast, a call queued for
-`k`'s actor and delivered in order by a task of the family's, and
+`k`'s actor and delivered in order by a task of the family's; it waits
+only for room in `k`'s mailbox, and an actor can't post to its own
+family. A `Docs.at` block can't reach `Docs` or a family installed
+inside it, so every wait points outward. And
 `chaos: true` evicts, at each call into the family, what `Random` picks,
 which is how a test finds a document that lives only in memory
 (examples/docs).
@@ -428,7 +431,8 @@ still ends the program, for now.)
 
 ## Background work is a task beside the body
 
-A handler has no task of its own. A cache's refresh, a pool's checks
+`Async.beside` and `Async.background` are std, written over `scope`
+(foundations.md decision 20). A handler has no task of its own. A cache's refresh, a pool's checks
 and a metrics flush are a task beside the `with`'s body, calling one of
 the handler's operations. **`Async.beside(task) fn() => body` runs
 `task` beside `body`: when the body ends, by returning, failing or being
@@ -548,8 +552,8 @@ the clock in its virtual time, which `ren test` installs for `Clock`;
 `takes`, two tasks' at once, with `SimProc.killed()` the ones cancelled
 while they ran and `SimProc.kills()` how each was to be killed. Eviction
 under chaos is a parameter of `actors`, `chaos: true`, whose draws are
-`Random`'s, so a seed replays them; `ren test` knows nothing of it, and
-reports each family's high-water mark, the most posts queued at once.
+`Random`'s, so a seed replays them; `ren test` knows nothing of it.
+`sim` and debug builds report each key's queue depth.
 
 This brings forward the first part of the simulation scheduler from stage
 15. The rest of it (simulated networks and disks that fail, crashes, and
@@ -737,7 +741,8 @@ and a background task's failure cancels the body and is its error. It runs, with
 - **One scheduler a run, and the runtime is its policy.** Every task is
   a fiber. `single` runs one thread in real time, first come first
   served; `sim` runs virtual time, choosing from a seeded tape;
-  `work_stealing` and `per_core` come with many cores (stage 11b). The
+  `per_core`, the default, and `work_stealing` come with many cores
+  (stage 11b). The
   rules don't change with the runtime, only the cost, so code runs
   unchanged on any.
 - **No preemption.** A task runs until it waits. A long computation
@@ -782,10 +787,13 @@ and a background task's failure cancels the body and is its error. It runs, with
 
 Left out on purpose:
 
-- **Fibers as values** (`fork`, `Fiber.join`). A task's handle is a
-  block: it's used inside its scope and never kept, for structured
-  concurrency and the no-cycles invariant.
-- **Daemon fibers** (`forkDaemon`), which aren't structured.
+- **Fibers as values** (`fork`, `Fiber.join`), and any task handle. A
+  scope is anonymous: a task is reachable only inside the call that
+  owns it, for structured concurrency and the no-cycles invariant.
+- **Daemon fibers** (`forkDaemon`), which aren't structured. Work that
+  outlives its call is a `D.Call` posted to a family.
+- **Messages between actors of one family.** Separate concerns are
+  separate families, reached outward.
 - **Several variants of each operation.** Ren keeps one of each.
 
 The rest is borrowed from elsewhere:
@@ -875,12 +883,11 @@ This document was first written before foundations.md, which changed it
 - **Pipelines and generators as pull arguments** wait for stage 11c,
   and `Net.connections(listener)` with them; collections, cursors, `&r`,
   blocks and a channel's `items()` are pulled today.
-- **Restart policies,** like Erlang's supervisors. Until then, it's
-  `attempt` or `retry` inside a task.
-- **Actors' open items** (foundations.md, decision 18): `Docs.at_all(keys)`,
-  a panic in an actor contained by `Async.isolate`, `expire:` and
-  `weigh:`, `place:`, and `Lfu` beside `Lru`.
-- **Many cores** (stage 11b): `work_stealing`, `per_core` and `pinned`,
+- **Actors' open items** (foundations.md, decision 18): `expire:` and
+  `weigh:`, `Lfu` beside `Lru`, and how `at` runs under `per_core`.
+  There are no restart policies: a panic is a bug and ends the program,
+  and an error is `attempt` or `retry` inside a task.
+- **Many cores** (stage 11b): `per_core`, `work_stealing` and `pinned`,
   arenas, `Mem.snapshot` and lock-free handlers.
 - **The rest of the simulation scheduler** (after 11a's `sim`): failing
   networks and disks, crashes, and checking every interleaving.

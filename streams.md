@@ -366,9 +366,24 @@ inference, runs twice on copies, and has no error channel.
 `break` for free, as in C# and Go, and a `.take(10)` over a writing
 generator rolls it back.
 
-**A cancel mid-step ends the generator.** Its `finally` runs. A finished
-generator gives `None`, but stepping one that was cancelled panics, so a
-timed-out stream can't pass for a clean end. A block given to a racing
+**A cancel mid-step ends the generator.** Its `finally` runs.
+
+**A generator ends once, keeps how it ended, and every later step says
+so.** How it ended is what its `finally(r)` was given:
+
+| How it ended | `finally` saw | Every later step |
+|---|---|---|
+| it returned | `Ok` | `None` |
+| it failed with `e` | `Err(e)` | fails with `e` again |
+| it was cancelled | `Err(Cancelled)` | panics: only a `finally` can get here |
+| it was never stepped | nothing; its body never ran | as a task cancelled before it starts |
+
+So a timed-out stream can't pass for a clean end, and a wrapper never
+has to remember that what it wraps is done (Wuyts' [missing
+state](https://blog.yoshuawuyts.com/the-future-trait-has-a-missing-state)).
+Answering the same way forever is a promise of a generator's frame, not
+of the cursor protocol: a reader at an offset can say `None` and be
+asked again later, as reading a growing file does. A block given to a racing
 operation (`Async.timeout`, `race`, `until`) can't step a pipeline from
 outside it: a pipeline isn't an operation (rule 7). To time each step,
 time it over a reader, `Async.timeout(d) fn() => &r.next()`.

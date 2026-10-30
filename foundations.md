@@ -24,8 +24,8 @@ record ([Staging](#staging)).
 
 ## The bet
 
-**Code flows down the stack, data flows anywhere, and services are
-handlers.**
+**Code flows down the stack, data flows anywhere, services are
+handlers, and work is a tree.**
 
 What a thing is, is data, an ADT; what code needs is a service, a
 handler it's given by name ([language.md](language.md)).
@@ -42,11 +42,21 @@ Every mechanism in Ren keeps that shape:
 | A value | as long as it's used, counted by Perceus |
 | A handler description | a value: code named by its handler, plus data copied in |
 | An actor | until it's evicted, or its family's `with` ends |
+| A posted call | its family's `with`, which drains it |
 
 Only values outlive the call that made them, and values are data. So
 lifetimes come from the program's structure and nobody writes them down,
 the code a call can reach is known by name, and frames exist only where a
 function can suspend.
+
+**Work is a tree.** Every piece of concurrent work has an owner and
+ends before it: a call owns the tasks it starts, and a family owns the
+calls posted to it. A task is code, so it never outlives its call. Work
+outlives its call only as data, a `D.Call` posted to a family reached by
+name. Every queue has a bound and every wait points outward, so the
+tree composes: cancellation goes down it, errors go up it, a call that
+returns is done, and a run of it replays exactly
+([structured-actors.md](structured-actors.md)).
 
 It's aimed at three things Rust gets wrong for the programs Ren is for:
 compile time, the split between `dyn` and generics, and colored functions
@@ -352,9 +362,18 @@ Async.scope fn(s) =>
     s.spawn fn() => handle(conn)
 ```
 
-- `s.spawn` starts a task. Its handle can cancel or join it inside the
-  scope. `s.replace(key) fn() => ...` cancels the task already under that
-  key.
+- **Two owners.** A call owns the tasks it starts and waits for them;
+  a family owns the calls posted to it and drains them before its
+  `with` ends (decision 18). There's no third: no detached task, no
+  handle kept past its call, no pool nobody owns. **If only the call
+  that started some work can reach it, the call owns it; if other calls
+  must reach it by name, a family owns it, and the key is the name.**
+- **Scopes are anonymous.** `s.spawn` starts a task and gives nothing
+  back, so a task is reachable only inside the call that owns it.
+  Waiting for two things is `Async.both`, a first to finish is
+  `Async.race`, and the latest of one kind of work across calls is a
+  family whose operation skips what's redundant. A scope is a block, so
+  it's passed down and never stored.
 - A spawned task can't fail with an unhandled error.
 - **A scope has a limit.** `Async.scope(max: n)`: `spawn` waits while
   `n` of the scope's tasks run, which is a server's backpressure. Every
@@ -371,7 +390,8 @@ Async.scope fn(s) =>
   `StructureViolationException` makes the same refusal at run time,
   Effekt's capture sets at compile time; where a scope passed to a
   helper hides which is inner, the check is the run time's.)
-- **Background work is a scope of its own:** `Async.beside(task) fn()
+- **Background work is a scope of its own,** in std over `scope`
+  (decision 20): `Async.beside(task) fn()
   => body` runs `task` alongside `body`, and when `body` ends, cancels
   `task` and waits for it; `Async.background fn(bg) => body` is the same
   for tasks spawned with `bg.spawn` as the body goes. Opened inside a
@@ -451,8 +471,8 @@ seen. An arena's body keeps the same rule (decision 10).
 Zig passes its `Io` in:
 
 ```ren
-with Async.work_stealing(cores: 8) in serve()   // the default
-with Async.per_core() in serve()                // one scheduler per core
+with Async.per_core() in serve()                // the default: one scheduler per core
+with Async.work_stealing(cores: 8) in serve()   // tasks move between cores
 with Async.single() in run()                    // one thread
 with Async.pinned() in hot_loop()               // this subtree stays on one thread
 with sim.scheduler(seed) in serve()             // tests
@@ -467,6 +487,10 @@ with sim.scheduler(seed) in serve()             // tests
   `Async.single()` the atomic paths aren't compiled at all.
 - **The world follows it too.** The real `Fs` and `Net` get their event
   source, io_uring, kqueue or a thread pool, from the runtime.
+- **`per_core` is the default.** Each core runs its own scheduler and
+  tasks don't move between cores; a family's keys have home cores, so
+  a post is one push to a core's queue (decision 18). It's a cost, not
+  a meaning, and the runtime is swappable, so measurements may move it.
 - v1 ships `single`, `work_stealing`, `per_core` and `sim`. A runtime
   written by users would be a later interface inside `trust`.
 
@@ -966,12 +990,10 @@ written the same way.
   data; the rest of that direction is later.
 - **The soundness rules are the primitive's,** so every library over it
   has them: a post makes its instance; queued calls count as waiting, so
-  an instance with mail is never evicted; a delivery may go past the
-  library's bound when nothing is evictable; every call from outside the
-  family is metered at its edge; a sibling's post past twice the bound
-  panics; teardown drains; and the no-deadlock rules. They're stated
-  below as `actors` uses them, and research/actors-post/ model-checks
-  them.
+  an instance with mail is never evicted; mail is bounded per key; an
+  `at` block holds its family; teardown drains, and cancellation drops;
+  and the no-deadlock rule. They're stated below as `actors` uses them,
+  and research/structured-actors/ model-checks them.
 - **Journal names** come from decision 11's rule for every runtime
   instance family, as task paths do.
 
@@ -989,9 +1011,10 @@ try Docs.at(id) fn() => Doc.edit(op)
 - **Addressing.** The key is the address. `Docs.at(k) fn() => body`
   installs k's actor as `Doc` for its block. `doc` names a handler
   whose one parameter is the key, and its other dependencies come from
-  the `with` set, so an actor can't `at` its own family: that's a cycle
-  in one `with`, already an error (decision 10). It may `post` to it,
-  below.
+  the `with` set, so an actor can't reach its own family: that's a
+  cycle in one `with`, already an error (decision 10). It may `at` or
+  `post` to a family installed outside its own; separate concerns are
+  separate families.
 - **Holding.** Each operation takes the actor for one call, as decision
   10 says for every instance. The `at` block pins it, so it isn't
   evicted while the block runs, but other callers' operations
@@ -1005,10 +1028,13 @@ try Docs.at(id) fn() => Doc.edit(op)
   cancelled, the waiters try it themselves.
 - **Eviction.** `actors` is always bounded by `max:`, whose default is
   std's (10_000): an unbounded family is a memory leak keyed by
-  whatever the network sends. Making one past `max:` evicts the
-  least recently released actor that's evictable, and the caller that
-  makes it pays: the victim's `finally` runs on its task. If none is
-  evictable, it waits. An actor that's pinned, running an operation, or
+  whatever the network sends. Making one past `max:` evicts the least
+  recently used of five evictable actors sampled with `Random` (from the
+  tape under `sim`), as Redis does: within half a point of exact LRU's
+  hit rate, and several times faster on the hit path, since a use is
+  one stamp and not a list to relink (experiments/runtime-p2/, K1b).
+  The caller that makes it waits while the victim's `finally` runs. If
+  none is evictable, it waits. An actor that's pinned, running an operation, or
   waited for is never evicted. Expiry is the program's own call,
   `Docs.evict_idle(d)` and `Docs.evict(k)`, from a task it owns; the
   runtime has no sweeper.
@@ -1021,66 +1047,68 @@ try Docs.at(id) fn() => Doc.edit(op)
   turn; it doesn't make actors, and doesn't count as use for eviction.
   There are no alarms and no timers per actor: a handler has no task of
   its own (decision 7).
-- **No deadlock.** `Docs.at` inside a block of `Docs.at` is a compile
-  error. A task that pins an actor may wait for a slot only in a family
-  installed outside the families it pins; anywhere else a full family
-  fails at once with `Full`, the inner-to-outer rule of decision 10.
-  This covers the two waits a family has, for a slot and for room in
-  the mailbox (below): a sibling's post never waits, which is what makes
-  actors posting to each other in a cycle safe, and an actor made for
-  a post never waits for a slot.
+- **No deadlock: an `at` block holds its family.** While it's held,
+  its block can't reach that family or one installed inside it, by `at`
+  or `post`. Operations keep this by construction, since a handler's
+  `uses` resolve outside its install. An `at` block runs the caller's
+  code, so it's checked as `at` inside `at` is: Infer refuses it where
+  the `with` is in sight, and the run time panics where a helper hid
+  it. So every wait in a family, for a slot, for room in a mailbox or
+  to take an actor, points to a family installed outside it, and
+  families form a DAG by install order: decision 10's inner-to-outer
+  rule. No wait needs an exception and nothing fails with `Full`. The
+  looser rule, "not F itself", deadlocks three ways
+  (research/structured-actors/MODEL.md).
 - **`post` is Erlang's cast: a message, and messages are data.**
   `Docs.post(k, Doc.Call.Edit { op })` puts one call of `D`, with its arguments,
   in k's mailbox and returns. The arguments are evaluated when it's
   posted and are data, copied as an Erlang message is; no block is kept.
   A mailbox is the family's queue of `D.Call`s, and the journal records
   posts as data. `at` is the call, `post` the cast.
-  research/actors-post/ model-checks these rules.
+  research/structured-actors/ model-checks these rules.
   - **`post` takes a call whose result is `()` with no errors**, since
     there's no caller to give a result or an error to. It's an ordinary
     type rule on `post`'s parameter, not a rule written for `actors`:
     anything else is a type error whose help says to handle it inside
     the actor, or to use `at`.
   - **`post` makes its actor, as `at` does,** so setup's errors are
-    `post`'s, `try Docs.post(k, Doc.Call.Edit { op })`, the only errors a post has; a
-    sibling's post handles them in the operation that posts. Queued
+    `post`'s, `try Docs.post(k, Doc.Call.Edit { op })`, the only errors a post has. Queued
     posts count as waiting for the actor, so an actor with mail is never
-    evicted, and a delivery never runs setup. An actor made for a post
-    may go past `max:` when none is evictable, rather than wait for a
-    slot: the excess is bounded by the keys with mail.
+    evicted, a delivery never runs setup, and a key with mail always has
+    a live actor. A post that needs a slot waits for one, as `at` does.
+  - **Back-pressure per key.** `mailbox:` bounds each key's queue
+    (std's default is 64), and a post waits only for room in its key's.
+    So a slow key holds up only its own posters, and a family's mail is
+    at most `max:` × `mailbox:`. The post returns once the call is
+    queued.
   - **Order:** posts from one task to one actor run in the order posted,
     each as one operation, on a task the family's `with` owns. The
     mailbox belongs to the key, not the actor, so order holds across
     eviction.
-  - **Siblings:** an actor names its own family in its handler's `uses`,
-    `handler doc(id: DocId) for Doc uses Store, Docs`, and may only
-    `post` to it, never `at`: a post holds nothing, so it can't close a
-    cycle. The handler's parameter, its key, is its `self()`.
-  - **Back-pressure at the family's edge.** A family has one bound,
-    `mailbox:` (std's default is 10_000), and every call from outside the family is
-    metered by it: a post waits while the family's mail is over it, and
-    so does an operation called through `at`, before it takes the actor
-    (the compiler may meter only operations that post). A post from an
-    actor to a sibling never waits. So the mail that work from outside
-    causes is at most `mailbox`, plus one operation's posts per live
-    actor.
-  - **A chain reaction panics.** Mail between siblings is recursion: an
-    operation that posts twice around a cycle grows without end. A
-    sibling's post past twice `mailbox:` panics, as a stack overflow
-    does, and debug builds and `sim` report each family's high-water
-    mark, which is how it's found before then. Waiting would deadlock,
-    dropping would lose posts, and a post can't fail with it.
-- **Policies are data.** `evict: Lru`, the default, or `Lfu`. Expiry
+  - **No mail inside a family.** An actor can't post to its own family.
+    Mail inside a family can form cycles, and a cycle in mail is
+    recursion that only a panic bounds. Bounding it properly means
+    charging each message to the outside call that caused it, a
+    BEAM-sized runtime; research/actor-origins/ is that design, checked,
+    for a later Ren. A protocol that should run forever is a loop in a
+    task beside the families, where it can be seen and cancelled.
+- **Policies are data.** `evict: Lru`, the default, sampled as above,
+  or `Lfu`. Expiry
   after a time without use or since a write (`expire:`) and a weight
   per actor (`weigh:`) are designed with the server milestone, as
   Caffeine's knobs are.
-- **Teardown drains, then** runs the actors' `finally`s in reverse
-  creation order, as nested `with`s run. Posts still queued when the
-  family's body returns are delivered first (and may post more), since
-  the family's `with` owns the task that runs them and a scope waits for
-  its tasks (decision 7); dropping them would make a post's return
-  meaningless. Two actors posting to each other forever keep the family
-  from ending, as a loop does. `Docs.count()` and counts of actors made and
+- **Teardown drains when the body returns, then** runs the actors'
+  `finally`s in reverse creation order, as nested `with`s run. Posts
+  still queued are delivered first (and may post outward), since the
+  family's `with` owns the tasks that run them and a scope waits for its
+  tasks (decision 7). So a test that wants posted work finished ends the
+  family's `with` and asserts after it. **A cancelled `with` cancels
+  instead:** running operations are cancelled at their next dependency
+  call, queued mail that hasn't started is dropped, and the `finally`s
+  see `Err(Cancelled)`. A drain isn't shielded: a graceful shutdown is a
+  body that returns when asked to, and a drain with a limit is the
+  `with` inside `Async.timeout`. Mail isn't durable; the store is.
+  `Docs.count()` and counts of actors made and
   evicted are exposed, which is how leaks and thrashing are found.
 - **`sim` is faithful to the policy.** Eviction happens only through
   `max:`, `evict_idle` and `evict`, which depend only on the schedule
@@ -1092,9 +1120,16 @@ try Docs.at(id) fn() => Doc.edit(op)
   the scheduler and the toolchain know nothing of it. The journal names
   an actor by decision 11's rule, `docs[DocId(7)]#3`, its family, key
   and incarnation, so replay can tell two lives of one key apart.
-- **Open:** whether `Docs.at_all(keys)`, holding several actors for a
-  block in sorted order, is in v1; and whether `Async.isolate` can
-  contain a panic in an actor by dropping it without its `finally`.
+- **Several keys at once.** `Docs.at_all(keys) fn() => body` holds
+  several actors of one family for a block, taken in sorted order, so
+  two `at_all`s can't wait on each other. Inside it, `at` on a held key
+  doesn't wait, so it's allowed and names which actor the ambient `Doc`
+  is; `at` on any other key of the family is the no-deadlock refusal,
+  checked at run time since keys are values. Moving a value between two
+  documents or two accounts is written this way, from outside the
+  family. It's in v1.
+- **A panic ends the program** (decision 8): no supervisors and no
+  restarts.
 
 **`striped`: map-reduce over fixed stripes.** Plain Ren in std, over
 the family, with fixed keys.
@@ -1130,27 +1165,30 @@ the family, with fixed keys.
 - **Operations are calls, not messages.** An operation runs as if in its
   caller's task. There's no `Send` bound: every value can cross, marked,
   copied or moved at a join (decision 10), and opaque C resources stay
-  on one thread with `Async.pinned`. `at` works from any task.
-- **No home core.** A caller takes the instance and runs the operation
-  where it is, and a release hands it to a waiter on the releasing
-  worker. Shipping operations to a home core, as Seastar does, costs a
-  hop per call; a `place:` parameter can come later if measurements
-  ask for it.
+  on one thread with `Async.pinned`. `at` works from any task; whether,
+  under `per_core`, each operation goes to the home core and back or
+  the task moves there for the block is the runtime's, decided by
+  experiment, and the compiler may choose per block.
+- **Home cores.** A family's keys are spread over the cores; how is the
+  runtime's choice. A post is a `D.Call` value, so delivering it is one
+  push to its key's home core's queue, as Seastar's cross-core queues
+  are, and setup and an eviction's `finally` run there. A program can
+  help, as Seastar's do, by routing a connection to the core of the
+  document it edits.
 - **Fair, not first in first out** (decision 10).
-- **A family is split into partitions**, a fixed number `actors` sets
-  with `parts:`, whose default comes from `max:` and never from the
-  core count. Each has its own lock, map, exact LRU and a cap of
-  `max / parts`. So a journal from a run on one thread replays on
-  sixteen.
+- **Nothing a program sees depends on the split.** Order is per key,
+  and the eviction victim is the same however a family is split, under
+  one global `max:` (K1b). So there's no `parts:`, and a journal from a
+  run on one thread replays on sixteen.
 - **The runtime changes cost, never meaning.** This falls out of
   decision 10's rule, exclusion is skipped unless shared, applied to the
   family:
 
 | Runtime | `striped(by: Key)` | `striped(by: Worker)` | `actors` |
 |---|---|---|---|
-| `single`, `pinned` | stripes with no locks | one stripe: the merge is the identity | partitions and actors with no locks |
-| `work_stealing` | locked stripes | locked stripes per worker, padded, made on their worker | locked partitions, an actor's lock per call |
-| `per_core` | locked stripes | a stripe per core, never locked across threads | as `work_stealing`, without migration |
+| `single`, `pinned` | stripes with no locks | one stripe: the merge is the identity | actors with no locks |
+| `per_core` | locked stripes | a stripe per core, never locked across threads | each key on its home core; a post is a push to that core's queue |
+| `work_stealing` | locked stripes | locked stripes per worker, padded, made on their worker | an actor's lock per call |
 | `sim` | as `single`, choices from the tape | at least two virtual workers, routing from the tape | as `single`, choices from the tape |
 
 ### 19. Formats are views
@@ -1591,14 +1629,15 @@ and 32-bit references as the default.
    fast as Rust's `match`. `ren review` with
    its "this is data" hint, and `ren profile`'s suggestions, come
    after.
-8. **11b, many cores.** `work_stealing`, `per_core` and `pinned`; the
+8. **11b, many cores.** `per_core`, `work_stealing` and `pinned`; the
    runtime model of [compiler.md](compiler.md#the-runtime-model): the
    shared mark and atomic counts on shared objects, a heap per thread
    with frees returned to the heap they came from, the current heap a
    pointer each task holds; arenas, sealed when shared, with copy-in;
    `Mem.snapshot` and its reclamation; lock-free handlers with `Atomic`
    fields; `striped` and `actors` on many cores as decision 18 says,
-   with fair handoff, partitions and marking as K3 decided. **Phase two
+   with fair handoff, home cores, sampled eviction and marking as K3
+   decided. **Phase two
    of the experiments:** the prototypes' questions again on the real
    runtime, a check that journals recorded on many cores replay on one,
    and a server benchmark against Go and Rust.
@@ -1618,9 +1657,8 @@ need no native code.
 ## Open questions
 
 - The size budget for cloning a `with` body per handler.
-- **Actors' open items** (decision 18): `at_all` in v1 or later;
-  containing a panic in an actor under `Async.isolate`; how `weigh:`
-  is given.
+- **Actors' open items** (decision 18): how `weigh:` is given; how
+  `at` runs under `per_core`.
 - **How a shared handler's state is marked** (decision 10), decided by
   experiment K3.
 - Whether `both` gets a "runs once" marker.
