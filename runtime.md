@@ -137,13 +137,20 @@ handler, or one no other task can reach, is neither, so a test's
   core: the stall watchdog names it, heavy pure work goes to `Async.map`,
   and `Async.yield()` checks for a cancel on every call and yields only
   when the budget is spent. The compiler inserts nothing.
-- **A shared take** is a compare-and-swap when no one holds it; on
-  contention it spins briefly, then parks the task, so a core never
-  blocks while one of its tasks waits. (Measured by X3:
-  research/runtime-frames/SYNTHESIS.md §7.)
+- **A shared take** is a compare-and-swap when no one holds it. On
+  contention it spins while the holder is running, for a few
+  microseconds at most, then parks the task, so a core never blocks
+  while one of its tasks waits. After a waiter has waited 1 ms, a
+  release hands the instance to it directly, so no waiter starves. A
+  worker spins briefly before it sleeps. (Measured in
+  experiments/runtime-frames/: with a 100 µs hold, parking wastes 1.7%
+  of the CPU where spinning wastes 87%, and a thread lock starved a
+  waiter for 1.6 s; with short holds on 8 workers, parking without the
+  spin is 4.4× slower than a thread lock.)
 - **A shared plain handler under `per_core` is a family of one key,**
   with a home core. State every core hits belongs in `striped(by:
-  Worker)`.
+  Worker)`, and `ren review` says so for a shared, exclusive handler
+  called from many tasks.
 
 ## How code meets the core: frames
 
@@ -152,7 +159,9 @@ compiles to a frame, holding what lives across a wait, and one resume
 function, a switch on where it waited. The calling convention is one
 register convention for both builds: a call takes the task, the frame
 and the frame stack's top, and returns a status and a value in two
-registers.
+registers. Under clang it cuts a nested round trip from 32 to 19 ns;
+under tcc it makes a single frame's switch about a third slower, which
+debug builds accept rather than emit two conventions.
 
 - **The fast path is an ordinary call.** A callee runs at once and
   returns done or pending. If nothing waits, a driver answering inline
@@ -160,7 +169,9 @@ registers.
   0.4 ns a level over plain C.
 - **Frames live on a per-task stack,** bump-allocated, sized statically
   where no recursion crosses a wait (capped at 256 B inline), with one
-  spare chunk kept. Calls nest, so frames are last in, first out. A
+  spare chunk kept while the task runs and freed when it parks: a parked
+  task costs 240 B, against 4,208 B with 4 KiB chunks, and a call at a
+  chunk's edge 4 ns, against 22 ns that allocates. Calls nest, so frames are last in, first out. A
   pulled generator's frame is a hidden local of its consumer's; a pulled
   *recursive* generator gets a frame stack of its own, so `zip` over two
   can't interleave their frames.
@@ -298,11 +309,10 @@ names and signatures are the runtime core stage's:
 ## Open
 
 - How `at` runs on shared-memory places under `per_core`, moving the
-  task or shipping each call: measured in the runtime core stage.
+  task or shipping each call, and whether a contended shared instance
+  is served at its home core instead of by a lock: experiment X3b.
 - The core's own record layout, shared with the journal and the hosted
   wire: the runtime core stage.
 - A user-written scheduler: later, inside `trust`, against this page.
-- Lock or park on a contended shared take, and the frame-stack sizes:
-  experiments X1, X3 and X5 (research/runtime-frames/SYNTHESIS.md §7).
 - The core's wake, cancel and reply protocol, model-checked before it's
   built (research/runtime-core-model/).
