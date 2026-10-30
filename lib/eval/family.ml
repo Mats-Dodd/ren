@@ -53,7 +53,8 @@ type state = Making | Live | Evicting
    the family's, [born]; its implementation of the family's dependency
    and its `finally`, once it's made; how many operations of it are
    running, [pins]; when it last stopped being pinned, for the order of
-   release; and what waits for it to be made. *)
+   release; and what waits for it to be made, or, while it's evicted,
+   for its `finally` to end, which [evictor] runs. *)
 type inst = {
   key : Value.t;
   life : int;
@@ -67,6 +68,7 @@ type inst = {
   mutable failed : exn option;
       (** what its setup failed with, which those that waited for it to be
           made fail with too *)
+  mutable evictor : Sched.task option;
 }
 
 (* A partition: its instances, the first made first, at most [cap] of
@@ -134,6 +136,9 @@ type family = {
   mutable deliveries : Sched.task list;  (** those running now *)
   mutable edge : (unit -> bool) list;
       (** the calls from outside waiting for room in the mailbox *)
+  mutable at_edge : (unit -> unit) option;
+      (** what the library runs at each call from outside into one of its
+          instances, before it takes it ([metered]): `actors`' chaos *)
 }
 
 (* A family as a program holds it, `Family<K, D>`: a handle, not an
@@ -296,6 +301,7 @@ let opened ~parts ~cap ~mailbox ~hash ~equal runner =
       context = Sched.context ();
       deliveries = [];
       edge = [];
+      at_edge = None;
     }
   in
   Option.iter (fun fams -> fams := f :: !fams) fams;
@@ -317,6 +323,13 @@ let part_of f k =
 let find f k =
   List.find_opt
     (fun i -> i.state <> Evicting && f.equal i.key k)
+    (part_of f k).insts
+
+(* [k]'s instance whose `finally` is running, if one is: a key has one
+   instance at a time, so the next isn't made until it's over. *)
+let dying f k =
+  List.find_opt
+    (fun i -> i.state = Evicting && f.equal i.key k)
     (part_of f k).insts
 
 (* [k]'s queue of posted calls, if it has calls queued or being
@@ -367,6 +380,7 @@ let next_life f k =
 let evict_now f i =
   let p = part_of f i.key in
   i.state <- Evicting;
+  i.evictor <- me ();
   p.lru <- List.filter (fun j -> j != i) p.lru;
   on_evicted (name_of f i);
   Fun.protect
@@ -374,6 +388,9 @@ let evict_now f i =
       p.insts <- List.filter (fun j -> j != i) p.insts;
       Option.iter (fun (ins : Value.installed) -> Hashtbl.remove owners ins.inst) i.installed;
       f.evicted <- f.evicted + 1;
+      (* those waiting to make its key's next instance *)
+      List.iter (fun w -> ignore (w ())) i.waiting;
+      i.waiting <- [];
       p.room <- Sched.wake_first p.room)
     (fun () -> Option.iter (fun fin -> Sched.shielded (fun () -> f.runner.finish fin)) i.finally)
 
@@ -425,7 +442,25 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) ?(over = false) f k =
           (Printf.sprintf "waits for `%s` to be made" (name_of f i))
           (fun wake -> i.waiting <- i.waiting @ [ wake ]);
         match i.failed with Some e -> raise e | None -> go ())
-    | Some { state = Evicting; _ } -> go ()
+    | Some { state = Evicting; _ } -> failwith "bug: the family: [find] found an evicted instance"
+    | None when dying f k <> None ->
+        (* its last life's `finally` is running: the next is made once
+           it's over, since a key has one instance at a time (decision
+           18), and a setup that reads what that `finally` writes would
+           read it stale. The task running that `finally` would wait for
+           itself *)
+        let i = Option.get (dying f k) in
+        (match (i.evictor, me ()) with
+        | Some e, Some t when e == t ->
+            panic
+              (Printf.sprintf
+                 "`%s`'s `finally` asks for the instance it ends, which is made again only once it's over"
+                 (name_of f i))
+        | _ -> ());
+        Sched.wait ?at
+          (Printf.sprintf "waits for `%s`'s `finally` to end" (name_of f i))
+          (fun wake -> i.waiting <- i.waiting @ [ wake ]);
+        go ()
     | None ->
         let p = part_of f k in
         (* a wait for room in a full partition, unless the task pins an
@@ -476,6 +511,7 @@ let pin ?at ?(victim = fun _ -> None) ?(block = false) ?(over = false) f k =
         state = Making;
         waiting = [];
         failed = None;
+        evictor = None;
       }
     in
     f.order <- f.order + 1;
@@ -607,13 +643,16 @@ let ordered ?at f i =
    it's an instance of a family's and the call comes from outside the
    family, an operation called through a pinned block, it's metered at
    the edge first, as a post is (research/actors-post/, recommendation
-   2), and waits for what its task posted to the instance ([ordered]). A
-   delivery's own, and a sibling's, don't wait. *)
+   2), and waits for what its task posted to the instance ([ordered]);
+   then the library's [at_edge] runs, which may evict others, not this
+   one, which its block pins. A delivery's own, and a sibling's, don't
+   wait. *)
 let metered ?at inst =
   match Hashtbl.find_opt owners inst with
   | Some (f, i) when not (sibling f) ->
       edge ?at f;
-      ordered ?at f i
+      ordered ?at f i;
+      Option.iter (fun each -> each ()) f.at_edge
   | _ -> ()
 
 (* [k]'s instance, which a call is queued for and so is live, pinned for

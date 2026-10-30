@@ -239,6 +239,12 @@ type env = {
   mutable group : (Path.t * group_fn) list;
       (** the functions of the group being checked, each with what its
           declaration says of it *)
+  mutable hidden_calls : (call * label * string * string) list;
+      (** calls of a function of [group] in the body of a `with` whose wiring
+          hides the label, each with the wiring and the item that installs
+          it: whether the callee brings the label in is known only once
+          every body of the group is checked ([Infer_top]'s
+          [check_hidden_calls]) *)
   mutable spelled : Path.t list;
       (** those of [group] whose signature is written out in full, every
           parameter's type included: public functions, mostly *)

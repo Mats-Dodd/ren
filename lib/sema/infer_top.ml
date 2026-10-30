@@ -767,6 +767,7 @@ let new_env sink ~reachable (r : Resolve.t) =
     visible;
     globals = Hashtbl.create 16;
     group = [];
+    hidden_calls = [];
     spelled = [];
     pending = [];
     forced = [];
@@ -1406,6 +1407,48 @@ let as_client env client f =
       env.hidden <- [])
     f
 
+(* The calls of a function of the group [ms] in the body of a `with` that
+   hides a label its wiring doesn't provide ([env.hidden_calls]), now
+   that every body is checked: one whose callee brings that label in,
+   itself or through the functions of the group it calls, is the body
+   using what's hidden (language.md §5), reported at the first such
+   call, as one that brings it in itself is (Infer_handlers.with_). What
+   a function brings in counts every call in its body, those inside a
+   `with` that installs the label too, so it's at most what it does. *)
+and check_hidden_calls env ms =
+  let calls = List.map (fun m -> (m.cx.self, !(m.cx.calls))) ms in
+  let brings = Hashtbl.create 8 in
+  let get p = Option.value (Hashtbl.find_opt brings p) ~default:[] in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun (p, cs) ->
+        let ls =
+          List.fold_left
+            (fun ls (c : call) ->
+              let more =
+                c.own @ match c.callee with Some q when List.mem_assoc q calls -> get q | _ -> []
+              in
+              List.fold_left (fun ls l -> if has_dep ls l then ls else l :: ls) ls more)
+            (get p) cs
+        in
+        if List.length ls > List.length (get p) then (
+          Hashtbl.replace brings p ls;
+          changed := true))
+      calls
+  done;
+  let pos (l : Loc.t) = (l.start.line, l.start.col) in
+  let reported = ref [] in
+  List.iter
+    (fun ((c : call), (l : label), wiring, maker) ->
+      let key = (wiring, l.name, maker) in
+      if (not (List.mem key !reported)) && has_dep (get (Option.get c.callee)) l then (
+        reported := key :: !reported;
+        report env (hidden_used c.cloc ~wiring ~dep:(shown_dep env l) ~maker)))
+    (List.sort (fun (a, _, _, _) (b, _, _, _) -> compare (pos a.cloc) (pos b.cloc)) env.hidden_calls);
+  env.hidden_calls <- []
+
 (* Check a group of functions that call each other: each one's body, then
    what that leaves to decide once every body is checked, by the
    constraint solver; then each is generalized. Each body sees the others
@@ -1436,6 +1479,7 @@ and check_own_group env ~values ~main so_far group =
         if Ast.spelled f then Some (Ast.fn_path env.home f) else None)
       group;
   List.iter (check_body env ~is_value) ms;
+  check_hidden_calls env ms;
   (* what each function names and declares, which holds of what its body
      does once the group's other constraints are decided *)
   List.iter

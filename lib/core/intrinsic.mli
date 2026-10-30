@@ -91,6 +91,7 @@ type t =
   | Family_pin
   | Family_visit
   | Family_idle
+  | Family_edge
   | Family_full
   | Family_enter
   | Family_post

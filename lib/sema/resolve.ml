@@ -4499,6 +4499,23 @@ let no_kept_blocks env (items : Resolved.program) =
         | Set _ -> ())
       es.errs
   in
+  (* a family's handle, `Family<K, D>`, written in [t]: it's good only in
+     the state of the handler that opened it, whose operations are where
+     its waits and its instances' `finally`s may run (compiler.md,
+     "Services stage", "Step 9, soundness"), so it can't leave through an
+     operation, a dependency's type argument or a handler's parameter *)
+  let family_in place (t : Resolved.ty) =
+    let rec find (t : Resolved.ty) =
+      match t with
+      | TyName ({ tref = Named p; tloc; _ }, _) when p = Path.prelude "Family" -> Some tloc
+      | TyName (_, ts) | TyVariant (_, _, ts) | TyTuple (ts, _) -> List.find_map find ts
+      | TyFn (ps, ret, _, _, _) -> List.find_map find (ps @ Option.to_list ret)
+      | TyInout (t, _) -> find t
+      | TyImpl _ | TyErrors _ -> None
+    in
+    if env.home <> Path.prelude_home then
+      Option.iter (fun loc -> Diag.report env.sink (Infer_msg.family_kept loc place)) (find t)
+  in
   let rec has_block (t : Resolved.ty) =
     match t with
     | TyFn _ -> true
@@ -4524,6 +4541,9 @@ let no_kept_blocks env (items : Resolved.program) =
   let fn ?(value = false) (f : Resolved.fn_def) =
     List.iter
       (fun (p : Resolved.param) ->
+        (match p.pty with
+        | Some t when Ast.is_handler f -> family_in `Handler_param t
+        | _ -> ());
         match p.pty with
         | Some t when Ast.is_handler f && has_block t && p.pblock <> Spawned ->
             let name = p.pname.ident in
@@ -4539,6 +4559,12 @@ let no_kept_blocks env (items : Resolved.program) =
         | Some t -> inner t
         | None -> ())
       f.params;
+    (* a dependency it uses whose type argument is a family's handle,
+       `uses Chan<Family<K, D>>`, which a handler could send it through *)
+    Option.iter
+      (fun (u : _ Ast.uses) ->
+        List.iter (fun (d : _ Ast.dep_ref) -> List.iter (family_in `Dep_arg) d.dargs) u.deps)
+      f.uses;
     Option.iter (data (if value then In_value f.name.name else Returned)) f.ret;
     Option.iter errors f.errors;
     expr f.body
@@ -4571,9 +4597,11 @@ let no_kept_blocks env (items : Resolved.program) =
                           | None -> ())
                         ps
                   | _ -> ());
+                  family_in `Op fd.field_ty;
                   inner fd.field_ty)
                 ops
-          | Dep_alias _ | Builtin -> ());
+          | Dep_alias d -> List.iter (family_in `Dep_arg) d.dargs
+          | Builtin -> ());
           List.iter
             (fun (o : Resolved.op) -> fn ~value:(o.op_kind = Op_value) o.op_fn)
             td.type_ops

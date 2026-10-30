@@ -2258,6 +2258,10 @@ and expr_at fs env (e : C.expr) : atom =
          (* the runtime, whose one task's `yield` and `tick` return at
             once, is Ren code (prelude.ml, `single_runtime`) *)
          && dep <> Path.prelude "Async" ->
+      (* the program's call of a library that reaches the keyed instance
+         family is said first: `$start` installs the world before the
+         program runs, and `actors` needs the real `Random` *)
+      first_family_call cx;
       unsupported_at fs e.loc (sprintf "the real `%s`" (Path.local dep))
   | With { ev; outer; dep; body; _ } when List.mem (ev.id, dep) fs.known ->
       (* a handler a release build knows: its state is in this frame,
@@ -3144,6 +3148,25 @@ and reaches_family cx (p : Path.t) =
       in
       Hashtbl.replace cx.family p b;
       b
+
+(* A call in the program of a library that reaches the keyed instance
+   family ([reaches_family]), if there's one: refused, at the first, by
+   where it's written. *)
+and first_family_call cx =
+  let found = ref [] in
+  let rec go (e : C.expr) =
+    (match e.kind with
+    | Call ({ kind = Global (p, _, _, _); _ }, _, _)
+      when e.loc.file <> Prelude.file && library p && reaches_family cx p ->
+        found := (e.loc, p) :: !found
+    | _ -> ());
+    List.iter go (C.children e)
+  in
+  Hashtbl.iter (fun p (f : C.fn_def) -> if not (library p) then go f.body) cx.fns;
+  let pos ((l : Loc.t), _) = (l.file, l.start.line, l.start.col) in
+  match List.sort (fun a b -> compare (pos a) (pos b)) !found with
+  | (loc, p) :: _ -> raise (family_not_native loc p)
+  | [] -> ()
 
 and call fs env (e : C.expr) (f : C.expr) args ev =
   let cx = fs.cx in

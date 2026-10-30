@@ -3227,7 +3227,10 @@ fn main() uses Console, Async, Random =
 
 (* A third library over the family, written in a test: a family with a
    fixed key set. It gets the family's rules, here its no-deadlock check
-   on `pin`, with no compiler support of its own. *)
+   on `pin`, with no compiler support of its own; and its `at` carries
+   its block's value and error out as `Actors.at` does, with
+   `family_kept` and `lib_panic`, which any library may call (step 9's
+   soundness review: decision 20, rule 2). *)
 let shards =
   {|
 type Shard = | A | B
@@ -3241,35 +3244,51 @@ handler count(s: Shard) for Count =
   add(k) => n += k
   total() => n
 
-dep Shards =
-  at: fn(s: Shard, body: fn() -> Int uses Count) -> Int
+dep Shards<D> =
+  enter: fn(s: Shard, body: fn() uses D) -> Pinned<D>
 
-handler shards() for Shards =
-  let fam = Instances.open(count, 1, 2, 16)
+  pub fn at<T>(s: Shard, body: fn() -> T uses D) -> T ! ..e uses Shards<(D ! ..e)> =
+    var got = None
+    let p: Pinned<(D ! ..e)> = Shards.enter(s, fn() => got = Some(family_kept(body)))
+    try Instances.made(p)
+    match got
+      Some(r) => try r
+      None => lib_panic("`at`'s block didn't run")
+
+dep Counts = Shards<Count>
+
+handler shards<D>(h: spawned fn(s: Shard) -> D) for Shards<D> =
+  let fam = Instances.open(fn(s: Shard) => h(s), 1, 2, 16)
   finally(r) =>
     Instances.close(fam)
     try r
-  at(s, body) => Instances.pin(fam, s, fn(_) => None, body)
+  enter(s, body) => Instances.enter(fam, s, fn(_) => None, body)
 |}
 
 let%expect_test "[s7 accept] a third library over the family: a fixed key set" =
+  (* its `at` gives what its block gives, a `Str`, and fails with what it
+     fails with *)
   run
     (shards
    ^ {|
+fn capped(n: Int) -> Int ! TooMany =
+  if n > 4 then fail TooMany
+  n
+
 fn main() uses Console =
-  with shards() in
-    let _ = Shards.at(A) fn() =>
-      Count.add(2)
-      0
-    let _ = Shards.at(B) fn() =>
-      Count.add(3)
-      0
-    print(Shards.at(B) fn() => Count.total())
-    print(Shards.at(A) fn() => Count.total())
+  with shards(count) as Counts in
+    Counts.at(A) fn() => Count.add(2)
+    Counts.at(B) fn() => Count.add(3)
+    print(Counts.at(B) fn() => "B has " + show(Count.total()))
+    print(attempt Counts.at(A) fn() => try capped(Count.total()))
+    print(attempt Counts.at(B) fn() =>
+      Count.add(4)
+      try capped(Count.total()))
 |});
   [%expect {|
-    3
-    2
+    B has 3
+    Ok(2)
+    Err(TooMany)
     ()
     |}]
 
@@ -3278,19 +3297,16 @@ let%expect_test "[s7 reject] a third library's `at` inside its own `at`: the fam
     (shards
    ^ {|
 fn main() =
-  with shards() in
-    let _ = Shards.at(A) fn() =>
-      Shards.at(B) fn() =>
-        Count.add(1)
-        0
-    ()
+  with shards(count) as Counts in
+    Counts.at(A) fn() =>
+      Counts.at(B) fn() => Count.add(1)
 |});
   [%expect {|
-    error: `Shards.at` inside a block of `Shards.at` could wait for a slot its own block holds
-       ┌─ test.ren:25:7
-    25 │       Shards.at(B) fn() =>
-       │       ^^^^^^^^^^^^^^^^^^^^
-       = `Shards.at` keeps the instance it pins for its block, and making another can wait for room in the family
+    error: `Counts.at` inside a block of `Counts.at` could wait for a slot its own block holds
+       ┌─ test.ren:35:7
+    35 │       Counts.at(B) fn() => Count.add(1)
+       │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = `Counts.at` keeps the instance it pins for its block, and making another can wait for room in the family
        help: finish with the first, then call the second; or post to it, which holds nothing
     |}]
 

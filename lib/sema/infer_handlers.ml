@@ -775,10 +775,11 @@ and with_ core env cx (e : expr) (items : with_item list) body =
     items;
   (* whether this is a wiring's own `with`, which its function checks; a
      problem among the items of one wiring is reported there, and not
-     again where it's listed *)
+     again where it's listed. One listing of it: its items all point at
+     the listing, and `with live, live` lists it twice *)
   let own_check = Resolve.checked_wiring cx.self <> None in
   let one_wiring (a : with_item) (b : with_item) =
-    (not own_check)
+    (not own_check) && a.iloc = b.iloc
     &&
     match (List.rev a.from, List.rev b.from) with
     | x :: _, y :: _ -> x.declared = y.declared
@@ -1114,7 +1115,18 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                     report env
                       (hidden_used c.cloc ~wiring ~dep:(shown_dep env l)
                          ~maker)
-                | [] -> ())
+                | [] ->
+                    (* a call of a function of the group being checked
+                       brings in what its body does, which isn't known
+                       until the group's bodies are all checked *)
+                    env.hidden_calls <-
+                      List.filter_map
+                        (fun (c : call) ->
+                          match c.callee with
+                          | Some p when List.mem_assoc p env.group -> Some (c, l, wiring, maker)
+                          | _ -> None)
+                        calls
+                      @ env.hidden_calls)
               hidden;
             t
         | (_, _, links, keys) :: rest ->

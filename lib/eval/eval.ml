@@ -1474,7 +1474,7 @@ and builtin ?loc ?ev cx f args =
   | VBuiltin
       ( (( Family_open | Family_call | Family_make | Family_keys | Family_evict
          | Family_evictable | Family_counts | Family_close | Family_pin | Family_visit
-         | Family_idle | Family_full | Family_enter | Family_post | Family_made | Family_kept
+         | Family_idle | Family_edge | Family_full | Family_enter | Family_post | Family_made | Family_kept
          | Call_first_hash
          | Call_add | Call_max | Call_min | Call_concat | Call_fold
          | Call_operations ) as x),
@@ -1800,6 +1800,15 @@ and family ?loc ?(ev = VEvidence []) cx (x : Intrinsic.t) tys args =
       Ok
         (Value.array_of_list
            (Family.evictable_keys ~idle:(Int64.to_float ms /. 1000.) (fam f)))
+  | Family_edge, [ f; each ] ->
+      (fam f).at_edge <-
+        Some
+          (fun () ->
+            match fst (call_at cx loc each [] (VEvidence [])) with
+            | Ok _ -> ()
+            | Error err when is_cancelled_tag err -> raise Sched.Cancelled
+            | Error _ -> bug "a family's edge block that failed, which can't");
+      Ok VUnit
   | Family_full, [ VBool on ] ->
       Family.may_be_full on;
       Ok VUnit

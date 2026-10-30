@@ -1060,6 +1060,11 @@ pub dep Instances =
   // the evictable keys released at least `d` ago, by the scheduler's
   // clock, the least recently released first
   pub fn idle<K, D>(f: Family<K, D>, d: Duration) -> Array<K> = family_idle(f, d.in_ms())
+  // `each` run at each call from outside the family into one of its
+  // instances, an operation called through a pinned block, on the
+  // calling task, before the call takes the instance: what the library
+  // does there, `actors`' chaos
+  pub fn at_edge<K, D>(f: Family<K, D>, each: spawned fn()) = family_edge(f, each)
   // `pin` for a block that gives nothing and can't fail, what making the
   // instance failed with kept in what it gives, for `made`: a library's
   // operation pins with it, since its type can't name that error
@@ -1296,6 +1301,9 @@ pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000, mailbox: In
   // the maker written here, so the instances are made with what's
   // installed where `actors` is
   let fam = Instances.open(fn(k: K) => h(k), n, cap_of(max, n), mailbox)
+  // chaos at each call into the family: its own operations below, and
+  // each operation called through `at`'s block, at the family's edge
+  let _ = if chaos then Instances.at_edge(fam, fn() => shake(fam, chaos))
   finally(r) =>
     Instances.close(fam)
     try r
@@ -1830,9 +1838,9 @@ let scheme (x : Intrinsic.t) =
      seed, so the same on every run and in every build (walk.ml,
      [fixed_hash]) *)
   | Hash -> fn ~reqs:hashed [ read (Var 0) ] int
-  (* fn<T>(what: Str) -> T: a panic, saying [what]: how the standard
-     library's handlers refuse what they can't go on from, a send on a
-     closed channel (std_lib.ml) *)
+  (* fn<T>(what: Str) -> T: a panic, saying [what]: how a library's
+     handlers refuse what they can't go on from, a send on a closed
+     channel (std_lib.ml) *)
   | Lib_panic -> fn [ read str ] (Var 0)
   (* the scheduler's (sched.ml), what `Async.scope`, `Scope` and `Task`'s
      members are written over (compiler.md, "Stage 11a", "Structured
@@ -2106,6 +2114,11 @@ let scheme (x : Intrinsic.t) =
      released at least [ms] milliseconds ago, by the scheduler's clock,
      the least recently released first *)
   | Family_idle -> fn [ read (family (Var 0) (Var 1)); read int ] (array (Var 0))
+  (* fn<K, D>(f: Family<K, D>, each: fn()): [each] run at each call into
+     [f] from outside it, an operation of an instance called through a
+     pinned block, before it takes the instance *)
+  | Family_edge ->
+      fn [ read (family (Var 0) (Var 1)); read (Fun ([], unit, Ty.closed, open_row 2)) ] unit
   (* fn(on: Bool): whether the next pin of the task running may fail with
      `Full`, which Lower says around a call Infer marked so (compiler.md,
      "Services stage", "Actors (step 7)") *)
@@ -2151,8 +2164,9 @@ let scheme (x : Intrinsic.t) =
   (* fn<T>(body: fn() -> T ! E uses U) -> Result<T, ! E> uses U: what
      [body] gives, or fails with, kept, how `Actors.at` carries what its
      block gives out of the operation that runs it, whose block can't
-     fail; only the prelude's source can call it, as `attempt` of its
-     transparent block that it then passes on with `try` *)
+     fail, as any library's may: `attempt` of its transparent block,
+     which a public function can't write, that it then passes on with
+     `try` *)
   | Family_kept ->
       scheme_of
         (Fun
@@ -2228,7 +2242,7 @@ let reaches (x : Intrinsic.t) =
   | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Task_random
   | Async_worker | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
-  | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_full
+  | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge | Family_full
   | Family_enter | Family_post | Family_made | Family_kept
   | Call_first_hash | Call_add | Call_max | Call_min
   | Call_concat | Call_fold | Call_operations
@@ -2265,8 +2279,13 @@ let caller (x : Intrinsic.t) =
       | Journal_load ) ) ->
       Journal
   | None, (Map_empty | Set_empty) -> Value
+  (* what `actors` and `striped` are written with that any library may
+     use too, so std has no power a user library lacks (decision 20, rule
+     2): a library's panic, and a block's value and error kept, to carry
+     them out of an operation whose block can't fail *)
+  | None, (Lib_panic | Family_kept) -> Any
   | ( None,
-      ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
+      ( Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum
       | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
       | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
       | Task_isolate | Task_map
@@ -2276,8 +2295,8 @@ let caller (x : Intrinsic.t) =
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
       | Sim_advance | Sim_alarm | Task_drain | Hash | Async_worker
       | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
-      | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_full
-      | Family_enter | Family_post | Family_made | Family_kept
+      | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_edge | Family_full
+      | Family_enter | Family_post | Family_made
       | Call_first_hash | Call_add | Call_max
       | Call_min | Call_concat | Call_fold | Call_operations ) ) ->
       Internal
@@ -2302,6 +2321,7 @@ let runtime_of (x : Intrinsic.t) =
   | Family_pin -> Some ("Instances", "pin")
   | Family_visit -> Some ("Instances", "visit")
   | Family_idle -> Some ("Instances", "idle")
+  | Family_edge -> Some ("Instances", "at_edge")
   | Family_enter -> Some ("Instances", "enter")
   | Family_post -> Some ("Instances", "post")
   | Family_made -> Some ("Instances", "made")
@@ -2386,6 +2406,7 @@ let fns : Intrinsic.t list =
     Family_pin;
     Family_visit;
     Family_idle;
+    Family_edge;
     Family_full;
     Family_enter;
     Family_post;

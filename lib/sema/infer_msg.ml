@@ -2289,6 +2289,23 @@ let handler_param_handle ~name loc h =
     ~help:"spawn into the scope where it's given, and pass the handler what the tasks make"
     "a handler's parameters are data"
 
+(* A family's handle, `Family<K, D>`, at [loc], where it could leave the
+   handler that opened it: an operation's parameter or result, a
+   dependency's type argument, or a handler's parameter. *)
+let family_kept loc place =
+  Diag.make loc ~says:"a family's handle"
+    ~notes:
+      [
+        "a family's handle is good only in the state of the handler that \
+         opened it: its waits and its instances' `finally`s are that \
+         handler's operations'";
+      ]
+    ~help:"keep it in the handler's state, and give what its instances give instead"
+    (match place with
+    | `Op -> "a dependency's operation can't take or give a family's handle"
+    | `Dep_arg -> "a dependency's type argument can't be a family's handle"
+    | `Handler_param -> "a handler's parameters are data, and a family's handle isn't")
+
 let handler_param_block ?name loc =
   Diag.make loc
     ~says:
@@ -4078,7 +4095,13 @@ let cannot_fail_arm loc =
 
 (* How a message names the function [f]: `pub fn transfer`. *)
 let fn_named (f : Ast.Resolved.fn_def) =
-  sprintf "%sfn %s" (if f.pub then "pub " else "") (Ast.fn_name f)
+  let pub = if f.pub then "pub " else "" in
+  (* a wiring's own function, `live$wiring` (Resolve.checked_wiring), is
+     said as the wiring *)
+  let name = Ast.fn_name f and suffix = "$wiring" in
+  if String.ends_with ~suffix name then
+    sprintf "%swiring %s" pub (String.sub name 0 (String.length name - String.length suffix))
+  else sprintf "%sfn %s" pub name
 
 (* [f]'s body can fail with [tag], shown as [shape], which its signature
    doesn't list; [from] is the first place it comes from, and what it is. *)

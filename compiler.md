@@ -7276,8 +7276,8 @@ doesn't match, `LEAVE` runs, and it has to leave: **`fail Tag(...)`,
 arm leaves (Resolve, a new `leaves : Parsed.expr -> bool` on the
 syntax, so it's checked before types). Ren has no `return`, and no
 expression a program writes panics with any type but `todo`: `assert
-false` is a `Unit`, and the standard library's `lib_panic` isn't the
-program's. A `break` there leaves the innermost loop, as Resolve already
+false` is a `Unit`, and `lib_panic`, a library's since the services
+stage's step 9, isn't a way to leave. A `break` there leaves the innermost loop, as Resolve already
 checks a `break` is in one. The pattern's names are bound after the
 `let`, for the rest of the block, as a `let`'s are. It lowers to a
 `Match` of two arms, the pattern then the rest of the block, and `_`
@@ -8545,7 +8545,8 @@ Step 5's choices, where the sections above are silent:
   then `fail Late(_) => todo`.
 - `todo` lowers to the `Lib_panic` call itself, at its type, the
   intrinsic's two rows closed. Natively that intrinsic in the program's
-  code (only `todo`'s, since a program can't name `lib_panic`) is said
+  code (`todo`'s, and since the services stage's step 9 a library's
+  `lib_panic`) is said
   at the call, where before it was said at the function's site; in the
   prelude and the standard library it's still said at the program's
   call that reached it.
@@ -12343,8 +12344,8 @@ Chosen in step 2, as built:
   dependency in themselves** (`call.own`), not by the body's row: this
   checker relates a `with`'s rows by unification, so the body's row
   holds what the items need as well. A call of a function of the same
-  recursive group, whose row isn't known when the call is met, isn't
-  caught: step 9's review.
+  recursive group, whose row isn't known when the call is met, is
+  checked once the group's bodies are (step 9, "Step 9, soundness").
 - **A problem among the items of one wiring is reported once,** at its
   own `with`, not again where it's listed: a dependency installed twice,
   two items that need each other.
@@ -12735,10 +12736,10 @@ Chosen in step 7a, as built:
   the alias as `Events.items()` is (step 5), and runs an operation of
   the family's library, `Actors.enter(k, body)` and `Actors.visit`, whose
   block gives nothing and can't fail: `at` carries its block's value
-  and error out of it with `family_kept`, an intrinsic only the
-  prelude's source names (an `attempt` of its transparent block, which
-  it then passes on with `try`, which a public function may not write
-  itself). `actors` implements the operations: `enter`, `visit`, `keys`,
+  and error out of it with `family_kept`, an intrinsic (an `attempt` of
+  its transparent block, which it then passes on with `try`, which a
+  public function may not write itself), which any library may call
+  since step 9. `actors` implements the operations: `enter`, `visit`, `keys`,
   `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`. So a
   family of a fake handler is still `actors(fake_doc) as Docs`; a
   handler of `Actors` written by hand implements those nine.
@@ -13048,6 +13049,130 @@ Step 9, docs and tooling (the review's third lens):
   `edit ... ! StoreDown` the block writes `try Doc.edit(op)`, as
   examples/docs does), not edited, foundations.md being design.
 
+### Step 9, soundness
+
+The review's soundness lens (the brief's step 9): adversarial programs
+for each area, each run through `ren run`, `ren run --release`, `ren
+test --seeds`, and `ren build` where it's sequential, with Core Lint on.
+What they found, by area; each fix has its regression in
+test/test_services_review.ml (`[s9 ...]`) unless it says otherwise.
+
+**Found and fixed:**
+
+- **`with live, live` crashed the compiler** (high: an internal error
+  in Lower, "a `with` inference didn't say the order of"). Two listings
+  of one wiring were taken for one wiring's items, whose problems are
+  reported at its own `with` and so nowhere. Infer_handlers' `one_wiring`
+  now also asks that the two items come from one listing (their `iloc`,
+  which is the listing's): it's "installs `Db` twice", as `wiring two =
+  live, live` already was.
+- **`provides` through a call of the same recursive group** (medium,
+  step 2's known gap): `fn f() = with live in g()`, `g` in `f`'s group
+  using the `Db` that `live` hides, ran with the hidden `Db`. A body's
+  call of a function of the group being checked is kept
+  (`env.hidden_calls`), and once every body of the group is checked,
+  Infer_top's `check_hidden_calls` finds what each function of the
+  group brings in, its calls' own labels and those of the group's
+  functions it calls, to a fixed point, and reports the first such call
+  whose callee brings the hidden label in, with the message a direct
+  call gets. It counts calls inside a `with` that installs the label
+  too, so it's at most what the function does: sound, and a program
+  whose group function doesn't use what's hidden is still accepted (a
+  test of each).
+- **Two lives of one key at once** (high): `at` or `post` on a key
+  whose instance's `finally` was running (being evicted on another
+  task) made the key's next life beside it, so a setup that loads what
+  that `finally` writes read it stale, and decision 18's one instance
+  per key didn't hold. family.ml's `pin` now waits for that `finally`
+  to end (`dying`, the instance's `waiting`, woken by `evict_now`), and
+  a `finally` that asks for its own key, posting to itself, panics,
+  since it would wait for itself. The dead branch `Some { state =
+  Evicting }` in `pin`, which would have spun, is now a bug report.
+- **A family's handle could leave its handler** (medium): an operation
+  `handle: fn() -> Family<K, D>` gave it out, and a function with no
+  `uses` could then `Instances.evict` through it, running an instance's
+  `finally` (a print) where no effect was declared, or call it after
+  the family ended (a panic). Resolve's `no_kept_blocks` now refuses a
+  `Family<...>` written in a dependency's operation, a dependency's type
+  argument (`dep X = Chan<Family<...>>`, or one in a `uses`) and a
+  handler's parameter, "a family's handle is good only in the state of
+  the handler that opened it". Inside the handler it's data as before:
+  its state, its helpers' parameters, `let`s.
+- **std had powers a user library lacked** (medium, decision 20 rule 2;
+  the spec review's finding): `Actors.at` carried its block's value and
+  error out with `family_kept` and `striped` refused with `lib_panic`,
+  both `Internal`. Both are `Any` now (prelude.ml's `caller`), so a
+  library calls them as the prelude does; step 7's third library in
+  test_services.ml is back to its first intent, a generic `Shards<D>`
+  whose `at` gives what its block gives, a `Str`, and fails with what it
+  fails with, through `family_kept`, `Instances.enter` and
+  `Instances.made`. Ren still has no `panic` of its own: `lib_panic` is
+  a library's way to refuse what it can't go on from.
+- **Chaos ran only at the library's own operations** (medium; the spec
+  review's): `actors(chaos: true)` shook at `enter`, `visit`, `keys`,
+  `evict`, `evict_idle` and `send`, not at an operation called through
+  `at`'s block, which decision 18 counts as a call into the family. A
+  new `Instances.at_edge(f, each)` (`family_edge`) keeps a block the
+  family runs at each call from outside into one of its instances, at
+  the edge's meter (`Family.metered`), before the call takes the
+  instance; `actors` gives it its `shake` when `chaos` is on. Policy
+  stays the library's: the family runs a block, and knows nothing of
+  chaos. examples/docs' thousand seeds still pass, in 10.2 s (was 9.7
+  s); bench/services/memory still fails under chaos at seed 9904, `left:
+  ""`, 93 of the seeds 1 to 100; lost_update at 4702.
+- **A wiring's errors named its function** (low; the spec review's): "`fn
+  live$wiring` says it can fail with ..." is "`wiring live` says ..."
+  (Infer_msg's `fn_named`).
+- **A program of actors was refused natively at the real `Random`**
+  (low; the spec review's), since `$start` installs the world before the
+  program's call of `actors` is compiled: to_mem.ml's
+  `first_family_call` says the program's first call of a library that
+  reaches the family first.
+
+**Probed and sound** (no change): a wiring diamond and a wiring listed
+beside its own item (installed twice, said); a cycle across two
+wirings and through three (said); an alias through two and three
+nested wirings, and one hidden by the outer (said); an item a wiring
+provides using what it hides (allowed: items meet each other); a
+service's member calling its own operation, returning a block over its
+state, or spawning tasks that write it (each refused); `try` inside a
+bracket around a chain, `try` then `orelse`, `..r` and `|>` and `.`
+lines inside brackets, a `|>` line at the statement's own indent
+(parsed as written; natively the same); a helper handed the inner scope
+or the background, a task in a scope handing `bg` on, `beside`'s task
+spawning into an outer scope (refused statically, or a panic at the
+spawn); a background task spawning more, and a scope inside one (stop
+with the body); `release` in `until`'s condition (refused), `total +=
+release Next.get(id)` (reads again after), nested `release`, `release`
+on a task spawned inside an arm (holds nothing, lets go of nothing);
+`produce` with a producer failing while the body sleeps, a `break` at
+`cap`, a body failing while the producer is blocked, a body that never
+pulls, two senders, and `produce` inside a producer (300 seeds each);
+`Concat` over stripes hit in either order (stripe order, not arrival);
+eviction during setup (the evicting caller waits); a full family
+reached from an actor (`at` in `at` of one family, a panic); teardown
+draining a chain of posts that evicts as it goes, under chaos (300
+seeds).
+
+**Left, by severity:**
+
+- **Low:** a world call inside an operation called through `at` is
+  journaled under the calling task's path; only a delivery's are named
+  `docs[DocId(7)]#3` (the spec review's). Naming them by the instance
+  would change how replay matches a call to its task, and every
+  recorded journal: later, with the journal's next version.
+- **Low:** `with a, b` where `a`'s item and `b`'s need each other says
+  "`ping()` and `pong()` in `a`", though `pong()` is `b`'s.
+- **Low:** the help of "`outer` installs `Docs` but doesn't provide it"
+  writes `with actors(doc) in`, without the item's `as Docs`.
+- **Low:** the help of the inner-scope error inside `Async.beside`'s
+  task suggests `Async.beside` again.
+- **Low:** natively, a third library over the family is refused at "a
+  value of type `Pinned<...>`", not by the family's message, since its
+  own code calls `Instances`' members.
+- **Low:** a `finally` that posts to its own key panics rather than
+  queueing for the key's next life; decision 18 doesn't say which.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -13068,6 +13193,7 @@ Step 9, docs and tooling (the review's third lens):
 | 4 (macOS) | 9eb2e07 | `Proc.run`'s C stub builds on macOS: lib/eval/ren_spawn.c's close-on-exec pipe made with `pipe` and `fcntl` where there's no `pipe2` (Linux keeps `pipe2`) | none |
 | 8 | 4b150c4 | the milestone: a wiring provides an item by its alias, `actors(doc) as Docs` (infer_handlers.ml's `provided_as`, 7b's finding), with tests; examples/docs (moved from bench/services/docs), language.md §11's document server behind wirings, `documents(max, chaos)` and `live(dir)`, over a line protocol and an `Op` that appends, a store of files and one in memory, sessions over `sim.net()` that interleave, tests that every subscriber sees one order, that the store holds the final text, that a session off the protocol fails alone, and that the documents outlive the server; its tests under `documents(2, true)`, chaos, pass `ren test --seeds 1000` (about 10 s); bench/services/memory and lost_update (and fixed.ren) as the whole server with one change each; bench/tasks.t's `services_milestone` holds; test_services.ml's s8 on, with two wiring tests; step 3's and 7b's "Chosen" lists moved here from Stage 11a's section, where they'd landed; language.md's table | step 9, the review |
 | 9 (docs and tooling) | e9a5b44 | the docs and tooling lens ("Step 9, docs and tooling", above): async.md, stdlib.md, testing.md, handlers.md's journal, errors.md, the README, language.md's table; this section's "As built" notes, superseded choices marked, step 5's and 2b's "Chosen" lists, the `expire(now)` note, the progress log; examples/breaker's and examples/docs' READMEs; differential.py over bench/services' folders, corpus cases for background work, producers and generic calls, `release`'s highlight, Zed's `rev`; test_calls.ml's §11 test named for what it changes | foundations.md's `Doc.edit` in `at` (low, design) |
+| 9 (soundness) | this commit | the soundness lens: adversarial programs for wirings, services, the pipe, background work, `release`, `produce`, stripes and actors ("Step 9, soundness"); fixed: `with live, live`'s internal error, `provides` through a call of the same recursive group, two lives of one key while a `finally` runs, a family's handle leaving its handler, `family_kept` and `lib_panic` open to any library (the third library's `at` generic again), chaos at operations through `at` (`Instances.at_edge`), a wiring's errors naming its function, actors refused natively at `actors`; test/test_services_review.ml | the low items in "Step 9, soundness"; the spec and docs lenses |
 
 ## Patterns stage
 
