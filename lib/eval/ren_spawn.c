@@ -23,6 +23,28 @@
 #include <caml/mlvalues.h>
 #include <caml/unixsupport.h>
 
+/* A pipe whose ends close on `exec`. Linux makes one at once; macOS has
+   no `pipe2`, so its ends are marked after, which leaves a moment where
+   another thread's `fork` could inherit them: harmless here, since such a
+   child only keeps the pipe open until it `exec`s. */
+static int cloexec_pipe(int fds[2])
+{
+#ifdef __linux__
+  return pipe2(fds, O_CLOEXEC);
+#else
+  if (pipe(fds) == -1) return -1;
+  if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) == -1 ||
+      fcntl(fds[1], F_SETFD, FD_CLOEXEC) == -1) {
+    int e = errno;
+    close(fds[0]);
+    close(fds[1]);
+    errno = e;
+    return -1;
+  }
+  return 0;
+#endif
+}
+
 /* ren_spawn(path, argv, group): the child's pid. [path] is the program,
    found already; [argv] its arguments, its name first; [group] whether it
    goes in a process group of its own. */
@@ -43,7 +65,7 @@ CAMLprim value ren_spawn(value path, value argv, value group)
   args[n] = NULL;
 
   int fds[2];
-  if (pipe2(fds, O_CLOEXEC) == -1) {
+  if (cloexec_pipe(fds) == -1) {
     int e = errno;
     for (mlsize_t i = 0; i < n; i++) free(args[i]);
     free(args);
