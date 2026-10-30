@@ -119,7 +119,7 @@ says what it recorded, and that the journal holds what the program read:
   recorded 8 calls to build.journal (Console 3, Fs 1, Os 1, Proc 3)
   warning: build.journal holds everything the program read, files and arguments included: read it before you share it
   $ sed 's/Ok(".*")$/Ok("...")/' build.journal
-  # ren journal 2 · main.ren · deps: Console Fs Os Proc
+  # ren journal 3 · main.ren · deps: Console Fs Os Proc
   1 main Fs.read("justfile") → Ok("...")
   2 main Os.args() → ["build"]
   3 main/run_all:0 Console.error("echo base")
@@ -259,7 +259,7 @@ its journal to `tests/` and adds a test that replays it:
   added the test "replays bug.journal" to main.ren
   run it with `ren test main.ren --only "replays bug.journal"`: it fails while the program ends as the recording did, and passes once it goes on past there, with the same outputs to there
   $ head -1 tests/bug.journal
-  # ren journal 2 · ../main.ren · deps: Console Fs Os Proc
+  # ren journal 3 · ../main.ren · deps: Console Fs Os Proc
   $ tail -3 main.ren
   test "replays bug.journal" =
     with replay("tests/bug.journal") in

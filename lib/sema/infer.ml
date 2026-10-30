@@ -91,12 +91,14 @@ type 'l found_ = 'l Infer_env.found_ =
   | Pulls_block
   | Pulled of { what : pulled; name : string }
   | For_param of int
+  | Full_marked
 
 and pulled = Infer_env.pulled = Snapshot | Cursor of Path.t
 
 let pulled_node = Infer_env.pulled_node
 let next_node = Infer_env.next_node
 let for_node = Infer_env.for_node
+let full_node = Infer_env.full_node
 
 type found = Ty.label found_
 

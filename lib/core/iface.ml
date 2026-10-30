@@ -345,7 +345,7 @@ let rec of_written ?(rows = fun _ -> None) ~sets (t : Ast.Resolved.ty) : Ty.ty =
       (* Resolve refuses a type parameter's variant *)
       Error
   | TyImpl { impl_deps; impl_over; impl_errors; impl_uses; _ } ->
-      let deps = deps_of ~sets impl_deps in
+      let deps = deps_of ~rows ~sets impl_deps in
       Ty.impl ~over:impl_over
         ~fails:(written_errors ~rows ~sets impl_errors)
         deps
@@ -379,7 +379,7 @@ and written_uses ~rows ~sets (u : Ast.Resolved.uses option) : Ty.row =
   match u with
   | Some u ->
       {
-        labels = dep_labels ~sets u.deps;
+        labels = dep_labels ~rows ~sets u.deps;
         tail = Option.bind u.dtail (named rows);
       }
   | None -> Ty.closed
@@ -388,23 +388,27 @@ and named rows (n : Ast.ident) = rows n.name
 
 (* The dependencies a `uses` lists, or that an implementation's type
    joins with `&`, with their type arguments. *)
-and deps_of ~sets (ds : Ast.tname Ast.dep_ref list) : Ty.dep list =
+and deps_of ?(rows = fun _ -> None) ~sets (ds : Ast.tname Ast.dep_ref list) : Ty.dep list =
   List.filter_map
     (fun (d : Ast.tname Ast.dep_ref) ->
       match d.dep.tref with
       | Named p ->
-          Some { Ty.dpath = p; dargs = List.map (of_written ~sets) d.dargs }
-      | Param _ -> (* resolve.ml only makes a dependency a [Named] *) None)
+          Some { Ty.dpath = p; dargs = List.map (of_written ~rows ~sets) d.dargs }
+      | Param i ->
+          (* `uses D`, or an implementation of `D`, [D] a type parameter
+             that stands for a description: the one dependency that's of,
+             once it's known (Ty.param_path) *)
+          Some { Ty.dpath = Ty.param_path; dargs = [ Var i ] })
     ds
 
 (* The labels of the dependencies a `uses` lists, sorted, each once. *)
-and dep_labels ?(sets = fun _ -> None) (ds : Ast.tname Ast.dep_ref list) =
+and dep_labels ?(rows = fun _ -> None) ?(sets = fun _ -> None) (ds : Ast.tname Ast.dep_ref list) =
   let rec once = function
     | [] -> []
     | l :: rest ->
         l :: once (List.filter (fun k -> not (Ty.same_label k l)) rest)
   in
-  Ty.sort_labels (once (List.map Ty.dep_of (deps_of ~sets ds)))
+  Ty.sort_labels (once (List.map Ty.dep_of (deps_of ~rows ~sets ds)))
 
 (* Just their paths. *)
 and dep_paths (ds : Ast.tname Ast.dep_ref list) =
@@ -542,7 +546,7 @@ let signature ?(closed = false) ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
     {
       labels =
         (match f.uses with
-        | Some (u : Ast.Resolved.uses) -> dep_labels ~sets u.deps
+        | Some (u : Ast.Resolved.uses) -> dep_labels ~rows ~sets u.deps
         | None -> []);
       tail = Some 1;
     }

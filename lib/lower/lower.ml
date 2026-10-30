@@ -193,7 +193,7 @@ type cx = {
           are found in *)
   opaque : Path.t list;
       (** the opaque types the module sees, but the prelude's (Infer.t) *)
-  through : (int, Path.t) Hashtbl.t;
+  through : (int * Loc.t, Path.t) Hashtbl.t;
       (** the member functions of dependencies called through an alias, by
           node, with the alias (Resolve.through) *)
   vars : (int, C.var) Hashtbl.t;  (** each local, by binder id *)
@@ -2085,8 +2085,8 @@ and call cx ?(changed = false) (e : expr) f args =
         (ty_of cx e.node) e.loc
   | Var (Global p) when for_param cx f.node <> None ->
       for_call cx ~changed e f p (Option.get (for_param cx f.node)) args
-  | Var (Global _) when Hashtbl.mem cx.through f.node ->
-      plain_call cx ~changed ~through:(Hashtbl.find cx.through f.node) e f args
+  | Var (Global _) when Hashtbl.mem cx.through (f.node, f.loc) ->
+      plain_call cx ~changed ~through:(Hashtbl.find cx.through (f.node, f.loc)) e f args
   | Var (Global p) when List.exists is_named args ->
       tags_call cx ~changed e f p args
   | Field (r, _) -> (
@@ -2335,6 +2335,21 @@ and plain_call cx ~changed ?callee ?through (e : expr) f args =
       match through with
       | Some alias -> rebound cx ~alias e.loc (fun () -> mk (Call (f, args, cx.ev)) ty e.loc)
       | None -> mk (Call (f, args, cx.ev)) ty e.loc
+    in
+    (* a pin inside another family's pinned block that can fail with
+       `Full` (Infer.Full_marked): the family is told so around it, and
+       fails it with `Full` rather than panicking where it would wait *)
+    let call =
+      match Infer.Nodes.find_opt (Infer.full_node e.node) cx.nodes with
+      | Some { found = Some Full_marked; _ } ->
+          let mark on =
+            let a : Ty.args = { tys = []; rows = [ Ty.closed; Ty.closed ] } in
+            let fty = Ty.apply a (Prelude.scheme Family_full).ty in
+            let f = mk (Intrinsic (Family_full, a, [], [])) fty e.loc in
+            mk (Call (f, [ Value (mk (Bool on) Ty.bool e.loc) ], cx.ev)) Ty.unit e.loc
+          in
+          mk (Seq (mark true, mk (Finally (call, mark false)) ty e.loc)) ty e.loc
+      | _ -> call
     in
     if C.fails f.ty then
       (* the places are written back even if it fails *)
@@ -2730,7 +2745,7 @@ and rebound cx ~(alias : Path.t) loc (body : unit -> C.expr) =
    `next` is called with the alias's implementation too ([rebound]). *)
 and made_through cx (iter : expr) =
   match iter.kind with
-  | Call ({ kind = Var (Global _); node; _ }, _) -> Hashtbl.find_opt cx.through node
+  | Call ({ kind = Var (Global _); node; loc }, _) -> Hashtbl.find_opt cx.through (node, loc)
   | _ -> None
 
 (* Whether [a] is a pull argument, what `for` takes passed to a block

@@ -276,6 +276,11 @@ type journal = {
   saw_cancel : task -> unit;
   astray : string -> unit;
   note : string -> unit;
+  family : task -> string -> unit;
+      (** what a keyed instance family did on the task, `made
+          docs[DocId(7)]#3` (family.ml): a line of its own, which a replay
+          checks where it comes, as a call (compiler.md, "Journal version
+          3") *)
 }
 
 (* The scheduler of a run: its queue, its timers, the task running, and
@@ -1122,6 +1127,11 @@ let watch j =
    which it keeps as a comment. *)
 let note line =
   match !running with Some { journal = Some j; _ } -> j.note line | _ -> ()
+
+(* A keyed instance family's [what], on the task running, told to a
+   journal being recorded or replayed. *)
+let family_event what =
+  match !running with Some ({ journal = Some j; _ } as s) -> j.family s.current what | _ -> ()
 
 (* ---- scopes and tasks ---- *)
 

@@ -447,7 +447,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
      leaves a dependency the runtime doesn't install to this *)
   let uses =
     (match
-       ( declared_uses env ~is_value:(fun _ -> false) ~tparams:cx.tparams f,
+       ( declared_uses env ~is_value:(fun _ -> false) ~tparams:cx.tparams ~named:cx.named f,
          repr ty )
      with
       | Some ds, _ -> ds
@@ -698,7 +698,7 @@ let new_env sink ~reachable (r : Resolve.t) =
            Key(n: 4)` *)
         if
           Ty.call_dep p <> None
-          || List.mem p [ Path.prelude "By"; Path.prelude "Fold" ]
+          || List.mem p [ Path.prelude "By"; Path.prelude "Fold"; Path.prelude "Evict" ]
         then None
         else Some (Hashtbl.find types p))
       r.scope
@@ -764,12 +764,58 @@ let new_env sink ~reachable (r : Resolve.t) =
     through = r.through;
     pulled_calls = Hashtbl.create 4;
     test_reported = Hashtbl.create 4;
+    pinned_by = [];
+    pin_ops = Hashtbl.create 4;
+    kept_pins = Hashtbl.create 4;
   }
 
 (* A function's parameters with defaults, by their places among the
    arguments a call gives: after `self`, for a method. *)
 let given_defaults ~method_ ds =
   if method_ then List.map (fun (i, n, l) -> (i - 1, n, l)) ds else ds
+
+(* ---- pinning (compiler.md, "Services stage", "Actors (step 7)") ----
+
+   A keyed instance family's no-deadlock rules (foundations.md, decision
+   18) are checks on its pin, as decision 7's are on `Async`'s spawn: a
+   call that pins an instance for a block, inside a block that pins one
+   of the same family, could wait for a slot its own block holds, and one
+   inside a block of another family could close a cycle of waits. A
+   library over the family pins in its operations, `Shards.at`, or in a
+   member of its dependency, `Actors.at`; which operations do is found
+   here, before the module's bodies are checked, as the arms that call
+   one of the family's pins, or an operation that does, written there.
+   What a helper hides, the family checks as it runs (family.ml). *)
+
+(* The module's operations whose arm pins ([env.pin_ops]), found as the
+   arms that call a function that pins, or one of these. *)
+let pinning_ops env (fns : fn_def list) =
+  let rec calls_pin (e : expr) =
+    (match e.kind with
+    | Var (Global p) -> pins_for_a_block env p
+    | Var (Dep_op (p, op)) -> Hashtbl.mem env.pin_ops (p, op)
+    | _ -> false)
+    || List.exists calls_pin (Ast.children e)
+  in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun (f : fn_def) ->
+        match f.body.kind with
+        | Handler { arms; _ } ->
+            List.iter
+              (fun (a : handler_arm) ->
+                match a.arm_op with
+                | Dep_op (p, op)
+                  when (not (Hashtbl.mem env.pin_ops (p, op))) && calls_pin a.arm_impl ->
+                    Hashtbl.replace env.pin_ops (p, op) ();
+                    changed := true
+                | _ -> ())
+              arms
+        | _ -> ())
+      fns
+  done
 
 (* The types of what the module can call before any of its own functions
    is checked: the functions of [imports], the interfaces of the modules
@@ -879,7 +925,7 @@ let setup env ~is_value (f : fn_def) =
     in
     let uses =
       extend
-        (Option.value (declared_uses env ~is_value ~tparams f) ~default:[])
+        (Option.value (declared_uses env ~is_value ~tparams ~named f) ~default:[])
         (tail (Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail)))
     in
     (* A public function's transparent parameter fails with exactly its
@@ -969,7 +1015,7 @@ let setup env ~is_value (f : fn_def) =
       selves = errs :: transparent_rows f.params ps;
       sources = Some (ref []);
       named;
-      declares = declared_uses env ~is_value ~tparams f;
+      declares = declared_uses env ~is_value ~tparams ~named f;
       later = ref [];
     }
   in
@@ -1667,7 +1713,8 @@ let canonical env so_far (f : fn_def) =
         | Args xs -> Args xs
         | Pulls_block -> Pulls_block
         | Pulled p -> Pulled p
-        | For_param k -> For_param k)
+        | For_param k -> For_param k
+        | Full_marked -> Full_marked)
       (Hashtbl.find_opt cx.found id)
   in
   let nodes =
@@ -1770,7 +1817,7 @@ let overlap (a : Loc.t) (b : Loc.t) =
    if it's known. [handlers] are the module's handlers. A `ren console`
    session's function, [shown], gives its last line's value to be shown,
    which may be a block. [value] says [f] is an associated value. *)
-let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
+let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_finally ~shown ~value
     (f : fn_def) nodes =
   let ty id =
     match Nodes.find_opt id nodes with Some n -> n.ty | None -> Ty.Error
@@ -1994,6 +2041,25 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         in
         generic_here callee ~blame;
         walk Callee callee;
+        (* a handler's maker, `actors(h: spawned fn(k: K) -> D)`, keeps
+           what it's given: a function's name, which captures nothing *)
+        (match callee.kind with
+        | Var (Global p) ->
+            let spawned = makers p in
+            List.iteri
+              (fun i (a : expr) ->
+                if List.mem i spawned then
+                  match a.kind with
+                  | Var (Global h) -> (
+                      (* and what it makes the family keeps, so its
+                         `finally`, run at an eviction or the family's
+                         end, has no caller to fail to *)
+                      match failing_finally h with
+                      | Some at -> say at (Infer_msg.kept_finally_fails at ~handler:(Path.short h))
+                      | None -> ())
+                  | _ -> say a.loc (Infer_msg.maker_unnamed a.loc))
+              args
+        | _ -> ());
         (* a handler's parameters are data: one whose type has a block in
            it is reported where it's declared *)
         let arg_place i =
@@ -2122,7 +2188,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
      | Some (Fun (ps, _, _, _)) ->
          List.iter2
            (fun (p : Resolved.param) (q : Ty.param) ->
-             if has_fun q.ty then
+             (* but a maker, `spawned`, which is given a function's name
+                and keeps nothing ([maker_args]) *)
+             if has_fun q.ty && p.pblock <> Spawned then
                let loc = p.pname.ident.loc in
                say loc
                  (Infer_msg.handler_param_block ~name:p.pname.ident.name loc))
@@ -2167,6 +2235,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
      value is checked as a function of no parameters (ast.ml) *)
   let fns = Ast.functions r.prog in
   add_globals env ~imports ~reachable fns;
+  pinning_ops env fns;
   (* which parameters each function writes a type for, which a call's
      arguments are narrowed to (Infer_written.written_params) *)
   List.iter
@@ -2281,6 +2350,48 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
         if Ast.is_handler f then Some (Ast.fn_path home f) else None)
       fns
   in
+  (* where the module's handler [p]'s `finally` can fail, if it can: a
+     `try` there of anything but the body's result it's given, `try r`,
+     which a family gives it as `Ok`, or a `fail` *)
+  let failing_finally p =
+    match
+      List.find_opt (fun (f : fn_def) -> Ast.is_handler f && Ast.fn_path home f = p) fns
+    with
+    | Some { body = { kind = Handler { state; _ }; _ }; _ } ->
+        List.find_map
+          (function
+            | Finally { kind = Lambda (ps, body); _ } ->
+                let given =
+                  List.map (fun (q : Resolved.param) -> q.pname.id) ps
+                in
+                let rec fails (e : expr) =
+                  match e.kind with
+                  | Try { kind = Var (Local b); _ } when List.mem b.id given -> None
+                  | Try _ | Fail _ -> Some e.loc
+                  | Lambda _ -> None
+                  | _ -> List.find_map fails (Ast.children e)
+                in
+                fails body
+            | _ -> None)
+          state
+    | _ -> None
+  in
+  (* each handler's makers, its block parameters, `spawned` (compiler.md,
+     "Services stage", "Actors (step 7)"), by their places: the module's
+     own as declared, another module's as its scheme says *)
+  let makers p =
+    match
+      List.find_opt (fun (f : fn_def) -> Ast.is_handler f && Ast.fn_path home f = p) fns
+    with
+    | Some f ->
+        List.concat
+          (List.mapi (fun i (q : Resolved.param) -> if q.pblock = Spawned then [ i ] else []) f.params)
+    | None -> (
+        match scheme_of p with
+        | Some ({ ty = Fun (_, Impl _, _, _); _ } as s) ->
+            List.filter_map (fun (i, m) -> if m = Ty.Spawned then Some i else None) s.modes
+        | _ -> [])
+  in
   List.iter2
     (fun (f : fn_def) (_, n) ->
       let shown =
@@ -2288,7 +2399,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
         | Some (name, _) -> f.name.name = name
         | None -> false
       in
-      check_blocks env r ~scheme_of ~handlers ~shown ~value:(is_value f) f n)
+      check_blocks env r ~scheme_of ~handlers ~makers ~failing_finally ~shown ~value:(is_value f) f n)
     fns nodes;
   (* an associated value is made once, so it's given no dictionaries: a
      value of its type variable is compared by its shape alone (walk.ml),

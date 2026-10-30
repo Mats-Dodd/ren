@@ -396,7 +396,9 @@ module.exports = grammar({
     // pub dep Clock = now: fn() -> Time ..., then its members: its
     // operations, indented under it, come first, which the compiler checks.
     // A generic one, dep Chan<T> = ...; or an alias of one at its types,
-    // dep Jobs = Chan<Job>, a dependency of its own with its operations
+    // dep Jobs = Chan<Job>, a dependency of its own with its operations,
+    // which may say what making its last type argument fails with, dep
+    // Docs = Actors<DocId, Doc> ! StoreDown
     dependency_definition: ($) =>
       seq(
         optional($.visibility),
@@ -416,7 +418,10 @@ module.exports = grammar({
             ),
             $._dedent,
           ),
-          field('names', $.dependency),
+          seq(
+            field('names', $.dependency),
+            optional(field('errors', $.error_set)),
+          ),
         ),
       ),
 

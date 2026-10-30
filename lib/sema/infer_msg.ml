@@ -1156,6 +1156,73 @@ let block_lists_less_help ~name ~param expected =
     sprintf "write its type where it's written: `let %s: %s = fn ...`" name
       expected
 
+(* A call [inner], `Docs.at`, that pins an instance of a keyed instance
+   family for a block, inside a block of [outer] that pins one of the same
+   family (foundations.md, decision 18, "No deadlock"). *)
+let pinned_inside loc ~inner ~outer =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "`%s` keeps the instance it pins for its block, and making another \
+           can wait for room in the family"
+          outer;
+      ]
+    ~help:"finish with the first, then call the second; or post to it, which holds nothing"
+    (sprintf "`%s` inside a block of `%s` could wait for a slot its own block holds"
+       inner outer)
+
+(* The handler [maker], kept by a family installed as [alias], whose
+   setup can fail with [errors], which the alias doesn't declare as what
+   making one of its instances fails with. *)
+let setup_undeclared loc ~maker ~alias ~errors =
+  let shown = String.concat " | " errors in
+  Diag.make loc
+    ~notes:
+      [
+        sprintf "a family's `at` fails with what making an instance does, which `%s` says" alias;
+      ]
+    ~help:
+      (sprintf
+         "declare it on the alias, after its type arguments, `dep %s = ... ! %s`, \
+          or handle it in `%s`'s setup"
+         alias shown maker)
+    (sprintf "`%s`'s setup can fail with `%s`, which `%s` doesn't declare" maker
+       shown alias)
+
+(* A handler's maker, a `spawned` block parameter, given something that
+   isn't a function's or a handler's name. *)
+let maker_unnamed loc =
+  Diag.make loc
+    ~notes:
+      [
+        "a handler's description is a value, which can outlive the call that \
+         made it, so a block it keeps captures nothing";
+      ]
+    ~help:"name a handler, or a function, here: `actors(doc)`"
+    "a handler keeps the block it's given here, so it's given a function's name"
+
+(* The handler [handler], whose `finally` can fail, at [loc], given to a
+   family that keeps its instances. *)
+let kept_finally_fails loc ~handler =
+  Diag.make loc
+    ~notes:
+      [
+        "it runs when an instance is evicted, or the family ends, where no \
+         caller is given its error";
+      ]
+    ~help:"save in its operations, write-through, or flush before the family ends"
+    (sprintf "`%s` is kept by a family, so its `finally` can't fail" handler)
+
+(* The handler [handler], kept by the family installed as [family], whose
+   arm calls [call], which pins one of that family's instances. *)
+let kept_pins_own loc ~handler ~family ~call =
+  Diag.make loc
+    ~notes:[ sprintf "an actor's siblings are the other instances of `%s`" family ]
+    ~help:"post to it instead, which holds nothing"
+    (sprintf "`%s` is kept by `%s`'s family, so it can't call `%s`, which pins one of its siblings"
+       handler family call)
+
 (* A block passed to the operation [op], `Tally.change`, that uses [dep],
    which its parameter's type, [param], doesn't list: the operation holds
    its instance while it runs the block, so a call back into it would wait

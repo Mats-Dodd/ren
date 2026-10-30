@@ -1547,6 +1547,28 @@ and install env cx (lk : with_link) (i : impl) ~keys inner =
   in
   around cx keys
 
+(* A handler [link] keeps, given to it by name, `actors(doc) as Docs`,
+   whose arms pin an instance of the family it's installed as, [a]: one
+   of its own siblings, which is refused (foundations.md, decision 18,
+   "No deadlock"; Infer_expr.pinning keeps what each arm pins). *)
+and kept_own_family env (link : expr) (a : tname dep_ref) =
+  match (link.kind, a.dep.tref) with
+  | Call (_, args), Named fam ->
+      List.iter
+        (fun (arg : expr) ->
+          let arg = match arg.kind with Named (_, v) -> v | _ -> arg in
+          match arg.kind with
+          | Var (Global p) ->
+              List.iter
+                (fun (family, call, loc) ->
+                  if family = Ty.dep_label fam then
+                    report env
+                      (kept_pins_own loc ~handler:(Path.short p) ~family:(env.names fam) ~call))
+                (List.rev (Option.value (Hashtbl.find_opt env.kept_pins p) ~default:[]))
+          | _ -> ())
+        args
+  | _ -> ()
+
 (* What the item [it], a chain of [links], is installed as, written after
    `as`, [a]: an alias of an instance of the dependency it implements,
    `with queue() as Jobs`, or that instance written out, `as Chan<Int>`,
@@ -1567,17 +1589,11 @@ and installed_as env cx (it : with_item) links (a : tname dep_ref) =
     match a.dep.tref with
     | Named p -> (
         match Iface.alias_of (Hashtbl.find_opt env.types) p with
-        | Some t ->
-            (* an alias: what it names, as a checker type *)
-            Some
-              ( dep (Ty.dep_label p),
-                {
-                  dpath = t.dpath;
-                  dargs =
-                    List.map
-                      (of_ty ~vars:(fun _ -> TError) ~tails:(fun _ -> REmpty))
-                      t.dargs;
-                } )
+        | Some _ ->
+            (* an alias: what it names, as a checker type, a description
+               among its type arguments needing what it's installed with
+               (Unify.aliased) *)
+            Some (dep (Ty.dep_label p), Unify.aliased env.st { dpath = p; dargs = [] })
         | None -> (
             match written_deps env ~tvars:cx.tparams [ a ] with
             | [ d ] -> Some (dep_of d, d)
@@ -1597,12 +1613,49 @@ and installed_as env cx (it : with_item) links (a : tname dep_ref) =
               (fun x y -> Unify.unify st (c.ty x) (c.ty y))
               d.dargs target.dargs)
       with
-      | Ok () -> Some (key, d.dpath)
-      | Error _ ->
-          report env
-            (installed_as_wrong it.iloc ~link:src ~as_
-               ~implements:(declared d.dpath));
-          None)
+      | Ok () ->
+          kept_own_family env lk.link a;
+          Some (key, d.dpath)
+      | Error _ -> (
+          (* a description among the type arguments that fails to start
+             with more than the alias declares, `Actors<DocId, Doc> !
+             StoreDown`: what making an actor fails with *)
+          let more =
+            List.concat
+              (List.map2
+                 (fun x y ->
+                   match (reveal env.st x, reveal env.st y) with
+                   | TImpl i, TImpl j
+                     when List.map (fun d -> d.dpath) i.deps
+                          = List.map (fun d -> d.dpath) j.deps ->
+                       let can = row_names j.fails in
+                       List.filter (fun n -> not (List.mem n can)) (row_names i.fails)
+                   | _ -> [])
+                 d.dargs target.dargs)
+          in
+          let maker =
+            match lk.link.kind with
+            | Call (_, args) ->
+                List.find_map
+                  (fun (arg : expr) ->
+                    match arg.kind with
+                    | Var (Global p) -> Some (Path.short p)
+                    | _ -> None)
+                  args
+            | _ -> None
+          in
+          match (more, maker, a.dep.tref) with
+          | _ :: _, Some maker, Named alias ->
+              report env
+                (setup_undeclared it.iloc ~maker ~alias:(env.names alias)
+                   ~errors:(List.sort_uniq compare more))
+              ;
+              None
+          | _ ->
+              report env
+                (installed_as_wrong it.iloc ~link:src ~as_
+                   ~implements:(declared d.dpath));
+              None))
   | ds, _ ->
       report env
         (installed_as_wrong it.iloc ~link:src ~as_

@@ -101,7 +101,7 @@ type t = {
       (** what of each import the module uses, by name (see [unused_imports]) *)
   wirings : Iface.wiring list;
       (** the module's wirings, flattened, in the order they're declared *)
-  through : (int, Path.t) Hashtbl.t;
+  through : (int * Loc.t, Path.t) Hashtbl.t;
       (** each member function of a dependency called through an alias of it,
           `Events.items()` for `dep Events = Chan<Event>`, by the node of the
           member as written, `Events.items`, with the alias: it runs with the
@@ -203,7 +203,7 @@ type env = {
       (** where a `with` or a wiring installs a service, `Kv(cfg)`, by where
           that's written: the only place a service's name is called
           ([installed]) *)
-  through : (int, Path.t) Hashtbl.t;
+  through : (int * Loc.t, Path.t) Hashtbl.t;
       (** each member function of a dependency written through an alias of
           it, `Events.items` for `dep Events = Chan<Event>`, by its node, with
           the alias ([t.through]) *)
@@ -864,6 +864,13 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) ?(tags = false)
               | Some d -> impl [ d ]
               | None ->
                   TyName ({ tref = Named (Path.prelude "Unit"); tloc = l }, []))
+          | Some (Param i, _)
+            when (not impl_over) && impl_uses = None && impl_errors <> None
+                 && List.length ts = 1 && (List.hd ts).dargs = [] ->
+              (* `(D ! ..e)`, [D] a type parameter that stands for a
+                 description: what it fails to start with, named
+                 (compiler.md, "Services stage", "Actors (step 7)") *)
+              impl [ { dep = { tref = Param i; tloc = tyname_loc t }; dargs = [] } ]
           | found ->
               (if found <> None then
                  let shown = show_tyname t in
@@ -1033,6 +1040,16 @@ and uses env ~params ?(rows = Declaration) (deps : tyname dep_ref list) :
   List.filter_map
     (fun (d : tyname dep_ref) ->
       let loc = tyname_loc d.dep in
+      match
+        if d.dep.tmod = None && d.dargs = [] then index_of d.dep.tid.name 0 params
+        else None
+      with
+      | Some i ->
+          (* a type parameter that stands for a description: the one
+             dependency that's of (compiler.md, "Services stage", "Actors
+             (step 7)") *)
+          Some { dep = { tref = Param i; tloc = loc }; dargs = [] }
+      | None ->
       match resolve d.dep with
       | None -> None
       | Some (_, n) when n <> List.length d.dargs ->
@@ -1192,7 +1209,8 @@ let default_of env (t : Resolved.ty option) ((lit, loc, node) as d) =
       | _ -> d)
   | _ -> d
 
-let param env sc ?rows ?(top = false) ?(defaults = top) bound (p : Parsed.param) :
+let param env sc ?rows ?(top = false) ?(defaults = top) ?(makers = false) bound
+    (p : Parsed.param) :
     Resolved.param * scope =
   let rows = Option.value rows ~default:(Body sc.rows) in
   (* a named function's parameter may be of `Tags` *)
@@ -1205,6 +1223,10 @@ let param env sc ?rows ?(top = false) ?(defaults = top) bound (p : Parsed.param)
     match p.pblock with
     | Ordinary -> Ast.Ordinary
     | m when top -> m
+    (* a handler's maker, `actors(h: spawned fn(k: K) -> D)`: given a
+       function's name, which keeps nothing (compiler.md, "Services stage",
+       "Actors (step 7)") *)
+    | Spawned when makers -> Spawned
     | m ->
         report env p.pname.loc ~help:"remove it"
           (sprintf "`%s` marks a block parameter of a function"
@@ -1236,11 +1258,11 @@ let receiver_type sc (r : Resolved.expr) =
       Some p
   | _ -> None
 
-let params env sc ?rows ?top ?defaults bound ps =
+let params env sc ?rows ?top ?defaults ?makers bound ps =
   let ps, sc =
     List.fold_left
       (fun (acc, sc) (p : Parsed.param) ->
-        let p, sc = param env sc ?rows ?top ?defaults (bound p) p in
+        let p, sc = param env sc ?rows ?top ?defaults ?makers (bound p) p in
         (p :: acc, sc))
       ([], sc) ps
   in
@@ -1363,6 +1385,8 @@ let item env sc ?node (t : tyname) (f : ident) =
           let q = Option.get (alias_of env p) in
           let path = Path.member q f.name in
           sc.fn.calls <- path :: sc.fn.calls;
+          (* by its node and where it's written: a node is numbered
+             within its function *)
           Option.iter (fun n -> Hashtbl.replace env.through n p) node;
           Global path
       | Some { tref = Named p; _ } -> (
@@ -2406,8 +2430,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             ]
           ~help:(sprintf "call it directly: `%s(...)`" f.name)
           (sprintf "a function of `%s` calls another directly" t.tid.name);
-        Var (item env sc ~node:e.node t f)
-    | Var (Item (t, f)) -> Var (item env sc ~node:e.node t f)
+        Var (item env sc ~node:(e.node, e.loc) t f)
+    | Var (Item (t, f)) -> Var (item env sc ~node:(e.node, e.loc) t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
     | Binop (op, a, b, n) ->
         let a = go a in
@@ -3678,6 +3702,7 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       (* a handler's may have a default, as a function's: `striped(h, by:
          By = Key, ...)` (compiler.md, "Services stage", "Stripes") *)
       ~defaults:true
+      ~makers:(match f.body.kind with Handler _ -> true | _ -> false)
       (fun p -> match p.pmode with Inout -> By_inout | Read -> By_param)
       (* `self`'s type is the owner's, never what's written *)
       (List.map
@@ -4447,7 +4472,7 @@ let no_kept_blocks env (items : Resolved.program) =
     List.iter
       (fun (p : Resolved.param) ->
         match p.pty with
-        | Some t when Ast.is_handler f && has_block t ->
+        | Some t when Ast.is_handler f && has_block t && p.pblock <> Spawned ->
             let name = p.pname.ident in
             Diag.report env.sink
               (Infer_msg.handler_param_block ~name:name.name

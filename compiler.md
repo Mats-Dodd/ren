@@ -12623,6 +12623,114 @@ Chosen in step 6b, as built:
   `()`; test_calls.ml's run of §11's `striped` lines writes `hit: fn(path:
   Path)`.
 
+Chosen in step 7a, as built:
+
+- **`at` and `each` are members of `Actors`, not operations.** An
+  operation can't be generic, `at: fn<T>`, and its block can't fail, so
+  `try Doc.edit(op)` inside `Docs.at`'s block, language.md's session,
+  couldn't be written; a member is a generic function whose block is
+  transparent, failing with what `at` does. A member is called through
+  the alias as `Events.items()` is (step 5), and runs an operation of
+  the family's library, `Actors.enter(k, body)` and `Actors.visit`, whose
+  block gives nothing and can't fail: `at` carries its block's value
+  and error out of it with `family_kept`, an intrinsic only the
+  prelude's source names (an `attempt` of its transparent block, which
+  it then passes on with `try`, which a public function may not write
+  itself). `actors` implements the operations: `enter`, `visit`, `keys`,
+  `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`. So a
+  family of a fake handler is still `actors(fake_doc) as Docs`; a
+  handler of `Actors` written by hand implements those nine.
+- **`E` is `D`'s: `Actors<K, D>` takes two type arguments,** and the
+  alias's `! E` is what making the last one fails with: `dep Docs =
+  Actors<DocId, Doc> ! StoreDown` is `Actors<DocId, (Doc ! StoreDown)>`,
+  a description of `Doc` that fails to start so (the parser). Generic
+  code names a description's setup errors by `(D ! ..e)`, `D` a type
+  parameter (Resolve; Unify's rule: it unifies with a description of
+  one dependency, `D` being that one and `..e` what it fails with), so
+  `Instances.pin(f: Family<K, (D ! ..e)>, ...) -> T ! ..e`. An alias's
+  description argument needs what the `with` that installs it has
+  (Unify.aliased gives it a fresh needs row each time), and through the
+  alias a member sees its errors open, so `at` fails with the block's
+  errors besides: sound since a description's errors are only ever what
+  something fails with. A setup that fails with more than the alias says
+  is "`doc`'s setup can fail with `StoreDown`, which `Docs` doesn't
+  declare", at the `with`, not the spec's function-type message.
+- **`uses D`, `D` a type parameter,** is the label of `Ty.param_path` with
+  `D` its payload, which is the dependency `D` is a description of once
+  that's known (Types.repr_row, Ty.known_label), and `(D ! ..e)`'s is
+  `D`'s. Evidence finds a dependency's type argument that's a
+  description by the dependencies it's of (Ty.key_ty: Core.describe,
+  Core Lint, the specializer and eval.ml's `key_of`).
+- **A handler's maker:** a handler's parameter may be a block only if
+  it's `spawned`, `actors(h: spawned fn(k: K) -> D)`, and every call
+  gives it a function's or a handler's name, which captures nothing
+  (Infer_top.check_blocks; "a handler keeps the block it's given here,
+  so it's given a function's name"). A handler given a maker needs what
+  the descriptions it makes need (Infer_expr.kept_needs), since the
+  family makes them with the evidence where it's installed: `actors`
+  writes its maker as `fn(k: K) => h(k)` in its setup, so it captures
+  that evidence.
+- **`actors` uses `Random`, not `Async`:** the family's members wait as
+  an operation of the handler that opened the family does, whose
+  instance is installed outside each call that reaches them, so they
+  name no `Async` and aren't among Intrinsic.waits (decided after the
+  draft: the family is ambient). A family handle returned from an
+  operation and pinned in a function with an empty row would be a wait
+  no row shows: the known hole, as 11a's block parameter passed on to an
+  operation is. `striped` still uses `Async`, for `Async.worker()`.
+- **Partitions:** `parts: Int = 4`, but as many as keep 64 actors each,
+  at least 1: `max(1, min(parts, max / 64))`, each with `max / n`, so a
+  small family is one partition with an exact LRU (the tests' `max: 2`
+  evicts the least recently released). Recorded in the journal.
+- **The no-deadlock checks** (Infer_expr.pinning): a call pins for a
+  block if it's a dependency's member whose block is given a dependency
+  a type variable names (`Actors.at`, `each`), or an operation whose arm,
+  in the module, calls `Instances.pin`, `visit`, `enter` or one of
+  those (Infer_top.pinning_ops, found before the bodies are checked).
+  Inside a block one pins, a pin of the same family (by the dependency
+  it's called through) is refused; of another, its errors gain `Full`
+  where they can (a member's; an operation's closed errors can't, and
+  it panics instead) and Lower tells the family around the call
+  (`family_full`). At run time `pin` panics for a task already pinning
+  one of the family's, and where waiting for room in a family installed
+  inside one the task pins (opened after it) isn't marked, "a task
+  pinning `Outers` would wait for a slot of `Inners`, installed inside
+  it". An actor whose arms pin its own family is refused at the `with`
+  that keeps it; naming its own family in `uses` is still the `with`
+  set's error until step 7b allows it for `post`.
+- **`finally` can't fail** is a check where a handler of the module is
+  given to a maker: a `try` in its `finally` of anything but the body's
+  result it's given, or a `fail` (Infer_top.failing_finally). One of
+  another module's that fails panics where the family runs it.
+- **A cancelled setup:** its waiters try again; a setup that fails
+  fails each waiter with its error; the next `at` makes it again.
+- **Journal version 3:** a family's lines are `main opened docs parts
+  1`, `main made docs[DocId(1)]#1` and `main/main:0 evicted
+  docs[DocId(1)]#1`, each by the task that did it: `parts` is an `opened`
+  line, since a family opens after the header is written. A replay
+  checks each where it comes; a test that replays a journal passes over
+  them. Teardown writes no `evicted` lines. Version 1 and 2 journals are
+  refused with "record it again" (Journal.Old_version).
+- **Recorded journals:** examples/just/tests/build.journal and the crams'
+  journals have no family, so recording them again changes only the
+  header's version, which was changed by hand; bench/11a's v1.expected
+  says version 3.
+- **A bug fixed:** Resolve's calls through an alias were keyed by node
+  alone, which is numbered within a function, so a call in another
+  function with the same node ran through the alias (`sim.scheduler(1)`
+  in `main`, after `Docs.at` in `go`): now by node and place.
+- **Families are named by what's installed:** eval.ml's `With` now
+  calls `Family.installing`, which step 6a wrote but nothing called, so
+  `striped`'s families were all `family`.
+- **Test programs mended:** step 0's s7 programs that weren't Ren were
+  mended, their targets unchanged: a handler's `finally` gives back the
+  body's result (`finally(r) => ...; try r`), a block doesn't end in a
+  `let`, `import` goes first, `Instances.open`'s arguments are
+  positional, the third library's `at` gives an `Int` so its block needs
+  only `Count`, no `release` on a member, `Full`'s test nests its two
+  `with`s so `Outers` is outside `Inners`, and the `at`-making test
+  prints the `with`'s body before the family's end.
+
 ### Progress log
 
 | step | commit | done | left |
@@ -12638,7 +12746,8 @@ Chosen in step 6b, as built:
 | 2b (state) | 81a56a1 | a service's state (language.md §4, rule 4): `let`, `var` and `finally` lines first (`parse_service`, `sstate`), the handler's state as written, failing with the service's `! E`; each member given the state after the parameters, a `var` `inout` and a `let` by value (`service_items`, `passes`), an arm passing `&n`, a member passing its own on; the state's type written or a literal's; a state that calls a member, a state taken apart and a state after a function refused with help; test_service.ml's state tests (a `var` counter and a list changed by members calling each other recursively, setup failing under `try with`, a test handler in its place, a block calling a member); natively bench/services/service's `Kv` with state and a `finally`; tree-sitter's `state` and `finally` in a service (service.txt); language.md's table, deps.md | steps 5 to 9 |
 | 5 | 1f11d2c | pull arguments: a parameter `fn() -> Option<T>` takes what `for` takes (Infer_expr's `pull_param`, `pulls`, `pull_arg`; Lower's `pull_block`, at `Infer.pulled_node`), `Async.map` and `Async.each` over one, pulled on the caller's task only when a slot frees (eval.ml's `all_of` asks for each call as there's room, `Sched.room`), `&r` a write held for the call (excl.ml, as any `&`); `for x in [try] f` over a block (`block_subject`, `block_loop`); a cursor's `next` that uses a dependency or fails (`cursor`, `next_call` at `Infer.next_node`); `Chan<T>`'s `items()` and `Items<T>` in std_lib.ml's `sync`, a member function through an alias resolved (Resolve's `alias_of`, `through`) and run with the alias's implementation (Infer's `through_alias`, Lower's `rebound`), "is pulled where it's written"; `Send<T>`, `Async.produce` and `Async.map_pull` in the prelude over `task_produce`, `task_map_pull`, `outbox_send` and `inbox_take` (sched.ml's streams, eval.ml), a stream given to a block failing with its function's errors (`streams_given`), unmarked calls of those last (solve.ml), defaults before the blocks given last; refused natively (to_mem.ml, bench/build.t); test_services.ml's s5 all on, with a test of each under `--seeds 1000`; examples/crawler on `Async.produce`, examples/server on `Async.each` over its connections; async.md (surface, table, server, crawler, "Later"), stdlib.md, language.md's table, the README | steps 6 to 9; the review's `produce` programs (a producer failing while the body is blocked, a body that breaks at `cap`); `for x in try &r` over a named cursor that can fail |
 | 6a | 261287d | the runtime half: lib/eval/family.ml, the keyed instance family (partitions, pins, the order of release, lives, names by the one rule, eviction with its `finally` on the evicting task, teardown in reverse creation order), reached through the prelude's `Instances` (`open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`) over `family_*` intrinsics that Core Lint lets only its members call (`Prelude.runtime_of`); `D.Call` for every dependency whose operations are all data (Resolve's `call_types`, `Doc.Call.Edit { op }` three-part paths in the parser and tree-sitter, `X.Call` as a type, "`Docs.Call` needs every operation of `Docs` to be data"); the `call(c)` clause and a merge's `call(c, a, b)`, checked once with a refined skolem result (`Types.refined`, Infer_handlers.call_clause) and copied per operation (Lower's `clause_ops`); handlers `for D`, made per dependency (`For_param`, Lower's `for_call`); generic code's `Call<D, R, E>` and its members `first_hash`, `sum`, `max`, `min`, `concat`, `fold`, and `operations(h)`; handler parameters with defaults; `Async.worker()` (sched.ml); the family refused natively (to_mem.ml); test/test_calls.ml; language.md's table | step 6b: `striped` in Ren, `sync.keyed` removed; step 7: `pin`, `post`, queues, the meter, setup's errors, `victim`, journal version 3, `D.Call<R ! E>` |
-| 6b | this commit | `striped` in the prelude, plain Ren over the family's `Instances`, `Async.worker()` and `Call`'s members: `By` (`Key(n: Int = 16)`, `Worker`), `Fold<D>` (`Unmerged`, `Sum`, `Max`, `Min`, `Concat`, `Custom(m)`), its checks at the `with` reading `operations(h)`, a keyless call on every stripe folded left to right; `sync.keyed` removed with `Sync_keyed`, `VKeyed`, `VKeys` and their sites, its tests moved to test_services.ml as `striped`'s; test_services.ml's s6 all on, the split law failing under seed 5671; language.md §11's `striped` lines run (test_calls.ml); bench/services/refused as specified, natively refused; async.md, deps.md, handlers.md, language.md's table, the README | step 7: `actors`, `pin`, `post`, journal version 3; the review's stripes program (a merge whose result depends on stripe order) |
+| 6b | 04d0347 | `striped` in the prelude, plain Ren over the family's `Instances`, `Async.worker()` and `Call`'s members: `By` (`Key(n: Int = 16)`, `Worker`), `Fold<D>` (`Unmerged`, `Sum`, `Max`, `Min`, `Concat`, `Custom(m)`), its checks at the `with` reading `operations(h)`, a keyless call on every stripe folded left to right; `sync.keyed` removed with `Sync_keyed`, `VKeyed`, `VKeys` and their sites, its tests moved to test_services.ml as `striped`'s; test_services.ml's s6 all on, the split law failing under seed 5671; language.md §11's `striped` lines run (test_calls.ml); bench/services/refused as specified, natively refused; async.md, deps.md, handlers.md, language.md's table, the README | step 7: `actors`, `pin`, `post`, journal version 3; the review's stripes program (a merge whose result depends on stripe order) |
+| 7a | this commit | `actors` in the prelude, plain Ren over the family: `Actors<K, D>` with `at` and `each` as members over the operations `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`; `actors(h: spawned fn(k: K) -> D, max, mailbox, evict: Lru, chaos, parts)`; the alias's `! E`; the family's `pin` for a block with a library's `victim`, `visit`, `enter`/`made`, `idle`, setup's errors as the family's, waiters sharing them, a cancelled setup retried; the no-deadlock rules static and at run time, `Full`; `finally` can't fail; partitions; chaos; journal version 3 (`opened`, `made`, `evicted`), replayed; test_services.ml's s7 tests but `post`'s on, test/test_actors.ml; tree-sitter's alias errors (corpus actors.txt); language.md's table | step 7b: `post`, the per-key queues and their delivery tasks, the edge's meter and high-water mark, a sibling's post and an actor naming its own family, teardown draining, research/actors-post/'s counterexamples; s7's `post` tests |
 
 ## The runtime model
 

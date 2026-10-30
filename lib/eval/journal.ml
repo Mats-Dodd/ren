@@ -40,7 +40,7 @@ open Value
 let sprintf = Printf.sprintf
 
 (* The version of the format, which a reader checks. *)
-let version = 2
+let version = 3
 
 (* ---- calls ---- *)
 
@@ -466,7 +466,7 @@ let header_text h =
     (String.concat " " h.deps)
 
 (* What a journal's first line is, for a message. *)
-let header_shape = "# ren journal 2 · <program> · deps: <dependencies>"
+let header_shape = "# ren journal 3 · <program> · deps: <dependencies>"
 
 (* A line after the header: a call, or the second line of one that waits
    ([Gave], its task's), a poll that woke tasks, by their paths, in the
@@ -477,17 +477,21 @@ type entry =
   | Gave of string * string option * int
   | Poll of string list * int
   | Cancel of string * int
+  | Family of string * string * int
+      (** what a keyed instance family did on a task: `opened docs parts
+          4`, `made docs[DocId(7)]#3` or `evicted docs[DocId(7)]#3`
+          (version 3) *)
   | End of ending * int
 
 (* The task an entry is a task's, if it is one's. *)
 let entry_task = function
   | Call c -> Some c.task
-  | Gave (p, _, _) | Cancel (p, _) -> Some p
+  | Gave (p, _, _) | Cancel (p, _) | Family (p, _, _) -> Some p
   | Poll _ | End _ -> None
 
 let entry_line = function
   | Call c -> c.line
-  | Gave (_, _, l) | Poll (_, l) | Cancel (_, l) | End (_, l) -> l
+  | Gave (_, _, l) | Poll (_, l) | Cancel (_, l) | Family (_, _, l) | End (_, l) -> l
 
 (* How a message shows an entry. *)
 let entry_shown = function
@@ -495,6 +499,7 @@ let entry_shown = function
   | Gave (p, _, _) -> p ^ " →, the end of its call"
   | Poll (ps, _) -> "poll " ^ String.concat " " ps
   | Cancel (p, _) -> p ^ " cancelled"
+  | Family (p, what, _) -> p ^ " " ^ what
   | End (e, _) -> ending_said e
 
 (* An entry that can't be read, at its line of [file]: a message that
@@ -574,6 +579,7 @@ let parse_entry ~file line text =
       let word, after = first_word rest in
       match word with
       | "cancelled" when after = "" -> Cancel (task, line)
+      | ("opened" | "made" | "evicted") when after <> "" -> Family (task, rest, line)
       | "→" -> Gave (task, (if after = "" then None else Some after), line)
       | "exit" when after = "0" -> End (Exited, line)
       | "exit" when (match int_of_string_opt after with Some n -> n > 128 && n < 256 | None -> false) ->
@@ -619,16 +625,18 @@ let parse_entry ~file line text =
               | None -> bad ())
           | _ -> bad ()))
 
-(* A journal of version 1, which this `ren` doesn't read: its file, as it
-   was named, and its program, from the folder [file] is in. *)
-exception Version_1 of { file : string; program : string }
+(* A journal of an older version, 1 or 2, which this `ren` doesn't read:
+   its version, its file, as it was named, and its program, from the
+   folder [file] is in. *)
+exception Old_version of { old : int; file : string; program : string }
 
 (* What `ren replay` says of one, and a test that replays one: how to
    record it again, its program found from where it's run, as `ren run`
    would be given it. *)
-let version_1_said ~file ~program =
-  ( sprintf "`%s` is a version 1 journal, which this `ren` doesn't read" file,
-    "version 2 names the task that made each call",
+let old_version_said ~old ~file ~program =
+  ( sprintf "`%s` is a version %d journal, which this `ren` doesn't read" file old,
+    (if old = 1 then "version 2 names the task that made each call, and version 3 the runtime's instance families"
+     else "version 3 names the runtime's instance families, and what they made and evicted"),
     sprintf "record it again: `ren run --record %s %s`" file program )
 
 (* [path], from the folder [dir]: `tests/../main.ren` is `main.ren`. *)
@@ -675,11 +683,15 @@ let parse_header ~file first =
     | None -> wrong ()
   in
   match String.split_on_char ' ' rest with
-  | "1" :: _ ->
+  | (("1" | "2") as old) :: _ ->
       let h = fields () in
       raise
-        (Version_1
-           { file; program = from_folder (Filename.dirname file) h.program })
+        (Old_version
+           {
+             old = int_of_string old;
+             file;
+             program = from_folder (Filename.dirname file) h.program;
+           })
   | v :: _
     when int_of_string_opt v <> Some version && int_of_string_opt v <> None ->
       raise
@@ -877,7 +889,7 @@ let load ~file text =
                       waits, whose first line ends `…`"
                    ()))
       | Cancel (p, _) -> Hashtbl.remove open_calls p
-      | Poll _ | End _ -> ())
+      | Poll _ | Family _ | End _ -> ())
     entries;
   let ending =
     List.find_map (function End (e, l) -> Some (e, l) | _ -> None) entries
@@ -916,7 +928,7 @@ let header_at path =
   match In_channel.with_open_bin path In_channel.input_line with
   | Some first -> (
       try Some (parse_header ~file:path first)
-      with Diag.Error _ | Version_1 _ -> None)
+      with Diag.Error _ | Old_version _ -> None)
   | None | (exception Sys_error _) -> None
 
 (* The same journal, standing in for the world in a test: each call is an
@@ -947,10 +959,18 @@ let for_test (j : t) ~gives_nothing =
       (fun p is acc -> (p, Array.of_list (List.rev is)) :: acc)
       outputs []
   in
+  (* what a family did isn't what a test compares: its lines are passed
+     over, as if the test had come to them *)
+  let consumed = Array.map (function Family _ -> true | _ -> false) j.entries in
+  let cursor =
+    let rec go i = if i < Array.length consumed && consumed.(i) then go (i + 1) else i in
+    go 0
+  in
   {
     j with
     mode = Test { inputs; outputs = Hashtbl.of_seq (List.to_seq outputs); made = [] };
-    consumed = Array.make (Array.length j.entries) false;
+    consumed;
+    cursor;
     (* a recording with no calls has no order to follow *)
     follows = (match j.entries with [||] | [| End _ |] -> false | _ -> true);
   }
@@ -1417,6 +1437,7 @@ let watcher j ~path_of : Sched.journal =
           (fun line ->
             Printf.fprintf out "# %s\n" (String.trim line);
             flush out);
+        family = (fun t what -> write_line j out (path_of t ^ " " ^ what));
       }
   | _ ->
       let strict = j.mode = Strict in
@@ -1469,6 +1490,15 @@ let watcher j ~path_of : Sched.journal =
               | _ -> astray ~verb:"has" (p ^ " seeing a cancel"));
         astray = (fun p -> astray ~verb:"has" (p ^ " waiting for nothing a poll ends"));
         note = ignore_;
+        family =
+          (fun t what ->
+            (* checked where it comes, strictly, as a call is; a test
+               passed over them ([for_test]) *)
+            if strict then
+              let p = path_of t in
+              match next_entry j with
+              | Some (Family (q, w, _)) when q = p && w = what -> consume j j.cursor
+              | _ -> went_differently j ~made:(p ^ " " ^ what));
       }
 
 (* ---- a test's outputs ---- *)

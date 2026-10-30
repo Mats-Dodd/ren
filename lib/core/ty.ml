@@ -228,9 +228,46 @@ let read ty = { mode = Read; ty }
 let closed = { labels = []; tail = None }
 let label name = { name; payload = [] }
 
-(* Whether two labels are one: the same name and payload. *)
+(* A dependency's type argument as evidence is found by it: a
+   description is the dependencies it's of, whatever it needs or fails to
+   start with, and `(D ! ..e)` is [D] (compiler.md, "Services stage",
+   "Actors (step 7)"). *)
+let rec key_ty (t : ty) =
+  match t with
+  | Impl { deps = [ { dpath; dargs = [ d ] } ]; over = false; _ }
+    when dpath = param_path ->
+      key_ty d
+  | Impl i ->
+      Impl
+        {
+          i with
+          deps = List.map (fun d -> { d with dargs = List.map key_ty d.dargs }) i.deps;
+          needs = closed;
+          fails = closed;
+        }
+  | Con (p, args) -> Con (p, List.map key_ty args)
+  | t -> t
+
+(* [t] with each description in it, however deep, as evidence finds it
+   ([key_ty]): what Core Lint compares an operation's type at a call
+   with. *)
+let rec key_deep (t : ty) =
+  let row (r : row) =
+    { r with labels = List.map (fun l -> { l with payload = List.map key_deep l.payload }) r.labels }
+  in
+  match key_ty t with
+  | Con (p, args) -> Con (p, List.map key_deep args)
+  | Variant (p, c, args) -> Variant (p, c, List.map key_deep args)
+  | Fun (ps, r, e, u) ->
+      Fun (List.map (fun (p : param) -> { p with ty = key_deep p.ty }) ps, key_deep r, row e, row u)
+  | Errors e -> Errors (row e)
+  | t -> t
+
+(* Whether two labels are one: the same name and payload, a dependency's
+   type arguments as evidence finds them ([key_ty]). *)
 let same_label (a : label) (b : label) =
-  a.name = b.name && a.payload = b.payload
+  a.name = b.name
+  && (a.payload = b.payload || List.map key_ty a.payload = List.map key_ty b.payload)
 
 (* The dependency at [p], with no type arguments: one that takes none. *)
 let plain p = { dpath = p; dargs = [] }
@@ -360,6 +397,21 @@ let known (t : ty) : ty =
       Impl { deps = [ d ]; over = false; needs = union i.needs needs; fails = union i.fails fails }
   | t -> t
 
+(* [l], a row's label, with what's known once a dependency is: `uses D`,
+   [D] a type parameter, is the one dependency the description [D] stands
+   for is of (compiler.md, "Services stage", "Actors (step 7)"). *)
+let rec known_label (l : label) =
+  match l.payload with
+  | [ Impl { deps = [ d ]; over = false; _ } ]
+    when l.name = dep_label param_path
+         && not (d.dpath = any_path || d.dpath = param_path) ->
+      dep_of d
+  | [ Impl { deps = [ { dpath; dargs = [ d ] } ]; over = false; _ } ]
+    when l.name = dep_label param_path && dpath = param_path ->
+      (* the dependency of `(D ! ..e)` is [D]'s *)
+      known_label { l with payload = [ d ] }
+  | _ -> l
+
 let rec apply (a : args) (s : ty) : ty =
   match s with
   | Var n -> List.nth a.tys n
@@ -384,11 +436,11 @@ let rec apply (a : args) (s : ty) : ty =
 and apply_row a (r : row) : row =
   let labels =
     List.map
-      (fun (l : label) -> { l with payload = List.map (apply a) l.payload })
+      (fun (l : label) -> known_label { l with payload = List.map (apply a) l.payload })
       r.labels
   in
   match r.tail with
-  | None -> { labels; tail = None }
+  | None -> { labels = sort_labels labels; tail = None }
   | Some n ->
       let more : row = List.nth a.rows n in
       let has (l : label) = List.exists (same_label l) labels in

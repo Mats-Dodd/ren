@@ -111,6 +111,13 @@ type t =
   | Family_evictable
   | Family_counts
   | Family_close
+  | Family_pin
+  | Family_visit
+  | Family_idle
+  | Family_full
+  | Family_enter
+  | Family_made
+  | Family_kept
   | Call_first_hash
   | Call_add
   | Call_max
@@ -272,6 +279,13 @@ let path x =
   | Family_evictable -> fn "family_evictable"
   | Family_counts -> fn "family_counts"
   | Family_close -> fn "family_close"
+  | Family_pin -> fn "family_pin"
+  | Family_visit -> fn "family_visit"
+  | Family_idle -> fn "family_idle"
+  | Family_full -> fn "family_full"
+  | Family_enter -> fn "family_enter"
+  | Family_made -> fn "family_made"
+  | Family_kept -> fn "family_kept"
   | Call_first_hash -> fn "call_first_hash"
   | Call_add -> fn "call_add"
   | Call_max -> fn "call_max"
@@ -371,7 +385,10 @@ let waits = function
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
   | Task_produce | Task_map_pull | Outbox_send | Inbox_take
-  | Async_yield | Async_tick | Sim_sleep | Family_call | Family_make | Family_evict
-  | Family_close ->
+  | Async_yield | Async_tick | Sim_sleep ->
       true
+  (* the keyed instance family's wait too, but as an operation of the
+     handler that opened the family does, whose instance is installed
+     outside each call that reaches them (compiler.md, "Services stage",
+     "Actors (step 7)"), so they're not among these *)
   | _ -> false

@@ -1278,6 +1278,7 @@ fn main() = print(Some(true))
       | Some Pulls_block -> print_endline "a block pulled"
       | Some (Pulled _) -> print_endline "a pull argument"
       | Some (For_param k) -> print_endline ("for its variable " ^ string_of_int k)
+      | Some Full_marked -> print_endline "can fail with Full"
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect
@@ -1446,7 +1447,7 @@ fn main() = f()
       ┌─ test.ren:1:22
     1 │ fn f() uses Console, Disk = 1
       │                      ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Actors`, `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 

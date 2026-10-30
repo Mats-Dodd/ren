@@ -1373,6 +1373,16 @@
     "type": "dependency_definition",
     "named": true,
     "fields": {
+      "errors": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "error_set",
+            "named": true
+          }
+        ]
+      },
       "member": {
         "multiple": true,
         "required": false,

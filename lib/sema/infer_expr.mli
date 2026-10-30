@@ -29,3 +29,9 @@ val stmt : env -> ctx -> Ast.Resolved.stmt -> unit
 (* The functions above, for Infer_handlers.handler, which a handler's body
    is checked with. *)
 val core : Infer_handlers.core
+
+(* Whether a function pins an instance of a keyed instance family for a
+   block: the family's own pins, `Instances.pin`, and a dependency's
+   member that runs a block given the dependency a type variable names,
+   `Actors.at` (compiler.md, "Services stage", "Actors (step 7)"). *)
+val pins_for_a_block : env -> Path.t -> bool

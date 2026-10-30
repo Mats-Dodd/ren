@@ -1,0 +1,87 @@
+================================================================================
+An alias that says what making its family's actors fails with
+================================================================================
+
+dep Docs = Actors<DocId, Doc> ! StoreDown
+dep Plain = Actors<DocId, Doc>
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (dependency_definition
+    (type_identifier)
+    (dependency
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (error_set
+      (error_tag
+        (type_identifier))))
+  (dependency_definition
+    (type_identifier)
+    (dependency
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))
+        (named_type
+          (type_name
+            (type_identifier)))))))
+
+================================================================================
+A handler's maker, a spawned block parameter
+================================================================================
+
+pub handler actors<K, D>(h: spawned fn(k: K) -> D, max: Int = 10000) for Actors<K, D> uses Random =
+  count() => 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (handler_definition
+    (visibility)
+    (identifier)
+    (type_parameters
+      (type_identifier)
+      (type_identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (block_mode)
+        (function_type
+          (function_type_parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (number)))
+    (dependency
+      (type_identifier)
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (handler_arm
+      (identifier)
+      (parameters)
+      (number))))

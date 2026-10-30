@@ -88,6 +88,13 @@ type t =
   | Family_evictable
   | Family_counts
   | Family_close
+  | Family_pin
+  | Family_visit
+  | Family_idle
+  | Family_full
+  | Family_enter
+  | Family_made
+  | Family_kept
   | Call_first_hash
   | Call_add
   | Call_max

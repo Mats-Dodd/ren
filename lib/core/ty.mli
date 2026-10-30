@@ -137,7 +137,16 @@ val closed : row
 (* A label with no payload: an error tag like `Frozen`, or a dependency. *)
 val label : string -> label
 
-(* Whether two labels are one: the same name and payload. *)
+(* A dependency's type argument as evidence is found by it: a
+   description is the dependencies it's of, whatever it needs or fails to
+   start with, and `(D ! ..e)` is [D]. *)
+val key_ty : ty -> ty
+
+(* [t] with each description in it, however deep, so ([key_ty]). *)
+val key_deep : ty -> ty
+
+(* Whether two labels are one: the same name and payload, as evidence
+   finds them ([key_ty]). *)
 val same_label : label -> label -> bool
 
 (* The dependency at a path, with no type arguments. *)
@@ -189,6 +198,10 @@ val apply : args -> ty -> ty
    handler `for D` implements, [D] one of one, is that one, needing what
    both need. [apply] does it. *)
 val known : ty -> ty
+
+(* A row's label with what's known once a dependency is: `uses D`, [D]
+   a description of one dependency, is that one's label. *)
+val known_label : label -> label
 
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, type and row variables separately, and its

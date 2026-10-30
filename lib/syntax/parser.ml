@@ -2817,6 +2817,40 @@ let rec parse_dep ?(prelude = false) p ~pub =
     (* an alias, `dep Jobs = Chan<Job>`: a dependency of its own, with the
        operations of the one it names at those types *)
     let target = parse_dep_ref p in
+    (* `dep Docs = Actors<DocId, Doc> ! StoreDown`: what making the
+       dependency its last type argument names fails with, the errors of
+       making an actor, written after the alias as a dependency's are
+       (compiler.md, "Services stage", "Actors (step 7)"). It's that
+       argument's, an implementation of `Doc` that fails to start so,
+       `(Doc ! StoreDown)` *)
+    let target =
+      if peek p <> BANG then target
+      else
+        let errs = parse_errors p in
+        match List.rev target.dargs with
+        | TyName (d, args) :: before ->
+            {
+              target with
+              dargs =
+                List.rev
+                  (TyImpl
+                     {
+                       impl_deps = [ { dep = d; dargs = args } ];
+                       impl_over = false;
+                       impl_errors = Some errs;
+                       impl_uses = None;
+                       impl_loc = errs.eloc;
+                     }
+                  :: before);
+            }
+        | _ ->
+            Diag.error errs.eloc
+              ~help:
+                "give it the dependency it keeps last, `Actors<DocId, Doc> ! \
+                 StoreDown`"
+              "an alias fails only as making the dependency its last type \
+               argument names does"
+    in
     if type_params <> [] then
       Diag.error at_params
         ~help:

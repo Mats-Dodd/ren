@@ -56,10 +56,17 @@ and occurs_row ?(ty = -1) id level r =
    an alias takes no type parameters. *)
 let aliased st (a : dep) : dep =
   let t : Ty.dep = Hashtbl.find st.aliases a.dpath in
-  {
-    dpath = t.dpath;
-    dargs = List.map (of_ty ~vars:(fun _ -> TError) ~tails:(fun _ -> REmpty)) t.dargs;
-  }
+  (* a description among them, `Doc ! StoreDown` in `Actors<DocId, Doc>
+     ! StoreDown`, is named by the dependency it's of and what it fails
+     to start with: what it needs is what the `with` that installs it
+     has, so it's open, each time (compiler.md, "Services stage", "Actors
+     (step 7)") *)
+  let darg (d : Ty.ty) =
+    match of_ty ~vars:(fun _ -> TError) ~tails:(fun _ -> REmpty) d with
+    | TImpl i -> TImpl { i with needs = fresh_row st }
+    | t -> t
+  in
+  { dpath = t.dpath; dargs = List.map darg t.dargs }
 
 let rec unify st a b =
   match (repr a, repr b) with
@@ -117,6 +124,23 @@ let rec unify st a b =
   | TImpl ({ deps = [ _ ]; _ } as i), TImpl ({ deps = [ b ]; _ } as j)
     when Hashtbl.mem st.aliases b.dpath ->
       unify st (TImpl i) (TImpl { j with deps = [ aliased st b ] })
+  (* an implementation of the dependency a type variable [D] is a
+     description of, written `(D ! ..e)` (Ty.param_path), is [D]'s, which
+     the other one is, with what it fails to start with named: so generic
+     code reads what a description's setup fails with, as `Instances.pin`
+     does (compiler.md, "Services stage", "Actors (step 7)"). What it's
+     written to need is [D]'s own *)
+  | TImpl ({ deps = [ { dpath; dargs = [ d ] } ]; over = false; _ } as i),
+    TImpl ({ deps = [ x ]; over = false; _ } as j)
+    when dpath = Ty.param_path && x.dpath <> Ty.param_path
+         && x.dpath <> Ty.any_path ->
+      unify st d (TImpl j);
+      unify_row st i.fails j.fails
+  | TImpl ({ deps = [ x ]; over = false; _ } as j),
+    TImpl ({ deps = [ { dpath; dargs = [ _ ] } ]; over = false; _ } as i)
+    when dpath = Ty.param_path && x.dpath <> Ty.param_path
+         && x.dpath <> Ty.any_path ->
+      unify st (TImpl i) (TImpl j)
   | TSkol (i, _), TSkol (j, _) when i = j -> ()
   | _ -> raise Mismatch
 

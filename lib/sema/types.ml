@@ -253,12 +253,37 @@ and chase t =
       t''
   | t -> t
 
+(* The label `uses D` writes, [D] a type parameter: [Ty.param_path]'s. *)
+let for_label = Ty.dep_label Ty.param_path
+
+(* [l], a row's label, with what's known now: a dependency named by a
+   type variable, `uses D`, is the one dependency the description [D]
+   stands for is of, once that's known, and the dependency of `(D ! ..e)`
+   is [D]'s (compiler.md, "Services stage", "Actors (step 7)"). *)
+let rec norm_label l =
+  if l.dep && l.name = for_label then
+    match l.payload with
+    | [ d ] -> (
+        match repr d with
+        | TImpl { deps = [ x ]; over = false; _ }
+          when x.dpath <> Ty.param_path && x.dpath <> Ty.any_path ->
+            { l with name = Ty.dep_label x.dpath; payload = x.dargs }
+        | TImpl { deps = [ { dpath; dargs = [ d' ] } ]; over = false; _ }
+          when dpath = Ty.param_path ->
+            norm_label { l with payload = [ d' ] }
+        | _ -> l)
+    | _ -> l
+  else l
+
 let rec repr_row r =
   match r with
   | RVar ({ contents = RLink r' } as cell) ->
       let r'' = repr_row r' in
       cell := RLink r'';
       r''
+  | RExtend (l, rest) when l.dep && l.name = for_label ->
+      let l' = norm_label l in
+      if l' == l then r else RExtend (l', rest)
   | r -> r
 
 (* Whether [a] and [b] are the same type now: a variable only itself, a
@@ -307,6 +332,7 @@ and same_row a b =
    same type arguments. Two tags of one name are one tag, whose payloads
    unification makes the same (unify.ml). *)
 let same_label (a : label) (b : label) =
+  let a = norm_label a and b = norm_label b in
   a.name = b.name
   && ((not (a.dep || b.dep))
      || List.length a.payload = List.length b.payload
@@ -840,7 +866,8 @@ let rec canon_ty c ~all t : Ty.ty =
       in
       let needs = canon_row c ~all i.needs in
       let fails = canon_row c ~all i.fails in
-      Impl { deps; over = i.over; needs; fails }
+      (* as [Ty.apply] makes it, with what's known once a dependency is *)
+      Ty.known (Impl { deps; over = i.over; needs; fails })
   | TFun (ps, r, e, u) ->
       (* `let`s fix the order of first appearance: OCaml evaluates a
          constructor's arguments right to left *)

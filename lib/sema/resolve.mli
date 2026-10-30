@@ -32,7 +32,7 @@ type t = {
   wirings : Iface.wiring list;
       (** its wirings (language.md §5), flattened, in the order they're
           declared: each is functions in [prog] by now *)
-  through : (int, Path.t) Hashtbl.t;
+  through : (int * Loc.t, Path.t) Hashtbl.t;
       (** each member function of a dependency called through an alias of it,
           `Events.items()` for `dep Events = Chan<Event>`, by the node of the
           member as written, with the alias *)

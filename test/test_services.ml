@@ -2760,11 +2760,15 @@ fn main() uses Console, Async =
 (* ---- s7: `actors`, plain Ren over the keyed instance family (decisions 18 and 20, language.md §11) ----
 
    `actors` uses `Random`, for `chaos:`, so a `main` that installs it
-   names `Random` (compiler.md, "Where this stage may differ"). *)
+   names `Random` (compiler.md, "Where this stage may differ"). The rules
+   of decision 18's list that aren't `post`'s each have a test here, or in
+   test_actors.ml. *)
 
 (* A document actor and its store, the smallest stand-ins: a document is
    text that grows by appending, and the store keeps the last text saved
-   and counts what it was asked. *)
+   and counts what it was asked. Its `finally` gives back the `with`'s
+   body's result, as any handler's does, which a family gives it as
+   `Ok(())`. *)
 let docs =
   {|
 type DocId = | DocId(n: Int)
@@ -2787,9 +2791,11 @@ dep Doc =
   edit: fn(s: Str) ! StoreDown
   text: fn() -> Str
 
-handler doc(id: DocId) for Doc uses Store, Console =
+handler doc(id: DocId) for Doc ! StoreDown uses Store, Console =
   var text = try Store.load(id)
-  finally(_) => print("evicted " + show(id))
+  finally(r) =>
+    print("evicted " + show(id))
+    try r
   edit(s) =>
     text = text + s
     try Store.save(id, text)
@@ -2799,18 +2805,11 @@ dep Docs = Actors<DocId, Doc> ! StoreDown
 |}
 
 let%expect_test "[s7 accept] `at` makes an actor on demand, and installs it as `D` for its block" =
-  until "s7"
-    ~want:{|
-ab
-1
-evicted DocId(1)
-Ok(())
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
+  (* the `with`'s body prints what `go` gave before the family ends,
+     evicting the actor *)
+  run
+    (docs
+   ^ {|
 fn go() ! StoreDown uses Docs, Console =
   try Docs.at(DocId(1)) fn() =>
     try Doc.edit("a")
@@ -2820,54 +2819,34 @@ fn go() ! StoreDown uses Docs, Console =
 
 fn main() uses Console, Random =
   with mem_store(), actors(doc, max: 2) as Docs in print(attempt go())
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    ab
+    1
+    Ok(())
+    evicted DocId(1)
+    ()
     |}]
 
 let%expect_test "[s7 accept] setup's errors are `at`'s, and the next `at` tries again" =
-  until "s7"
-    ~want:{|
-Err(StoreDown)
-0
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
+  run
+    (docs
+   ^ {|
 fn main() uses Console, Random =
   with mem_store(), actors(doc) as Docs in
     print(attempt Docs.at(DocId(-1)) fn() => Doc.text())
     print(Docs.count())
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    Err(StoreDown)
+    0
+    ()
     |}]
 
 let%expect_test "[s7 accept] past `max:`, the least recently released actor is evicted, its `finally` on the caller's task" =
-  until "s7"
-    ~want:{|
-evicted DocId(1)
-2
-1
-1
-evicted DocId(3)
-evicted DocId(2)
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
+  run
+    (docs
+   ^ {|
 fn touch(n: Int) ! StoreDown uses Docs =
   try Docs.at(DocId(n)) fn() => try Doc.edit("x")
 
@@ -2884,28 +2863,21 @@ fn main() uses Console, Random =
     match attempt go()
       Ok(_) => ()
       Err(_) => print("failed")
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    evicted DocId(1)
+    2
+    1
+    1
+    evicted DocId(3)
+    evicted DocId(2)
+    ()
     |}]
 
 let%expect_test "[s7 accept] an evicted actor made again reads what the store kept" =
-  until "s7"
-    ~want:{|
-evicted DocId(1)
-evicted DocId(2)
-xy
-evicted DocId(1)
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
+  run
+    (docs
+   ^ {|
 fn go() ! StoreDown uses Docs, Console =
   try Docs.at(DocId(1)) fn() => try Doc.edit("x")
   try Docs.at(DocId(2)) fn() => try Doc.edit("-")
@@ -2918,23 +2890,20 @@ fn main() uses Console, Random =
     match attempt go()
       Ok(_) => ()
       Err(_) => print("failed")
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    evicted DocId(1)
+    evicted DocId(2)
+    xy
+    evicted DocId(1)
+    ()
     |}]
 
 let%expect_test "[s7 accept] a pinned actor isn't evicted; the maker waits for one that's evictable" =
-  until "s7"
-    ~says:[ "✓ the pinned one keeps its text" ]
-    (fun () ->
-      test ~seeds:200
-        (pub_all
-         (docs
-       ^ {|
+  test ~seeds:200
+    (pub_all
+       (docs
+      ^ {|
 test "the pinned one keeps its text" =
   with mem_store(), actors(doc, max: 1) as Docs in
     Async.scope fn(s) =>
@@ -2943,39 +2912,23 @@ test "the pinned one keeps its text" =
           let _ = attempt Doc.edit("a")
           Async.yield()
           assert Doc.text() == "a"
+        ()
       s.spawn fn() =>
         let _ = attempt Docs.at(DocId(2)) fn() => Doc.text()
-|})));
+        ()
+|}));
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:35
-    29 │ pub dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                                   ^
+    test.ren
+      ✓ the pinned one keeps its text
 
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:35:13
-    35 │         let _ = attempt Docs.at(DocId(1)) fn() =>
-       │             ^
-       help: add the value this block should produce as its last line
+    1 passed, each under 200 seeds
+    [exit 0]
     |}]
 
 let%expect_test "[s7 accept] `evict(k)`, `evict_idle(d)` and `each`" =
-  until "s7"
-    ~want:{|
-evicted DocId(1)
-1
-b
-evicted DocId(2)
-0
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
-import sim
-
+  run
+    ("import sim\n" ^ docs
+   ^ {|
 fn go() ! StoreDown uses Docs, Console, Clock =
   try Docs.at(DocId(1)) fn() => try Doc.edit("a")
   Clock.sleep(Duration.seconds(10))
@@ -2993,60 +2946,38 @@ fn main() uses Console, Random =
         match attempt go()
           Ok(_) => ()
           Err(_) => print("failed")
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
-
-    error: imports go at the top of the file
-       ┌─ test.ren:31:1
-    31 │ import sim
-       │ ^^^^^^^^^^
-       help: move it above the file's first function or type
+    evicted DocId(1)
+    1
+    b
+    evicted DocId(2)
+    0
+    ()
     |}]
 
 let%expect_test "[s7 accept] teardown in reverse creation order" =
-  until "s7"
-    ~want:{|
-evicted DocId(3)
-evicted DocId(1)
-evicted DocId(2)
-()
-|}
-    (fun () ->
-      run
-        (docs
-       ^ {|
+  run
+    (docs
+   ^ {|
 fn main() uses Console, Random =
   with mem_store(), actors(doc) as Docs in
     for n in [2, 1, 3]
       let _ = attempt Docs.at(DocId(n)) fn() => Doc.text()
-|}));
+      ()
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
-
-    error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:34:11
-    34 │       let _ = attempt Docs.at(DocId(n)) fn() => Doc.text()
-       │           ^
-       help: add the value this block should produce as its last line
+    evicted DocId(3)
+    evicted DocId(1)
+    evicted DocId(2)
+    ()
     |}]
 
 let%expect_test "[s7 accept] two operations of one actor race; one operation doesn't" =
   (* language.md §11: a read and a write in two operations race *)
-  until "s7"
-    ~says:[ "✗ two appends by read-then-write both land"; "✓ two appends by one operation both land" ]
-    (fun () ->
-      test ~seeds:200
-        (pub_all
-         {|
+  test ~seeds:200
+    (pub_all
+       {|
 type DocId = | DocId(n: Int)
 
 dep Doc =
@@ -3075,73 +3006,25 @@ test "two appends by one operation both land" =
       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.append("a")
       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.append("b")
     Docs.at(DocId(1)) fn() => assert Doc.text().bytes().len() == 2
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-       ┌─ test.ren:14:16
-    14 │ pub dep Docs = Actors<DocId, Doc>
-       │                ^^^^^^
-       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-       help: use one of those, or declare it with `dep`
+    test.ren
+      ✗ two appends by read-then-write both land
+      ✓ two appends by one operation both land
 
-    error: there's no function named `actors`
-       ┌─ test.ren:17:8
-    17 │   with actors(doc) as Docs in
-       │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-       ┌─ test.ren:17:23
-    17 │   with actors(doc) as Docs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:19:28
-    19 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text() + "a")
-       │                            ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:20:28
-    20 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.set(Doc.text() + "b")
-       │                            ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:21:10
+    ──── two appends by read-then-write both land ── test.ren:21
+       │
     21 │     Docs.at(DocId(1)) fn() => assert Doc.text().bytes().len() == 2
-       │          ^^
-       help: declare it under `type Docs`
+       │                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       │
+       left:  1
+       right: 2
+              ^ differs here
 
-    error: there's no function named `actors`
-       ┌─ test.ren:24:8
-    24 │   with actors(doc) as Docs in
-       │        ^^^^^^
+       seed 7511 · rerun: ren test test.ren --only "two appends by read-then-write" --seed 7511
 
-    error: `Docs` is a type, not a dependency
-       ┌─ test.ren:24:23
-    24 │   with actors(doc) as Docs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:26:28
-    26 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.append("a")
-       │                            ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:27:28
-    27 │       s.spawn fn() => Docs.at(DocId(1)) fn() => Doc.append("b")
-       │                            ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:28:10
-    28 │     Docs.at(DocId(1)) fn() => assert Doc.text().bytes().len() == 2
-       │          ^^
-       help: declare it under `type Docs`
+    1 passed, 1 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s7 accept] `actors(doc, chaos: true)` finds what lives only in memory" =
@@ -3150,12 +3033,9 @@ let%expect_test "[s7 accept] `actors(doc, chaos: true)` finds what lives only in
      `ren test`, so under some seed the document kept only in memory
      loses its text between two `at`s. The scheduler and `ren test` know
      nothing of it *)
-  until "s7"
-    ~says:[ "✗ the text kept only in memory survives" ]
-    (fun () ->
-      test ~seeds:50
-        (pub_all
-         {|
+  test ~seeds:50
+    (pub_all
+       {|
 type DocId = | DocId(n: Int)
 
 dep Doc =
@@ -3173,73 +3053,50 @@ test "the text kept only in memory survives" =
   with actors(doc, chaos: true) as Docs in
     Docs.at(DocId(1)) fn() => Doc.append("a")
     Docs.at(DocId(1)) fn() => assert Doc.text() == "a"
-|}));
+|});
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-       ┌─ test.ren:12:16
-    12 │ pub dep Docs = Actors<DocId, Doc>
-       │                ^^^^^^
-       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-       help: use one of those, or declare it with `dep`
+    test.ren
+      ✗ the text kept only in memory survives
 
-    error: there's no function named `actors`
-       ┌─ test.ren:15:8
-    15 │   with actors(doc, chaos: true) as Docs in
-       │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-       ┌─ test.ren:15:36
-    15 │   with actors(doc, chaos: true) as Docs in
-       │                                    ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:16:10
-    16 │     Docs.at(DocId(1)) fn() => Doc.append("a")
-       │          ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:17:10
+    ──── the text kept only in memory survives ── test.ren:17
+       │
     17 │     Docs.at(DocId(1)) fn() => assert Doc.text() == "a"
-       │          ^^
-       help: declare it under `type Docs`
+       │                                      ^^^^^^^^^^^^^^^^^
+       │
+       left:  ""
+       right: "a"
+               ^ differs here
+
+       seed 6561 · rerun: ren test test.ren --only "the text" --seed 6561
+
+    0 passed, 1 failed
+    [exit 1]
     |}]
 
 let%expect_test "[s7 reject] `at` inside `at` of the same family" =
-  until "s7"
-    ~says:
-      [
-        "error: `Docs.at` inside a block of `Docs.at` could wait for a slot its own block holds";
-        "help: finish with the first, then call the second; or post to it, which holds nothing";
-      ]
-    (fun () ->
-      check_error
-        (docs
-       ^ {|
-fn main() ! StoreDown uses Store, Docs =
+  check_error
+    (docs
+   ^ {|
+fn go() ! StoreDown uses Docs =
   try Docs.at(DocId(1)) fn() =>
     try Docs.at(DocId(2)) fn() => Doc.text()
-|}));
+
+fn main() = ()
+|});
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    error: `Docs.at` inside a block of `Docs.at` could wait for a slot its own block holds
+       ┌─ test.ren:35:9
+    35 │     try Docs.at(DocId(2)) fn() => Doc.text()
+       │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       = `Docs.at` keeps the instance it pins for its block, and making another can wait for room in the family
+       help: finish with the first, then call the second; or post to it, which holds nothing
     |}]
 
 let%expect_test "[s7 reject] an actor `at`-ing its own family" =
-  until "s7"
-    ~says:
-      [
-        "error: `doc` is kept by `Docs`'s family, so it can't call `Docs.at`, which pins one of its siblings";
-        "help: post to it instead, which holds nothing";
-      ]
-    (fun () ->
-      check_error
-        {|
+  (* an actor names its own family to post to it (step 7b); it may never
+     pin one of its siblings *)
+  check_error
+    {|
 type DocId = | DocId(n: Int)
 dep Doc =
   poke: fn()
@@ -3248,178 +3105,105 @@ handler doc(id: DocId) for Doc uses Docs =
   poke() => Docs.at(DocId(2)) fn() => Doc.poke()
 fn main() uses Console, Random =
   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-|});
+|};
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Docs = Actors<DocId, Doc>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:5:37
-    5 │ handler doc(id: DocId) for Doc uses Docs =
-      │                                     ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-      ┌─ test.ren:6:18
+    error: `doc` is kept by `Docs`'s family, so it can't call `Docs.at`, which pins one of its siblings
+      ┌─ test.ren:6:13
     6 │   poke() => Docs.at(DocId(2)) fn() => Doc.poke()
-      │                  ^^
-      help: declare it under `type Docs`
+      │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = an actor's siblings are the other instances of `Docs`
+      help: post to it instead, which holds nothing
 
-    error: there's no function named `actors`
-      ┌─ test.ren:8:8
+    error: nothing installs `Docs` before `main`
+      ┌─ test.ren:7:4
+    7 │ fn main() uses Console, Random =
+      │    ^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
     8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:8:23
-    8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │                       ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-      ┌─ test.ren:8:36
-    8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │                                    ^^
-      help: declare it under `type Docs`
+      │        ----------- installing this needs `Docs`
+      help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Docs`
     |}]
 
 let%expect_test "[s7 reject] an actor's handler takes one parameter, its key" =
-  (* `actors`' `h` is `fn(k: K) -> D ! E`: an ordinary argument's type *)
-  until "s7"
-    ~says:
-      [ "found `fn(DocId, Int) -> Doc`" ]
-    (fun () ->
-      check_error
-        {|
+  (* `actors`' `h` is `fn(k: K) -> D`: an ordinary argument's type *)
+  check_error
+    {|
 type DocId = | DocId(n: Int)
 dep Doc =
   poke: fn()
 dep Docs = Actors<DocId, Doc>
 handler doc(id: DocId, size: Int) for Doc =
   poke() => ()
-fn main() =
+fn main() uses Random =
   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-|});
+|};
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Docs = Actors<DocId, Doc>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-      ┌─ test.ren:8:8
+    error: expected `fn(_) -> _`, found `fn(DocId, Int) -> Doc`
+      ┌─ test.ren:8:15
     8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:8:23
-    8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │                       ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-      ┌─ test.ren:8:36
-    8 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-      │                                    ^^
-      help: declare it under `type Docs`
+      │               ^^^
     |}]
 
 let%expect_test "[s7 reject] setup that fails with what the family doesn't declare" =
-  (* the ordinary rule for a block's errors, `h: fn(k: K) -> D ! E` with
-     the alias's `E`, which is none *)
-  until "s7"
-    ~says:
-      [ "this function can fail with `StoreDown`" ]
-    (fun () ->
-      check_error
-        {|
+  (* the alias's `! E` is what making an actor fails with, which is none
+     here *)
+  check_error
+    {|
 type DocId = | DocId(n: Int)
 dep Doc =
   poke: fn()
 dep Docs = Actors<DocId, Doc>
-fn load() -> Int ! StoreDown = 1
+fn load() -> Int ! StoreDown = fail StoreDown
 handler doc(id: DocId) for Doc =
   let n = try load()
   poke() => ()
-fn main() =
+fn main() uses Random =
   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-|});
+|};
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Docs = Actors<DocId, Doc>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
+    error: `doc`'s setup can fail with `StoreDown`, which `Docs` doesn't declare
        ┌─ test.ren:10:8
     10 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-       │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-       ┌─ test.ren:10:23
-    10 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:10:36
-    10 │   with actors(doc) as Docs in Docs.at(DocId(1)) fn() => Doc.poke()
-       │                                    ^^
-       help: declare it under `type Docs`
+       │        ^^^^^^^^^^^^^^^^^^^
+       = a family's `at` fails with what making an instance does, which `Docs` says
+       help: declare it on the alias, after its type arguments, `dep Docs = ... ! StoreDown`, or handle it in `doc`'s setup
     |}]
 
 let%expect_test "[s7 reject] an actor's `finally` that can fail" =
-  until "s7"
-    ~says:
-      [
-        "error: `doc` is kept by a family, so its `finally` can't fail";
-        "help: save in its operations, write-through, or flush before the family ends";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 type DocId = | DocId(n: Int)
 dep Doc =
   poke: fn()
 dep Docs = Actors<DocId, Doc> ! StoreDown
-fn flush() ! StoreDown = ()
+fn flush() ! StoreDown = fail StoreDown
 handler doc(id: DocId) for Doc =
   finally(r) =>
     try flush()
     try r
   poke() => ()
-fn main() =
+fn main() uses Random =
   with actors(doc) as Docs in
     match attempt Docs.at(DocId(1)) fn() => Doc.poke()
       _ => ()
-|});
+|};
   [%expect {|
-    (until s7)
-    error: expected a new line, found `!`
-      ┌─ test.ren:4:31
-    4 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-      │                               ^
+    error: `doc` is kept by a family, so its `finally` can't fail
+      ┌─ test.ren:8:5
+    8 │     try flush()
+      │     ^^^^^^^^^^^
+      = it runs when an instance is evicted, or the family ends, where no caller is given its error
+      help: save in its operations, write-through, or flush before the family ends
     |}]
 
-let%expect_test "[s7 reject] `Full` where waiting could close a cycle" =
+let%expect_test "[s7 accept] `Full` where waiting could close a cycle" =
   (* decision 18: a task that pins an actor may wait for a slot only in a
-     family installed outside the ones it pins; anywhere else `Full` *)
-  until "s7"
-    ~says:[ "Err(Full)" ]
-    (fun () ->
-      run
-        {|
+     family installed outside the ones it pins; anywhere else `Full`,
+     which `Inners.at` inside `Outers.at`'s block can fail with. Here the
+     first task holds the only slot of `Inners`, installed inside
+     `Outers`, while the second, pinning one of `Outers`, asks for
+     another *)
+  run
+    {|
 type Key = | Key(n: Int)
 dep Inner =
   poke: fn()
@@ -3433,71 +3217,20 @@ handler outer(k: Key) for Outer =
   poke() => ()
 
 fn main() uses Console, Async, Random =
-  with actors(outer, max: 1) as Outers, actors(inner, max: 1) as Inners in
-    Async.scope fn(s) =>
-      s.spawn fn() =>
-        Inners.at(Key(1)) fn() =>
-          Async.yield()
-          Inner.poke()
-      s.spawn fn() =>
-        Outers.at(Key(1)) fn() =>
-          print(attempt Inners.at(Key(2)) fn() => Inner.poke())
-|});
+  with actors(outer, max: 1) as Outers in
+    with actors(inner, max: 1) as Inners in
+      Async.scope fn(s) =>
+        s.spawn fn() =>
+          Inners.at(Key(1)) fn() =>
+            Async.yield()
+            Inner.poke()
+        s.spawn fn() =>
+          Outers.at(Key(1)) fn() =>
+            print(attempt Inners.at(Key(2)) fn() => Inner.poke())
+|};
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:6:14
-    6 │ dep Inners = Actors<Key, Inner>
-      │              ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Inner`, `Net`, `Os`, `Outer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:7:14
-    7 │ dep Outers = Actors<Key, Outer>
-      │              ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Inner`, `Net`, `Os`, `Outer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:14:8
-    14 │   with actors(outer, max: 1) as Outers, actors(inner, max: 1) as Inners in
-       │        ^^^^^^
-
-    error: `Outers` is a type, not a dependency
-       ┌─ test.ren:14:33
-    14 │   with actors(outer, max: 1) as Outers, actors(inner, max: 1) as Inners in
-       │                                 ^^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: there's no function named `actors`
-       ┌─ test.ren:14:41
-    14 │   with actors(outer, max: 1) as Outers, actors(inner, max: 1) as Inners in
-       │                                         ^^^^^^
-
-    error: `Inners` is a type, not a dependency
-       ┌─ test.ren:14:66
-    14 │   with actors(outer, max: 1) as Outers, actors(inner, max: 1) as Inners in
-       │                                                                  ^^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Inners` has no member named `at`
-       ┌─ test.ren:17:16
-    17 │         Inners.at(Key(1)) fn() =>
-       │                ^^
-       help: declare it under `type Inners`
-
-    error: `Outers` has no member named `at`
-       ┌─ test.ren:21:16
-    21 │         Outers.at(Key(1)) fn() =>
-       │                ^^
-       help: declare it under `type Outers`
-
-    error: `Inners` has no member named `at`
-       ┌─ test.ren:22:32
-    22 │           print(attempt Inners.at(Key(2)) fn() => Inner.poke())
-       │                                ^^
-       help: declare it under `type Inners`
+    Err(Full)
+    ()
     |}]
 
 (* A third library over the family, written in a test: a family with a
@@ -3517,80 +3250,66 @@ handler count(s: Shard) for Count =
   total() => n
 
 dep Shards =
-  at: fn(s: Shard, body: fn() uses Count)
+  at: fn(s: Shard, body: fn() -> Int uses Count) -> Int
 
 handler shards() for Shards =
-  let fam = Instances.open(count, parts: 1, cap: 2, mailbox: 16)
-  finally(_) => Instances.close(fam)
-  at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
+  let fam = Instances.open(count, 1, 2, 16)
+  finally(r) =>
+    Instances.close(fam)
+    try r
+  at(s, body) => Instances.pin(fam, s, fn(_) => None, body)
 |}
 
 let%expect_test "[s7 accept] a third library over the family: a fixed key set" =
-  until "s7"
-    ~want:{|
-5
-2
-()
-|}
-    (fun () ->
-      run
-        (shards
-       ^ {|
+  run
+    (shards
+   ^ {|
 fn main() uses Console =
   with shards() in
-    Shards.at(A) fn() => Count.add(2)
-    Shards.at(B) fn() => Count.add(3)
-    Shards.at(B) fn() => Count.add(0)
-    Shards.at(B) fn() => print(Count.total())
-    Shards.at(A) fn() => print(Count.total())
-|}));
+    let _ = Shards.at(A) fn() =>
+      Count.add(2)
+      0
+    let _ = Shards.at(B) fn() =>
+      Count.add(3)
+      0
+    print(Shards.at(B) fn() => Count.total())
+    print(Shards.at(A) fn() => Count.total())
+|});
   [%expect {|
-    (until s7)
-    error: `Instances` has no member named `pin`
-       ┌─ test.ren:18:36
-    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
-       │                                    ^^^
-       help: its members: `open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`
+    3
+    2
+    ()
     |}]
 
 let%expect_test "[s7 reject] a third library's `at` inside its own `at`: the family's check on `pin`" =
-  until "s7"
-    ~says:[ "error: `Shards.at` inside a block of `Shards.at` could wait for a slot its own block holds" ]
-    (fun () ->
-      check_error
-        (shards
-       ^ {|
+  check_error
+    (shards
+   ^ {|
 fn main() =
   with shards() in
-    Shards.at(A) fn() =>
-      Shards.at(B) fn() => Count.add(1)
-|}));
+    let _ = Shards.at(A) fn() =>
+      Shards.at(B) fn() =>
+        Count.add(1)
+        0
+    ()
+|});
   [%expect {|
-    (until s7)
-    error: `Instances` has no member named `pin`
-       ┌─ test.ren:18:36
-    18 │   at(s, body) => release Instances.pin(fam, s, fn(_) => None, body)
-       │                                    ^^^
-       help: its members: `open`, `call`, `make`, `keys`, `evictable`, `evict`, `counts`, `close`
+    error: `Shards.at` inside a block of `Shards.at` could wait for a slot its own block holds
+       ┌─ test.ren:25:7
+    25 │       Shards.at(B) fn() =>
+       │       ^^^^^^^^^^^^^^^^^^^^
+       = `Shards.at` keeps the instance it pins for its block, and making another can wait for room in the family
+       help: finish with the first, then call the second; or post to it, which holds nothing
     |}]
 
 let%expect_test "[s7 accept] a journal of a run that evicts and remakes a key names each life, and replays" =
-  (* `docs[DocId(1)]#1`, then `#2` once it's made again: version 3's made
-     and evicted lines; and `ren replay` of it follows it *)
-  until "s7"
-    ~says:
-      [
-        "# ren journal 3";
-        "made docs[DocId(1)]#1";
-        "evicted docs[DocId(1)]#1";
-        "made docs[DocId(1)]#2";
-        "replayed";
-      ]
-    (fun () ->
-      in_folder
-        [
-          ( "main.ren",
-            {|
+  (* `docs[DocId(1)]#1`, then `#2` once it's made again: version 3's
+     opened, made and evicted lines; `ren replay` of it follows it, and
+     recording it again writes the same journal, byte for byte *)
+  in_folder
+    [
+      ( "main.ren",
+        {|
 type DocId = | DocId(n: Int)
 dep Doc =
   poke: fn()
@@ -3604,54 +3323,50 @@ fn main() uses Console, Random =
     Docs.at(DocId(2)) fn() => Doc.poke()
     Docs.at(DocId(1)) fn() => Doc.poke()
 |}
-          );
-        ]
-        (fun () ->
-          record ();
-          replay "run.journal"));
+      );
+    ]
+    (fun () ->
+      record ();
+      let first = read "run.journal" in
+      replay "run.journal";
+      record ();
+      print_endline
+        (if read "run.journal" = first then "recorded again: the same bytes"
+         else "recorded again: different"));
   [%expect {|
-    (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ main.ren:4:12
-    4 │ dep Docs = Actors<DocId, Doc>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-      ┌─ main.ren:9:8
-    9 │   with actors(doc, max: 1) as Docs in
-      │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-      ┌─ main.ren:9:31
-    9 │   with actors(doc, max: 1) as Docs in
-      │                               ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ main.ren:10:10
-    10 │     Docs.at(DocId(1)) fn() => Doc.poke()
-       │          ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ main.ren:11:10
-    11 │     Docs.at(DocId(2)) fn() => Doc.poke()
-       │          ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `at`
-       ┌─ main.ren:12:10
-    12 │     Docs.at(DocId(1)) fn() => Doc.poke()
-       │          ^^
-       help: declare it under `type Docs`
-    error: run.journal isn't a journal: it doesn't start as one does
-      ┌─ run.journal:1:1
-    1 │
-      │ ^
-      = a journal starts `# ren journal 2 · <program> · deps: <dependencies>`
-      help: record one with `ren run --record <file.journal> <file.ren>`
+    DocId(1)
+    DocId(2)
+    DocId(1)
+    # ren journal 3 · main.ren · deps: Console Random
+    1 main opened docs parts 1
+    2 main made docs[DocId(1)]#1
+    3 main Console.write("DocId(1)")
+    4 main evicted docs[DocId(1)]#1
+    5 main made docs[DocId(2)]#1
+    6 main Console.write("DocId(2)")
+    7 main evicted docs[DocId(2)]#1
+    8 main made docs[DocId(1)]#2
+    9 main Console.write("DocId(1)")
+    10 main exit 0
+    DocId(1)
+    DocId(2)
+    DocId(1)
+    replayed 3 calls
+    DocId(1)
+    DocId(2)
+    DocId(1)
+    # ren journal 3 · main.ren · deps: Console Random
+    1 main opened docs parts 1
+    2 main made docs[DocId(1)]#1
+    3 main Console.write("DocId(1)")
+    4 main evicted docs[DocId(1)]#1
+    5 main made docs[DocId(2)]#1
+    6 main Console.write("DocId(2)")
+    7 main evicted docs[DocId(2)]#1
+    8 main made docs[DocId(1)]#2
+    9 main Console.write("DocId(1)")
+    10 main exit 0
+    recorded again: the same bytes
     |}]
 
 (* ---- s7: `post`, Erlang's cast ---- *)
@@ -3684,35 +3399,11 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:12
-    5 │ dep Logs = Actors<Key, Log>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(log) as Logs in
-       │        ^^^^^^
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:12:23
-    12 │   with actors(log) as Logs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:14:10
     14 │     Logs.post(Key(1), Log.Call.Put { s })
        │          ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:16:10
-    16 │     Logs.at(Key(1)) fn() => print(Log.all())
-       │          ^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] a post's call is a value: built, kept, posted and shown" =
@@ -3748,41 +3439,17 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:12
-    5 │ dep Logs = Actors<Key, Log>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(log) as Logs in
-       │        ^^^^^^
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:12:23
-    12 │   with actors(log) as Logs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:13:10
     13 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
        │          ^^^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:15:10
     15 │     Logs.post(Key(1), c)
        │          ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:16:10
-    16 │     Logs.at(Key(1)) fn() => print(Log.all())
-       │          ^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] posts from one task to one actor run in order, each as one operation" =
@@ -3815,53 +3482,23 @@ test "posts arrive in the order posted" =
 |}));
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:16
-    5 │ pub dep Logs = Actors<Key, Log>
-      │                ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(log, max: 1) as Logs in
-       │        ^^^^^^
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:12:31
-    12 │   with actors(log, max: 1) as Logs in
-       │                               ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:15:14
     15 │         Logs.post(Key(1), Log.Call.Put { s: "a" })
        │              ^^^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:16:14
     16 │         Logs.post(Key(1), Log.Call.Put { s: "b" })
        │              ^^^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:17:14
     17 │         Logs.post(Key(1), Log.Call.Put { s: "c" })
        │              ^^^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:18:28
-    18 │       s.spawn fn() => Logs.at(Key(2)) fn() => Log.put("x")
-       │                            ^^
-       help: declare it under `type Logs`
-
-    error: `Logs` has no member named `at`
-       ┌─ test.ren:20:10
-    20 │     Logs.at(Key(1)) fn() => assert Log.all() == "abc"
-       │          ^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] a post makes its actor, so setup's errors are the post's, and nothing is lost" =
@@ -3889,15 +3526,11 @@ fn main() uses Console, Random =
 |}));
   [%expect {|
     (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
-
-    error: expected a new line, found `!`
-       ┌─ test.ren:31:33
-    31 │ dep Notes = Actors<DocId, Note> ! StoreDown
-       │                                 ^
+    error: `Notes` has no operation or member named `post`
+       ┌─ test.ren:42:25
+    42 │     print(attempt Notes.post(DocId(-1), Note.Call.Touch))
+       │                         ^^^^
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] teardown delivers queued posts before the `finally`s" =
@@ -3926,35 +3559,17 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Logs = Actors<Key, Log>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:10:8
-    10 │   with actors(log) as Logs in
-       │        ^^^^^^
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:10:23
-    10 │   with actors(log) as Logs in
-       │                       ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:11:10
     11 │     Logs.post(Key(1), Log.Call.Put { s: "a" })
        │          ^^^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:12:10
     12 │     Logs.post(Key(1), Log.Call.Put { s: "b" })
        │          ^^^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] an actor posts to its own family" =
@@ -3981,41 +3596,17 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:13
-    5 │ dep Peers = Actors<Key, Peer>
-      │             ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Peers` is a type, not a dependency
-      ┌─ test.ren:6:36
-    6 │ handler peer(k: Key) for Peer uses Peers, Console =
-      │                                    ^^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
       ┌─ test.ren:7:23
     7 │   ping(from) => Peers.post(from, Peer.Call.Pong { from: k })
       │                       ^^^^
-      help: declare it under `type Peers`
+      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: there's no function named `actors`
-       ┌─ test.ren:11:8
-    11 │   with actors(peer) as Peers in
-       │        ^^^^^^
-
-    error: `Peers` is a type, not a dependency
-       ┌─ test.ren:11:24
-    11 │   with actors(peer) as Peers in
-       │                        ^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
        ┌─ test.ren:12:11
     12 │     Peers.post(Key(2), Peer.Call.Ping { from: Key(1) })
        │           ^^^^
-       help: declare it under `type Peers`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 reject] posting an operation that returns a value" =
@@ -4043,24 +3634,11 @@ fn main() uses Logs =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:12
-    5 │ dep Logs = Actors<Key, Log>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Log`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Logs` is a type, not a dependency
-       ┌─ test.ren:10:16
-    10 │ fn main() uses Logs =
-       │                ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Logs` has no member named `post`
+    error: `Logs` has no operation or member named `post`
        ┌─ test.ren:11:8
     11 │   Logs.post(Key(1), Log.Call.Line { at: 0 })
        │        ^^^^
-       help: declare it under `type Logs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 reject] posting an operation that can fail" =
@@ -4079,10 +3657,11 @@ fn main() ! StoreDown uses Store, Docs =
 |}));
   [%expect {|
     (until s7)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:31
-    29 │ dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                               ^
+    error: `Docs` has no operation or member named `post`
+       ┌─ test.ren:34:12
+    34 │   try Docs.post(DocId(1), Doc.Call.Edit { s: "a" })
+       │            ^^^^
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] two actors posting to each other past `mailbox:` don't deadlock while an outside poster waits" =
@@ -4113,47 +3692,23 @@ test "siblings never wait; the outside does" =
 |}));
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:17
-    5 │ pub dep Peers = Actors<Key, Peer>
-      │                 ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Peers` is a type, not a dependency
-      ┌─ test.ren:6:40
-    6 │ pub handler peer(k: Key) for Peer uses Peers =
-      │                                        ^^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
       ┌─ test.ren:9:28
     9 │     if left > 0 then Peers.post(Key(3 - n), Peer.Call.Ping { left: left - 1 })
       │                            ^^^^
-      help: declare it under `type Peers`
+      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: there's no function named `actors`
-       ┌─ test.ren:13:8
-    13 │   with actors(peer, mailbox: 2) as Peers in
-       │        ^^^^^^
-
-    error: `Peers` is a type, not a dependency
-       ┌─ test.ren:13:36
-    13 │   with actors(peer, mailbox: 2) as Peers in
-       │                                    ^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
        ┌─ test.ren:15:29
     15 │       s.spawn fn() => Peers.post(Key(1), Peer.Call.Ping { left: 3 })
        │                             ^^^^
-       help: declare it under `type Peers`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
        ┌─ test.ren:18:17
     18 │           Peers.post(Key(2), Peer.Call.Noted)
        │                 ^^^^
-       help: declare it under `type Peers`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 reject] a chain reaction panics past twice `mailbox:`, with the high-water mark" =
@@ -4182,47 +3737,23 @@ fn main() uses Console, Random =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:13
-    4 │ dep Peers = Actors<Key, Peer>
-      │             ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Peer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Peers` is a type, not a dependency
-      ┌─ test.ren:5:36
-    5 │ handler peer(k: Key) for Peer uses Peers =
-      │                                    ^^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
       ┌─ test.ren:8:11
     8 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
       │           ^^^^
-      help: declare it under `type Peers`
+      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
       ┌─ test.ren:9:11
     9 │     Peers.post(Key(n + 1), Peer.Call.Double { depth: depth + 1 })
       │           ^^^^
-      help: declare it under `type Peers`
+      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: there's no function named `actors`
-       ┌─ test.ren:12:8
-    12 │   with actors(peer, mailbox: 2) as Peers in
-       │        ^^^^^^
-
-    error: `Peers` is a type, not a dependency
-       ┌─ test.ren:12:36
-    12 │   with actors(peer, mailbox: 2) as Peers in
-       │                                    ^^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Peers` has no member named `post`
+    error: `Peers` has no operation or member named `post`
        ┌─ test.ren:13:11
     13 │     Peers.post(Key(0), Peer.Call.Double { depth: 0 })
        │           ^^^^
-       help: declare it under `type Peers`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] a post from inside `at` while the mailbox is full and its target isn't live completes" =
@@ -4253,41 +3784,17 @@ fn main() uses Console, Async, Random =
 |});
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:4:12
-    4 │ dep Docs = Actors<Key, Doc>
-      │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: there's no function named `actors`
-      ┌─ test.ren:9:8
-    9 │   with actors(doc, max: 1, mailbox: 1) as Docs in
-      │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:9:43
-    9 │   with actors(doc, max: 1, mailbox: 1) as Docs in
-      │                                           ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `post`
+    error: `Docs` has no operation or member named `post`
        ┌─ test.ren:11:28
     11 │       s.spawn fn() => Docs.post(Key(2), Doc.Call.Touch { by: 1 })
        │                            ^^^^
-       help: declare it under `type Docs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
 
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:13:14
-    13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
-       │              ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `post`
+    error: `Docs` has no operation or member named `post`
        ┌─ test.ren:13:38
     13 │         Docs.at(Key(1)) fn() => Docs.post(Key(2), Doc.Call.Touch { by: 2 })
        │                                      ^^^^
-       help: declare it under `type Docs`
+       help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 let%expect_test "[s7 accept] a session looping an `at` operation that posts to a sibling is held at the edge" =
@@ -4317,47 +3824,11 @@ test "the session's posts stay within the bound" =
 |}));
   [%expect {|
     (until s7)
-    error: there's no dependency named `Actors`
-      ┌─ test.ren:5:16
-    5 │ pub dep Docs = Actors<Key, Doc>
-      │                ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Docs` is a type, not a dependency
-      ┌─ test.ren:6:38
-    6 │ pub handler doc(k: Key) for Doc uses Docs =
-      │                                      ^^^^
-      help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `post`
+    error: `Docs` has no operation or member named `post`
       ┌─ test.ren:7:18
     7 │   edit() => Docs.post(Key(0), Doc.Call.Changed { from: k })
       │                  ^^^^
-      help: declare it under `type Docs`
-
-    error: there's no function named `actors`
-       ┌─ test.ren:11:8
-    11 │   with actors(doc, mailbox: 4) as Docs in
-       │        ^^^^^^
-
-    error: `Docs` is a type, not a dependency
-       ┌─ test.ren:11:35
-    11 │   with actors(doc, mailbox: 4) as Docs in
-       │                                   ^^^^
-       help: a dependency is declared with `dep`, and lists the operations a function can call on it
-
-    error: `Docs` has no member named `at`
-       ┌─ test.ren:12:10
-    12 │     Docs.at(Key(1)) fn() =>
-       │          ^^
-       help: declare it under `type Docs`
-
-    error: `Docs` has no member named `high_water`
-       ┌─ test.ren:15:17
-    15 │     assert Docs.high_water() <= 5
-       │                 ^^^^^^^^^^
-       help: declare it under `type Docs`
+      help: its operations: `enter`, `visit`, `keys`, `evict`, `evict_idle`, `count`, `made`, `evicted`, `high_water`
     |}]
 
 (* ---- s8: the milestone, in miniature (bench/services/docs is the whole one) ---- *)
@@ -4387,14 +3858,9 @@ test "every edit is in the store, in one order" =
 |})));
   [%expect {|
     (until s8)
-    error: expected a new line, found `!`
-       ┌─ test.ren:29:35
-    29 │ pub dep Docs = Actors<DocId, Doc> ! StoreDown
-       │                                   ^
-
     error: this block ends with a `let`, so it has no value
-       ┌─ test.ren:38:15
-    38 │           let _ = attempt Docs.at(DocId(n % 2)) fn() =>
+       ┌─ test.ren:40:15
+    40 │           let _ = attempt Docs.at(DocId(n % 2)) fn() =>
        │               ^
        help: add the value this block should produce as its last line
     |}]

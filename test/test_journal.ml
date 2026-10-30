@@ -48,9 +48,9 @@ let replay file =
       (Driver.replay ~lint:true ~journal ~file:"main.ren" (read "main.ren"));
     Printf.printf "replayed %d calls\n" journal.made
   with
-  | Journal.Version_1 { file; program } ->
+  | Journal.Old_version { old; file; program } ->
       (* as `ren replay` says it (main.ml) *)
-      let said, note, help = Journal.version_1_said ~file ~program in
+      let said, note, help = Journal.old_version_said ~old ~file ~program in
       Printf.printf "error: %s\n  = %s\n  help: %s\n" said note help
   | e -> show_error e
 
@@ -96,7 +96,7 @@ fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) uses Fs, Os, Consol
     a"b	c
 
     done
-    # ren journal 2 · main.ren · deps: Console Fs Os
+    # ren journal 3 · main.ren · deps: Console Fs Os
     1 main Os.args() → ["x y"]
     2 main Fs.write("out.txt", "a\"b\tc\n")
     3 main Fs.read("out.txt") → Ok("a\"b\tc\n")
@@ -132,7 +132,7 @@ fn main() uses Console =
   [%expect
     {|
     error: NoSuchFile(nothing)
-    # ren journal 2 · main.ren · deps: Fs
+    # ren journal 3 · main.ren · deps: Fs
     1 main Fs.read("nothing") → Err(NoSuchFile("nothing"))
     2 main error NoSuchFile("nothing")
     1
@@ -140,7 +140,7 @@ fn main() uses Console =
       ┌─ main.ren:4:9
     4 │   print(xs[3])
       │         ^^^^^
-    # ren journal 2 · main.ren · deps: Console
+    # ren journal 3 · main.ren · deps: Console
     1 main Console.write("1")
     2 main panic main.ren:4:9 "index 3 is out of bounds for an array of length 1"
     |}]
@@ -164,7 +164,7 @@ fn main() ! FsError uses Fs, Console =
   [%expect
     {|
     4
-    # ren journal 2 · main.ren · deps: Console Fs
+    # ren journal 3 · main.ren · deps: Console Fs
     1 main Fs.read("in.bin") → Ok("\xff\x01ok")
     2 main Console.write("4")
     3 main exit 0
@@ -201,7 +201,7 @@ test "the recording replays" =
 let reader_journal ?(calls = []) () =
   String.concat "\n"
     ([
-       "# ren journal 2 · main.ren · deps: Clock Console Fs";
+       "# ren journal 3 · main.ren · deps: Clock Console Fs";
        {|1 main Fs.read("a") → Ok("one")|};
        {|2 main Clock.now() → 10|};
        {|3 main Console.write("one")|};
@@ -351,7 +351,7 @@ let%expect_test "an entry that can't be read fails the test, at its line" =
       ( "run.journal",
         String.concat "\n"
           [
-            "# ren journal 2 · main.ren · deps: Clock Console Fs";
+            "# ren journal 3 · main.ren · deps: Clock Console Fs";
             {|1 main Fs.read("a") → Ok(<redacted>)|};
             "2 main exit 0";
           ] );
@@ -363,7 +363,7 @@ let%expect_test "an entry that can't be read fails the test, at its line" =
       ( "run.journal",
         String.concat "\n"
           [
-            "# ren journal 2 · main.ren · deps: Clock Console Fs";
+            "# ren journal 3 · main.ren · deps: Clock Console Fs";
             {|1 main Fs.read("a") → Ok(5)|};
             "2 main exit 0";
           ] );
@@ -426,25 +426,25 @@ let%expect_test "a journal's lines that can't be read are said at their line" =
       Option.iter print_string
         (Driver.render_error ~sources:(fun _ -> Some (clean text)) e)
   in
-  load "# ren journal 3 · main.ren · deps: Clock\n";
-  load "# ren journal 2 · main.ren · deps: Clock\n1 main Clock.now( → 5\n";
-  load "# ren journal 2 · main.ren · deps: Clock\n1 main now() → 5\n";
-  load "# ren journal 2 · main.ren · deps: Clock\n1 main panic\n";
+  load "# ren journal 4 · main.ren · deps: Clock\n";
+  load "# ren journal 3 · main.ren · deps: Clock\n1 main Clock.now( → 5\n";
+  load "# ren journal 3 · main.ren · deps: Clock\n1 main now() → 5\n";
+  load "# ren journal 3 · main.ren · deps: Clock\n1 main panic\n";
   (* a version 1 line, which names no task *)
-  load "# ren journal 2 · main.ren · deps: Clock\n1 Clock.now() → 5\n";
+  load "# ren journal 3 · main.ren · deps: Clock\n1 Clock.now() → 5\n";
   (* what a call gave, with no call waiting for it *)
-  load "# ren journal 2 · main.ren · deps: Clock\n1 main → 5\n2 main exit 0\n";
+  load "# ren journal 3 · main.ren · deps: Clock\n1 main → 5\n2 main exit 0\n";
   (* a call while its task waits in another *)
   load
-    "# ren journal 2 · main.ren · deps: Clock\n\
+    "# ren journal 3 · main.ren · deps: Clock\n\
      1 main Clock.sleep(5) …\n\
      2 main Clock.now() → 5\n\
      3 main exit 0\n";
   [%expect
     {|
-    error: run.journal is a journal of version 3, and this ren reads version 2
+    error: run.journal is a journal of version 4, and this ren reads version 3
       ┌─ run.journal:1:1
-    1 │ # ren journal 3 · main.ren · deps: Clock
+    1 │ # ren journal 4 · main.ren · deps: Clock
       │ ^
       help: record it again with this ren
     error: this line of run.journal isn't a call or how the run ended
@@ -621,7 +621,7 @@ fn main() ! Broke(Str) uses Console =
   let text =
     String.concat "\n"
       [
-        "# ren journal 2 · main.ren · deps: Console";
+        "# ren journal 3 · main.ren · deps: Console";
         "1 main "
         ^ Journal.ending_text (Panicked { at = "main.ren:3:3"; msg = "a\nb" });
       ]
@@ -634,12 +634,12 @@ fn main() ! Broke(Str) uses Console =
     {|
     1
     error: Broke("two\nlines")
-    # ren journal 2 · main.ren · deps: Console
+    # ren journal 3 · main.ren · deps: Console
     1 main Console.write("1")
     2 main error Broke("two\nlines")
     1
     error: Broke("two\nlines")
-    # ren journal 2 · main.ren · deps: Console
+    # ren journal 3 · main.ren · deps: Console
     1 main panic main.ren:3:3 "a\nb"
     read back: a
     b
@@ -664,7 +664,7 @@ test "the rest are the test's" =
       );
       ( "run.journal",
         {|
-# ren journal 2 · main.ren · deps: Console
+# ren journal 3 · main.ren · deps: Console
 1 main Console.write("hi")
 2 main exit 0
 |}
@@ -687,7 +687,7 @@ fn main() uses Console, Clock =
 |});
       ( "run.journal",
         {|
-# ren journal 2 · main.ren · deps: Console
+# ren journal 3 · main.ren · deps: Console
 1 main Console.write("hi")
 2 main exit 0
 |}
@@ -698,7 +698,7 @@ fn main() uses Console, Clock =
     {|
     error: run.journal recorded a `main` that uses `Console`, and this one uses `Clock` and `Console`
       ┌─ run.journal:1:1
-    1 │ # ren journal 2 · main.ren · deps: Console
+    1 │ # ren journal 3 · main.ren · deps: Console
       │ ^
       help: the code changed since this was recorded; record it again
     |}]
@@ -745,7 +745,7 @@ let%expect_test "a test of a bug's recording passes once the bug is fixed" =
       ┌─ main.ren:4:9
     4 │   print(xs[3])
       │         ^^^^^
-    # ren journal 2 · main.ren · deps: Clock Console
+    # ren journal 3 · main.ren · deps: Clock Console
     1 main Console.write("1")
     2 main panic main.ren:4:9 "index 3 is out of bounds for an array of length 1"
     main.ren
@@ -825,7 +825,7 @@ let%expect_test "each entry names its task, and a call that waits is two lines" 
     fast
     slow
     done
-    # ren journal 2 · main.ren · deps: Clock Console
+    # ren journal 3 · main.ren · deps: Clock Console
     1 main/main:0 Console.error("slow")
     2 main/main:0 Clock.sleep(40) …
     3 main/main:1 Console.error("fast")
@@ -848,7 +848,7 @@ let%expect_test "each entry names its task, and a call that waits is two lines" 
 
 (* the same run, but with its polls the other way round *)
 let swapped =
-  {|# ren journal 2 · main.ren · deps: Clock Console
+  {|# ren journal 3 · main.ren · deps: Clock Console
 1 main/main:0 Console.error("slow")
 2 main/main:0 Clock.sleep(40) …
 3 main/main:1 Console.error("fast")
@@ -1004,7 +1004,7 @@ let%expect_test "a test runs in the recorded order while it can" =
     ("a", 1)
     b
     ("b", 2)
-    # ren journal 2 · main.ren · deps: Console
+    # ren journal 3 · main.ren · deps: Console
     1 main/main:0 Console.error("a")
     2 main/main:0 Console.write("(\"a\", 1)")
     3 main/main:1 Console.error("b")
@@ -1021,7 +1021,7 @@ let%expect_test "then the seeded tape takes over" =
      isn't the recording's from its first call, and each seed's is its
      own: some pass, and some fail *)
   let journal =
-    {|# ren journal 2 · main.ren · deps: Console
+    {|# ren journal 3 · main.ren · deps: Console
 1 main/main:1 Console.error("b")
 2 main/main:1 Console.write("(\"b\", 1)")
 3 main/main:0 Console.error("a")
@@ -1088,7 +1088,7 @@ fn main() ! Broke uses Console, Clock, Async =
     warning: main/main:3 failed too, with `Broke`, while it was being cancelled
     error: Broke
       = from the task main/main:2
-    # ren journal 2 · main.ren · deps: Clock Console
+    # ren journal 3 · main.ren · deps: Clock Console
     1 main/main:0 Clock.sleep(5) …
     2 main/main:1 Clock.sleep(2000) …
     3 poll main/main:0
@@ -1137,6 +1137,6 @@ let%expect_test "a version 1 journal is refused" =
 
     0 passed, 1 failed
     error: `run.journal` is a version 1 journal, which this `ren` doesn't read
-      = version 2 names the task that made each call
+      = version 2 names the task that made each call, and version 3 the runtime's instance families
       help: record it again: `ren run --record run.journal main.ren`
     |}]

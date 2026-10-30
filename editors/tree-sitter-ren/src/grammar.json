@@ -1779,12 +1779,33 @@
               ]
             },
             {
-              "type": "FIELD",
-              "name": "names",
-              "content": {
-                "type": "SYMBOL",
-                "name": "dependency"
-              }
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "names",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "dependency"
+                  }
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "FIELD",
+                      "name": "errors",
+                      "content": {
+                        "type": "SYMBOL",
+                        "name": "error_set"
+                      }
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                }
+              ]
             }
           ]
         }

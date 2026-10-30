@@ -16,11 +16,13 @@ open Infer_written
    for a public function without one, or an associated value, which uses
    nothing. A private function without `uses` declares nothing, and
    inference works out what it uses. *)
-let declared_uses env ~is_value ~tparams (f : fn_def) =
+let declared_uses env ~is_value ~tparams ?(named = []) (f : fn_def) =
   match f.uses with
   | _ when is_value f -> Some []
   | Some (u : Resolved.uses) ->
-      Some (fst (row_parts (written_uses env ~tvars:tparams ~named:[] u)))
+      (* a row it names inside one of them, `Actors<K, (D ! ..e)>`, is its
+         signature's *)
+      Some (fst (row_parts (written_uses env ~tvars:tparams ~named u)))
   | None when f.pub -> Some []
   | None -> None
 
@@ -474,7 +476,7 @@ let check_declared env ~is_value ~withheld ~needs c =
   let path = Ast.fn_path env.home f in
   Option.iter
     (check_uses env ~is_value ~withheld ~main:c.fmain f cx)
-    (declared_uses env ~is_value ~tparams:cx.tparams f);
+    (declared_uses env ~is_value ~tparams:cx.tparams ~named:cx.named f);
   if f.pub && not (is_value f) then check_open_rows env f cx;
   List.iter (fun n -> if n.nself = path then check_needs env f n) needs;
   Option.iter

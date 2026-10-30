@@ -33,35 +33,6 @@ let named_row ~named (n : ident option) =
       | None -> REmpty (* resolve.ml reported it *))
   | None -> REmpty
 
-(* The dependencies a `uses` lists or an implementation's type joins, with
-   their type arguments as checker types. *)
-let written_deps env ~tvars (ds : tname dep_ref list) =
-  match ds with
-  | [ { dep = { tref = Param i; _ }; _ } ] ->
-      (* a handler `for D`, [D] its type parameter (resolve.ml: nothing
-         else has one here): whatever [D] stands for *)
-      [ { dpath = Ty.param_path; dargs = [ List.nth tvars i ] } ]
-  | ds ->
-  List.map
-    (fun (d : Ty.dep) ->
-      {
-        dpath = d.dpath;
-        dargs =
-          List.map
-            (of_ty ~vars:(List.nth tvars) ~tails:(fun _ -> REmpty))
-            d.dargs;
-      })
-    (Iface.deps_of ~sets:env.sets ds)
-
-let written_uses env ~tvars ~named (u : Resolved.uses) =
-  let rec once = function
-    | [] -> []
-    | l :: rest -> l :: once (List.filter (fun k -> not (same_label k l)) rest)
-  in
-  extend
-    (once (List.map dep_of (written_deps env ~tvars u.deps)))
-    (named_row ~named u.dtail)
-
 (* Turn a written type into a checker type. [tvars] are what the type
    parameters in scope stand for, in order, and [named] the rows the
    function's signature names (`..d`, ast.ml). [row] makes the rows of
@@ -81,7 +52,7 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
       TVariant (p, c.name, List.map go args)
   | TyVariant ({ tref = Param _; _ }, _, _) -> TError
   | TyImpl { impl_deps = ds; impl_over = over; impl_errors; impl_uses; _ } ->
-      let deps = written_deps env ~tvars ds in
+      let deps = written_deps env ~tvars ~named ds in
       (* what it can fail to start with is what's written, or nothing *)
       let fails =
         match impl_errors with
@@ -109,6 +80,10 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
         | None when over ->
             (* it needs the one under it *)
             extend (List.map dep_of deps) (row ())
+        | None when List.exists (fun d -> d.dpath = Ty.param_path) deps ->
+            (* `(D ! ..e)`: what [D] stands for needs what it needs
+               (Unify) *)
+            REmpty
         | None -> row ())
   | TyFn (ps, ret, errs, u, _) ->
       let ret = match ret with Some r -> go r | None -> unit in
@@ -130,6 +105,36 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   | TyErrors es ->
       TErrors (extend (error_labels env ~tvars es) (named_row ~named es.etail))
   | TyTuple (ts, _) -> TCon (Ty.tuple_path (List.length ts), List.map go ts)
+
+(* The dependencies a `uses` lists or an implementation's type joins, with
+   their type arguments as checker types: each as written, a named row
+   in one, `Actors<K, (D ! ..e)>`, the signature's ([named]). *)
+and written_deps env ~tvars ?(named = []) (ds : tname dep_ref list) =
+  match ds with
+  | [ { dep = { tref = Param i; _ }; _ } ] ->
+      (* a handler `for D`, or `uses D`, [D] a type parameter: whatever
+         [D] stands for (Ty.param_path) *)
+      [ { dpath = Ty.param_path; dargs = [ List.nth tvars i ] } ]
+  | ds ->
+      List.map
+        (fun (d : tname dep_ref) ->
+          match d.dep.tref with
+          | Param i -> { dpath = Ty.param_path; dargs = [ List.nth tvars i ] }
+          | Named p ->
+              {
+                dpath = p;
+                dargs = List.map (convert env ~tvars ~named ~row:closed) d.dargs;
+              })
+        ds
+
+and written_uses env ~tvars ~named (u : Resolved.uses) =
+  let rec once = function
+    | [] -> []
+    | l :: rest -> l :: once (List.filter (fun k -> not (same_label k l)) rest)
+  in
+  extend
+    (once (List.map dep_of (written_deps env ~tvars ~named u.deps)))
+    (named_row ~named u.dtail)
 
 and convert_param env ~tvars ~named ~row = function
   | TyInout (t, _) -> { mode = Inout; ty = convert env ~tvars ~named ~row t }

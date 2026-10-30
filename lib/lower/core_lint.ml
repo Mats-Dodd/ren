@@ -470,6 +470,15 @@ let rec described env sc loc (d : desc) : Ty.ty =
 (* [d] describes [t], which [what] has. *)
 and describes env sc loc what d (t : Ty.ty) =
   let found = described env sc loc d in
+  (* `(D ! ..e)` is described as [D], the description of the one
+     dependency it's of, which is what evidence is found by (Core.describe) *)
+  let t =
+    match t with
+    | Impl { deps = [ { dpath; dargs = [ d ] } ]; over = false; _ }
+      when dpath = Ty.param_path && has_param env.ntys t ->
+        d
+    | t -> t
+  in
   (* a variant type is described as its sum, whose value it is *)
   if Ty.erase_variants found <> Ty.erase_variants t then
     fail env loc
@@ -736,7 +745,13 @@ let rec expr env sc (e : expr) =
             if next then { labels = []; tail = Some 0 }
             else { labels = [ label ]; tail = Some 0 }
           in
-          if not (instance_of env (Fun (ps, r, errs, uses)) fty) then
+          (* as evidence finds them: `(D ! ..e)` among the call's type
+             arguments is described as [D] (Core.describe) *)
+          if
+            not
+              (instance_of env (Fun (ps, r, errs, uses)) fty
+              || instance_of env (Ty.key_deep (Fun (ps, r, errs, uses))) (Ty.key_deep fty))
+          then
             fail env loc
               (sprintf "`%s.%s` is used at `%s`, which isn't its type, `%s`"
                  p.name op (show fty)
@@ -785,7 +800,12 @@ let rec expr env sc (e : expr) =
         | _ -> d
       in
       (match impl.ty with
-      | Impl { deps = [ q ]; needs; _ } when named q = named implemented ->
+      | Impl { deps = [ q ]; needs; _ }
+        when named q = named implemented
+             || (* a description among its type arguments, as evidence finds
+                   it (Ty.key_ty) *)
+             (named q).dpath = (named implemented).dpath
+             && List.map Ty.key_ty (named q).dargs = List.map Ty.key_ty (named implemented).dargs ->
           List.iter (available env loc what) needs.labels
       | t ->
           fail env impl.loc
@@ -905,7 +925,9 @@ let rec expr env sc (e : expr) =
                   | Some t when k.dargs = [] -> t
                   | _ -> k
               in
-              if named <> d then
+              if named <> d && Ty.key_deep (Ty.Impl { deps = [ named ]; over = false; needs = Ty.closed; fails = Ty.closed })
+                               <> Ty.key_deep (Ty.Impl { deps = [ d ]; over = false; needs = Ty.closed; fails = Ty.closed })
+              then
                 fail env loc
                   (sprintf "`%s` is installed as `%s`"
                      (show_dep (Ty.dep_of d))

@@ -639,6 +639,13 @@ let rec describe tys (t : Ty.ty) =
          function type with one of them in it is described *)
       invalid_arg "Core.describe: a function type with type variables"
   | Errors e -> Errs (row e)
+  | Impl { deps = [ { dpath; dargs = [ d ] } ]; over = false; _ }
+    when dpath = Ty.param_path ->
+      (* `(D ! ..e)`, a description of the dependency [D] stands for one
+         of: evidence is found by that one, so it's described as [D]
+         (compiler.md, "Services stage", "Actors (step 7)"), which the
+         interpreter's keys agree with (eval.ml, [key_ty]) *)
+      describe tys d
   | Impl _ | Error -> Known t
 
 (* The key of [d], a dependency of a type written in the type variables

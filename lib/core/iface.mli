@@ -216,11 +216,13 @@ val is_dep : (Path.t -> type_decl option) -> Path.t -> bool
 (* The labels of the dependencies a `uses` lists, sorted, each once, with
    their type arguments. [sets] says what a named error set in one stands
    for. *)
-val dep_labels : ?sets:sets -> Ast.tname Ast.dep_ref list -> Ty.label list
+val dep_labels :
+  ?rows:(string -> int option) -> ?sets:sets -> Ast.tname Ast.dep_ref list -> Ty.label list
 
 (* The dependencies a `uses` lists, or an implementation's type joins with
    `&`, as written, with their type arguments. *)
-val deps_of : sets:sets -> Ast.tname Ast.dep_ref list -> Ty.dep list
+val deps_of :
+  ?rows:(string -> int option) -> sets:sets -> Ast.tname Ast.dep_ref list -> Ty.dep list
 
 (* Just their paths. *)
 val dep_paths : Ast.tname Ast.dep_ref list -> Path.t list

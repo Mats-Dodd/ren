@@ -131,7 +131,7 @@ those waits; replaying it prints what the run printed, with no network:
   $ kill -TERM $server; wait $server; echo "exit $?"
   exit 0
   $ sed "s/$port/PORT/" net.journal
-  # ren journal 2 · echo.ren · deps: Clock Console Net Os
+  # ren journal 3 · echo.ren · deps: Clock Console Net Os
   1 main Os.args() → ["PORT"]
   2 main Net.listen(Addr { host: "127.0.0.1", port: PORT }) → Ok(1)
   3 main Net.accept_until(1, 15) …

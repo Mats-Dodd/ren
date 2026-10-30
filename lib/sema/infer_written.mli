@@ -12,7 +12,11 @@ val error_labels :
 (* The dependencies a `uses` lists, or an implementation's type joins, with
    their type arguments as checker types. *)
 val written_deps :
-  env -> tvars:Types.ty list -> Ast.tname Ast.dep_ref list -> Types.dep list
+  env ->
+  tvars:Types.ty list ->
+  ?named:(string * Types.row) list ->
+  Ast.tname Ast.dep_ref list ->
+  Types.dep list
 
 (* The row a written `uses` lists, each dependency once, ending in the row
    it names, if it names one of [named]. *)

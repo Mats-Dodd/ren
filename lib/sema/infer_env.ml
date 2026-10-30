@@ -99,6 +99,12 @@ type 'l found_ =
           Lower makes the block that pulls it, named [name] as a lambda is
           (streams.md, rule 3) *)
   | For_param of int
+  | Full_marked
+      (** at a call's own node ([full_node]): a call that pins an instance of
+          a keyed instance family inside a block that pins one of another, so
+          it fails with `Full` where waiting for room could close a cycle,
+          which the family is told around it (compiler.md, "Services
+          stage", "Actors (step 7)") *)
       (** at a call of a handler `for D`'s own node ([for_node]): which of its
           scheme's variables is [D], whose type argument there is the
           implementation it's made for (compiler.md, "Services stage",
@@ -121,6 +127,7 @@ let default_node node i = -((node * 256) + i + 1)
 let pulled_node node = min_int + (node * 4)
 let next_node node = min_int + (node * 4) + 1
 let for_node node = min_int + (node * 4) + 2
+let full_node node = min_int + (node * 4) + 3
 
 (* A default, [lit], as the expression a call that leaves it out is
    given, at [loc]: a literal, or a variant written bare, a constructor of
@@ -297,7 +304,7 @@ type env = {
           method), its name and its literal *)
       (** each top-level function's parameters' names, by its path, which a
           message about an argument passed by name names *)
-  through : (int, Path.t) Hashtbl.t;
+  through : (int * Loc.t, Path.t) Hashtbl.t;
       (** each member function of a dependency called through an alias of it,
           `Events.items()`, by the node of the member as written, with the
           alias (Resolve.through) *)
@@ -315,6 +322,18 @@ type env = {
           the first use of each only: the module's own opaque types, whose
           representation it used, by their paths, and its private methods, by
           theirs *)
+  mutable pinned_by : (Path.t * string) list;
+      (** the keyed instance families the blocks being checked are pinned
+          by, innermost first: each by the dependency its library is
+          installed as, `Docs`, with the call that pins it, as written,
+          `Docs.at` (compiler.md, "Services stage", "Actors (step 7)") *)
+  pin_ops : (Path.t * string, unit) Hashtbl.t;
+      (** the module's operations an arm of whose pins an instance of a
+          family for a block, `Shards.at` ([pinning_ops]) *)
+  kept_pins : (Path.t, (string * string * Loc.t) list) Hashtbl.t;
+      (** each handler whose arms pin, by its function, with each family
+          they pin, the call as written and where: one a family keeps can't
+          pin its own *)
 }
 
 (* A function of the group being checked, as the group's functions see

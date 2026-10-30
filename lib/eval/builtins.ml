@@ -561,7 +561,9 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
      operations, and `Call`'s, which read the program's types (eval.ml,
      [family]) *)
   | Family_open | Family_call | Family_make | Family_keys | Family_evict | Family_evictable
-  | Family_counts | Family_close | Call_first_hash | Call_add | Call_max
+  | Family_counts | Family_close | Family_pin | Family_visit | Family_idle | Family_full
+  | Family_enter | Family_made | Family_kept
+  | Call_first_hash | Call_add | Call_max
   | Call_min | Call_concat | Call_fold | Call_operations
   (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,
      [run_program]) *)

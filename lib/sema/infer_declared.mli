@@ -12,6 +12,7 @@ val declared_uses :
   env ->
   is_value:(fn_def -> bool) ->
   tparams:Types.ty list ->
+  ?named:(string * Types.row) list ->
   fn_def ->
   Types.label list option
 

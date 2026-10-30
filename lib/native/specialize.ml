@@ -65,7 +65,8 @@ let close_ty ~fin (s : sub) (t : Ty.ty) : Ty.ty =
     | Var i when i < n -> List.nth s.tys i
     | Var i when fin && i = n -> Var 0
     | Var _ -> Ty.unit
-    | Con (p, ts) -> Con (p, List.map ty ts)
+    (* with what's known once a dependency is, as [Ty.apply] makes it *)
+    | Con (p, ts) -> Ty.known (Con (p, List.map ty ts))
     | Variant (p, c, ts) -> Variant (p, c, List.map ty ts)
     | Fun (ps, r, e, u) ->
         Fun
@@ -75,7 +76,7 @@ let close_ty ~fin (s : sub) (t : Ty.ty) : Ty.ty =
             uses u )
     | Errors r -> Errors (errs r)
     | Impl i ->
-        Impl
+        Ty.known @@ Impl
           {
             i with
             deps =
@@ -105,7 +106,9 @@ let close_ty ~fin (s : sub) (t : Ty.ty) : Ty.ty =
       labels = Ty.sort_labels (ls @ List.filter (fun l -> not (has l)) more);
       tail = None;
     }
-  and uses (r : Ty.row) = { r with labels = labels r.labels } in
+  and uses (r : Ty.row) =
+    { r with labels = Ty.sort_labels (List.map Ty.known_label (labels r.labels)) }
+  in
   ty t
 
 (* Whether a type has no variable in it, but for the variable of what a
@@ -1084,7 +1087,17 @@ and lambda cx fb env (e : C.expr) : C.expr * (unit -> lifted) option =
       in
       let given =
         List.map
-          (fun (k : C.dkey) -> { k with kargs = List.map (desc env) k.kargs })
+          (fun (k : C.dkey) ->
+            let k = { k with kargs = List.map (desc env) k.kargs } in
+            (* `uses D`, once [D] is known: the dependency it's a
+               description of (Ty.known_label) *)
+            match (k.kpath = Ty.param_path, k.kargs) with
+            | true, [ Known t ] -> (
+                match Ty.key_ty t with
+                | Impl { deps = [ x ]; _ } when x.dpath <> Ty.param_path ->
+                    { C.kpath = x.dpath; kargs = List.map (fun a -> C.Known a) x.dargs }
+                | _ -> k)
+            | _ -> k)
           given
       in
       let around =

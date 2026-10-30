@@ -346,8 +346,8 @@ let read_journal file =
    whole journal that can't be. *)
 let loaded ~file text =
   try Journal.load ~file text with
-  | Journal.Version_1 { file; program } ->
-      let said, note, help = Journal.version_1_said ~file ~program in
+  | Journal.Old_version { old; file; program } ->
+      let said, note, help = Journal.old_version_said ~old ~file ~program in
       prerr_endline ("error: " ^ said);
       prerr_endline ("  = " ^ note);
       prerr_endline ("  help: " ^ help);

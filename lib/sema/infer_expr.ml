@@ -310,17 +310,21 @@ let op_block env (e : expr) ~listed ~expected ~calls =
                let calls =
                  List.sort (fun a b -> compare (pos a.cloc) (pos b.cloc)) !calls
                in
-               let at, l =
+               let at, l, pins =
                  match
                    List.find_map
                      (fun c ->
-                       Option.map (fun l -> (c.cloc, l))
+                       Option.map (fun l -> (c.cloc, l, c.op))
                          (List.find_opt (brings c) extra))
                      calls
                  with
-                 | Some found -> found
-                 | None -> (e.loc, List.hd extra)
+                 | Some (at, l, op) ->
+                     (* a call that pins one of the family's instances,
+                        which [pinning] said *)
+                     (at, l, match op with Some o -> Hashtbl.mem env.pin_ops (dpath, o) | None -> false)
+                 | None -> (e.loc, List.hd extra, false)
                in
+               if not (pins && l.name = Ty.dep_label dpath) then
                let param =
                  match reveal env.st expected with
                  | TFun (ps, ret, errs, _) ->
@@ -374,6 +378,33 @@ let pattern_by_name env c (fields : Iface.field list) (ps : pattern list) =
   let given = List.filter_map Fun.id named in
   let rest = List.length given < List.length fields in
   c ^ " { " ^ String.concat ", " (given @ if rest then [ ".." ] else []) ^ " }"
+
+(* Whether [p], a function, pins for a block: the family's own pins, and a
+   dependency's member that runs a block given the dependency a type
+   variable names, `Actors.at`'s `body: fn() -> T uses D`. *)
+let family_pins =
+  List.map (Path.member (Path.prelude "Instances")) [ "pin"; "visit"; "enter" ]
+
+let pins_for_a_block env (p : Path.t) =
+  List.mem p family_pins
+  || p.member <> None
+     && Path.owner p <> Path.prelude "Instances"
+     && Iface.is_dep (Hashtbl.find_opt env.types) (Path.owner p)
+     &&
+     match Option.map repr (Hashtbl.find_opt env.globals p) with
+     | Some (TFun (ps, _, _, _)) ->
+         List.exists
+           (fun (q : Types.param) ->
+             match q.ty with
+             | TFun (_, _, _, u) ->
+                 let rec has = function
+                   | RExtend (l, rest) -> l.name = for_label || has rest
+                   | _ -> false
+                 in
+                 has u
+             | _ -> false)
+           ps
+     | _ -> false
 
 let rec infer env cx (e : expr) : ty = read_wide cx e (infer_raw env cx e)
 
@@ -1145,8 +1176,8 @@ and cursor ?(found = fun p -> Method_of p) ?meth_at ?fails env cx ~at (iter : ex
   let uses_here =
     match iter.kind with
     | Call ({ kind = Var (Global _); node; loc; _ }, _)
-      when Hashtbl.mem env.through node -> (
-        match through_alias env (Hashtbl.find env.through node) loc tm with
+      when Hashtbl.mem env.through (node, loc) -> (
+        match through_alias env (Hashtbl.find env.through (node, loc)) loc tm with
         | TFun (_, _, _, u) -> u
         | _ -> uses)
     | _ -> uses
@@ -2271,11 +2302,11 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                    ?what m elsewhere);
               nothing ())
       | None, _ -> field_call ())
-  | Var (Global _) when Hashtbl.mem env.through f.node ->
+  | Var (Global _) when Hashtbl.mem env.through (f.node, f.loc) ->
       (* a dependency's member function called through an alias of it,
          `Events.items()`: what it uses of the dependency it uses of the
          alias, whose implementation it runs with (Lower) *)
-      let alias = Hashtbl.find env.through f.node in
+      let alias = Hashtbl.find env.through (f.node, f.loc) in
       let tf = through_alias env alias f.loc (infer env cx f) in
       let t = call_with env cx e f tf args in
       (* a cursor it makes runs its `next` with the alias's too, which
@@ -2302,6 +2333,24 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
    `Events`, at the alias's type arguments. *)
 and through_alias env (alias : Path.t) loc tf =
   let target = Unify.aliased env.st { dpath = alias; dargs = [] } in
+  (* a description among its type arguments fails to start with what the
+     alias says, and the member may say it fails with more besides, its
+     block's errors among them, `Actors.at`'s: so here it's open. That's
+     sound only as what a member can fail with, which is all a
+     description's errors are to the dependency it's an argument of
+     (compiler.md, "Services stage", "Actors (step 7)") *)
+  let target =
+    {
+      target with
+      dargs =
+        List.map
+          (fun t ->
+            match t with
+            | TImpl i -> TImpl { i with fails = extend (fst (row_parts i.fails)) (fresh_row env.st) }
+            | t -> t)
+          target.dargs;
+    }
+  in
   let name = Ty.dep_label target.dpath in
   let rec swap r =
     match repr_row r with
@@ -2780,7 +2829,8 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
             if op <> None then
               List.iter (fun (a : expr) -> Hashtbl.remove op_args a.node) args)
           (fun () ->
-            check_args env cx ~name ?callee ~written ps args;
+            pinning env cx e f errs (fun () ->
+                check_args env cx ~name ?callee ~written ps args);
             (* a block bound by `let` and passed here brings in only what
                the parameter's type lists, as one written here does *)
             if op <> None then
@@ -2847,7 +2897,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
   (* the parameters and arguments that aren't of `Tags`, checked as any
      call's *)
   let rest_checked ps written args =
-    check_args env cx ~name ?callee ~written ps args;
+    pinning env cx e f errs (fun () -> check_args env cx ~name ?callee ~written ps args);
     absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses
   in
   if ntags > 0 && given = n - ntags && not (List.exists named args) then (
@@ -2942,7 +2992,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
                        (tags_cant_fail loc ~fn ~param ~tag:t ~what ~can))
                  names)))
       (List.rev !given_tags);
-    made env ret
+    kept_needs env ps (made env ret)
 
 (* [t], what a call gives, once its arguments [args] are checked, for
    the parameters [ps]: if it's a handler `for D`'s (Ty.param_path;
@@ -3009,7 +3059,83 @@ and given_for env cx ~fnode ~at ~ename ps args t =
                  | None -> "this")
                (show (printer env) dt));
           TError)
+  | _ -> kept_needs env ps t
+
+(* [t], what a call of a handler gives, given [ps], its parameters: one
+   given a maker, a parameter that's a function giving a description,
+   `actors(h: spawned fn(k: K) -> D)`, keeps it, and makes instances of
+   what it describes where it's installed (the runtime's family does,
+   with the evidence there), so it needs what those need too
+   (compiler.md, "Services stage", "Actors (step 7)"). *)
+and kept_needs env ps t =
+  match repr t with
+  | TImpl i ->
+      let kept =
+        List.concat_map
+          (fun (p : Types.param) ->
+            match reveal env.st p.ty with
+            | TFun (_, ret, _, _) -> (
+                match reveal env.st ret with
+                | TImpl { needs; _ } -> fst (row_parts needs)
+                | _ -> [])
+            | _ -> [])
+          ps
+      in
+      if kept = [] then t
+      else
+        let ls = fst (row_parts i.needs) in
+        TImpl { i with needs = extend (ls @ without_labels ls kept) (row_end i.needs) }
   | _ -> t
+
+(* [check ()], checking the arguments of the call [e] of [f], whose
+   errors are [errs]: if it pins an instance of a keyed instance family
+   for a block (compiler.md, "Services stage", "Actors (step 7)"),
+   decision 18's no-deadlock rules, as checks on that pin. One inside a
+   block that pins one of the same family could wait for a slot its own
+   block holds, which is refused; one inside a block of another family
+   could close a cycle of waits, and fails with `Full` instead of waiting
+   where that's so, which this call says it can, and lowering tells the
+   family ([Full_marked]). A handler's arms' pins are kept, for the
+   family that keeps it ([kept_pins]). Its blocks are checked as pinned
+   by it. *)
+and pinning env cx (e : expr) (f : expr) errs check =
+  let family =
+    match f.kind with
+    | Var (Global p) when pins_for_a_block env p && not (List.mem p family_pins) ->
+        Some (match Hashtbl.find_opt env.through (f.node, f.loc) with Some alias -> alias | None -> Path.owner p)
+    | Var (Dep_op (p, op)) when Hashtbl.mem env.pin_ops (p, op) -> Some p
+    | _ -> None
+  in
+  match family with
+  | None -> check ()
+  | Some fam ->
+      (* as it's written: through the alias it's called by *)
+      let written =
+        match f.kind with
+        | Var (Dep_op (p, op)) -> env.names p ^ "." ^ op
+        | Var (Global p) -> env.names fam ^ "." ^ Path.short p
+        | _ -> Option.value (env.source f) ~default:(env.names fam)
+      in
+      (match List.assoc_opt fam env.pinned_by with
+      | Some outer -> report env (pinned_inside e.loc ~inner:written ~outer)
+      | None when env.pinned_by <> [] -> (
+          (* `Full` where waiting could close a cycle, if what the call
+             fails with can say so *)
+          let full = { name = "Full"; payload = []; dep = false; written = unmarked () } in
+          match
+            Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
+                Unify.unify_row st (c.row errs) (c.row (RExtend (full, fresh_row st))))
+          with
+          | Ok () ->
+              Hashtbl.replace cx.nodes (full_node e.node) unit;
+              Hashtbl.replace cx.found (full_node e.node) Full_marked
+          | Error _ -> ())
+      | None -> ());
+      Hashtbl.replace env.kept_pins cx.self
+        ((Ty.dep_label fam, written, e.loc)
+        :: Option.value (Hashtbl.find_opt env.kept_pins cx.self) ~default:[]);
+      env.pinned_by <- (fam, written) :: env.pinned_by;
+      Fun.protect ~finally:(fun () -> env.pinned_by <- List.tl env.pinned_by) check
 
 (* Whether [t] is the prelude's `Tags`. *)
 and is_tags t =

@@ -1,4 +1,4 @@
-# ren journal 2 · ../main.ren · deps: Console Fs Os Proc
+# ren journal 3 · ../main.ren · deps: Console Fs Os Proc
 1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, from the folder this is in.\n\n# the first recipe, so the one that runs with no args: `build` and\n# `test` both need only `base`, so they run at once\nall: build test\n  echo all done\n\nbuild: base\n  echo building\n  echo built\n\n# waits a moment first, so `build` has printed by the time it does\ntest: base\n  sleep 0.5\n  echo testing\n\nbase:\n  echo base\n\n# exits with 3 halfway through, so its last line never runs\nbroken: base\n  echo trying\n  exit 3\n  echo never\n\n# `broken` fails while `slow` runs, which is killed then\nci: broken slow\n\nslow: base\n  exec sleep 5\n  echo never\n")
 2 main Os.args() → ["build"]
 3 main/run_all:0 Console.error("echo base")

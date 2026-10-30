@@ -23,7 +23,7 @@ A panic is the journal's last entry, and a replay panics again, at the
 same place:
 
   $ sed -e 's/→ [0-9]*$/→ N/' -e 's/index [0-9]/index N/' -e 's/write("[0-9]")/write("N")/' dice.journal
-  # ren journal 2 · dice.ren · deps: Clock Console Random
+  # ren journal 3 · dice.ren · deps: Clock Console Random
   1 main Clock.now() → N
   2 main Random.int(6) → N
   3 main Console.write("N")
@@ -41,7 +41,7 @@ a call gave is what the program gets, even a roll of 6, which the real
 `Random.int(6)` never gives:
 
   $ cat > six.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now() → 0
   > 2 main Random.int(6) → 6
   > 3 main Console.write("6")
@@ -60,7 +60,7 @@ A panic inside a call to the world is recorded where the call was made,
 and the replay panics at that call:
 
   $ cat > fire.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now() → 0
   > 2 main panic dice.ren:3:14 "the dice caught fire"
   > END
@@ -76,7 +76,7 @@ A call past the recording's end anywhere else isn't where it panicked:
 the program went on past it, and the replay went differently:
 
   $ cat > early.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now() → 0
   > 2 main panic dice.ren:2:11 "the clock stopped"
   > END
@@ -94,7 +94,7 @@ A replay that ends differently from the recording stops, at the
 recording's end:
 
   $ cat > short.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now() → 0
   > 2 main Random.int(6) → 6
   > 3 main Console.write("6")
@@ -112,7 +112,7 @@ recording's end:
   [1]
 
   $ cat > out.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now() → 0
   > 2 main exit 0
   > END
@@ -129,7 +129,7 @@ recording's end:
 An entry that can't be read as what its call gives is said at its line:
 
   $ cat > bad.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now() → 0
   > 2 main Random.int(6) → "six"
   > 3 main exit 0
@@ -161,7 +161,7 @@ so a replay couldn't say whether the run ended as it did:
     ┌─ not.journal:1:1
   1 │ hello
     │ ^
-    = a journal starts `# ren journal 2 · <program> · deps: <dependencies>`
+    = a journal starts `# ren journal 3 · <program> · deps: <dependencies>`
     help: record one with `ren run --record <file.journal> <file.ren>`
   [1]
 
@@ -247,7 +247,7 @@ kept, ending in it, and the trace is printed:
     = right: 2
   [1]
   $ cat sure.journal
-  # ren journal 2 · sure.ren · deps: Console
+  # ren journal 3 · sure.ren · deps: Console
   1 main Console.write("before")
   2 main panic sure.ren:3:10 "this `assert` failed"
   $ REN_NO_TIMINGS=1 ren replay sure.journal --trace
@@ -287,7 +287,7 @@ An entry for a call whose result the program uses has to say what it
 gave:
 
   $ cat > mute.journal <<'END'
-  > # ren journal 2 · dice.ren · deps: Clock Console Random
+  > # ren journal 3 · dice.ren · deps: Clock Console Random
   > 1 main Clock.now()
   > 2 main exit 0
   > END
@@ -316,16 +316,17 @@ that's more than two folders up, when it's absolute:
   $ mkdir -p a/b/c && ren run --record a/b/near.journal sure.ren > /dev/null 2>&1
   [1]
   $ head -1 a/b/near.journal
-  # ren journal 2 · ../../sure.ren · deps: Console
+  # ren journal 3 · ../../sure.ren · deps: Console
   $ ren run --record a/b/c/far.journal sure.ren > /dev/null 2>&1
   [1]
   $ head -1 a/b/c/far.journal | sed -E 's|· /.+/sure.ren|· /.../sure.ren|'
-  # ren journal 2 · /.../sure.ren · deps: Console
+  # ren journal 3 · /.../sure.ren · deps: Console
   $ ren replay a/b/c/far.journal 2>&1 | head -2
   before
   replayed 1 call, to the panic it ended in: nothing touched the disk, and nothing ran
 
-A journal is version 2 (compiler.md, "Journal version 2"): each entry
+A journal is version 3 (compiler.md, "Journal version 2" and "Journal
+version 3"): each entry
 names the task that made it, a call that its task waited in is two
 lines, its start, which ends `…`, and what it gave, after the poll that
 woke it, and each poll that woke tasks is a line. Here a level of
@@ -355,7 +356,7 @@ tenth of a second apart, so the order they end in is the same each run;
   > END
   $ ren run --record level.journal recipes.ren > run.out 2>&1
   $ cat level.journal
-  # ren journal 2 · recipes.ren · deps: Clock Console Os Proc
+  # ren journal 3 · recipes.ren · deps: Clock Console Os Proc
   1 main Os.args() → []
   2 main/main:0 Console.error("true")
   3 main/main:0 Clock.sleep(300) …

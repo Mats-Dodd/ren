@@ -548,7 +548,7 @@ trace is for reading, and replay doesn't need them.
 ### What an entry holds
 
 ```
-# ren journal 2 · main.ren · deps: Console Fs Os Proc
+# ren journal 3 · main.ren · deps: Console Fs Os Proc
 1 main Fs.read("justfile") → Ok("# What `ren run main.ren` runs, ...\n")
 2 main Os.args() → ["build"]
 3 main Console.error("echo base")
