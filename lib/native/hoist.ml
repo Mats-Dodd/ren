@@ -447,8 +447,9 @@ let fn (f : fn) =
 
 (* ---- the bytes a loop reads ----
 
-   A `Str`'s or `Bytes`' length and where its bytes are never change once
-   it's made (ren_rt.h, [ren_str]), but C can't know that: a loop that
+   A `Str`'s or `Bytes`' length and where its bytes are don't change
+   while two references hold it (ren_rt.h, [ren_str]), but C can't know
+   that: a loop that
    reads a byte, [Bytes_at], and also calls a function or stores
    anything reads both from the object again before every byte, since
    the call or the store might have changed them as far as C knows. Rust
@@ -466,7 +467,9 @@ let fn (f : fn) =
    bytes, since they were shared); it's used in the loop, so the reference it
    holds (or, borrowed, its caller's) is alive across it, or the loop's
    own reads would be of freed memory; and nothing writes a string's
-   header once it's made. A copy made in the loop, `let y = x`, never
+   header while more than one reference holds it: a `+=` that appends in
+   place ([Str_concat_taking]) takes the only one, and the variable alive
+   across the loop holds one, so it copies instead. A copy made in the loop, `let y = x`, never
    [Set] either, is the same object, and read through as [x] is. A
    [Decl]ed variable, which is [Set] later, is never one. *)
 

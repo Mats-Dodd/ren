@@ -139,7 +139,7 @@ let rt_sig (rt : rt) : layout list * layout =
   | Array_reserve (Word _) -> ([ Int; Desc ], Boxed)
   | Array_reserve _ -> ([ Int ], Boxed)
   | Str_len -> ([ Boxed ], Int)
-  | Str_concat -> ([ Boxed; Boxed ], Boxed)
+  | Str_concat | Str_concat_taking -> ([ Boxed; Boxed ], Boxed)
   | Str_eq -> ([ Boxed; Boxed ], Bool)
   | Slice (_, Range) -> ([ Boxed; Int; Int ], Boxed)
   | Slice (_, Before) -> ([ Boxed; Int ], Boxed)

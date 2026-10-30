@@ -36,6 +36,11 @@ _Noreturn void ren_panic(const ren_site *site, const char *msg) {
 _Noreturn void ren_panic_help(const ren_site *site, const char *msg,
                               const char *help) {
   fflush(stdout);
+  ren_site_print(site, msg, help);
+  exit(1);
+}
+
+void ren_site_print(const ren_site *site, const char *msg, const char *help) {
   const unsigned char *p = site->ops;
   for (;;) {
     switch (*p++) {
@@ -78,6 +83,8 @@ _Noreturn void ren_panic_help(const ren_site *site, const char *msg,
       }
       break;
     }
+    case 0:
+      return;
     default:
       exit(1);
     }
@@ -210,8 +217,15 @@ ren_obj *ren_array_reserve_d(int64_t cap, ren_obj *d) {
   return ren_alloc_array_c(0, cap, ren_desc_counted(d), 0, ren_desc_elem(d));
 }
 
-static ren_obj *ren_alloc_str(int64_t len) {
-  size_t bytes = sizeof(ren_str) + (size_t)len + 1;
+/* The memory an owner of room [cap] takes: its header and its bytes. */
+static size_t ren_str_size(int64_t cap) { return sizeof(ren_str) + (size_t)cap; }
+
+/* An owner of [len] bytes, not yet written, with room for [cap] (at
+   least [len]), rounded up to the word its memory ends in, which is
+   room it has anyway. */
+static ren_obj *ren_alloc_str_cap(int64_t len, int64_t cap) {
+  cap = (int64_t)(ren_words(ren_str_size(cap)) * 8 - sizeof(ren_str));
+  size_t bytes = ren_str_size(cap);
   ren_str *s = ren_alloc_bytes(bytes);
 #ifdef REN_STATS
   ren_count_alloc((int64_t)bytes);
@@ -222,10 +236,11 @@ static ren_obj *ren_alloc_str(int64_t len) {
   s->h.objs = 0;
   s->len = len;
   s->data = s->bytes;
-  s->root = NULL;
-  s->bytes[len] = 0;
+  s->cap = cap;
   return &s->h;
 }
+
+static ren_obj *ren_alloc_str(int64_t len) { return ren_alloc_str_cap(len, len); }
 
 /* Objects whose count reached 0, waiting to have their fields dropped
    and be freed. Freeing goes through this list rather than recursing,
@@ -337,11 +352,11 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
   }
   case REN_TAG_STR: {
     ren_str *s = (ren_str *)o;
-    if (s->root != NULL) {
+    if (ren_str_is_slice(o)) {
       ren_release(t, s->root);
       size = sizeof(ren_str);
     } else
-      size = sizeof(ren_str) + (size_t)s->len + 1;
+      size = ren_str_size(s->cap);
     bytes = (int64_t)size;
     break;
   }
@@ -432,7 +447,7 @@ void ren_mark_shared(ren_obj *o) {
       n = ((ren_desc *)x)->nargs;
       break;
     case REN_TAG_STR:
-      n = ((ren_str *)x)->root != NULL;
+      n = ren_str_is_slice(x);
       break;
     case REN_TAG_MAP:
       n = (size_t)((ren_map *)x)->len * 2;
@@ -725,6 +740,130 @@ ren_obj *ren_str_concat(ren_obj *a, ren_obj *b) {
   return o;
 }
 
+/* ---- appending in place (compiler.md, "Bytes stage, part two",
+   "Appending in place") ---- */
+
+/* The sites that copied, the last first, for the report: the program's
+   thread's, which [ren_run] reads once it has ended. */
+static ren_append *ren_appends;
+
+/* What [ren_str_concat_taking] grows to, or copies into: twice [cap] or
+   [need], whichever is more, and 32 bytes at least. */
+static int64_t ren_str_room(int64_t cap, int64_t need) {
+  int64_t room = cap > INT64_MAX / 2 ? INT64_MAX : cap * 2;
+  if (room < need)
+    room = need;
+  return room < 32 ? 32 : room;
+}
+
+/* [a], a unique owner, made a new one with room for [cap] bytes, its
+   [len] kept: in its memory if the allocator can, as an array's buffer
+   grows ([ren_array_grow]), and not an object made, which the statistics
+   count as a grow. */
+__attribute__((noinline)) static ren_obj *ren_str_grow(ren_obj *a, int64_t cap) {
+  ren_str *s = (ren_str *)a;
+  size_t old = ren_str_size(s->cap);
+  cap = (int64_t)(ren_words(ren_str_size(cap)) * 8 - sizeof(ren_str));
+  size_t bytes = ren_str_size(cap);
+  ren_str *t;
+#ifndef REN_SYSTEM_MALLOC
+  if (ren_words(old) <= REN_SMALL_WORDS) {
+    /* a small object's memory is from a free list, which realloc can't
+       take back */
+    t = ren_alloc_bytes(bytes);
+    memcpy(t, s, sizeof(ren_str) + (size_t)s->len);
+    ren_free_bytes(s, old);
+  } else
+#endif
+  {
+    t = realloc(s, bytes);
+    if (t == NULL)
+      ren_out_of_memory();
+  }
+#ifdef REN_STATS
+  ren_stats.grows++;
+  ren_stats.live_bytes += (int64_t)bytes - (int64_t)old;
+  if (ren_stats.live_bytes > ren_stats.peak_bytes)
+    ren_stats.peak_bytes = ren_stats.live_bytes;
+#endif
+  t->data = t->bytes;
+  t->cap = cap;
+  return &t->h;
+}
+
+ren_obj *ren_str_concat_slow(ren_obj *a, ren_obj *b, ren_append *site) {
+  ren_str *x = (ren_str *)a;
+  int64_t la = x->len, lb = ren_str_len(b);
+  if (ren_rc(a) == 1 && !ren_str_is_slice(a)) {
+    if (lb <= x->cap - la) {
+      memcpy(x->bytes + la, ren_str_data(b), (size_t)lb);
+      x->len = la + lb;
+      return a;
+    }
+    /* [b] may be [a] itself, or a part of its bytes nothing counted, which
+       growing moves: where it starts in them is read first */
+    const char *from = ren_str_data(b);
+    bool inside = from >= x->bytes && from < x->bytes + la;
+    int64_t at = inside ? from - x->bytes : 0;
+    ren_str *y = (ren_str *)ren_str_grow(a, ren_str_room(x->cap, la + lb));
+    from = inside ? y->bytes + at : from;
+    memcpy(y->bytes + la, from, (size_t)lb);
+    y->len = la + lb;
+    return &y->h;
+  }
+  /* shared, a literal or a slice: its range copied, with room to grow,
+     twice its length, not its room, which a loop that copies on every
+     pass would double each time. The report counts a copy of what
+     something else holds, the one that makes a loop quadratic; not a
+     literal's or a slice's, which a loop that starts each string from
+     `""` makes once a string */
+  if (site != NULL && ren_rc(a) != 0 && ren_rc(a) != 1 && site->copies++ == 0) {
+    site->next = ren_appends;
+    ren_appends = site;
+  }
+  ren_obj *o = ren_alloc_str_cap(la + lb, ren_str_room(la, la + lb));
+  memcpy(((ren_str *)o)->bytes, x->data, (size_t)la);
+  memcpy(((ren_str *)o)->bytes + la, ren_str_data(b), (size_t)lb);
+  ren_drop(a);
+  return o;
+}
+
+static int ren_append_order(const void *p, const void *q) {
+  uint32_t a = (*(ren_append *const *)p)->order, b = (*(ren_append *const *)q)->order;
+  return a < b ? -1 : a > b;
+}
+
+/* The report: a note for each site that copied on more than one pass, in
+   the order of the program's sites, unless REN_NOTES is 0. */
+static void ren_append_report(void) {
+  const char *on = getenv("REN_NOTES");
+  if (ren_appends == NULL || (on != NULL && strcmp(on, "0") == 0))
+    return;
+  size_t n = 0;
+  for (ren_append *s = ren_appends; s != NULL; s = s->next)
+    n++;
+  ren_append **all = malloc(n * sizeof *all);
+  if (all == NULL)
+    return;
+  n = 0;
+  for (ren_append *s = ren_appends; s != NULL; s = s->next)
+    all[n++] = s;
+  qsort(all, n, sizeof *all, ren_append_order);
+  fflush(stdout);
+  for (size_t i = 0; i < n; i++) {
+    if (all[i]->copies < 2)
+      continue;
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "this `%s` copied its %s on %" PRId64
+             " passes, since something else held it",
+             all[i]->compound ? "+=" : "+",
+             all[i]->compound ? "string" : "left side", all[i]->copies);
+    ren_site_print(all[i]->site, msg, NULL);
+  }
+  free(all);
+}
+
 bool ren_str_eq(ren_obj *a, ren_obj *b) {
   return ren_str_len(a) == ren_str_len(b) &&
          memcmp(ren_str_data(a), ren_str_data(b), (size_t)ren_str_len(a)) == 0;
@@ -862,11 +1001,11 @@ static ren_obj *ren_str_part(ren_obj *a, int64_t i, int64_t j) {
 #endif
   s->h.rc = 1;
   s->h.tag = REN_TAG_STR;
-  s->h.nfields = 0;
+  s->h.nfields = REN_STR_SLICE;
   s->h.objs = 0;
   s->len = j - i;
   s->data = from->data + i;
-  s->root = from->root != NULL ? from->root : a;
+  s->root = ren_str_is_slice(a) ? from->root : a;
   ren_dup(s->root);
   return &s->h;
 }
@@ -988,11 +1127,13 @@ ren_obj *ren_str_splice(ren_obj *s, int64_t i, int64_t j, ren_obj *b) {
   return o;
 }
 
-/* Strings never change, so their halves are never lent: joined, they're
+/* Strings change only where one reference holds them (an append in
+   place), so their halves are never lent: joined, they're
    their root, or a slice of it, if they're next to each other in it. */
 ren_obj *ren_str_join(ren_obj *a, ren_obj *b) {
   ren_str *x = (ren_str *)a, *y = (ren_str *)b;
-  if (x->root != NULL && x->root == y->root && x->data + x->len == y->data) {
+  if (ren_str_is_slice(a) && ren_str_is_slice(b) && x->root == y->root &&
+      x->data + x->len == y->data) {
     ren_obj *root = x->root;
     if (x->data == ((ren_str *)root)->data &&
         x->len + y->len == ren_str_len(root)) {
@@ -1165,7 +1306,6 @@ ren_obj *ren_str_lower(ren_obj *s) {
     char c = from[i];
     to[i] = c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
   }
-  to[n] = 0;
   return o;
 }
 
@@ -1178,7 +1318,7 @@ ren_obj *ren_array_copied(ren_obj *a) {
 }
 
 ren_obj *ren_str_copied(ren_obj *s) {
-  if (((ren_str *)s)->root == NULL) {
+  if (!ren_str_is_slice(s)) {
     ren_dup(s);
     return s;
   }
@@ -1536,7 +1676,6 @@ ren_obj *ren_utf8_lossy(ren_obj *b) {
       i -= k;
     }
   }
-  to[len] = 0;
   return o;
 }
 
@@ -1551,10 +1690,21 @@ ren_obj *ren_bytes_zeros(int64_t n, const ren_site *site) {
   return o;
 }
 
+/* `%lld`'s digits, written from the last: snprintf's took a fifth of
+   building JSON with `+=` (compiler.md, "Bytes stage, part two", "Step
+   3, as built"). */
 ren_obj *ren_show_int(int64_t n) {
-  char buf[32];
-  int len = snprintf(buf, sizeof buf, "%" PRId64, n);
-  return ren_str_of(buf, len);
+  char buf[24];
+  char *end = buf + sizeof buf, *p = end;
+  /* the magnitude as unsigned, which INT64_MIN's has room for */
+  uint64_t u = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
+  do {
+    *--p = (char)('0' + u % 10);
+    u /= 10;
+  } while (u != 0);
+  if (n < 0)
+    *--p = '-';
+  return ren_str_of(p, end - p);
 }
 
 ren_obj *ren_show_bool(bool b) {
@@ -3186,5 +3336,6 @@ int ren_run(void (*program)(void)) {
   }
   pthread_join(thread, NULL);
   fflush(stdout);
+  ren_append_report();
   return 0;
 }

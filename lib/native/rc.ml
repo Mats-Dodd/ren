@@ -199,6 +199,7 @@ let rec erase (b : block) : block =
     | Runtime (Map_set, xs, s) -> Runtime (Map_set_taking, xs, s)
     | Runtime (Set_add, xs, s) -> Runtime (Set_add_taking, xs, s)
     | Runtime (Map_remove, xs, s) -> Runtime (Map_remove_taking, xs, s)
+    | Runtime (Str_concat, xs, s) -> Runtime (Str_concat_taking, xs, s)
     | r -> r
   in
   match b with
@@ -1174,6 +1175,22 @@ and place_stmt pl cx (s : stmt) (after : Ids.t) : stmt list * Ids.t =
        && (not (List.mem gid borrowed_ids))
        && owns fi ~after:kept ~uses:before ~moved gid
   in
+  match s with
+  (* a `+` takes its left side only where it dies there, as [moved] says,
+     or is a literal, which is never unique, so it's copied with room to
+     grow; anywhere else it's the `+` that borrows both, which copies into
+     an owner of the exact size, rather than counting the left side again
+     only for [Str_concat_taking] to find it shared and copy it (compiler.md,
+     "Bytes stage, part two", "Appending in place") *)
+  | Let (v, Runtime (Str_concat_taking, (x :: _ as xs), site))
+    when not
+           (match x with
+           | Lit _ -> true
+           | _ -> (
+               match tracked_of fi x with Some gid -> moved gid | None -> false))
+    ->
+      place_stmt pl cx (Let (v, Runtime (Str_concat, xs, site))) after
+  | _ ->
   (* a part or a view is borrowed from its parent while the parent is
      held, even where the two die together *)
   let owned_now gid = owns fi ~after:kept ~uses:before ~moved gid in

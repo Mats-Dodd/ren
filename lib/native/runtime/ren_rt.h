@@ -245,17 +245,31 @@ static inline ren_val ren_sized_word(uint8_t kind, uint64_t bits) {
 }
 
 /* A `Str` or `Bytes`, the same in memory: an owner, whose [data] is its
-   own [bytes], [len] of them then a 0, and whose [root] is NULL; or a
-   slice, whose [data] points into its root's bytes, not followed by a 0,
-   and whose [root] is that owner, counted, as an array's is. Nothing
-   writes a string's bytes once it's made, so a slice is never copied. */
+   own [bytes], [len] of them used and room for [cap], and nothing after
+   them (no 0: nothing reads past [len]); or a slice, the bit
+   [REN_STR_SLICE] of [h.nfields] set, whose [data] points into its root's
+   bytes and whose [root] is that owner, counted, as an array's is
+   (compiler.md, "Bytes stage, part two", "The owner's header"). A
+   string literal is an owner whose count is 0 and whose [cap] is its
+   length. An owner whose count is 1 is the only way to its bytes, so a
+   `+=` appends to it in place ([ren_str_concat_taking]) and `Bytes`' writes
+   change it ([ren_bytes_writable]); nothing else changes a string once
+   it's made, so a slice is never copied. */
 typedef struct {
-  ren_obj h;
+  ren_obj h;          /* [h.nfields]: [REN_STR_SLICE] if it's a slice */
   int64_t len;
   const char *data;
-  ren_obj *root;
-  char bytes[];
+  union {
+    int64_t cap;      /* an owner's room for bytes, at least [len] */
+    ren_obj *root;    /* a slice's owner */
+  };
+  char bytes[];       /* an owner's */
 } ren_str;
+#define REN_STR_SLICE 1
+
+static inline bool ren_str_is_slice(ren_obj *s) {
+  return (s->nfields & REN_STR_SLICE) != 0;
+}
 
 /* Where a panic is, and what it prints: the compiler renders `ren run`'s
    message in pieces (diag.ml, [piece]), with a hole where the message
@@ -312,6 +326,10 @@ _Noreturn void ren_panic(const ren_site *site, const char *msg);
    character's names `char_floor` on the string as it's written. */
 _Noreturn void ren_panic_help(const ren_site *site, const char *msg,
                               const char *help);
+
+/* What a panic at [site] prints, but not ending the program: the `+=`
+   report's notes too (ren_str_concat_taking). */
+void ren_site_print(const ren_site *site, const char *msg, const char *help);
 
 /* The same, with the message a `Str`, [s]: a failed `assert` of the
    prelude's, which shows the values it's about. */
@@ -1127,6 +1145,47 @@ static inline const char *ren_str_data(ren_obj *s) { return ((ren_str *)s)->data
 ren_obj *ren_str_concat(ren_obj *a, ren_obj *b);
 bool ren_str_eq(ren_obj *a, ren_obj *b);
 
+/* Where a debug build's `+=` report counts the copies a `+=`, or the `+`
+   of `o = o + x`, made because something else held its left side
+   (compiler.md, "Bytes stage, part two", "Appending in place"): one for
+   each such site, which the program defines, linked into the runtime's
+   list the first time it copies. At a normal exit each that copied on
+   more than one pass prints a note, by [order], the site's number,
+   unless REN_NOTES is 0. */
+typedef struct ren_append {
+  const ren_site *site;
+  int64_t copies;
+  struct ren_append *next; /* the next that copied, once it has */
+  uint32_t order;
+  uint8_t compound;        /* a `+=`'s, not a `+`'s */
+} ren_append;
+
+/* [a] followed by [b], taking [a], which dies there: written after [a]'s
+   bytes if [a] is an owner whose count is 1 and has the room, and grown
+   first if it hasn't, to twice its room or more (realloc, in place when
+   the allocator can); otherwise copied, [a]'s range then [b], into a new
+   owner with room for twice that, so a loop that copies a literal on its
+   first pass appends in place from then on. Its room is 32 bytes at
+   least. [b] may be [a], or in [a]'s bytes. [site], a debug build's,
+   counts a copy of what something else held; a release build's is NULL.
+   The fast path is here, inline; the rest is [ren_str_concat_slow]. */
+ren_obj *ren_str_concat_slow(ren_obj *a, ren_obj *b, ren_append *site);
+static inline ren_obj *ren_str_concat_taking(ren_obj *a, ren_obj *b,
+                                             ren_append *site) {
+  ren_str *x = (ren_str *)a;
+  int64_t la = x->len, lb = ((ren_str *)b)->len;
+  if (__builtin_expect(ren_rc(a) == 1 && !ren_str_is_slice(a) &&
+                           lb <= x->cap - la,
+                       1)) {
+    /* [b]'s bytes are before [la], if they're [a]'s, so they're not
+       written over */
+    memcpy(x->bytes + la, ((ren_str *)b)->data, (size_t)lb);
+    x->len = la + lb;
+    return a;
+  }
+  return ren_str_concat_slow(a, b, site);
+}
+
 /* ---- slices (foundations.md, decision 17) ----
 
    Each borrows what it's given and counts what it keeps, as the rest of
@@ -1404,7 +1463,7 @@ ren_obj *ren_bytes_unshare(ren_obj *b);
 static inline char *ren_bytes_writable(ren_obj **cell, bool taking) {
   ren_obj *b = *cell;
   if (!taking ||
-      __builtin_expect(!(ren_rc(b) == 1 && ((ren_str *)b)->root == NULL), 0))
+      __builtin_expect(!(ren_rc(b) == 1 && !ren_str_is_slice(b)), 0))
     *cell = b = ren_bytes_unshare(b);
   return ((ren_str *)b)->bytes;
 }

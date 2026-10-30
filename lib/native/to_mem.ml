@@ -1210,6 +1210,22 @@ type fs = {
 
 let at fs (loc : Loc.t) = if loc.file = Prelude.file then fs.here else loc
 
+(* The `+` a debug build's `+=` report counts at an [Assign (v, value)]
+   (compiler.md, "Bytes stage, part two", "Appending in place"): the first
+   of the `+`s [value] is made of, if its left side is [v], `o + a` of
+   `o = o + a + b`, the one way appending copies the whole string. *)
+let rec append_of (v : C.var) (e : C.expr) =
+  match e.kind with
+  | Call
+      ({ kind = Intrinsic ((Str_add | Bytes_add), _, _, _); _ }, [ Value l; _ ], _)
+    -> (
+      match l.kind with Local w when w.id = v.id -> Some e | _ -> append_of v l)
+  | _ -> None
+
+(* The [append_of]s of the assignments being compiled, the innermost
+   first: each `+`, the assignment's place, and whether it's a `+=`. *)
+let appends : (C.expr * Loc.t * bool) list ref = ref []
+
 let unsupported_at fs loc what = unsupported (at fs loc) what
 let layout_at fs loc t = layout fs.cx (at fs loc) t
 (* [s], after what's been compiled: the variable it defines made at the
@@ -1898,7 +1914,17 @@ and expr_at fs env (e : C.expr) : atom =
       drop fs env (Var m);
       r
   | Assign (v, value) ->
-      let x = expr fs env value in
+      let x =
+        match append_of v value with
+        | None -> expr fs env value
+        | Some add ->
+            (* a `+=`'s `+` has the assignment's place (lower.ml, [assign]),
+               and `o = o + x`'s its own *)
+            appends := (add, e.loc, add.loc = e.loc) :: !appends;
+            let x = expr fs env value in
+            appends := List.tl !appends;
+            x
+      in
       let m = mem_var env v in
       consume env x;
       (match m.layout with
@@ -3066,7 +3092,13 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
           Unit
       | _ -> bug "a `push` without `&`")
   | Str_byte_len, _, _ -> runtime Str_len
-  | (Str_add | Bytes_add), _, _ -> runtime Str_concat
+  | (Str_add | Bytes_add), _, _ -> (
+      (* the `+` of a `+=`, or of `o = o + x`, has a site the report counts
+         its copies at, but not in the prelude, whose code isn't shown *)
+      match List.find_opt (fun (add, _, _) -> add == e) !appends with
+      | Some (_, loc, compound) when not fs.prelude ->
+          runtime ~site:(new_site cx ~kind:(Appends compound) loc) Str_concat
+      | _ -> runtime Str_concat)
   | Str_split, _, _ -> runtime ~site:(site ()) Str_split
   | Str_trim, _, _ -> runtime Str_trim
   | Array_copy, _, _ -> runtime (Copied Of_array_elems)

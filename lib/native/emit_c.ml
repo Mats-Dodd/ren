@@ -470,6 +470,14 @@ let runtime rt args site_arg =
       sprintf "ren_array_reserve(%s, %b, 0)" (a 0) (is_object l)
   | Str_len -> sprintf "ren_str_len(%s)" (a 0)
   | Str_concat -> sprintf "ren_str_concat(%s, %s)" (a 0) (a 1)
+  (* a debug build's report counts its site's copies; a release build's
+     has none *)
+  | Str_concat_taking -> (
+      match site_arg with
+      | Some s when not !is_release ->
+          sprintf "ren_str_concat_taking(%s, %s, &ren_append_%d)" (a 0) (a 1)
+            s.sid
+      | _ -> sprintf "ren_str_concat_taking(%s, %s, NULL)" (a 0) (a 1))
   | Str_eq -> sprintf "ren_str_eq(%s, %s)" (a 0) (a 1)
   (* slices (ren_rt.c, "slices"): a `Str`'s and `Bytes`' are strings, a
      `Str`'s checked not to cut a character *)
@@ -1793,6 +1801,9 @@ type parts = {
       (** its string literals, the texts its sites print, descriptors,
           declarations, structs and associated values *)
   site_defs : string list;  (** its sites, each defined *)
+  appends : (int * string) list;
+      (** a debug build's `+=` report's counts, each defined, and the site
+          it points at *)
   typedefs : string;  (** its structs' C types, which all of it uses *)
   protos : (string * string) list;
       (** each function's name, and its prototype *)
@@ -1854,14 +1865,35 @@ let parts ~restrict ~release ~site_pieces (p : program) =
       add
         (sprintf
            "%sstruct ren_lit_%d { ren_obj h; int64_t len; const char *data; \
-            ren_obj *root; char bytes[%d]; } ren_lit_%d = { { 0, REN_TAG_STR, \
-            0, 0 }, %d, ren_lit_%d.bytes, 0, %s };\n"
-           !linkage i (n + 1) i n i (c_string s)))
+            int64_t cap; char bytes[%d]; } ren_lit_%d = { { 0, REN_TAG_STR, \
+            0, 0 }, %d, ren_lit_%d.bytes, %d, %s };\n"
+           !linkage i (n + 1) i n i n (c_string s)))
     p.strings;
   (* a [Caller] site is [ren_here], none of its own *)
   let site_defs =
     sites add ~site_pieces
       (List.filter (fun (s : site) -> s.kind <> Caller) p.sites)
+  in
+  (* a debug build's `+=` report: each [Appends] site's count of the
+     copies made there (ren_rt.h, [ren_append]), after the sites *)
+  let appends =
+    if release then []
+    else
+      List.filter_map
+        (fun (s : site) ->
+          match s.kind with
+          | Appends compound ->
+              let named =
+                Option.value (Hashtbl.find_opt site_names s.sid) ~default:s.sid
+              in
+              Some
+                ( named,
+                  sprintf
+                    "%sren_append ren_append_%d = { &ren_site_%d, 0, NULL, %d, \
+                     %d };\n"
+                    !linkage s.sid named s.sid (Bool.to_int compound) )
+          | _ -> None)
+        p.sites
   in
   add
     (sprintf "static const char *const ren_tag_table[%d] = %s;\n"
@@ -2029,7 +2061,16 @@ let parts ~restrict ~release ~site_pieces (p : program) =
         (v.vname, sprintf "extern %s %s;\n" (ctype v.vlayout) v.vname))
       p.values
   in
-  { data; site_defs; typedefs; protos; externs; fns; run = Buffer.contents b }
+  {
+    data;
+    site_defs;
+    appends;
+    typedefs;
+    protos;
+    externs;
+    fns;
+    run = Buffer.contents b;
+  }
 
 (* The C file for [p]. [site_pieces] is what a panic at a site prints,
    with a [Hole] where its message goes. *)
@@ -2047,6 +2088,7 @@ let program ?(restrict = false) ?(release = false)
   add ps.typedefs;
   add ps.data;
   List.iter add ps.site_defs;
+  List.iter (fun (_, d) -> add d) ps.appends;
   add "\n";
   List.iter (fun (_, proto) -> add proto) ps.protos;
   add "\n";
@@ -2126,6 +2168,11 @@ let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
     (fun (s : site) ->
       let n = sprintf "ren_site_%d" s.sid in
       Hashtbl.replace decls n (sprintf "extern const ren_site %s;\n" n))
+    p.sites;
+  List.iter
+    (fun (s : site) ->
+      let n = sprintf "ren_append_%d" s.sid in
+      Hashtbl.replace decls n (sprintf "extern ren_append %s;\n" n))
     p.sites;
   List.iteri
     (fun i _ ->
@@ -2242,5 +2289,20 @@ let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
           (fun i defs ->
             ( sprintf "ren_s%d" i,
               "#define REN_UNIT\n#include \"ren_rt.h\"\n\n" ^ defs ))
-          (List.rev !site_units);
+          (List.rev !site_units)
+      (* the report's counts, a unit of their own, which declares the
+         sites they point at *)
+      @
+      match ps.appends with
+      | [] -> []
+      | xs ->
+          [
+            ( "ren_appends",
+              "#define REN_UNIT\n#include \"ren_rt.h\"\n\n"
+              ^ String.concat ""
+                  (List.map
+                     (fun n -> sprintf "extern const ren_site ren_site_%d;\n" n)
+                     (List.sort_uniq compare (List.map fst xs)))
+              ^ String.concat "" (List.map snd xs) );
+          ];
   }

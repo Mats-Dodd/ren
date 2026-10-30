@@ -9652,6 +9652,28 @@ Choices where strings.md, decision 17 and the brief are silent:
   `concat` move to `+` unchanged.
 - Step 2: an interpolated string whose hole is a `Str` uses it as it is,
   without `show` (the same value), and a string of one hole is that value.
+- Step 3: a copy made by `_taking` gets room for twice the left side's
+  length, not twice its owner's room: a loop that copies a shared string
+  on every pass would otherwise double the room it asks for each time
+  (2^100 bytes after 100 passes of append_report.ren's first loop).
+  Growing a unique owner in place doubles its room.
+- Step 3: the report's sites are a `+=` and a `+` whose result is put
+  back in the variable its leftmost left side is, `o = o + a + b`'s
+  `o + a`, and it counts a copy only when the left side was held by
+  something else (a count above 1), not a literal's or a slice's copy.
+  Counting every `+` site, and literals, reported `print("a" + show(i))`
+  in a loop, and any loop that starts each string from `""` (json_plus's
+  `tags`, `json_quoted`'s `o`), none of which is quadratic. So
+  append_report.ren's first loop reports 99 copies, its first pass's
+  being of the literal.
+- Step 3: a `+` whose left side doesn't die there is the `+` that
+  borrows both (rc.ml turns `Str_concat_taking` back into `Str_concat`
+  where its left side isn't moved), copying into an owner of the exact
+  size, and isn't counted by the report. A parameter given to a `+`'s
+  left side is owned (borrow.ml), as one given to `push` is.
+- Step 3: `show` of an `Int`, natively (`ren_show_int`), writes its digits itself, not with
+  `snprintf`, which took a fifth of json's time once appending was in
+  place.
 
 ### Step 1, as built
 
@@ -9769,12 +9791,103 @@ timed here: qemu only checks correctness. They're the owner's to
 confirm with `diff.exe bench` built natively there (bench/native/
 RESULTS.md, "Bytes stage, part two, step 1").
 
+### Step 3, as built
+
+**The owner's header** is as specified: `ren_str` stays 32 bytes, its
+fourth word a union, an owner's `cap` (room for bytes, at least `len`)
+or a slice's `root`, and bit 0 of `h.nfields`, `REN_STR_SLICE`, set on
+a slice. Every test of `root != NULL` in ren_rt.c and ren_rt.h moved to
+`ren_str_is_slice`: freeing (an owner's memory is `32 + cap`), the
+shared-mark walk, `ren_str_part` (a slice of a slice has the first's
+root), `ren_str_join`, `ren_str_copied` and `ren_bytes_writable`. An
+owner's room is rounded up to the word its memory ends in, which the
+allocator gives anyway, and its bytes have no 0 after them: the two
+writes past `len`, in `ascii_lower` and `from_utf8_lossy`, are gone.
+emit_c.ml's literals keep their layout, their fourth word `cap`, their
+length, and their count 0. Map keys, hashing, `==` and the walks read
+`data` and `len` only and didn't change.
+
+**`ren_str_concat_taking(a, b, site)`** takes `a`. Its fast path is
+inline in ren_rt.h: a unique owner with the room gets `b`'s bytes after
+its own. `ren_str_concat_slow` grows a unique owner that hasn't the room
+to twice its room or more (32 bytes at least): `realloc` when its
+memory is malloc's, and when it's a small object from a free list a new
+object and a copy, since realloc can't take free-list memory; either is
+a `grows` in the statistics, not an allocation. `b` may be `a` itself,
+or a part of its bytes nothing counted: where it starts is read before
+growing and its bytes taken from the grown owner. Anything else (a
+count above 1, a literal, an A slice) is copied, its range then `b`,
+into an owner with room for twice that range, and `a` dropped. Plain
+`ren_str_concat` copies into an owner of the exact size, as before.
+`Bytes`' `+` is the same function.
+
+**rc.ml.** `prepare` makes every `Str_concat` the `_taking` one, as it
+makes `push`'s (mem.ml's `takes`: argument 0). While placing the counts,
+a `_taking` `+` whose left side isn't moved there (it's used after, a
+borrowed parameter's, or `b` is the same group) goes back to plain
+`Str_concat`, so nothing counts the left side again only for the
+runtime to find it shared; a literal's stays `_taking`, so `var out =
+"["` copies once with room. `+=` on an `inout` parameter is a cell's
+view, which `find_takes` sees taken straight from its slot, so
+put_json's `o += …` appends in place. A parameter used as a `+`'s left
+side is owned (borrow.ml sees the `_taking` form), as `push`'s array is.
+hoist.ml's reason for reading a string's data and length once a loop
+now says why an append can't move them: the variable alive across the
+loop holds a reference, so the `+` copies. Mem Lint checks
+`Str_concat_taking` as any taking call.
+
+**The report.** to_mem.ml gives a `+` a site of kind `Appends` when
+it's the leftmost `+` of an assignment's value and its left side is the
+variable assigned, `o = o + a + b`'s `o + a`; a `+=` is that same shape
+in Core, and is told from `o = o + x` by its `+` having the
+assignment's place (lower.ml's `assign`). The prelude's have none.
+A debug build defines a `ren_append` for each such site (its site, its
+count, its number), in a unit of its own when it's in units, and passes
+its address; a release build passes NULL. A copy of what something else
+holds (a count above 1) is counted, and the site put on a list the first
+time. `ren_run`, once `main` has returned, prints a note for each site
+with more than one copy, by site number, unless `REN_NOTES` is `0`;
+the note is a diagnostic's pieces with `note:` for `error:` (driver.ml),
+printed by `ren_site_print`, which a panic now prints through too. A
+panic, which exits, prints none. bench/build.t and bench/bytes.t set
+`REN_NOTES=0` beside strs.t; no OCaml test runs a native binary.
+
+**The tests.** append_count is fewer than 200 objects in debug and
+release, append_report's block prints the note (99 copies: the first
+pass copies the literal, which isn't counted), and every strs.t program
+is the same natively in every build with no object alive. build.t's
+fannkuch (10 objects to 8) and nbody (5,017 to 5,013 debug, 12 to 8
+release) count fewer, from `+` chains in the prelude's `show`s.
+
+**Measured** (x86_64 cloud container, 4 cores, shared, wall time;
+bench/native/RESULTS.md, "Bytes stage, part two, step 3", has the
+spreads and the commands). At 1M records `+=` takes 285.4 ms a round on
+json against Rust `push_str`'s 201.8 (1.41×) and 194.4 on logfmt
+against 182.6 (1.06×). 50,000 records take 13.0× and 10.1× what 5,000
+do (the baseline's 340 to 403×). `o = o + a + b` appends in place as
+`+=` does, since `o` dies at its `+` (this section's own rule), so
+`_plus` is linear too (421.2 and 203.8 ms at 1M); a `+` whose left
+side something else holds stays quadratic: `json_held`, `_plus` keeping
+the output before each record, takes 54.1 ms at 5,000 and 19,559 at
+50,000 (362×), and a debug build reports it. The other strs kernels and
+the slices and maps kernels are within noise of step 2's.
+
+**What misses.** json's `+=` is 1.41× Rust, not 1.1×. It isn't the
+appending: callgrind puts 23% of a round in the 32-byte slice objects
+`put_json` makes for `s[run..i]` under A, and 12% in `show(x.id)` and
+`show(x.score)` making strings that Rust's `write!` writes into the
+buffer. logfmt, which appends whole fields, is at 1.06×. Step 4's B
+makes the slices values; `show` into a buffer isn't in this stage. `ren_show_int`
+wrote its digits with `snprintf` before this step, a fifth of json's
+instructions; it writes them itself now (json was 1.85×, logfmt 1.23×).
+
 ### Progress log
 
 | step | commit | what's done | what's left |
 |---|---|---|---|
 | 1 | "Bytes stage, part two, step 1: the boundary" | the NEON block validator and its scalar path, the rescan; `InvalidUtf8(at, incomplete)` in every use; `from_utf8_lossy`; test/utf8/'s differential test, natively and under qemu-aarch64, 0 disagreements; invalid_utf8 and s1 on; scalar path 21×, 1.23× and 2.3× the old loop on ASCII, CJK and mixed (x86_64) | the NEON GB/s targets, the owner's to time on the M4 Max |
 | 2 | "Bytes stage, part two, step 2: the API" | `'a'`, interpolation with `\{x=}`, `ascii_lower`, `byte_len`, `is_empty`, the `len`/`s[i]`/`lower`/`concat` errors, `+` and `+=` (copying), `char_floor`/`char_ceil` and the cut panic's help natively, `chars`, `code`, `of_code`, `join`, `cursor(from:)`; tree-sitter and Zed; every program moved; s2 on | in-place `+=` (step 3); excl.ml got one constructor in its list of nodes to walk, the only touch of the services stage's files beyond the shared ones |
+| 3 | "Bytes stage, part two, step 3: appending in place" | the owner's `cap` and `REN_STR_SLICE`; `ren_str_concat_taking` (in place, doubling, copying with room) where the left side dies, `Bytes` too; the debug report with `REN_NOTES`; append_count and the report's block on; `+=` 1.06× Rust on logfmt, linear on both | json's `+=` at 1.41× of Rust, not 1.1×: A's slice objects and `show`'s strings, not the appending (step 4 makes the slices values) |
 
 ## Services stage
 

@@ -9,6 +9,101 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Bytes stage, part two, step 3 (compiler.md, "Bytes stage, part two", "Step 3, as built")
+
+Appending in place, on representation A: `+=`, and `a + b` where `a`
+dies, write into a unique owner's room, growing it by doubling. The
+machine is the baseline's: an x86_64 cloud container, 4 cores, shared,
+GCC 13.3 -O2, rustc 1.97.0, go 1.24.7, **wall time** (no cycle counters
+here), numbers for ratios, which the owner re-measures on the M4 Max.
+The `out` rows' R changed now that they're linear: 100 rounds at 5,000
+records, 10 at 50,000, 5 at 1M (the Ren 1M rows are new). Seven runs,
+interleaved and rotated, ms a round, the R-round runs' spread in
+brackets:
+
+```sh
+sh bench/native/strs/build.sh $out
+KERNELS=json_append_5k,json_plus_5k,logfmt_append_5k,logfmt_plus_5k,json_append_50k,json_plus_50k,logfmt_append_50k,logfmt_plus_50k,json_1m,json_plus_1m,logfmt_1m,logfmt_plus_1m \
+  python3 -I bench/native/strs/measure.py $out 7 out.jsonl
+KERNELS=json_held_5k,json_held_50k python3 -I bench/native/strs/measure.py $out 3 held.jsonl
+```
+
+| records | Ren json, `+=` | Ren json, `a + b` | Ren logfmt, `+=` | Ren logfmt, `a + b` | Rust json | Rust logfmt | Go json | Go logfmt |
+|---|---|---|---|---|---|---|---|---|
+| 5,000 | 1.23 (122-173 for 100) | 1.90 (156-232) | 0.62 (62-81) | 0.68 (63-87) | 0.82 (76-112) | 0.44 (44-68) | 2.41 | 2.95 |
+| 50,000 | 15.97 (199-266 for 10) | 18.94 (225-343) | 6.26 (140-224) | 6.99 (147-210) | 6.70 (110-136) | 5.72 (84-127) | 24.09 | 28.09 |
+| 1,000,000 | 285.4 (2800-3476 for 5) | 421.2 (3265-3824) | 194.4 (2502-3081) | 203.8 (2762-3227) | 201.8 (1588-1959) | 182.6 (1377-1745) | 644.8 | 591.1 |
+
+- **`+=` against Rust's `push_str`, 1M records:** logfmt 1.06×, within
+  the 1.1× target; **json 1.41×, which misses it.** The baseline was
+  860× and 1,640× at 5,000 records.
+- **Linear:** 50,000 records take 13.0× (json, `+=`), 10.0× (json,
+  `a + b`), 10.1× and 10.3× (logfmt) what 5,000 do; Rust 8.2× and
+  13.0×. The baseline's were 340 to 403×.
+- **`a + b` in a loop.** `o = o + a + b` appends in place too, since
+  `o` dies at its first `+` (compiler.md, "Appending in place"), so
+  `_plus` is linear: 1.48× and 1.05× of `+=` at 1M. What stays
+  quadratic is a `+` whose left side something else holds: `json_held`,
+  `_plus` with the output before the last record kept, takes 54.1 ms a
+  round at 5,000 (272-314 for 5) and 19,559 ms at 50,000 (19,546-19,850
+  for 1, three runs, while another build ran), 362×. A debug build of it
+  prints, at exit:
+
+```
+note: this `+` copied its left side on 199 passes, since something else held it
+    ┌─ bench.ren:307:5
+307 │     o = o + (if r > 0 then "," else "") + "{\"id\":" + show(x.id) + …
+    │     ^^^^^^^^^^…
+    help: build the string once: join, or keep it unique
+```
+
+  (200 records, `main.ren` calling `bench.run_json_held(200, 1)`, built
+  `ren build --debug`; the first pass copies the literal `"["`, which
+  isn't counted.)
+
+**Where json's 1.41× goes** (callgrind, json at 50,000 for 10 rounds less
+0 rounds, 1,065M instructions): the slices `put_json` takes,
+`s[run..i]`, each a 32-byte object under A (`ren_str_slice`,
+`ren_chars_check`, `ren_str_part` and their frees, 23%), and
+`show(x.id)` and `show(x.score)`, each a new string (`ren_show_int`,
+12%), which Rust's `write!` puts in the buffer. Appending is
+`ren_str_concat_taking`'s fast path, inlined into the loops, and its
+`memcpy` (11%, which other copies share). logfmt
+appends whole fields and has no slices, and runs at Rust's speed. Step 4's
+representation B makes those slices values; the shows stay. Before
+`ren_show_int` wrote its own digits it was `snprintf`, a fifth of
+json's instructions, and json ran at 1.85× and logfmt 1.23× (one
+session, 5 runs).
+
+**Nothing else slowed.** The other strs kernels and the slices and maps
+kernels, built at step 2 (86c1e88) and now, interleaved, 7 runs, ms a
+round (bench/native/strs/ab.py, below, runs each build's binaries at R
+and 0 in turn):
+
+| kernel | step 2 | step 3 | step 3 / step 2 |
+|---|---|---|---|
+| tok | 50.1 (534-705) | 50.3 (562-706) | 1.00 |
+| sort | 1067 (5339-6107) | 1078 (5231-6802) | 1.01 |
+| map | 1574 (7898-9843) | 1460 (7866-10156) | 0.93 |
+| group | 531.9 (3857-4573) | 555.7 (3345-4821) | 1.04; 11 runs again, 1.01 |
+| logs | 447.1 (3854-4914) | 392.2 (3017-3671) | 0.88 |
+| utf8 cjk / mixed, ms for 4,000 | 1.13 / 0.52 | 1.12 / 0.52 | 0.99 / 1.01 |
+| slices logs / `_r` | 36.7 / 19.6 | 36.4 / 19.2 | 0.99 / 0.98 |
+| slices json / `_r` | 133.9 / 88.5 | 149.2 / 84.0 | 1.11 (11 runs again: 1.00) / 0.95 |
+| slices pages / `_r` | 12.9 / 3.42 | 11.1 / 3.34 | 0.85 / 0.98 |
+| maps | 88.8 | 88.2 | 0.99 |
+
+utf8 ascii's round is under the noise of its 0-round run here. The
+input-making runs (0 rounds) got faster where gen.ren builds strings by
+`+` (group's from 1,485 to 1,083 ms), so a kernel's round, a difference,
+moves with them; the spreads overlap on every row.
+
+```sh
+# $before: build.sh at 86c1e88; $after: build.sh now
+python3 -I bench/native/strs/ab.py $before $after 7 tok:10 sort:5 map:5 group:5 logs:5 utf8_ascii:4000 utf8_cjk:4000 utf8_mixed:4000 \
+  slices_logs:20 slices_logs_r:20 slices_json:20 slices_json_r:20 slices_pages:20 slices_pages_r:20 maps:20
+```
+
 ## Bytes stage, part two: the baseline (briefs/stage-bytes-2.md, step 0)
 
 Where Ren's strings stand before part two: representation A, `+` and

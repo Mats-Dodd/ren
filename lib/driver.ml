@@ -1966,6 +1966,21 @@ let find_sub sub s =
 let site_pieces ~lines_of ~sources (s : Mem.site) : Diag.piece list =
   match s.kind with
   | Caller -> [] (* it's [ren_here], whose pieces are its call's *)
+  (* the `+=` report's note (compiler.md, "Bytes stage, part two",
+     "Appending in place"): a diagnostic's pieces, `note:` where an
+     error's say `error:`, the message, which counts the copies, the
+     binary's *)
+  | Appends _ ->
+      let d =
+        Diag.make ~help:"build the string once: join, or keep it unique" s.loc
+          "\000"
+      in
+      List.concat_map
+        (fun (p : Diag.piece) : Diag.piece list ->
+          match p with
+          | Text "error: \000\n" -> [ Text "note: "; Hole; Text "\n" ]
+          | p -> [ p ])
+        (Diag.pieces_indexed ~lines_of d)
   | Asserts -> Diag.pieces_indexed ~lines_of (assert_failed s.loc None)
   | Panics ->
       let wrap =

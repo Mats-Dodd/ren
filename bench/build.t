@@ -18,6 +18,11 @@ overflow panic, and checks for leaks, which a panic leaves alive on
 purpose (the statistics count them); on macOS it does neither, and here
 neither is asked for.
 
+A debug build reports a `+=` that copied a shared string, at exit, on
+stderr (compiler.md, "Bytes stage, part two"), which `ren run` doesn't,
+so the comparisons here ask it not to.
+
+  $ export REN_NOTES=0
   $ export REN_CC=cc
   $ export REN_CFLAGS='-fsanitize=address,undefined'
   $ export ASAN_OPTIONS=detect_stack_use_after_return=0:detect_leaks=0
@@ -324,7 +329,7 @@ and nothing for each permutation, so it allocates as many objects for
   >   a=$(allocations run_6.ren $rc); b=$(allocations run_7.ren $rc)
   >   if [ "$a" = "$b" ]; then echo "fannkuch, $rc: $a, both"; else echo "fannkuch, $rc: more for 7"; fi
   > done
-  fannkuch, perceus: allocations 10, both
+  fannkuch, perceus: allocations 8, both
   fannkuch, naive: more for 7
   $ cd ../blocks
   $ for n in 1000 2000; do
@@ -661,8 +666,8 @@ unique, so it allocates a body only where it isn't:
   >   ren build --$mode --stats small.ren -o ./nbody.bin 2> /dev/null && ./nbody.bin 2>&1 > /dev/null |
   >     grep -o 'allocations [0-9]*' | sed "s/^/$mode: /"
   > done
-  debug: allocations 5017
-  release: allocations 12
+  debug: allocations 5013
+  release: allocations 8
   $ cd ../..
 
 A loop that changes an array it holds, and makes no other reference to

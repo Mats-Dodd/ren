@@ -85,9 +85,11 @@ object alive at the end; release run by `ren run --release` too; and a
 debug build compiled by tcc, as bench/build.t checks its programs. A
 program the native build can't compile yet says so, with the first
 line of what `ren build` said. Layer 3 landed natively in step 2, `Map`,
-`Set` and `x.hash()` landed in step 3.
+`Set` and `x.hash()` landed in step 3. A debug build's `+=` report,
+which `ren run` doesn't print, is silenced (`REN_NOTES=0`).
 
   $ export ASAN_OPTIONS=detect_stack_use_after_return=0:detect_leaks=0
+  $ export REN_NOTES=0
   $ native() {
   >   (cd "$(dirname "$1")" && f=$(basename "$1") &&
   >    { ren run "$f" > interp.out 2> interp.err; echo "exit $?" > interp.code; } &&

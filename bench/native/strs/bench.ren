@@ -16,8 +16,11 @@
 // - out: 1M people as one JSON array and 1M log records as logfmt,
 //   built by appending to a `Str` (B3). `_append` appends a piece at a
 //   time, `o += x`; `_plus` adds each record's pieces in one expression,
-//   `o = o + a + b`. Until appending is in place (step 3) both copy the
-//   whole string each time: quadratic.
+//   `o = o + a + b`. Until appending was in place (step 3) both copied the
+//   whole string each time: quadratic. Since, both append in place, as `o`
+//   dies at its `+`; `_held` is `_plus` with the string before each record
+//   kept, so each `+` copies it, quadratic still, which a debug build
+//   reports.
 // - utf8: `Str.from_utf8` of a 1 MiB text, ASCII, CJK or mixed (B5).
 //
 // Ren has no `starts_with` natively yet (`begins`, below).
@@ -290,6 +293,21 @@ fn json_plus(ps: Array<Person>) -> Str =
   o = o + "]"
   join([ps.len(), o.byte_len()])
 
+// `_plus`, but the output before the last record kept, `last`, so each
+// record's first `+` finds the string held and copies it: quadratic
+fn json_held(ps: Array<Person>) -> Str =
+  var o = "["
+  var last = ""
+  for r in 0..ps.len()
+    let x = ps[r]
+    var tags = ""
+    for t in 0..x.tags.len()
+      tags = tags + (if t > 0 then "," else "") + json_quoted(x.tags[t])
+    last = o
+    o = o + (if r > 0 then "," else "") + "{\"id\":" + show(x.id) + ",\"name\":" + json_quoted(x.name) + ",\"email\":" + json_quoted(x.email) + ",\"score\":" + show(x.score) + ",\"tags\":[" + tags + "]}"
+  o = o + "]"
+  join([ps.len(), o.byte_len(), o.byte_len() - last.byte_len()])
+
 fn logfmt_append(rs: Array<Rec>) -> Str =
   var o = ""
   for r in rs
@@ -361,6 +379,14 @@ pub fn run_json(n: Int, rounds: Int, plus: Bool) uses Console =
   let ps = people(src, n)
   for _ in 0..rounds
     print(if plus then json_plus(ps) else json_append(ps))
+
+// [n] records, kept as they're built (`json_held`)
+pub fn run_json_held(n: Int, rounds: Int) uses Console =
+  let src = gen.people(n)
+  print(src.byte_len())
+  let ps = people(src, n)
+  for _ in 0..rounds
+    print(json_held(ps))
 
 pub fn run_logfmt(n: Int, rounds: Int, plus: Bool) uses Console =
   let src = gen.logs(n)

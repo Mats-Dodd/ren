@@ -151,14 +151,17 @@ type atom =
    so a panic there is said to be at the program's call that reached it,
    as `ren run` says (eval.ml, [call_at]): the runtime's [ren_here], which
    a [Here_set] sets before each call of the prelude from the program's
-   code. *)
+   code. An [Appends] site is a `+=`'s ([true]) or a `+`'s whose result
+   is put back in its left side's variable, `o = o + x`: what a debug
+   build's `+=` report says is where (compiler.md, "Bytes stage, part
+   two", "Appending in place"). *)
 (* A dependency as evidence holds it: its number and, if it's generic, the
    descriptors of its type arguments, [Chan<Job>]'s [Job]. [kfrom] is the
    number of the dependency a handler implements that it's installed as:
    [kdep] itself, or the one an alias names (`with queue() as Jobs`). *)
 type key = { kdep : int; kfrom : int; kargs : atom list }
 type wrap = { meth : string; recv : Loc.t; arg : Loc.t option }
-type site_kind = Panics | Asserts | Caller
+type site_kind = Panics | Asserts | Caller | Appends of bool
 type site = {
   sid : int;
   loc : Loc.t;
@@ -236,6 +239,12 @@ type rt =
           given; a [Word]'s descriptor after it says whether they're objects *)
   | Str_len
   | Str_concat
+  | Str_concat_taking
+      (** [Str_concat] that takes its left side, which dies there: appended to
+          in place if it's a unique owner, grown by doubling if it hasn't the
+          room, else copied into an owner with room to grow (compiler.md,
+          "Bytes stage, part two", "Appending in place"). Its site, a debug
+          build's, is an [Appends] one, which the `+=` report counts *)
   | Str_eq
   | Slice of sliced * part
       (** a slice of an array, a `Str` or `Bytes` (foundations.md, decision
@@ -791,6 +800,7 @@ let takes (rt : rt) n =
   | Array_push_taking _ -> n = 1
   | Map_set_taking -> n = 1 || n = 2
   | Set_add_taking -> n = 1
+  | Str_concat_taking -> n = 0
   | Array_own -> n = 0
   | Buf_set _ | Buf_set_field _ -> n = 3
   | _ -> false
@@ -877,6 +887,7 @@ let show_rt = function
   | Array_reserve l -> "array-reserve:" ^ show_layout l
   | Str_len -> "str-len"
   | Str_concat -> "str-concat"
+  | Str_concat_taking -> "str-concat-taking"
   | Str_eq -> "str-eq"
   | Slice (s, p) ->
       (match p with Range -> "slice" | Before -> "before" | After -> "after")

@@ -199,9 +199,9 @@ object (representation A).
   >    fi; rm -f count.bin build.err)
   > }
   $ objects --debug --stats append_count.ren
-  200 objects or more
+  fewer than 200 objects
   $ objects --release --stats append_count.ren
-  200 objects or more
+  fewer than 200 objects
   $ objects --release --stats slices_count.ren
   200 objects or more
   $ objects --debug --stats slices_count.ren
@@ -209,8 +209,8 @@ object (representation A).
 
 The report (step 3): a debug build of append_report.ren says, once, at
 a normal exit, that its first loop's `+=` copied a string something
-else held on each pass, and nothing of its second, which copied only a
-literal on its first. `REN_NOTES=0` silences it, and a release build
+else held on each pass after its first (which copied the literal), and
+nothing of its second, which copied only a literal on its first. `REN_NOTES=0` silences it, and a release build
 has no report.
 
   $ (cd strs && for b in debug release; do
@@ -223,6 +223,11 @@ has no report.
   101
   100
   101
+  note: this `+=` copied its string on 99 passes, since something else held it
+     ┌─ append_report.ren:13:5
+  13 │     out += "x"
+     │     ^^^^^^^^^^
+     help: build the string once: join, or keep it unique
   exit 0
   debug, REN_NOTES=0:
   release:
