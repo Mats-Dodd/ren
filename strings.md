@@ -29,6 +29,7 @@ equality is by bytes, and `trim` and `lower` are ASCII. Items marked
 - [The `unicode` module](#the-unicode-module)
 - [Building strings](#building-strings)
   - [Templates](#templates)
+- [Literals](#literals)
 - [The boundary](#the-boundary)
 - [Characters](#characters)
 - [Retention](#retention)
@@ -369,9 +370,8 @@ key, a prepared statement or a log message id, the consumer passes
   method call: Java withdrew its template processors (JEP 465) for that
   reason. In SQL it loses the verb and the row type, and in logs it has
   nowhere to put the level.
-- **Open:** raw and multi-line literals (`"""..."""`), `b"..."` and
-  `t"..."` are decided together, later. The JSON and HTML programs were
-  full of `\"`.
+- **Raw and multi-line templates** are [Literals](#literals)'
+  `t"""..."""` and `t#"..."#`, which keep their holes.
 
 **Measured,** on an M4 Max, hand-written C as release should emit it,
 against Rust's `write!` (research/templates/verify.md):
@@ -401,6 +401,76 @@ against Rust's `write!` (research/templates/verify.md):
 - **C++20's `format_string` and Zig's `std.fmt`:** the check lives in
   the callee and runs at compile time, as a signature `let` does.
 - **postgres.js and doobie:** a hole's kind is a value, `sql(ident)`.
+
+## Literals
+
+Decided on 2026-10-29. Before it, a string couldn't span lines and had
+four escapes, so an HTTP line ending couldn't be written, and the JSON
+and HTML programs of the templates experiment were full of `\"`. The
+best prior art (Swift, C# 11) strips indentation at compile time by the
+closing delimiter's column, and makes raw strings by choosing a
+delimiter rather than banning characters; runtime dedenting (Kotlin's
+`trimIndent`, Python's `textwrap.dedent`), a crate (Rust's `indoc!`) and
+per-line prefixes (Zig's `\\`) are what those replaced.
+
+Three rules:
+
+1. **`"""` starts a multi-line string, and the closing `"""`'s column
+   decides its indentation.**
+
+   ```ren
+   let body = """
+     {
+       "name": "\{name}",
+       "tags": ["a", "b"]
+     }
+     """
+   ```
+
+   - The content starts on the line after the opening `"""` and ends
+     before the line of the closing `"""`, so it has no trailing
+     newline; a blank line before the closing `"""` gives one.
+   - Every content line starts with the closing `"""`'s indentation,
+     which is removed. A line indented less is an error pointing at it,
+     and so is a prefix that mixes tabs and spaces. A blank line may be
+     shorter.
+   - `\` at the end of a line joins it to the next, for a long line.
+   - Escapes and holes work as in `"..."`, and a `"` needs no escape.
+   - The layout rule doesn't look inside: the literal is one token.
+
+2. **`#`s around a string make it raw: its escape becomes `\` followed
+   by as many `#`s.**
+
+   ```ren
+   let re = #"\d{3}-\d{4}"#
+   let q = t#"select "name" from t where id = \#{id}"#
+   let doc = #"""
+     "\n" means newline. Ask \#{who}.
+     """#
+   ```
+
+   Inside `#"..."#`, `\n` is two characters; `\#n` is a newline and
+   `\#{x}` a hole. Content holding `"#` takes more: `##"..."##`. It's
+   one rule for every form: `"""`, the prefixes `t` and `b`, and holes,
+   as Swift's has been since 2019.
+
+3. **The escapes are `\n`, `\t`, `\r`, `\0`, `\"`, `\\` and
+   `\u{...}`** (a code point, 1 to 6 hex digits, not a surrogate) in
+   every string, and in character literals with `\'` for `\"`. **`\x41`,
+   a byte, is only in `b"..."`:** in a `Str` it could make invalid
+   UTF-8, and its error's help writes the `\u{...}`.
+
+**`b"..."` is a `Bytes` literal:** `b"\r\n"`, `b"\x00\x01"`,
+`b#"..."#`, `b"""..."""`. Its bytes are the UTF-8 of the text as
+written, non-ASCII included (as Zig, unlike Rust), plus each `\x`. It
+has **no holes**: `Bytes` has no `show` to put into one, so `\{` there
+is an error whose help points to [formats.md](formats.md). It's a
+static owner, as a `Str` literal is, so it allocates nothing:
+`b.index(b"\r\n")`.
+
+**The prefixes are a closed set, `t` and `b`.** No user prefixes
+([Templates](#templates), "No prefix like `DB"..."`"), and no `r`: a
+`#` is the raw form.
 
 ## The boundary
 
@@ -624,9 +694,6 @@ error: `'é'` isn't a byte: it's 2 bytes in UTF-8
 
 - **`s.get(a..b) -> Option<Str>`,** a checked slice for offsets that
   come from input, added only with the same form on `Array` and `Bytes`.
-- **`b"…"` literals** for `Bytes` needles, `b.index(b"\r\n")`, decided
-  together with raw and multi-line literals and `t"…"`
-  ([Templates](#templates)).
 - **Short strings inline,** measured again once the 16-byte layout is
   real, and under contended counts on a hot root (decision 10).
 - **Copying a slice when the compiler proves its root dies first,** an

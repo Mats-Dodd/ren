@@ -132,7 +132,7 @@ isn't merged when you start, stop and say so.
   payload with nothing native to show for it.
 - The `unicode` module; short strings inline (SSO) and German strings;
   a capacity-keeping `clear()`; proved copy-on-store; the retention
-  report (a root kept alive by small slices); `b"…"` literals; x86 SIMD;
+  report (a root kept alive by small slices); x86 SIMD;
   formats (layer 2), `Table`, `Pool`, the world natively, native tasks.
 
 ## Working beside the services stage
@@ -408,6 +408,20 @@ Record these in the spec; don't reopen them.
   box and the 4 GiB escape.
 - **`Path` and `Os` are out,** for Staging item 7b.
 - **The rest of strings.md's API table is in,** as step 5.
+- **2026-10-29: literals, as step 5b** (strings.md, "Literals"):
+  `"""` multi-line strings with indentation set by the closing
+  delimiter, `\` joining lines; `#` raw strings whose escape is `\#`,
+  holes kept as `\#{x}`; the escapes `\r`, `\0` and `\u{...}` in every
+  string and character literal, `\x` only in `b"..."`; and `b"..."`,
+  a static `Bytes` owner with no holes. Every form combined with `t`
+  where templates exist and with `b`. Through the lexer, its errors
+  with help (a line indented less than the closing `"""`, mixed tabs
+  and spaces, `\x` in a `Str`, `\{` in `b"..."`, a bad `\u`), the
+  interpreter, natively, tree-sitter's grammar and corpus (an external
+  scanner for `#` counts and `"""` indentation) and Zed's highlights.
+  `\r` and `b"\r\n"` come first: HTTP needs them. *Done when*
+  test_strs.ml's literal tests pass in `ren run` and every native
+  build, and the grammar's corpus covers every form.
 
 ## Final report
 
