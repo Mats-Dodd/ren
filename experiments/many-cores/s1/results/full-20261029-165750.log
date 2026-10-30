@@ -1,0 +1,4 @@
+start Thu Oct 29 17:44:40 PDT 2026 load: { 3.20 4.50 5.24 }
+cmd: env REPS=7 ./run.sh
+# written to results/s1-20261029-174440.txt
+end Thu Oct 29 17:53:52 PDT 2026 rc=0 secs=552 load: { 14.82 12.42 9.10 }

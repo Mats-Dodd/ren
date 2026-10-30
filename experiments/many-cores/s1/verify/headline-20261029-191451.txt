@@ -1,0 +1,34 @@
+exp=s1 lang=c variant=one_lock pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=244.53 mops_min=224.64 mops_max=270.63 ok=1
+exp=s1 lang=c variant=one_unfair pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=168.09 mops_min=159.73 mops_max=171.02 ok=1
+exp=s1 lang=c variant=atomic pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=17.60 mops_min=17.05 mops_max=19.81 ok=1
+exp=s1 lang=c variant=stripe_lock pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=37.59 mops_min=36.34 mops_max=42.50 ok=1
+exp=s1 lang=c variant=stripe_lock pad=128 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=4155.53 mops_min=3434.41 mops_max=9322.98 ok=1
+exp=s1 lang=c variant=stripe_owner pad=128 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=6522.23 mops_min=5784.72 mops_max=6702.50 ok=1
+exp=s1 lang=c variant=one_lock pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=9.46 mops_min=9.05 mops_max=9.90 ok=1
+exp=s1 lang=c variant=one_unfair pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=9.93 mops_min=9.72 mops_max=10.05 ok=1
+exp=s1 lang=c variant=atomic pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=15.53 mops_min=15.29 mops_max=16.43 ok=1
+exp=s1 lang=c variant=stripe_lock pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=31.68 mops_min=30.91 mops_max=32.96 ok=1
+exp=s1 lang=c variant=stripe_lock pad=128 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=114.51 mops_min=110.04 mops_max=131.06 ok=1
+exp=s1 lang=c variant=stripe_owner pad=128 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=111.21 mops_min=109.71 mops_max=114.26 ok=1
+exp=s1 lang=c variant=atomic pad=0 workers=1 reader=0 work=100 reps=7 ms=300 mops_median=10.08 mops_min=8.16 mops_max=11.04 ok=1
+exp=s1 lang=c variant=stripe_owner pad=128 workers=1 reader=0 work=100 reps=7 ms=300 mops_median=11.10 mops_min=10.91 mops_max=11.17 ok=1
+exp=s1 lang=c variant=atomic pad=0 workers=16 reader=1 work=0 reps=7 ms=300 mops_median=17.31 mops_min=16.96 mops_max=17.55 read_p50_ns=42 read_p99_ns=750 read_mean_ns=248.3 ok=1
+exp=s1 lang=c variant=stripe_lock pad=128 workers=16 reader=1 work=0 reps=7 ms=300 mops_median=4304.20 mops_min=3612.07 mops_max=9627.97 read_p50_ns=13459 read_p99_ns=10100042 read_mean_ns=575483.8 ok=1
+exp=s1 lang=c variant=stripe_owner pad=128 workers=16 reader=1 work=0 reps=7 ms=300 mops_median=5498.55 mops_min=4829.86 mops_max=6485.33 read_p50_ns=42 read_p99_ns=1417 read_mean_ns=535.3 ok=1
+exp=s1 lang=rust variant=one_lock pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=8.83 mops_min=8.35 mops_max=9.47 ok=1
+exp=s1 lang=rust variant=one_unfair pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=192.54 mops_min=153.44 mops_max=204.04 ok=1
+exp=s1 lang=rust variant=atomic pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=18.30 mops_min=16.09 mops_max=23.47 ok=1
+exp=s1 lang=rust variant=stripe_lock pad=0 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=39.74 mops_min=38.29 mops_max=52.24 ok=1
+exp=s1 lang=rust variant=stripe_lock pad=128 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=4805.68 mops_min=4314.91 mops_max=9563.38 ok=1
+exp=s1 lang=rust variant=stripe_owner pad=128 workers=16 reader=0 work=0 reps=7 ms=300 mops_median=8787.91 mops_min=7930.36 mops_max=9210.45 ok=1
+exp=s1 lang=rust variant=one_lock pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=2.70 mops_min=1.82 mops_max=2.86 ok=1
+exp=s1 lang=rust variant=one_unfair pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=7.24 mops_min=6.98 mops_max=7.55 ok=1
+exp=s1 lang=rust variant=atomic pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=13.98 mops_min=12.83 mops_max=14.90 ok=1
+exp=s1 lang=rust variant=stripe_lock pad=0 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=20.34 mops_min=19.30 mops_max=20.66 ok=1
+exp=s1 lang=rust variant=stripe_lock pad=128 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=39.18 mops_min=36.67 mops_max=40.16 ok=1
+exp=s1 lang=rust variant=stripe_owner pad=128 workers=16 reader=0 work=100 reps=7 ms=300 mops_median=51.13 mops_min=49.87 mops_max=52.32 ok=1
+exp=s1 lang=rust variant=atomic pad=0 workers=1 reader=0 work=100 reps=7 ms=300 mops_median=5.79 mops_min=4.05 mops_max=6.17 ok=1
+exp=s1 lang=rust variant=stripe_owner pad=128 workers=1 reader=0 work=100 reps=7 ms=300 mops_median=6.46 mops_min=6.31 mops_max=6.49 ok=1
+exp=s1 lang=rust variant=atomic pad=0 workers=16 reader=1 work=0 reps=7 ms=300 mops_median=17.73 mops_min=17.29 mops_max=19.01 read_p50_ns=42 read_p99_ns=709 read_mean_ns=245.6 ok=1
+exp=s1 lang=rust variant=stripe_lock pad=128 workers=16 reader=1 work=0 reps=7 ms=300 mops_median=4351.53 mops_min=4146.77 mops_max=9740.68 read_p50_ns=8959 read_p99_ns=10683208 read_mean_ns=341817.7 ok=1
+exp=s1 lang=rust variant=stripe_owner pad=128 workers=16 reader=1 work=0 reps=7 ms=300 mops_median=6763.55 mops_min=5678.72 mops_max=8087.32 read_p50_ns=42 read_p99_ns=1250 read_mean_ns=611.3 ok=1

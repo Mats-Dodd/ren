@@ -1,0 +1,16 @@
+p3 impl=c mode=fifo workers=8 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=7.612e+05 wait_p50_ns=77824 wait_p99_ns=102400 wait_max_ns=226833 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=fifo workers=8 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=7.607e+05 wait_p50_ns=77824 wait_p99_ns=102400 wait_max_ns=2102541 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=barge workers=8 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=1.504e+06 wait_p50_ns=368 wait_p99_ns=114688 wait_max_ns=147125 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=barge workers=8 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=1.498e+06 wait_p50_ns=368 wait_p99_ns=114688 wait_max_ns=209500 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=fifo workers=12 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=4.022e+05 wait_p50_ns=147456 wait_p99_ns=221184 wait_max_ns=380333 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=fifo workers=12 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=4.038e+05 wait_p50_ns=147456 wait_p99_ns=221184 wait_max_ns=550666 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=barge workers=12 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=1.374e+06 wait_p50_ns=320 wait_p99_ns=131072 wait_max_ns=176041 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=barge workers=12 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=1.372e+06 wait_p50_ns=320 wait_p99_ns=131072 wait_max_ns=590583 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=fifo workers=16 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=2.965e+05 wait_p50_ns=204800 wait_p99_ns=393216 wait_max_ns=3624541 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=fifo workers=16 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=3.229e+05 wait_p50_ns=188416 wait_p99_ns=393216 wait_max_ns=3977541 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=barge workers=16 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=1.195e+06 wait_p50_ns=288 wait_p99_ns=163840 wait_max_ns=3955750 guard_handoff_frac=0.0001 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=barge workers=16 tasks=64 cs_ns=100 out_ns=1000 reps=7 ops_per_s=1.192e+06 wait_p50_ns=288 wait_p99_ns=163840 wait_max_ns=3383333 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=fifo workers=12 tasks=64 cs_ns=500 out_ns=1000 reps=7 ops_per_s=4.221e+05 wait_p50_ns=139264 wait_p99_ns=212992 wait_max_ns=426916 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=fifo workers=12 tasks=64 cs_ns=500 out_ns=1000 reps=7 ops_per_s=4.113e+05 wait_p50_ns=147456 wait_p99_ns=212992 wait_max_ns=466250 guard_handoff_frac=0.0000 ok=1
+p3 impl=c mode=barge workers=12 tasks=64 cs_ns=500 out_ns=1000 reps=7 ops_per_s=8.297e+05 wait_p50_ns=114688 wait_p99_ns=155648 wait_max_ns=277541 guard_handoff_frac=0.0000 ok=1
+p3 impl=c_fixed runnext_nowake=1 mode=barge workers=12 tasks=64 cs_ns=500 out_ns=1000 reps=7 ops_per_s=8.243e+05 wait_p50_ns=114688 wait_p99_ns=155648 wait_max_ns=407958 guard_handoff_frac=0.0000 ok=1

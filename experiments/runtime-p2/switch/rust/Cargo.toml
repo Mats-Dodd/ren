@@ -1,0 +1,13 @@
+[package]
+name = "switch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
+debug = false

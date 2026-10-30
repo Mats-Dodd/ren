@@ -1,0 +1,6 @@
+start Thu Oct 29 19:30:04 PDT 2026 load: { 2.80 4.04 4.62 }
+cmd: bash -c for sc in 8 32 128; do for ch in 4 16 64; do for v in edge shared; do
+  ./verify/k3_hybrid --variant $v --lock unfair --workers 8 --subs-cap $sc --chunks $ch --ms 500 --reps 5
+  ./verify/k3_hybrid --variant $v --lock hybrid --spin 64 --workers 8 --subs-cap $sc --chunks $ch --ms 500 --reps 5
+done; done; done
+end Thu Oct 29 19:32:00 PDT 2026 rc=0 secs=116 load: { 4.47 4.41 4.70 }

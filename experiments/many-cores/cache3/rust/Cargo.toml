@@ -1,0 +1,15 @@
+[package]
+name = "cache3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dashmap = "6"
+moka = { version = "0.12", features = ["sync"] }
+parking_lot = "0.12"
+
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 1
+lto = "thin"

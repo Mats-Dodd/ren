@@ -1,0 +1,195 @@
+== correctness
+throughput: lines=576 not_ok=0
+extras: lines=84 not_ok=0
+sim lines 64 not_ok 0
+k1b_parts dist=scan max=10000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=scan max=50000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=uniform max=10000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=uniform max=50000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=zipf70 max=10000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=zipf70 max=50000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=zipf99 max=10000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+k1b_parts dist=zipf99 max=50000 s3_changes=0 s5_changes=0 s10_changes=0 clock_changes=0 plru_changes=1 lru_changes=0 ok=1
+['k1b_sim_agree lines=32 ok=1']
+
+== noisy rows (spread (max-min)/median > 0.25), throughput+extras
+48 of 660
+  c b_sampled k=5 spin uniform max=10000 u=0.9 p=8 w=12 med=108.44 min=108.12 max=172.73 load=3.07
+  c b_sampled k=5 spin uniform max=10000 u=0.9 p=8 w=16 med=122.02 min=120.11 max=213.49 load=3.44
+  c c_clock k=0 spin uniform max=10000 u=0.9 p=8 w=12 med=153.57 min=128.99 max=169.92 load=2.92
+  c c_clock k=0 spin uniform max=10000 u=0.9 p=8 w=16 med=120.85 min=120.21 max=201.94 load=3.08
+  c c_clock k=0 spin scan max=10000 u=0.9 p=8 w=16 med=15.20 min=11.49 max=16.35 load=3.49
+  rust c_clock k=0 spin scan max=10000 u=0.9 p=8 w=16 med=12.45 min=8.42 max=16.17 load=2.96
+  rust a_lru k=0 spin uniform max=50000 u=0.9 p=32 w=4 med=41.52 min=29.81 max=41.59 load=2.88
+  c b_sampled k=5 spin uniform max=50000 u=0.9 p=32 w=4 med=233.20 min=168.96 max=236.31 load=2.81
+  c b_sampled k=5 spin uniform max=50000 u=0.9 p=32 w=8 med=189.15 min=152.71 max=206.80 load=2.90
+  rust b_sampled k=5 spin uniform max=50000 u=0.9 p=32 w=8 med=188.13 min=175.06 max=229.20 load=3.69
+  c c_clock k=0 spin uniform max=50000 u=0.9 p=32 w=4 med=210.44 min=113.50 max=239.13 load=3.47
+  c c_clock k=0 spin uniform max=50000 u=0.9 p=32 w=12 med=117.15 min=96.60 max=142.94 load=5.65
+  rust c_clock k=0 spin uniform max=50000 u=0.9 p=32 w=8 med=207.77 min=162.98 max=218.28 load=4.76
+  c a_lru k=0 spin scan max=50000 u=0.9 p=32 w=4 med=11.92 min=10.00 max=15.62 load=4.80
+  c a_lru k=0 spin scan max=50000 u=0.9 p=32 w=8 med=12.87 min=8.23 max=13.38 load=5.90
+  c a_lru k=0 spin scan max=50000 u=0.9 p=32 w=16 med=10.76 min=5.70 max=12.90 load=4.96
+  rust a_lru k=0 spin scan max=50000 u=0.9 p=32 w=4 med=15.95 min=13.68 max=18.84 load=4.69
+  c b_sampled k=5 spin scan max=50000 u=0.9 p=32 w=12 med=18.16 min=9.04 max=18.33 load=2.85
+  c b_sampled k=5 spin scan max=50000 u=0.9 p=32 w=16 med=19.12 min=12.31 max=22.74 load=2.78
+  rust b_sampled k=5 spin scan max=50000 u=0.9 p=32 w=16 med=15.32 min=12.12 max=19.58 load=3.04
+  c c_clock k=0 spin scan max=50000 u=0.9 p=32 w=2 med=11.92 min=8.92 max=12.12 load=4.39
+  c c_clock k=0 spin scan max=50000 u=0.9 p=32 w=4 med=11.85 min=7.69 max=16.89 load=3.62
+  c c_clock k=0 spin scan max=50000 u=0.9 p=32 w=12 med=3.98 min=3.95 max=12.76 load=2.97
+  c c_clock k=0 spin scan max=50000 u=0.9 p=32 w=16 med=11.85 min=4.03 max=12.16 load=3.62
+  rust c_clock k=0 spin scan max=50000 u=0.9 p=32 w=4 med=15.39 min=9.19 max=17.44 load=2.93
+  rust c_clock k=0 spin scan max=50000 u=0.9 p=32 w=12 med=11.75 min=3.67 max=13.97 load=2.93
+  rust c_clock k=0 spin scan max=50000 u=0.9 p=32 w=16 med=9.76 min=5.11 max=14.68 load=3.40
+  c a_lru k=0 spin scan max=10000 u=2 p=8 w=4 med=12.30 min=9.63 max=13.60 load=3.59
+  c c_clock k=0 spin scan max=10000 u=2 p=8 w=12 med=9.55 min=8.20 max=11.42 load=2.94
+  c a_lru k=0 spin scan max=50000 u=2 p=32 w=4 med=12.40 min=12.33 max=16.63 load=3.17
+  c a_lru k=0 spin scan max=50000 u=2 p=32 w=16 med=11.99 min=6.57 max=13.84 load=3.40
+  rust a_lru k=0 spin scan max=50000 u=2 p=32 w=8 med=11.69 min=8.14 max=12.39 load=2.92
+  rust a_lru k=0 spin scan max=50000 u=2 p=32 w=16 med=11.58 min=6.37 max=14.79 load=2.95
+  c b_sampled k=5 spin scan max=50000 u=2 p=32 w=12 med=14.92 min=7.66 max=16.74 load=2.96
+  c b_sampled k=5 spin scan max=50000 u=2 p=32 w=16 med=13.49 min=6.33 max=16.62 load=2.96
+  rust b_sampled k=5 spin scan max=50000 u=2 p=32 w=12 med=15.69 min=13.16 max=17.69 load=2.90
+  rust b_sampled k=5 spin scan max=50000 u=2 p=32 w=16 med=13.34 min=6.35 max=14.13 load=3.22
+  c c_clock k=0 spin scan max=50000 u=2 p=32 w=4 med=11.60 min=7.85 max=12.78 load=2.93
+  c c_clock k=0 spin scan max=50000 u=2 p=32 w=8 med=9.11 min=7.24 max=9.73 load=2.93
+  c c_clock k=0 spin scan max=50000 u=2 p=32 w=12 med=9.53 min=3.77 max=10.84 load=3.34
+  c c_clock k=0 spin scan max=50000 u=2 p=32 w=16 med=7.06 min=3.16 max=7.65 load=3.06
+  rust c_clock k=0 spin scan max=50000 u=2 p=32 w=4 med=8.73 min=7.37 max=12.46 load=3.53
+  rust c_clock k=0 spin scan max=50000 u=2 p=32 w=12 med=10.63 min=3.89 max=10.69 load=3.25
+  rust c_clock k=0 spin scan max=50000 u=2 p=32 w=16 med=8.95 min=3.39 max=11.90 load=2.99
+  c c_clock k=0 os uniform max=10000 u=0.9 p=8 w=16 med=187.24 min=144.27 max=206.63 load=3.46
+  c b_sampled k=5 spin uniform max=10000 u=0.9 p=1 w=16 med=133.51 min=122.00 max=204.04 load=3.34
+  c b_sampled k=5 spin uniform max=10000 u=0.9 p=8 w=16 med=207.41 min=120.58 max=212.15 load=3.34
+  c b_sampled k=5 spin uniform max=10000 u=0.9 p=64 w=16 med=138.57 min=119.72 max=200.86 load=3.55
+
+== P1: one worker, C, spin, u=0.9: b/a and c/a; ns per at of b
+  max=10000 zipf99   a=   64.2 b=   88.0 c=   89.2 Mops  b/a=1.37 c/a=1.39  a_ns=15.6 b_ns=11.4
+  max=10000 zipf70   a=   60.9 b=   77.5 c=   78.5 Mops  b/a=1.27 c/a=1.29  a_ns=16.4 b_ns=12.9
+  max=10000 uniform  a=   56.1 b=   69.8 c=   70.7 Mops  b/a=1.25 c/a=1.26  a_ns=17.8 b_ns=14.3
+  max=10000 scan     a=   22.7 b=   17.8 c=   17.5 Mops  b/a=0.78 c/a=0.77  a_ns=44.0 b_ns=56.3
+  max=50000 zipf99   a=   54.5 b=   82.8 c=   83.8 Mops  b/a=1.52 c/a=1.54  a_ns=18.4 b_ns=12.1
+  max=50000 zipf70   a=   52.4 b=   69.6 c=   69.4 Mops  b/a=1.33 c/a=1.32  a_ns=19.1 b_ns=14.4
+  max=50000 uniform  a=   48.4 b=   62.1 c=   60.2 Mops  b/a=1.29 c/a=1.25  a_ns=20.7 b_ns=16.1
+  max=50000 scan     a=   19.5 b=   15.2 c=   16.1 Mops  b/a=0.78 c/a=0.83  a_ns=51.3 b_ns=66.0
+
+== P2/P3: scaling 16w/1w, and b16/a16 (u=0.9, C and Rust)
+  c    max=10000 uniform  a:[56 23 21 10 8 8] x0.14 b:[70 127 242 153 108 122] x1.75 c:[71 132 241 142 154 121] x1.71  b16/a16=15.8 c16/a16=15.6
+  c    max=10000 zipf70   a:[61 21 19 9 7 7] x0.11 b:[77 126 204 150 156 141] x1.82 c:[78 127 208 139 157 140] x1.78  b16/a16=20.4 c16/a16=20.2
+  c    max=10000 zipf99   a:[64 18 16 7 5 5] x0.08 b:[88 91 95 30 19 17] x0.19 c:[89 92 96 30 20 17] x0.19  b16/a16=3.4 c16/a16=3.4
+  c    max=10000 scan     a:[23 12 13 8 6 5] x0.22 b:[18 16 21 13 17 21] x1.17 c:[18 12 16 10 11 15] x0.87  b16/a16=4.1 c16/a16=3.0
+  c    max=50000 uniform  a:[48 34 41 24 22 24] x0.49 b:[62 118 233 189 199 210] x3.38 c:[60 122 210 133 117 210] x3.49  b16/a16=8.9 c16/a16=8.9
+  c    max=50000 zipf70   a:[52 33 39 24 22 23] x0.44 b:[70 126 225 172 181 213] x3.05 c:[69 125 227 182 181 208] x3.00  b16/a16=9.2 c16/a16=9.0
+  c    max=50000 zipf99   a:[54 28 29 15 9 8] x0.15 b:[83 99 112 37 24 19] x0.23 c:[84 99 110 36 24 20] x0.23  b16/a16=2.4 c16/a16=2.5
+  c    max=50000 scan     a:[19 13 12 13 7 11] x0.55 b:[15 18 23 14 18 19] x1.26 c:[16 12 12 10 4 12] x0.74  b16/a16=1.8 c16/a16=1.1
+  rust max=10000 uniform  a:[55 23 21 9 8 8] x0.14 b:[86 161 293 147 176 212] x2.46 c:[87 157 292 156 176 214] x2.46  b16/a16=27.9 c16/a16=28.2
+  rust max=10000 zipf70   a:[60 21 20 9 7 7] x0.12 b:[99 152 241 149 150 133] x1.35 c:[99 153 241 149 152 125] x1.26  b16/a16=19.2 c16/a16=18.0
+  rust max=10000 zipf99   a:[64 19 16 7 5 5] x0.08 b:[115 100 91 26 19 16] x0.14 c:[115 102 92 27 18 16] x0.14  b16/a16=3.2 c16/a16=3.2
+  rust max=10000 scan     a:[24 12 15 8 6 6] x0.23 b:[18 18 24 13 18 21] x1.22 c:[17 12 17 10 13 12] x0.72  b16/a16=3.8 c16/a16=2.2
+  rust max=50000 uniform  a:[44 35 42 24 23 23] x0.51 b:[75 143 288 188 188 230] x3.05 c:[75 143 269 208 209 244] x3.25  b16/a16=10.1 c16/a16=10.7
+  rust max=50000 zipf70   a:[48 34 39 24 22 23] x0.48 b:[88 158 277 186 185 218] x2.47 c:[86 152 276 179 194 218] x2.52  b16/a16=9.4 c16/a16=9.4
+  rust max=50000 zipf99   a:[52 29 29 15 9 8] x0.16 b:[106 113 113 35 23 19] x0.18 c:[106 113 107 33 23 19] x0.18  b16/a16=2.3 c16/a16=2.3
+  rust max=50000 scan     a:[21 16 16 13 12 12] x0.60 b:[15 20 26 15 20 15] x1.02 c:[16 10 15 11 12 10] x0.60  b16/a16=1.2 c16/a16=0.8
+
+== P4: p50/p99 ns at 16 workers, u=0.9, C
+  max=10000 uniform  a p50=417 p99=34667  b p50=167 p99=333  c p50=167 p99=333
+  max=10000 zipf99   a p50=375 p99=57792  b p50=83 p99=22708  c p50=83 p99=22333
+  max=50000 uniform  a p50=458 p99=4167  b p50=83 p99=167  c p50=83 p99=167
+  max=50000 zipf99   a p50=292 p99=39125  b p50=83 p99=19917  c p50=83 p99=20417
+
+== P5: c/b on hit path (u=0.9, all lang/max/dist/workers)
+  (scan excluded: it misses at u=0.9)
+  within 10%: 67/72  median c/b=1.00 min=0.59 max=1.42
+
+== P6: rust/c on hit path (u=0.9)
+  within 15%: 99/144  median=1.03 min=0.80 max=2.95
+   a_lru: median=1.01 min=0.91 max=1.81 within15=44/48
+   b_sampled: median=1.09 min=0.80 max=1.74 within15=29/48
+   c_clock: median=1.10 min=0.82 max=2.95 within15=26/48
+   low 0.80 b_sampled scan max=50000 w=16
+   low 0.82 c_clock scan max=10000 w=16
+   low 0.82 c_clock scan max=50000 w=16
+   low 0.86 c_clock scan max=50000 w=2
+   low 0.87 b_sampled zipf99 max=10000 w=8
+   low 0.89 c_clock zipf70 max=10000 w=16
+
+== P7: os lock vs spin (extras, u=0.9, max 10000)
+  c    zipf99   a_lru     w1: os=52 spin=64 (0.80)  w8: os=8 spin=7 (1.04)  w16: os=7 spin=5 (1.38)
+  c    zipf99   b_sampled w1: os=78 spin=88 (0.89)  w8: os=40 spin=30 (1.33)  w16: os=38 spin=17 (2.25)
+  c    zipf99   c_clock   w1: os=77 spin=89 (0.87)  w8: os=40 spin=30 (1.33)  w16: os=38 spin=17 (2.32)
+  c    uniform  a_lru     w1: os=45 spin=56 (0.81)  w8: os=9 spin=10 (0.97)  w16: os=8 spin=8 (1.03)
+  c    uniform  b_sampled w1: os=58 spin=70 (0.83)  w8: os=138 spin=153 (0.91)  w16: os=200 spin=122 (1.64)
+  c    uniform  c_clock   w1: os=62 spin=71 (0.88)  w8: os=138 spin=142 (0.97)  w16: os=187 spin=121 (1.55)
+  rust zipf99   a_lru     w1: os=50 spin=64 (0.78)  w8: os=8 spin=7 (1.07)  w16: os=7 spin=5 (1.40)
+  rust zipf99   b_sampled w1: os=93 spin=115 (0.81)  w8: os=38 spin=26 (1.47)  w16: os=38 spin=16 (2.38)
+  rust zipf99   c_clock   w1: os=95 spin=115 (0.83)  w8: os=39 spin=27 (1.45)  w16: os=36 spin=16 (2.28)
+  rust uniform  a_lru     w1: os=42 spin=55 (0.76)  w8: os=9 spin=9 (0.96)  w16: os=8 spin=8 (1.07)
+  rust uniform  b_sampled w1: os=72 spin=86 (0.84)  w8: os=145 spin=147 (0.99)  w16: os=216 spin=212 (1.02)
+  rust uniform  c_clock   w1: os=72 spin=87 (0.82)  w8: os=142 spin=156 (0.91)  w16: os=217 spin=214 (1.01)
+
+== P8: parts on hit path (extras, C, max 10000, u=0.9)
+  zipf99   a_lru     w=8: parts1=3 parts8=7 parts64=14  64/1=4.86
+  zipf99   a_lru     w=16: parts1=1 parts8=5 parts64=7  64/1=6.63
+  zipf99   b_sampled w=8: parts1=29 parts8=29 parts64=29  64/1=1.02
+  zipf99   b_sampled w=16: parts1=16 parts8=16 parts64=16  64/1=0.99
+  uniform  a_lru     w=8: parts1=3 parts8=10 parts64=28  64/1=9.61
+  uniform  a_lru     w=16: parts1=1 parts8=8 parts64=30  64/1=23.56
+  uniform  b_sampled w=8: parts1=138 parts8=142 parts64=139  64/1=1.01
+  uniform  b_sampled w=16: parts1=134 parts8=207 parts64=139  64/1=1.04
+
+== P9/P10/P11: miss regime u=2 (C)
+  max=10000 uniform  a:[23 12 12 6 6 5] b:[18 14 13 7 6 5] c:[18 9 9 4 3 3]  a1/b1=1.24 b8/a8=1.21 b16/a16=1.00 c16/b16=0.54 retries/miss b=[0.00 0.13 0.45 1.23 1.87 2.35] c=[0.00 0.14 0.44 1.13 1.80 2.31]
+  max=10000 scan     a:[22 12 12 7 6 5] b:[17 15 19 12 15 14] c:[17 11 15 9 10 12]  a1/b1=1.27 b8/a8=1.57 b16/a16=2.87 c16/b16=0.85 retries/miss b=[0.00 0.08 0.28 0.84 0.80 1.14] c=[0.00 0.09 0.24 0.82 0.77 0.85]
+  max=10000 zipf99   a:[50 17 15 7 5 5] b:[49 48 53 28 24 19] c:[50 40 40 17 14 11]  a1/b1=1.01 b8/a8=3.99 b16/a16=4.11 c16/b16=0.56 retries/miss b=[0.00 0.06 0.21 0.71 0.84 0.68] c=[0.00 0.07 0.27 0.83 1.41 1.79]
+  max=10000 zipf70   a:[35 15 15 7 6 6] b:[28 24 25 13 12 10] c:[28 18 16 7 6 5]  a1/b1=1.22 b8/a8=1.74 b16/a16=1.72 c16/b16=0.47 retries/miss b=[0.00 0.11 0.39 1.11 1.81 2.37] c=[0.00 0.12 0.41 1.06 1.72 2.15]
+  max=50000 uniform  a:[18 15 15 8 8 7] b:[15 16 15 8 8 7] c:[15 11 10 4 4 4]  a1/b1=1.24 b8/a8=1.01 b16/a16=1.08 c16/b16=0.49 retries/miss b=[0.00 0.03 0.10 0.25 0.41 0.54] c=[0.00 0.03 0.10 0.25 0.40 0.52]
+  max=50000 scan     a:[18 13 12 13 7 12] b:[15 16 21 13 15 13] c:[16 9 12 9 10 7]  a1/b1=1.26 b8/a8=1.01 b16/a16=1.13 c16/b16=0.52 retries/miss b=[0.00 0.02 0.13 0.39 0.35 0.48] c=[0.00 0.03 0.08 0.23 0.32 0.42]
+  max=50000 zipf99   a:[43 25 27 15 10 8] b:[46 55 64 33 26 21] c:[44 49 50 21 20 16]  a1/b1=0.92 b8/a8=2.26 b16/a16=2.65 c16/b16=0.76 retries/miss b=[0.00 0.01 0.04 0.12 0.11 0.08] c=[0.00 0.02 0.06 0.15 0.21 0.25]
+  max=50000 zipf70   a:[28 21 23 12 12 11] b:[24 28 29 14 15 13] c:[25 20 18 8 7 6]  a1/b1=1.18 b8/a8=1.22 b16/a16=1.23 c16/b16=0.48 retries/miss b=[0.00 0.03 0.09 0.22 0.35 0.45] c=[0.00 0.03 0.09 0.23 0.37 0.47]
+  k sweep (extras, b_sampled, u=2, max 10000; k=5 from throughput)
+   zipf99   w1: k3=49 k5=49 k10=48  w8: k3=28 k5=28 k10=28  w16: k3=19 k5=19 k10=18
+   zipf70   w1: k3=29 k5=28 k10=27  w8: k3=12 k5=13 k10=13  w16: k3=10 k5=10 k10=11
+   uniform  w1: k3=19 k5=18 k10=17  w8: k3=7 k5=7 k10=7  w16: k3=6 k5=5 k10=6
+   scan     w1: k3=18 k5=17 k10=15  w8: k3=12 k5=12 k10=12  w16: k3=14 k5=14 k10=14
+
+== P12-P15: simulator hit rates (C), points vs lru
+  zipf99   max=10000 U=1.25 lru= 96.78% plru=-0.01 s3=-0.37 s5=-0.28 s10=-0.10 clock=-0.28
+  zipf99   max=10000 U=2    lru= 90.10% plru=+0.00 s3=-0.70 s5=-0.31 s10=-0.09 clock=-0.42
+  zipf99   max=10000 U=4    lru= 81.59% plru=-0.01 s3=-0.90 s5=-0.40 s10=-0.19 clock=-0.72
+  zipf99   max=10000 U=10   lru= 72.64% plru=-0.01 s3=-0.94 s5=-0.50 s10=-0.15 clock=-0.88
+  zipf99   max=50000 U=1.25 lru= 97.18% plru=-0.01 s3=-0.30 s5=-0.17 s10=-0.08 clock=-0.28
+  zipf99   max=50000 U=2    lru= 91.30% plru=-0.00 s3=-0.65 s5=-0.33 s10=-0.11 clock=-0.38
+  zipf99   max=50000 U=4    lru= 83.76% plru=+0.00 s3=-0.76 s5=-0.34 s10=-0.11 clock=-0.61
+  zipf99   max=50000 U=10   lru= 75.50% plru=+0.00 s3=-0.79 s5=-0.35 s10=-0.11 clock=-0.76
+  zipf70   max=10000 U=1.25 lru= 90.94% plru=-0.00 s3=-0.72 s5=-0.43 s10=-0.18 clock=-0.24
+  zipf70   max=10000 U=2    lru= 73.38% plru=+0.03 s3=-1.05 s5=-0.55 s10=-0.14 clock=-0.74
+  zipf70   max=10000 U=4    lru= 53.25% plru=-0.02 s3=-1.12 s5=-0.55 s10=-0.23 clock=-1.15
+  zipf70   max=10000 U=10   lru= 34.74% plru=+0.00 s3=-0.89 s5=-0.33 s10=-0.16 clock=-1.05
+  zipf70   max=50000 U=1.25 lru= 91.14% plru=-0.01 s3=-0.77 s5=-0.42 s10=-0.18 clock=-0.21
+  zipf70   max=50000 U=2    lru= 73.88% plru=+0.01 s3=-1.12 s5=-0.54 s10=-0.19 clock=-0.72
+  zipf70   max=50000 U=4    lru= 53.88% plru=+0.01 s3=-1.06 s5=-0.51 s10=-0.17 clock=-1.09
+  zipf70   max=50000 U=10   lru= 35.41% plru=+0.00 s3=-0.82 s5=-0.36 s10=-0.10 clock=-1.01
+  uniform  max=10000 U=1.25 lru= 79.95% plru=-0.02 s3=+0.00 s5=+0.08 s10=+0.00 clock=+0.00  max/U=80.00%
+  uniform  max=10000 U=2    lru= 49.93% plru=+0.00 s3=-0.02 s5=-0.03 s10=+0.03 clock=-0.02  max/U=50.00%
+  uniform  max=10000 U=4    lru= 25.02% plru=+0.00 s3=-0.01 s5=+0.01 s10=-0.00 clock=-0.03  max/U=25.00%
+  uniform  max=10000 U=10   lru= 10.18% plru=+0.01 s3=-0.04 s5=+0.02 s10=-0.01 clock=+0.01  max/U=10.00%
+  uniform  max=50000 U=1.25 lru= 80.00% plru=-0.00 s3=-0.00 s5=-0.03 s10=+0.02 clock=+0.03  max/U=80.00%
+  uniform  max=50000 U=2    lru= 50.01% plru=+0.01 s3=-0.02 s5=+0.05 s10=-0.04 clock=+0.01  max/U=50.00%
+  uniform  max=50000 U=4    lru= 25.02% plru=+0.00 s3=+0.01 s5=+0.01 s10=-0.02 clock=+0.00  max/U=25.00%
+  uniform  max=50000 U=10   lru= 10.00% plru=+0.00 s3=-0.01 s5=-0.01 s10=-0.00 clock=+0.01  max/U=10.00%
+  scan     max=10000 U=1.25 lru= 38.07% plru=+0.00 s3=+1.58 s5=+0.15 s10=-0.06 clock=-0.79
+  scan     max=10000 U=2    lru= 36.03% plru=-0.00 s3=+1.16 s5=+0.08 s10=-0.06 clock=-0.78
+  scan     max=10000 U=4    lru= 33.34% plru=-0.00 s3=+0.91 s5=-0.07 s10=-0.09 clock=-0.70
+  scan     max=10000 U=10   lru= 30.33% plru=-0.01 s3=+0.55 s5=-0.11 s10=-0.08 clock=-0.63
+  scan     max=50000 U=1.25 lru= 39.25% plru=-0.00 s3=+1.84 s5=+0.23 s10=-0.05 clock=-0.75
+  scan     max=50000 U=2    lru= 37.43% plru=+0.00 s3=+1.52 s5=+0.15 s10=-0.05 clock=-0.70
+  scan     max=50000 U=4    lru= 35.03% plru=-0.00 s3=+1.14 s5=+0.02 s10=-0.06 clock=-0.66
+  scan     max=50000 U=10   lru= 32.13% plru=+0.00 s3=+0.83 s5=-0.02 s10=-0.05 clock=-0.56
+
+== P17-P19: memory
+  lang=c layout=packed n=50000 state=32 sizeof=56 side=0 bytes=2800000 per_instance=56.0 over_packed_bytes=0 over_packed_pct=0.0 footprint_delta=2850840 table_bytes=1572864 table_per_instance=31.5 ok=1
+  lang=c layout=packed n=50000 state=256 sizeof=280 side=0 bytes=14000000 per_instance=280.0 over_packed_bytes=0 over_packed_pct=0.0 footprint_delta=14041112 table_bytes=1572864 table_per_instance=31.5 ok=1
+  lang=c layout=line n=50000 state=32 sizeof=128 side=0 bytes=6400000 per_instance=128.0 over_packed_bytes=3600000 over_packed_pct=128.6 footprint_delta=6455320 table_bytes=1572864 table_per_instance=31.5 ok=1
+  lang=c layout=line n=50000 state=256 sizeof=384 side=0 bytes=19200000 per_instance=384.0 over_packed_bytes=5200000 over_packed_pct=37.1 footprint_delta=19234840 table_bytes=1572864 table_per_instance=31.5 ok=1
+  lang=c layout=line_header n=50000 state=32 sizeof=128 side=32 bytes=8000000 per_instance=160.0 over_packed_bytes=5200000 over_packed_pct=185.7 footprint_delta=8060952 table_bytes=1572864 table_per_instance=31.5 ok=1
+  lang=c layout=line_header n=50000 state=256 sizeof=128 side=256 bytes=19200000 per_instance=384.0 over_packed_bytes=5200000 over_packed_pct=37.1 footprint_delta=19283992 table_bytes=1572864 table_per_instance=31.5 ok=1

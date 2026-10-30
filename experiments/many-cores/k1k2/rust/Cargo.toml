@@ -1,0 +1,13 @@
+[package]
+name = "k1k2"
+version = "0.1.0"
+edition = "2021"
+
+# No dependencies: locks, QoS and the clock are the same macOS calls the C uses.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+debug = false
+codegen-units = 1
+panic = "abort"

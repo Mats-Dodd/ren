@@ -1,0 +1,6 @@
+load1=2.20 bin/mem_c --layout packed --n 50000 --state 32
+load1=2.20 bin/mem_c --layout packed --n 50000 --state 256
+load1=2.20 bin/mem_c --layout line --n 50000 --state 32
+load1=2.20 bin/mem_c --layout line --n 50000 --state 256
+load1=2.20 bin/mem_c --layout line_header --n 50000 --state 32
+load1=2.20 bin/mem_c --layout line_header --n 50000 --state 256

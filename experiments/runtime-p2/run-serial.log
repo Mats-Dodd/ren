@@ -1,0 +1,15 @@
+[2026-10-29 21:04:25] run-serial begin: k1b load1=1.99
+[2026-10-29 21:04:31] START k1b-det load1=2.07 cmd: env REPS=7 LOAD_MAX=3 LOAD_WAIT=60 k1b/measure.sh sim parts mem
+[2026-10-29 21:05:27] END   k1b-det load1=2.20 rc=0
+[2026-10-29 21:05:27] START k1b-thru load1=2.20 cmd: env REPS=7 LOAD_MAX=3 LOAD_WAIT=60 k1b/measure.sh throughput
+[2026-10-29 21:09:51] ABORT k1b-thru after 21 lines: per-run wait (LOAD_WAIT=60) was stalling on load our own 16-worker runs raise; restarting with LOAD_WAIT=10
+[2026-10-29 21:09:59] run-serial begin: k1b_timed load1=2.80
+[2026-10-29 21:09:59] START k1b-thru load1=2.80 cmd: env REPS=7 LOAD_MAX=3 LOAD_WAIT=10 k1b/measure.sh throughput
+[2026-10-29 22:34:32] END   k1b-thru load1=4.03 rc=0
+[2026-10-29 22:34:32] gate: load 4.03 > 3, waiting
+[2026-10-29 22:35:02] START k1b-extras load1=2.98 cmd: env REPS=7 LOAD_MAX=3 LOAD_WAIT=10 k1b/measure.sh extras
+[2026-10-29 22:48:52] END   k1b-extras load1=4.71 rc=0
+[2026-10-29 22:48:52] run-serial done: k1b_timed
+[2026-10-29 22:49:04] run-serial begin: percore spin switch load1=4.36
+[2026-10-29 22:49:07] gate: load 4.09 > 3, waiting
+[2026-10-29 22:49:37] START percore load1=2.99 cmd: env LOAD_WAIT=10 percore/measure-p2.sh --reps 7

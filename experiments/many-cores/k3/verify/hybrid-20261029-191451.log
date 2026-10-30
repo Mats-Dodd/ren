@@ -1,0 +1,5 @@
+start Thu Oct 29 19:25:58 PDT 2026 load: { 2.88 3.65 4.62 }
+cmd: bash -c for w in 1 8 16; do for sp in 64 1000; do for v in edge shared; do
+  ./verify/k3_hybrid --variant $v --lock hybrid --spin $sp --workers $w --ms 1000 --reps 7
+done; done; done
+end Thu Oct 29 19:27:34 PDT 2026 rc=0 secs=96 load: { 9.09 5.13 5.05 }

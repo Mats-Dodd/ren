@@ -1,0 +1,8 @@
+start Thu Oct 29 19:34:12 PDT 2026 load: { 2.38 3.57 4.31 }
+cmd: bash -c for cfg in "100 8" "100 12" "100 16" "500 12"; do set -- $cfg
+  for m in fifo barge; do
+    bin/p3c --mode $m --workers $2 --cs-ns $1 --out-ns 1000 --ms 1000 --reps 7
+    bin/p3rust --mode $m --workers $2 --cs-ns $1 --out-ns 1000 --ms 1000 --reps 7
+    verify/p3_fixed --mode $m --workers $2 --cs-ns $1 --out-ns 1000 --ms 1000 --reps 7 --runnext-nowake 1
+  done; done
+end Thu Oct 29 19:37:11 PDT 2026 rc=0 secs=179 load: { 11.51 7.52 5.83 }

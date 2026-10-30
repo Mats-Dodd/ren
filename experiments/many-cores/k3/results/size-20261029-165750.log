@@ -1,0 +1,36 @@
+start Thu Oct 29 17:16:01 PDT 2026 load: { 2.78 4.53 4.85 }
+cmd: bash -c for sc in 8 32 128; do for ch in 4 16 64; do for v in edge shared; do
+  ./bin/k3-c --variant $v --lock unfair --workers 8 --subs-cap $sc --chunks $ch --ms 1000 --reps 7
+  ./bin/k3-rust --variant $v --lock mutex --workers 8 --subs-cap $sc --chunks $ch --ms 1000 --reps 7
+done; done; done
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+k3 --variant shared|edge [--workers N] [--ms M | --ops N] [--reps R]
+   [--lock unfair|spin] [--subs-cap 32] [--chunks 16]
+   [--chunk-bytes 64] [--think 0] [--seed S]
+end Thu Oct 29 17:19:17 PDT 2026 rc=0 secs=196 load: { 6.22 5.81 5.35 }

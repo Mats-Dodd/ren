@@ -1,0 +1,6 @@
+start Thu Oct 29 19:52:04 PDT 2026 load: { 2.84 5.70 6.66 }
+cmd: bash -c ./bin/k2_c --max 1000,10000,100000 --parts 8,64 --factors 1.0,1.1,1.25,1.5,2,4,10 --measure 20 > verify/k2_c.txt
+  ./bin/k2_rust --max 1000,10000,100000 --parts 8,64 --factors 1.0,1.1,1.25,1.5,2,4,10 --measure 20 > verify/k2_rust.txt
+  diff <(sed "s/lang=[a-z]*//" verify/k2_c.txt) <(sed "s/lang=[a-z]*//" verify/k2_rust.txt) && echo "k2 c=rust: same"
+  diff <(sed "s/lang=[a-z]*//" verify/k2_c.txt) <(sed "s/lang=[a-z]*//" bin/k2_full_c.txt) && echo "k2 rerun=original: same"
+end Thu Oct 29 19:52:51 PDT 2026 rc=0 secs=47 load: { 2.52 5.21 6.43 }

@@ -1,0 +1,7 @@
+start Thu Oct 29 20:05:17 PDT 2026 load: { 2.65 5.31 5.94 }
+cmd: bash -c for v in edge shared; do
+  ./verify/k3_hybrid --variant $v --lock unfair --workers 8 --ms 1000 --reps 7
+  ./verify/k3_hybrid --variant $v --lock hybrid --spin 64 --workers 8 --ms 1000 --reps 7
+  ./verify/k3_hybrid --variant $v --lock hybrid --spin 1000 --workers 8 --ms 1000 --reps 7
+done
+end Thu Oct 29 20:06:05 PDT 2026 rc=0 secs=48 load: { 5.21 5.61 6.02 }

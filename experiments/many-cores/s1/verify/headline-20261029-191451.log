@@ -1,0 +1,11 @@
+start Thu Oct 29 19:40:11 PDT 2026 load: { 2.52 5.05 5.10 }
+cmd: bash -c for lang in c rust; do
+  for wk in 0 100; do for cfg in one_lock:0 one_unfair:0 atomic:0 stripe_lock:0 stripe_lock:128 stripe_owner:128; do
+    bin/s1_$lang --variant ${cfg%%:*} --pad ${cfg##*:} --workers 16 --reader 0 --ms 300 --reps 7 --work $wk
+  done; done
+  for cfg in atomic:0 stripe_owner:128; do bin/s1_$lang --variant ${cfg%%:*} --pad ${cfg##*:} --workers 1 --reader 0 --ms 300 --reps 7 --work 100; done
+  for cfg in atomic:0 stripe_lock:128 stripe_owner:128; do
+    bin/s1_$lang --variant ${cfg%%:*} --pad ${cfg##*:} --workers 16 --reader 1 --ms 300 --reps 7 --work 0
+  done
+done
+end Thu Oct 29 19:41:38 PDT 2026 rc=0 secs=87 load: { 41.27 16.12 9.28 }

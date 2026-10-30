@@ -1,0 +1,6 @@
+start Thu Oct 29 19:22:23 PDT 2026 load: { 2.75 3.83 4.93 }
+cmd: bash -c for w in 1 8; do for v in edge shared; do
+  for l in unfair spin; do ./bin/k3-c --variant $v --lock $l --workers $w --ms 1000 --reps 7; done
+  for l in mutex spin; do ./bin/k3-rust --variant $v --lock $l --workers $w --ms 1000 --reps 7; done
+done; done
+end Thu Oct 29 19:24:28 PDT 2026 rc=0 secs=125 load: { 5.34 4.21 4.91 }

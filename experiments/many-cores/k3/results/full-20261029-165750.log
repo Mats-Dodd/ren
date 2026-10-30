@@ -1,0 +1,3 @@
+start Thu Oct 29 17:01:50 PDT 2026 load: { 2.69 4.40 3.79 }
+cmd: env REPS=7 MS=1000 ./run.sh
+end Thu Oct 29 17:08:01 PDT 2026 rc=0 secs=370 load: { 17.34 9.31 5.97 }

@@ -1,0 +1,6 @@
+k1b_mem lang=c layout=packed n=50000 state=32 sizeof=56 side=0 bytes=2800000 per_instance=56.0 over_packed_bytes=0 over_packed_pct=0.0 footprint_delta=2850840 table_bytes=1572864 table_per_instance=31.5 ok=1
+k1b_mem lang=c layout=packed n=50000 state=256 sizeof=280 side=0 bytes=14000000 per_instance=280.0 over_packed_bytes=0 over_packed_pct=0.0 footprint_delta=14041112 table_bytes=1572864 table_per_instance=31.5 ok=1
+k1b_mem lang=c layout=line n=50000 state=32 sizeof=128 side=0 bytes=6400000 per_instance=128.0 over_packed_bytes=3600000 over_packed_pct=128.6 footprint_delta=6455320 table_bytes=1572864 table_per_instance=31.5 ok=1
+k1b_mem lang=c layout=line n=50000 state=256 sizeof=384 side=0 bytes=19200000 per_instance=384.0 over_packed_bytes=5200000 over_packed_pct=37.1 footprint_delta=19234840 table_bytes=1572864 table_per_instance=31.5 ok=1
+k1b_mem lang=c layout=line_header n=50000 state=32 sizeof=128 side=32 bytes=8000000 per_instance=160.0 over_packed_bytes=5200000 over_packed_pct=185.7 footprint_delta=8060952 table_bytes=1572864 table_per_instance=31.5 ok=1
+k1b_mem lang=c layout=line_header n=50000 state=256 sizeof=128 side=256 bytes=19200000 per_instance=384.0 over_packed_bytes=5200000 over_packed_pct=37.1 footprint_delta=19283992 table_bytes=1572864 table_per_instance=31.5 ok=1

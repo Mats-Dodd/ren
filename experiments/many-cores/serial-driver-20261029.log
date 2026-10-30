@@ -1,0 +1,114 @@
+[16:57:50] load 6.39, waiting
+[16:58:50] load 6.11, waiting
+[16:59:50] load 5.11, waiting
+[17:00:50] load 3.56, waiting
+[17:01:51] k3/full start, load 2.69
+[17:08:01] k3/full done rc=0
+[17:08:01] load 17.34, waiting
+[17:09:01] load 8.17, waiting
+[17:10:01] load 5.29, waiting
+[17:11:01] load 4.42, waiting
+[17:12:01] load 3.89, waiting
+[17:13:01] load 4.69, waiting
+[17:14:01] load 3.61, waiting
+[17:15:01] load 3.48, waiting
+[17:16:01] k3/size start, load 2.78
+[17:19:17] k3/size done rc=0
+[17:19:17] load 6.22, waiting
+[17:20:17] load 3.79, waiting
+[17:21:17] load 3.14, waiting
+[17:22:18] p1/full start, load 2.44
+[17:23:41] p1/full done rc=0
+[17:23:41] p3/full start, load 2.84
+[17:29:39] p3/full done rc=0
+[17:29:39] load 8.32, waiting
+[17:30:39] load 5.83, waiting
+[17:31:39] load 3.97, waiting
+[17:32:39] load 5.00, waiting
+[17:33:39] load 4.68, waiting
+[17:34:39] load 4.45, waiting
+[17:35:39] load 5.00, waiting
+[17:36:39] load 5.19, waiting
+[17:37:39] load 6.38, waiting
+[17:38:40] load 6.34, waiting
+[17:39:40] load 4.84, waiting
+[17:40:40] load 6.38, waiting
+[17:41:40] load 4.10, waiting
+[17:42:40] load 3.73, waiting
+[17:43:40] load 3.06, waiting
+[17:44:40] load still 3.20 after 15 min, running anyway
+[17:44:40] s1/full start, load 3.20
+[17:53:52] s1/full done rc=0
+[17:53:52] load 14.82, waiting
+[17:54:52] load 7.97, waiting
+[17:55:52] load 6.28, waiting
+[17:56:52] load 5.35, waiting
+[17:57:52] load 4.06, waiting
+[17:58:53] load 4.02, waiting
+[17:59:53] load 3.30, waiting
+[18:00:53] load 5.41, waiting
+[18:01:53] load 5.14, waiting
+[18:02:53] load 3.90, waiting
+[18:03:53] load 5.79, waiting
+[18:04:53] load 5.29, waiting
+[18:05:53] load 4.30, waiting
+[18:06:53] load 4.64, waiting
+[18:07:53] load 4.59, waiting
+[18:08:53] load still 5.27 after 15 min, running anyway
+[18:08:54] s1/work100 start, load 5.27
+[18:11:08] s1/work100 done rc=0
+[18:11:08] load 14.64, waiting
+[18:12:08] load 8.11, waiting
+[18:13:08] load 6.38, waiting
+[18:14:08] load 4.37, waiting
+[18:15:08] load 5.06, waiting
+[18:16:08] load 5.48, waiting
+[18:17:08] load 4.77, waiting
+[18:18:08] load 6.36, waiting
+[18:19:09] load 4.99, waiting
+[18:20:09] load 9.46, waiting
+[18:21:09] load 6.60, waiting
+[18:22:09] load 5.04, waiting
+[18:23:09] load 4.13, waiting
+[18:24:09] load 3.92, waiting
+[18:25:09] load 4.85, waiting
+[18:26:09] load still 4.74 after 15 min, running anyway
+[18:26:09] k1k2/full start, load 4.74
+[18:31:16] k1k2/full done rc=0
+[18:31:16] load 8.84, waiting
+[18:32:16] load 5.16, waiting
+[18:33:16] load 4.45, waiting
+[18:34:17] load 4.77, waiting
+[18:35:17] load 4.57, waiting
+[18:36:17] load 3.98, waiting
+[18:37:17] load 4.49, waiting
+[18:38:17] load 4.18, waiting
+[18:39:17] load 3.49, waiting
+[18:40:17] load 4.11, waiting
+[18:41:17] load 5.77, waiting
+[18:42:17] load 6.37, waiting
+[18:43:17] load 5.39, waiting
+[18:44:17] load 6.44, waiting
+[18:45:18] load 6.41, waiting
+[18:46:18] load still 6.27 after 15 min, running anyway
+[18:46:18] cache3/full start, load 6.27
+[18:51:02] cache3/full done rc=0
+[18:51:02] load 17.35, waiting
+[18:52:02] load 8.93, waiting
+[18:53:02] load 8.56, waiting
+[18:54:03] load 6.73, waiting
+[18:55:03] load 6.31, waiting
+[18:56:03] load 5.16, waiting
+[18:57:03] load 4.73, waiting
+[18:58:03] load 4.47, waiting
+[18:59:03] load 4.15, waiting
+[19:00:03] load 3.75, waiting
+[19:01:03] load 4.44, waiting
+[19:02:03] load 4.76, waiting
+[19:03:03] load 4.60, waiting
+[19:04:04] load 3.54, waiting
+[19:05:04] load 4.09, waiting
+[19:06:04] load still 4.98 after 15 min, running anyway
+[19:06:04] cache3/fetch0 start, load 4.98
+[19:07:56] cache3/fetch0 done rc=0
+[19:07:56] all done

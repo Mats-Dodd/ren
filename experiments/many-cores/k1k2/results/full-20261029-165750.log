@@ -1,0 +1,4 @@
+start Thu Oct 29 18:26:09 PDT 2026 load: { 4.74 5.32 6.03 }
+cmd: env REPS=7 ./run.sh
+built: k1_c k1_c_tsan k1_c_tsan.dSYM k1_rust k2_c k2_quick_c.txt k2_quick_rust.txt k2_rust quick.err 
+end Thu Oct 29 18:31:16 PDT 2026 rc=0 secs=307 load: { 8.84 8.89 7.62 }
