@@ -2691,12 +2691,33 @@
           "type": "SEQ",
           "members": [
             {
-              "type": "FIELD",
-              "name": "member",
-              "content": {
-                "type": "SYMBOL",
-                "name": "function_definition"
-              }
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "state",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "let_statement"
+                  }
+                },
+                {
+                  "type": "FIELD",
+                  "name": "finally",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "finally_statement"
+                  }
+                },
+                {
+                  "type": "FIELD",
+                  "name": "member",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "function_definition"
+                  }
+                }
+              ]
             },
             {
               "type": "REPEAT",
@@ -2708,12 +2729,33 @@
                     "name": "_newline"
                   },
                   {
-                    "type": "FIELD",
-                    "name": "member",
-                    "content": {
-                      "type": "SYMBOL",
-                      "name": "function_definition"
-                    }
+                    "type": "CHOICE",
+                    "members": [
+                      {
+                        "type": "FIELD",
+                        "name": "state",
+                        "content": {
+                          "type": "SYMBOL",
+                          "name": "let_statement"
+                        }
+                      },
+                      {
+                        "type": "FIELD",
+                        "name": "finally",
+                        "content": {
+                          "type": "SYMBOL",
+                          "name": "finally_statement"
+                        }
+                      },
+                      {
+                        "type": "FIELD",
+                        "name": "member",
+                        "content": {
+                          "type": "SYMBOL",
+                          "name": "function_definition"
+                        }
+                      }
+                    ]
                   }
                 ]
               }

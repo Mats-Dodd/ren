@@ -153,3 +153,80 @@ fn main() uses Console =
         (call_expression
           (identifier)
           (arguments))))))
+
+================================================================================
+service: its state first, a `finally` among it
+================================================================================
+
+service Counter(c: Cfg) ! Refused =
+  var n: Int = c.start
+  let label: Str = try open(c)
+  finally(r) =>
+    try r
+  pub fn next() -> Int = bump(1)
+  fn bump(k: Int) -> Int = n + k
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (service_definition
+    (type_identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (let_statement
+      (identifier)
+      (named_type
+        (type_name
+          (type_identifier)))
+      (field_expression
+        (identifier)
+        (identifier)))
+    (let_statement
+      (identifier)
+      (named_type
+        (type_name
+          (type_identifier)))
+      (try_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)))))
+    (finally_statement
+      (parameters
+        (parameter
+          (identifier)))
+      (block
+        (try_expression
+          (identifier))))
+    (function_definition
+      (visibility)
+      (identifier)
+      (parameters)
+      (named_type
+        (type_name
+          (type_identifier)))
+      (call_expression
+        (identifier)
+        (arguments
+          (number))))
+    (function_definition
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (named_type
+        (type_name
+          (type_identifier)))
+      (binary_expression
+        (identifier)
+        (identifier)))))

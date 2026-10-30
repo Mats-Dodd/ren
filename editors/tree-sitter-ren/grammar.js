@@ -550,9 +550,10 @@ module.exports = grammar({
     //     pub fn get(k: Key) -> Option<Entry> ! KvError = ...
     //     fn call(req: Request) -> Response ! KvError = ...
     //
-    // `service` is a word only here. Its operations are its `pub fn`s;
-    // the compiler refuses a member that writes `uses`, and anything but
-    // a function among them
+    // `service` is a word only here. Its state comes first, `let`, `var`
+    // and `finally` lines, as a handler's, then its functions, whose
+    // `pub fn`s are its operations; the compiler checks the order, and
+    // refuses a member that writes `uses`
     service_definition: ($) =>
       seq(
         optional($.visibility),
@@ -564,7 +565,14 @@ module.exports = grammar({
         optional(field('uses', $.uses_clause)),
         '=',
         $._indent,
-        sep1(field('member', $.function_definition), $._newline),
+        sep1(
+          choice(
+            field('state', $.let_statement),
+            field('finally', $.finally_statement),
+            field('member', $.function_definition),
+          ),
+          $._newline,
+        ),
         $._dedent,
       ),
 

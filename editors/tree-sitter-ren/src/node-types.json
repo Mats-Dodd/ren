@@ -4013,9 +4013,19 @@
           }
         ]
       },
+      "finally": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "finally_statement",
+            "named": true
+          }
+        ]
+      },
       "member": {
         "multiple": true,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "function_definition",
@@ -4039,6 +4049,16 @@
         "types": [
           {
             "type": "parameters",
+            "named": true
+          }
+        ]
+      },
+      "state": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "let_statement",
             "named": true
           }
         ]

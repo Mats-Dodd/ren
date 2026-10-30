@@ -369,20 +369,167 @@ fn main() = 1
       help: mark the functions its callers call `pub fn`
     |}]
 
-let%expect_test "[s2b reject] state among a service's members" =
+(* ---- step 2b (state): a service keeps state in `var`s, sets it up,
+   and may fail to start ---- *)
+
+let counter =
+  {|
+pub type Cfg = { start: Int }
+
+pub service Counter(c: Cfg) uses Console ! Refused =
+  var n: Int = c.start
+  var log: Array<Str> = []
+  let label: Str = try open(c.start)
+  finally(r) =>
+    print("closing " + label + " at " + show(n))
+    try r
+  pub fn next() -> Int = bump(1)
+  pub fn add(k: Int) -> Int = bump(k)
+  pub fn total() -> Int = n
+  pub fn history() -> Array<Str> = log
+  fn bump(k: Int) -> Int =
+    n += 1
+    &log.push(label + show(n))
+    if k > 1 then bump(k - 1) else n
+
+pub fn open(at: Int) -> Str ! Refused = if at < 0 then fail Refused else "c"
+|}
+
+let%expect_test "[s2b accept] a service keeps state in `var`s, which its functions read and write as they call each other" =
+  (* `add(3)` is three calls of `bump`, recursively, each changing `n`
+     and `log`, then `total()` reads them: one instance, kept by each
+     operation until it returns *)
+  run
+    (counter
+   ^ {|
+pub fn main() ! Refused uses Console =
+  try with Counter(Cfg { start: 10 }) in
+    print(Counter.next())
+    print(Counter.add(3))
+    print(Counter.total())
+    print(Counter.history())
+|});
+  [%expect {|
+    11
+    14
+    14
+    ["c11", "c12", "c13", "c14"]
+    closing c at 14
+    ()
+    |}]
+
+let%expect_test "[s2b accept] a service's setup fails with its `! E`, installed with `try with`" =
+  run
+    (counter
+   ^ {|
+pub fn main() uses Console =
+  print(attempt (with Counter(Cfg { start: -1 }) in Counter.total()))
+|});
+  [%expect {|
+    Err(Refused)
+    ()
+    |}]
+
+let%expect_test "[s2b accept] a test handler still replaces a service that keeps state" =
+  test
+    (counter
+   ^ {|
+pub fn twice() -> Int uses Counter =
+  let _ = Counter.next()
+  Counter.next()
+
+test handler fixed() for Counter =
+  next() => 7
+  add(k) => k
+  total() => 0
+  history() => []
+
+test "the real one counts" =
+  try with Counter(Cfg { start: 0 }) in assert twice() == 2
+
+test "a test handler in its place" =
+  with fixed() in assert twice() == 7
+|});
+  [%expect {|
+    test.ren
+      ✓ the real one counts
+      ✓ a test handler in its place
+
+    2 passed
+    [exit 0]
+    |}]
+
+let%expect_test "[s2b accept] a block in a member calls another member with the state" =
+  run
+    {|
+service Tally() =
+  var n = 0
+  var seen: Array<Str> = []
+  pub fn add_all(ks: Array<Str>) -> Int =
+    ks.each fn(k) => add(k)
+    n
+  pub fn names() -> Array<Str> = seen
+  fn add(k: Str) =
+    n += 1
+    &seen.push(k)
+
+fn main() =
+  with Tally() in
+    let a = Tally.add_all(["x", "y"])
+    (a, Tally.names())
+|};
+  [%expect {| (2, ["x", "y"]) |}]
+
+let%expect_test "[s2b reject] a service's state without its type" =
   check_error
     {|
-service Kv(base: Str) =
-  var n = 0
-  pub fn get(k: Str) -> Str = base
+service Kv(start: Int) =
+  var n = start
+  pub fn get() -> Int = n
 
 fn main() = 1
 |};
   [%expect {|
-    error: a service's members are functions
-      ┌─ test.ren:2:3
-    2 │   var n = 0
+    error: `n` is `Kv`'s state, so its type is written
+      ┌─ test.ren:2:7
+    2 │   var n = start
+      │       ^
+      = each of `Kv`'s functions is given its state, as a parameter, and a parameter's type is written
+      help: write it: `var n: T = ...`
+    |}]
+
+let%expect_test "[s2b reject] a service's state calling its functions" =
+  check_error
+    {|
+service Kv() =
+  let m: Int = start()
+  pub fn get() -> Int = m
+  fn start() -> Int = 1
+
+fn main() = 1
+|};
+  [%expect {|
+    error: `start` is a function of `Kv`, which its state can't call
+      ┌─ test.ren:2:16
+    2 │   let m: Int = start()
+      │                ^^^^^
+      = `Kv`'s functions are given its state, which is still being set up here
+      help: set it up here, or with a function outside the service
+    |}]
+
+let%expect_test "[s2b reject] a service's state after its functions" =
+  check_error
+    {|
+service Kv() =
+  pub fn get() -> Int = 1
+  var n = 0
+
+fn main() = 1
+|};
+  [%expect {|
+    error: a service's state comes first, before its functions
+      ┌─ test.ren:3:3
+    3 │   var n = 0
       │   ^^^
-      = its members are functions, which share its parameters and its `uses`; state a service keeps comes later
-      help: keep state in a handler: `dep Kv = ...` and `handler kv(...) for Kv`
+      help: move it above the service's first function
     |}]

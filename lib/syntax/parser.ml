@@ -65,7 +65,11 @@
                                                     after the `=`, indented,
                                                     and on lines after a `,`)
      service  := "service" UIDENT "(" param, ... ")" [uses] [errors] "="
-                 INDENT ["pub"] fn_def { NEWLINE ["pub"] fn_def } DEDENT
+                 INDENT { stmt NEWLINE } ["pub"] fn_def
+                 { NEWLINE ["pub"] fn_def } DEDENT
+                                                   (its state first, `let`,
+                                                    `var` and `finally` lines,
+                                                    as a handler's)
                                                    (`service` is a word only
                                                     here; its operations are
                                                     its `pub fn`s)
@@ -3407,26 +3411,34 @@ let parse_service p ~pub =
          sname.name
          (describe (peek p)));
   advance p;
+  (* its state first, `let`s, `var`s and `finally`s, as a handler's *)
+  let next_line () =
+    match peek p with
+    | NEWLINE ->
+        advance p;
+        true
+    | DEDENT ->
+        advance p;
+        false
+    | _ -> fail_expected p "the end of the line"
+  in
+  let rec state acc =
+    match peek p with
+    | LET | VAR | FINALLY ->
+        let st = parse_stmt p in
+        if next_line () then state (st :: acc) else (List.rev (st :: acc), false)
+    | _ -> (List.rev acc, true)
+  in
+  let sstate, more = state [] in
   let member p =
     let pub = peek p = PUB in
     if pub then advance p;
     match peek p with
     | FN -> parse_fn p ~pub
-    | LET | VAR | FINALLY ->
+    | (LET | VAR | FINALLY) when not pub ->
         Diag.error (loc p)
-          ~notes:
-            [
-              "its members are functions, which share its parameters and its \
-               `uses`; state a service keeps comes later";
-            ]
-          ~help:
-            (Printf.sprintf
-               "keep state in a handler: `dep %s = ...` and `handler %s(...) \
-                for %s`"
-               sname.name
-               (String.uncapitalize_ascii sname.name)
-               sname.name)
-          "a service's members are functions"
+          ~help:"move it above the service's first function"
+          "a service's state comes first, before its functions"
     | _ ->
         Diag.error (loc p)
           ~help:
@@ -3437,22 +3449,16 @@ let parse_service p ~pub =
   in
   let rec members acc =
     let m = member p in
-    match peek p with
-    | NEWLINE ->
-        advance p;
-        members (m :: acc)
-    | DEDENT ->
-        advance p;
-        List.rev (m :: acc)
-    | _ -> fail_expected p "the end of the line"
+    if next_line () then members (m :: acc) else List.rev (m :: acc)
   in
-  let members = members [] in
+  let members = if more then members [] else [] in
   {
     spub = pub;
     sname;
     sparams;
     suses;
     serrors;
+    sstate;
     members;
     sloc = Loc.span start (last_loc p);
   }

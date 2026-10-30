@@ -200,9 +200,10 @@ type env = {
 }
 
 (* A service of the module (language.md §4), as its members see it: its
-   members' names, and how many parameters it has, which each member
-   takes first ([service_items]). *)
-and service = { members : string list; shared : int }
+   members' names, and what each member takes first, its parameters, then
+   its state ([service_items]): for each, whether it's passed `inout`, as
+   a `var` of its state is. *)
+and service = { members : string list; passes : bool list }
 
 (* Where a type is written, which says what rows it can name, `..e` and
    `..d` (ast.ml): a function's signature names them, and its body can
@@ -267,10 +268,12 @@ and fn_state = {
       (** the last node this pass numbered in the function, for what a wiring
           is flattened into ([use_wiring]): below -1, apart from the parser's
           and Test_items' *)
-  mutable member_of : (string * service * binder list) option;
+  mutable member_of : (string * service * binder list option) option;
       (** the service the function is a member of, if it's one, and the
           parameters it shares, the function's first, which a call of
-          another member passes on ([service_items]) *)
+          another member passes on ([service_items]); or [None] for them
+          in the handler the service is made with, whose own code is its
+          state's, set up before any member can run *)
 }
 
 let report env ?help ?notes ?labels loc msg =
@@ -2082,6 +2085,20 @@ let member_named sc x =
   | Some (_, s, _) -> List.mem x s.members
   | None -> false
 
+(* A member [x] of the service [sname] called, or read, in its state, which
+   is set up before any of them can run: each takes the state. *)
+let member_in_state env loc ~sname x =
+  report env loc
+    ~notes:
+      [
+        sprintf
+          "`%s`'s functions are given its state, which is still being set up \
+           here"
+          sname;
+      ]
+    ~help:"set it up here, or with a function outside the service"
+    (sprintf "`%s` is a function of `%s`, which its state can't call" x sname)
+
 (* The handler the service [name] is made with, if [name], in scope bare,
    is a service's: the module's own, unless a constructor of its own
    sums has that name, which it then is, or one imported by name, whose
@@ -2198,7 +2215,9 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
               (sprintf "`%s.fail(...)` takes the error to fail with" x);
             Unit)
     | Var (Bare x) when member_named sc x ->
-        let sname, _, _ = Option.get sc.fn.member_of in
+        let sname, _, passed = Option.get sc.fn.member_of in
+        if passed = None then member_in_state env e.loc ~sname x
+        else
         report env e.loc
           ~help:(sprintf "call it in a block: `fn(...) => %s(...)`" x)
           (sprintf "`%s` is a function of `%s`, so it's called, not passed" x
@@ -2221,8 +2240,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
       when t.tmod = None
            &&
            match sc.fn.member_of with
-           | Some (sname, _, _) -> sname = t.tid.name
-           | None -> false ->
+           | Some (sname, _, Some _) -> sname = t.tid.name
+           | Some (_, _, None) | None -> false ->
         (* `Kv.get` would go to the `Kv` installed outside, and a member
            shares its service's `uses`, which never names the service *)
         report env e.loc
@@ -2250,17 +2269,28 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let op = Option.get (next_callee env sc f) in
         Call ({ kind = Var op; loc = f.loc; node = f.node }, List.map go args)
     | Call (({ kind = Var (Bare x); _ } as f), args) when member_named sc x ->
-        (* another member of the service, given the parameters they share
-           first (see [service_items]) *)
-        let sname, _, shared = Option.get sc.fn.member_of in
+        (* another member of the service, given the parameters and the
+           state they share first, a `var` by `&`: a direct call in the
+           same operation, which keeps the instance it has (see
+           [service_items]) *)
+        let sname, s, shared = Option.get sc.fn.member_of in
         let p = Path.make env.home (sname ^ "$" ^ x) in
         sc.fn.calls <- p :: sc.fn.calls;
-        let passed b : Resolved.expr =
-          { kind = Var (Local b); loc = f.loc; node = fresh sc }
+        let passed b inout : Resolved.expr =
+          let var : Resolved.expr =
+            { kind = Var (Local b); loc = f.loc; node = fresh sc }
+          in
+          if inout then { kind = Ref var; loc = f.loc; node = fresh sc } else var
         in
-        Call
-          ( { kind = Var (Global p); loc = f.loc; node = f.node },
-            List.map passed shared @ List.map go args )
+        let args = List.map go args in
+        (match shared with
+        | Some shared ->
+            Call
+              ( { kind = Var (Global p); loc = f.loc; node = f.node },
+                List.map2 passed shared s.passes @ args )
+        | None ->
+            member_in_state env f.loc ~sname x;
+            Call ({ kind = Var (Global p); loc = f.loc; node = f.node }, args))
     | Call (f, args) ->
         let f =
           let f = as_item env sc f in
@@ -3443,9 +3473,16 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
             Some
               ( sname,
                 s,
-                List.filteri
-                  (fun j _ -> j < s.shared)
-                  (List.map (fun (p : Resolved.param) -> p.pname) ps) )
+                Some
+                  (List.filteri
+                     (fun j _ -> j < List.length s.passes)
+                     (List.map (fun (p : Resolved.param) -> p.pname) ps)) )
+      | None -> ())
+  | _ when owner = None && is_capital f.name.name -> (
+      (* the handler a service is made with, whose state can't call its
+         members yet *)
+      match Hashtbl.find_opt env.services f.name.name with
+      | Some s -> sc.fn.member_of <- Some (f.name.name, s, None)
       | None -> ())
   | _ -> ());
   let ret = ty_opt env ~params:sc.tparams ~rows f.ret in
@@ -4711,9 +4748,18 @@ let wiring_fns env (defs : Parsed.wiring_def list) =
    bound each keeps to, or inferred for a private service, so what the
    members need is required where the service is installed (deps.md).
    A member is a function, not an arm, so members call each other in any
-   order, recursively too ([expr] passes the shared parameters on); that
-   is also why a service keeps no state yet: a function can't reach a
-   handler's `var`s ("Where this stage may differ"). A `pub fn`'s result
+   order, recursively too ([expr] passes the shared parameters on).
+
+   Its state, `var n: Int = 0` and the rest, is the handler's, set up by
+   each `with` that installs it, and given to each member after the
+   parameters: a `var` `inout`, a `let` by value, under its own name, so
+   `n += 1` in a member changes the instance's `n`. An arm passes `&n`;
+   a member calling another passes its own `&n` on. That's sound with
+   nothing new (compiler.md, "Step 2b (state)"): a member is a direct
+   call inside the arm that keeps the instance, never an operation that
+   takes it again, and what it's given is checked as any `&` argument
+   is. A state's type is written, or a literal's, since a member's
+   parameter needs one to find its methods. A `pub fn`'s result
    and errors are as written, `()` and none if left out, as a public
    function's are, since they're the dependency's operation. *)
 let service_items env (s : Parsed.service_def) : Parsed.program =
@@ -4777,10 +4823,61 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
       (sprintf "`%s` has no operations: a service's operations are its `pub \
                 fn`s"
          sname);
+  (* its state, each `let` and `var` a parameter of every member, by
+     value or `inout`: its type written, or a literal's *)
+  let state =
+    List.filter_map
+      (fun (st : Parsed.stmt) ->
+        match st with
+        | Let { name; ty; value; mut } -> (
+            let named n : Parsed.ty =
+              TyName ({ tmod = None; tid = { name = n; loc = name.loc } }, [])
+            in
+            let rec literal (v : Parsed.expr) =
+              match v.kind with
+              | Int _ -> Some (named "Int")
+              | Float _ -> Some (named "Float")
+              | Bool _ -> Some (named "Bool")
+              | Str _ | Interp _ -> Some (named "Str")
+              | Unop (_, a, _) -> literal a
+              | _ -> None
+            in
+            match (ty, literal value) with
+            | Some t, _ | None, Some t -> Some (name, Some t, mut)
+            | None, None ->
+                report env name.loc
+                  ~notes:
+                    [
+                      sprintf
+                        "each of `%s`'s functions is given its state, as a \
+                         parameter, and a parameter's type is written"
+                        sname;
+                    ]
+                  ~help:
+                    (sprintf "write it: `%s %s: T = ...`"
+                       (if mut then "var" else "let")
+                       name.name)
+                  (sprintf "`%s` is `%s`'s state, so its type is written"
+                     name.name sname);
+                (* still given, so its uses aren't reported too *)
+                Some (name, None, mut))
+        | Let_pattern { pat; _ } ->
+            report env pat.ploc
+              ~help:"name it, and take it apart where it's used"
+              (sprintf
+                 "`%s`'s state is given to its functions by name, so it isn't \
+                  taken apart"
+                 sname);
+            None
+        | Expr _ | Finally _ -> None)
+      s.sstate
+  in
   Hashtbl.replace env.services sname
     {
       members = List.map (fun (m : Parsed.fn_def) -> m.name.name) s.members;
-      shared = List.length s.sparams;
+      passes =
+        List.map (fun _ -> false) s.sparams
+        @ List.map (fun (_, _, mut) -> mut) state;
     };
   (* what this makes is numbered below the parser's, in the handler *)
   let fresh = ref 0 in
@@ -4844,6 +4941,10 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
         (Call
            ( var (sname ^ "$" ^ m.name.name),
              List.map var shared
+             @ List.map
+                 (fun ((n : ident), _, mut) ->
+                   if mut then mk at (Ref (var n.name)) else var n.name)
+                 state
              @ List.map (fun (p : Parsed.param) -> var p.pname.name) m.params ))
     in
     {
@@ -4877,7 +4978,7 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
                any = false;
                fails = s.serrors;
                needs = s.suses;
-               state = [];
+               state = s.sstate;
                arms = List.map arm ops;
              });
       owner = None;
@@ -4894,6 +4995,16 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
         name = { name = sname ^ "$" ^ m.name.name; loc = m.name.loc };
         params =
           List.map (fun (p : Parsed.param) -> { p with pdefault = None }) s.sparams
+          @ List.map
+              (fun ((n : ident), t, mut) : Parsed.param ->
+                {
+                  pname = n;
+                  pty = t;
+                  pmode = (if mut then Inout else Read);
+                  pblock = Ordinary;
+                  pdefault = None;
+                })
+              state
           @ m.params;
         ret = (if m.pub then Some (ret m) else m.ret);
         errors = (if m.pub then Some (errs m) else m.errors);

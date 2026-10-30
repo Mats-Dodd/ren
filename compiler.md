@@ -10602,11 +10602,10 @@ primary  := ... | IDENT "." UIDENT "(" ...    (`kv.Kv(cfg)`, another
 
 The parameters are written even when there are none, `service
 Counter() =`, as a handler's are, and it's installed with them,
-`Counter()`. A `var`, a `let` or a `finally` among the members is the
-parser's "a service's members are functions" (below, and "Where this
-stage may differ"). The AST gains `Service of service_def` (`spub`,
-`sname`, `sparams`, `suses`, `serrors`, `members`, `sloc`), as parsed
-only, as a `Wiring` is.
+`Counter()`. Its state, `let`, `var` and `finally` lines, comes first,
+as a handler's does ("Step 2b (state)", below). The AST gains `Service
+of service_def` (`spub`, `sname`, `sparams`, `suses`, `serrors`,
+`sstate`, `members`, `sloc`), as parsed only, as a `Wiring` is.
 
 **It lowers to exactly a `dep` and a handler** (rule 1), in Resolve,
 first thing, where it's written in the module (`service_items`), so
@@ -10721,9 +10720,19 @@ error: `get` is an operation of `Kv`, so its parameters have types
 error: `Kv` has no operations: a service's operations are its `pub fn`s
   help: mark the functions its callers call `pub fn`
 
-error: a service's members are functions                             (parser)
-  = its members are functions, which share its parameters and its `uses`; state a service keeps comes later
-  help: keep state in a handler: `dep Kv = ...` and `handler kv(...) for Kv`
+error: a service's state comes first, before its functions          (parser)
+  help: move it above the service's first function
+
+error: `n` is `Counter`'s state, so its type is written
+  = each of `Counter`'s functions is given its state, as a parameter, and a parameter's type is written
+  help: write it: `var n: T = ...`
+
+error: `start` is a function of `Kv`, which its state can't call
+  = `Kv`'s functions are given its state, which is still being set up here
+  help: set it up here, or with a function outside the service
+
+error: `Kv`'s state is given to its functions by name, so it isn't taken apart
+  help: name it, and take it apart where it's used
 ```
 
 The tests are test/test_service.ml's (`[s2b accept]`, `[s2b reject]`),
@@ -10731,6 +10740,75 @@ a file of their own since step 3 changes test_services.ml beside this
 step; tree-sitter's `service_definition` and the `kv.Kv(...)`
 constructor, the corpus (service.txt), the highlights and Zed's
 outline.
+
+### Step 2b (state)
+
+language.md §4's rule 4: "`! E` is what it fails to start with, and it
+may keep state in `var`s." Built after step 4, as a follow-up to 2b.
+
+```ren
+service Counter(c: Cfg) uses Console ! Refused =
+  var n: Int = c.start
+  let label: Str = try open(c.start)
+  finally(r) =>
+    print("closing " + label)
+    try r
+  pub fn add(k: Int) -> Int = bump(k)
+  fn bump(k: Int) -> Int =
+    n += 1
+    if k > 1 then bump(k - 1) else n
+```
+
+is
+
+```ren
+handler Counter(c: Cfg) for Counter uses Console ! Refused =
+  var n: Int = c.start
+  let label: Str = try open(c.start)
+  finally(r) => ...
+  add(k) => Counter$add(c, &n, label, k)
+fn Counter$add(c: Cfg, inout n: Int, label: Str, k: Int) -> Int = bump(k)    // Counter$bump(c, &n, label, k)
+fn Counter$bump(c: Cfg, inout n: Int, label: Str, k: Int) -> Int = ...
+```
+
+- **The state lives in the handler,** as written: its `let`s, `var`s
+  and `finally`s are the handler's state, in order, set up by each
+  `with` that installs it, failing with its `! E`, its `finally`s
+  covering what follows them and the `with`'s body, as a handler's do
+  (handlers.md). So installing it with `try with`, and a test handler
+  in its place, are as before.
+- **Each member is given the state,** after the service's parameters:
+  a `var` as an `inout` parameter, a `let` by value, each under its own
+  name, so a member reads and writes `n` as it's written. An arm passes
+  its instance's `&n`; a member calling another passes its own `&n`
+  on (Resolve's call, as for the parameters, `passes` saying which go by
+  `&`). Members still call each other directly, in any order and
+  recursively, being functions.
+- **Sound under decision 10 and excl.ml's rules, with nothing new:** an
+  operation keeps its instance until its arm returns, and a member
+  called from it is a direct call inside that arm, never an operation,
+  so it never takes the instance again. What it's given is the arm's
+  own state, passed `inout` as any `&` argument is, so exclusivity
+  checks it as it checks any call: two `var`s are two places, and a
+  block in a member that calls another member captures the parameter as
+  any block does (rule A). Nothing outlives the arm: a `var`'s changes
+  are written back when the call returns, before the arm does.
+- **Its type is written, or a literal's** (`0`, `"x"`, `true`, `1.5`):
+  a member's parameter needs a known type, since a private function's
+  untyped parameter is generalized and a method on it, `log.push(x)`,
+  can't be found. `var log: Array<Str> = []` writes it. A state taken
+  apart by a pattern is refused: it's given by name.
+- **The state can't call a member,** since every member is given the
+  state being set up. `finally` can't either, for the same reason where
+  it stands; a member a `finally` needs is written in its body or
+  outside the service.
+
+Its errors are above. The tests are test_service.ml's (`[s2b accept] a
+service keeps state in `var`s...`, setup failing under `try with`, a
+test handler in its place, a block calling a member, and the three
+refusals); natively bench/services/service, whose `Kv` keeps a count
+and a list and reports them in its `finally`. tree-sitter's
+`service_definition` takes `state` and `finally` lines (service.txt).
 
 ### Background work (step 3)
 
@@ -11858,14 +11936,13 @@ fit the code, each to revisit if a step finds it wrong:
 - **A wiring a test splits is `pub`.** language.md §5's test splits a
   private `core`, but a test sees what an importer sees (testing.md),
   so in a test the split wiring is `pub`, its `uses` written.
-- **A service keeps no state yet.** language.md §4's rule 4 lets one
-  keep state in `var`s; its members are functions, so they call each
-  other in any order and recursively, and a function can't reach a
-  handler's `var`s. A `var`, `let` or `finally` among the members is
-  refused, with the help to write a `dep` and a handler, until a
-  service's state is designed with its members (a record the handler
-  keeps, passed to them `inout`, is one way). Its `! E` is accepted, as
-  a handler's is, with nothing yet that can fail to start.
+- **A service's state is its handler's, given to each member as
+  parameters** (step 2b (state)): a `var` `inout`, a `let` by value,
+  each written with its type or a literal, the state first, as a
+  handler's; the state can't call a member. One record of the state
+  passed `inout` was the other way, but a record type needs its fields'
+  types written all the same, and every member would read `st.n`
+  instead of `n`.
 - **A service is installed with its parentheses,** `Kv()` when it takes
   nothing, as a handler is; `Kv` alone where a `with` lists it is the
   same call.
@@ -12162,7 +12239,9 @@ Chosen in step 4, as built:
 | 2 | 7b18441 | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
 | 3 | d5f31e2 | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
 | 4 | this commit | `release` through the whole pipeline: the word in `parse_unary`, `Release` (ast.ml), Infer's check and Excl's (outside an operation), Lower's write-back, `arm_release`, the call in a `Finally` with `arm_retake` and the reads again (`Lower.released`), `Sched.let_go`, `retake`, `take_back`, natively nothing (bench/services/release in the loops); decision 2's row narrowed in excl.ml (`Lets_go`: `release` and `Async.until`, and block parameters' calls); the deadlock and cycle panics naming what each task holds (`waits_of`); `sim`'s fair choice in `released`; defaults that are variants written bare, a one-field variant's field default, an operation's parameters' defaults; `Kill`, `Proc.run(kill:)`, lib/eval/ren_spawn.c, the group killed, `SimProc.kills()`; examples/breaker and bench/services/breaker_held (bench/tasks.t); the journals' `Proc.run` lines; tree-sitter's `release_expression`, defaults, corpus (release.txt), highlights; test_services.ml's s4 all on; language.md's table, deps.md, testing.md | steps 5 to 9; the review's `release` programs (state read across it, `release` inside `until`'s condition) |
-| 2b | this commit | `service`, a dependency and its one implementation written once (language.md §4), through the whole pipeline: `parse_service` (`service` a word before a capitalized name) and `kv.Kv(...)` in the parser, `Service` (ast.ml); Resolve's `service_items`, exactly a `dep`, a handler named as the service is and a private function per member, `Kv.get`, taking the service's parameters first, its `uses` the service's; a member's calls of another, the shared parameters passed on, recursion and chains included (infer_expr.ml's `Piped` after them); `installed`, `service_named` and the three errors of the brief with help, and a member passed as a value, a member's `Kv.get(...)`, an operation's untyped parameter, no `pub fn`, state among members; a member's need past the service's `uses` reported once, at the member (infer_declared.ml, infer_msg.ml's `service_undeclared`); test/test_service.ml's s2b (a test installs a service and replaces it with a test handler; a service in a wiring; another module's; the `uses` bound pinned); natively, bench/services/service in the `same`, `release` and `tcc_same` loops; tree-sitter's `service_definition` and the module's constructor, the corpus (service.txt), the highlights and Zed's outline; examples/checkout and examples/server without a private function's `uses` (no example moved to `service`: checkout's `Orders` and `Discounts` are ports, the ledger's `Sql` keeps state and has `transaction()` over it, the server's `Line` keeps a `finally`); language.md's table, the README, deps.md. Built in parallel with step 3, from 84ac5d3 | a service's state (`var`s among the members: "Where this stage may differ"); steps 3 to 9 |
+| 2b | 827ff7e | `service`, a dependency and its one implementation written once (language.md §4), through the whole pipeline: `parse_service` (`service` a word before a capitalized name) and `kv.Kv(...)` in the parser, `Service` (ast.ml); Resolve's `service_items`, exactly a `dep`, a handler named as the service is and a private function per member, `Kv.get`, taking the service's parameters first, its `uses` the service's; a member's calls of another, the shared parameters passed on, recursion and chains included (infer_expr.ml's `Piped` after them); `installed`, `service_named` and the three errors of the brief with help, and a member passed as a value, a member's `Kv.get(...)`, an operation's untyped parameter, no `pub fn`, state among members; a member's need past the service's `uses` reported once, at the member (infer_declared.ml, infer_msg.ml's `service_undeclared`); test/test_service.ml's s2b (a test installs a service and replaces it with a test handler; a service in a wiring; another module's; the `uses` bound pinned); natively, bench/services/service in the `same`, `release` and `tcc_same` loops; tree-sitter's `service_definition` and the module's constructor, the corpus (service.txt), the highlights and Zed's outline; examples/checkout and examples/server without a private function's `uses` (no example moved to `service`: checkout's `Orders` and `Discounts` are ports, the ledger's `Sql` keeps state and has `transaction()` over it, the server's `Line` keeps a `finally`); language.md's table, the README, deps.md. Built in parallel with step 3, from 84ac5d3 | a service's state (`var`s among the members: "Where this stage may differ"); steps 3 to 9 |
+
+| 2b (state) | this commit | a service's state (language.md §4, rule 4): `let`, `var` and `finally` lines first (`parse_service`, `sstate`), the handler's state as written, failing with the service's `! E`; each member given the state after the parameters, a `var` `inout` and a `let` by value (`service_items`, `passes`), an arm passing `&n`, a member passing its own on; the state's type written or a literal's; a state that calls a member, a state taken apart and a state after a function refused with help; test_service.ml's state tests (a `var` counter and a list changed by members calling each other recursively, setup failing under `try with`, a test handler in its place, a block calling a member); natively bench/services/service's `Kv` with state and a `finally`; tree-sitter's `state` and `finally` in a service (service.txt); language.md's table, deps.md | steps 5 to 9 |
 
 ## The runtime model
 

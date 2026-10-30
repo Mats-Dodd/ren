@@ -2,9 +2,10 @@
 // service, a dependency and its one implementation written once
 // (language.md §4), built natively and checked against `ren run`. `Kv`'s
 // members share its parameter and its `uses`, call each other directly,
-// one recursively, and one as a chain's step; a wiring installs it with
-// the `Store` it needs; and a handler of `Kv` replaces it, as a test's
-// would.
+// one recursively, and one as a chain's step, and keep its state, a
+// `var` each changes, which its `finally` reports (step 2b, state); a
+// wiring installs it with the `Store` it needs; and a handler of `Kv`
+// replaces it, as a test's would.
 
 type Cfg = { prefix: Str, tries: Int }
 
@@ -17,13 +18,22 @@ handler mem_store() for Store uses Console =
     try r
   read(k) => if k == "kv/a" then Some("1") else None
 
-service Kv(c: Cfg) uses Store =
+service Kv(c: Cfg) uses Store, Console =
+  var reads = 0
+  var missed: Array<Str> = []
+  finally(r) =>
+    print("kv closed after " + show(reads) + " reads, missing " + show(missed))
+    try r
   pub fn get(k: Str) -> Str ! Missing =
     match Store.read(key(k))
       Some(v) => v |> padded(c.tries)
-      None => fail Missing
+      None =>
+        &missed.push(k)
+        fail Missing
   pub fn keys() -> Int = count(c.tries)
-  fn key(k: Str) -> Str = c.prefix + k
+  fn key(k: Str) -> Str =
+    reads += 1
+    c.prefix + k
   fn padded(v: Str, n: Int) -> Str = if n == 0 then v else padded(v + ".", n - 1)
   fn count(n: Int) -> Int = if n == 0 then 0 else 1 + count(n - 1)
 

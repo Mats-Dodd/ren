@@ -1,6 +1,7 @@
 Ok("1..")
 Err(Missing)
 2
+kv closed after 2 reads, missing ["b"]
 store closed
 Ok("fixed a")
 Ok("fixed b")

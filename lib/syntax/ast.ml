@@ -715,6 +715,9 @@ type ('v, 'b, 't) service_def = {
   suses : 't uses option;
   serrors : 't errors option;
       (** what installing it fails with, the handler's `!` *)
+  sstate : ('v, 'b, 't) stmt list;
+      (** its `var`s, `let`s and `finally`s, the handler's state, which its
+          functions are given *)
   members : ('v, 'b, 't) fn_def list;  (** in source order *)
   sloc : Loc.t;  (** the whole declaration *)
 }
@@ -1490,6 +1493,7 @@ let show_item : item -> string = function
             parens (List.map show_param s.sparams);
           ]
         @ uses @ errors
+        @ List.map show_stmt s.sstate
         @ List.map member s.members)
 
 (* ---- code as it's written, for messages ----
