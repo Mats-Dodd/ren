@@ -137,17 +137,25 @@ handler, or one no other task can reach, is neither, so a test's
   core: the stall watchdog names it, heavy pure work goes to `Async.map`,
   and `Async.yield()` checks for a cancel on every call and yields only
   when the budget is spent. The compiler inserts nothing.
-- **A shared take** is a compare-and-swap when no one holds it. On
-  contention it spins while the holder is running, for a few
-  microseconds at most, then parks the task, so a core never blocks
-  while one of its tasks waits. After a waiter has waited 1 ms, a
-  release hands the instance to it directly, so no waiter starves. A
-  worker spins briefly before it sleeps. (Measured in
-  experiments/runtime-frames/: with a 100 µs hold, parking wastes 1.7%
-  of the CPU where spinning wastes 87%, and a thread lock starved a
-  waiter for 1.6 s; with short holds on 8 workers, parking without the
-  spin is 4.4× slower than a thread lock.)
-- **A shared plain handler under `per_core` is a family of one key,**
+- **A shared take under `per_core` is served at the instance's home
+  core.** A shared, exclusive instance is a family of one key, so an
+  operation from another core is a `D.Call` pushed to its home's queue
+  and answered: the same queue as a post or a world call, with no lock
+  moving between cores, no spinning on the take, and no starving, since
+  the queue is first in, first out. With short contended holds on 8
+  workers it ran 2 to 2.7× a thread lock and 2.6 to 5.9× parking; with a
+  100 µs hold it kept other workers' work flowing where a thread lock
+  starved a waiter for 1.6 s (experiments/runtime-frames/, X3 and X3b).
+  Whether an uncontended take runs in place first is experiment X3c.
+- **The `per_core` scheduler drains its incoming queue at every
+  scheduling point and runs tasks just resumed first,** which cuts a
+  shipped operation's wait under light contention from 130 to 10 µs, and
+  **a worker spins about 5 µs before it sleeps,** without which a home
+  spends its time waking sleepers and throughput halves.
+- **Under `work_stealing`,** where tasks move between cores anyway, a
+  contended take parks the task, and after a waiter has waited 1 ms a
+  release hands the instance to it directly, so no waiter starves.
+- **So a shared plain handler under `per_core` is a family of one key,**
   with a home core. State every core hits belongs in `striped(by:
   Worker)`, and `ren review` says so for a shared, exclusive handler
   called from many tasks.
@@ -259,9 +267,11 @@ shares memory with the others or doesn't**, and that one property is all
 the abstraction needs:
 
 - **Shared memory** (threads): a value crosses by reference, marked
-  shared; a task may move to a key's home for an `at` block, or send
-  each operation there and back. Which is the runtime's, and the
-  compiler may choose per block.
+  shared. An `at` block sends each operation to the key's home and
+  back; the compiler moves the task there instead when the block makes
+  about 8 operations or more (X3b: moving is 0.16× shipping at one
+  operation, 0.51× at four, 1.70× at sixteen). A home runs moved-in
+  tasks fairly beside its own, or they starve it.
 - **No shared memory** (Web Workers, isolates): a value crosses as data,
   copied; a frame can't move, so an `at` sends each operation to the
   key's place and back.
@@ -308,9 +318,8 @@ names and signatures are the runtime core stage's:
 
 ## Open
 
-- How `at` runs on shared-memory places under `per_core`, moving the
-  task or shipping each call, and whether a contended shared instance
-  is served at its home core instead of by a lock: experiment X3b.
+- Whether an uncontended shared take runs in place, shipping only under
+  contention: experiment X3c.
 - The core's own record layout, shared with the journal and the hosted
   wire: the runtime core stage.
 - A user-written scheduler: later, inside `trust`, against this page.
