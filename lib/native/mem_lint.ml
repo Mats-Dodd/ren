@@ -203,7 +203,7 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
   | Map_new _ -> ([], Boxed)
   | Map_len -> ([ Boxed ], Int)
   | Map_find -> ([ Boxed; Word 0; Desc ], Int)
-  | Map_value -> ([ Boxed; Int ], Word 0)
+  | Map_value l | Map_peek l -> ([ Boxed; Int ], l)
   | Map_set | Map_set_taking -> ([ Cell Boxed; Word 0; Word 0; Desc; Desc ], Unit)
   | Set_add | Set_add_taking | Map_remove | Map_remove_taking ->
       ([ Cell Boxed; Word 0; Desc ], Unit)
@@ -416,8 +416,13 @@ let rhs env (r : rhs) : layout =
           List.map2
             (fun (i, (w : layout)) x ->
               match w with
-              (* a map's key, which [ren_map_set_sv] boxes if it keeps it *)
-              | Word _ when atom env x = env.str && (views r || i = 1) -> env.str
+              (* a map's key or value, which its entries keep as two
+                 words (ren_rt.h, [ren_map_set_sv]) *)
+              | Word _
+                when atom env x = env.str
+                     && (views r || i = 1
+                        || (i = 2 && (r = Map_set || r = Map_set_taking))) ->
+                  env.str
               | _ -> w)
             (List.mapi (fun i w -> (i, w)) want) xs
         else want
@@ -1506,7 +1511,7 @@ let rc_let env st (v : var) (r : rhs) =
       let st = call_changes env st in
       fresh_var env st v B_owned
   (* an element, or a slice, lent: a part of what it's read from *)
-  | Runtime ((Array_peek _ | Str_view _), (x :: _ as xs), _) ->
+  | Runtime ((Array_peek _ | Map_peek _ | Str_view _), (x :: _ as xs), _) ->
       List.iter (read env st) xs;
       lent_part env st v x
   | Runtime (Buf_peek _, (Var p :: _ as xs), _) ->

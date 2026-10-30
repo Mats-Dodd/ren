@@ -551,7 +551,7 @@ let analyze ?(lent = fun _ -> false) fns (f : fn) : info =
             | Arg_borrowed _ when not (changes v) -> define v Borrowed_param
             (* an element read, or a slice of a release build's string,
                that [lent_reads] lends: a part of what it's read from *)
-            | Runtime ((Array_get _ | Slice (_, Range)), Var x :: _, _)
+            | Runtime ((Array_get _ | Map_value _ | Slice (_, Range)), Var x :: _, _)
               when lent v.id ->
                 let gx = group fi x in
                 if gx.kind = Uncounted then define v Owned
@@ -1494,6 +1494,10 @@ let find_takes fi (body : block) =
      array. An array taken, by a write in place say, is left out: swap.ml
      moves an element out of an array uncounted where it's written back,
      which a part of it wouldn't see.
+   - A map's value read by `get` ([Map_value]), an object or a release
+     build's `Str` or `Bytes`, under the same conditions: a map changes
+     only through its variable's cell ([Map_set]), which makes the
+     variable one that changes, or by being taken.
 
    Either is lent only if its own variable never changes. Borrow inference
    (borrow.ml, [consumed]) doesn't see these parts: a lent read that's
@@ -1536,7 +1540,7 @@ let lent_reads fns (f : fn) =
       | Let (v, Runtime (Slice ((Of_str | Of_bytes), Range), Var x :: _, _))
         when ssa v && ssa x && is_struct v.layout && x.layout = v.layout ->
           Hashtbl.replace lent v.id ()
-      | Let (v, Runtime (Array_get l, Var x :: _, _))
+      | Let (v, Runtime ((Array_get l | Map_value l), Var x :: _, _))
         when ssa v
              && (match l with Boxed | Struct (_, true) -> true | _ -> false)
              && ssa x ->
@@ -1560,6 +1564,8 @@ let rec lend_reads fi (b : block) : block =
       match s with
       | Let (v, Runtime (Array_get l, xs, site)) when part v ->
           Let (v, Runtime (Array_peek l, xs, site))
+      | Let (v, Runtime (Map_value l, xs, site)) when part v ->
+          Let (v, Runtime (Map_peek l, xs, site))
       | Let (v, Runtime (Slice (s, Range), xs, site)) when part v ->
           Let (v, Runtime (Str_view s, xs, site))
       | s -> map_blocks (lend_reads fi) s)
@@ -1733,7 +1739,7 @@ let lend_fn fns (f : fn) : fn =
     | Some r -> (
         match r with
         | Atom (Var x) | Struct_get (Var x, _) | Field (Var x, _, _)
-        | Runtime ((Array_peek _ | Str_view _), Var x :: _, _) ->
+        | Runtime ((Array_peek _ | Map_peek _ | Str_view _), Var x :: _, _) ->
             settled x
         | Runtime (Buf_peek _, Var b :: _, _) -> (
             match Hashtbl.find_opt bufs b.id with

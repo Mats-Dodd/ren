@@ -1,0 +1,30 @@
+Map.of([("alpha", 2), ("beta", 1), ("gamma", 1), ("delta", 1), ("epsilon", 1), ("zeta", 1)])
+Map.of([("start", "al"), ("alpha", "ep"), ("beta", "ga"), ("gamma", "de"), ("delta", "al"), ("epsilon", "ze")])
+Some("ep")
+3
+Some("ga")
+Some("changed")
+false
+1
+start=al
+alpha=ep
+beta=changed
+delta=al
+epsilon=ze
+["start", "alpha", "beta", "delta", "epsilon"]
+["al", "ep", "changed", "al", "ze"]
+["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+Some("al")
+Some(9)
+6
+97
+Some("k3-9")
+Some("k99-9801")
+true
+Set.of(["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
+true
+2
+true
+Map.of([(1, <bytes 61 6c 70>), (2, <bytes 68 61 2c>)])
+Map.of([("x", <bytes 61>), ("y", <bytes 6c>)])
+exit 0

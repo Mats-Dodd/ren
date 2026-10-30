@@ -267,6 +267,8 @@ typedef struct {
   char bytes[];       /* an owner's */
 } ren_str;
 #define REN_STR_SLICE 1
+/* [h.nfields]: views of it hold objects it holds (ren_rt.c, [ren_kids]) */
+#define REN_STR_KIDS 2
 
 static inline bool ren_str_is_slice(ren_obj *s) {
   return (s->nfields & REN_STR_SLICE) != 0;
@@ -280,29 +282,88 @@ typedef struct {
 
 _Static_assert(sizeof(ren_str) == 32, "a string's bytes are 32 bytes in");
 
+/* The 4 GiB escape (compiler.md, "Bytes stage, part two", "The 4 GiB
+   escape" and "Step 4 (part 3), as built"): a value whose bytes end past
+   the first 2^32 - 2 of its owner's is its range's offset field
+   [REN_SV_ESCAPE], its length field 0, and its root a slice object,
+   counted, that holds its real [data] and [len] ([ren_sv_escape]). Every
+   other value's bytes end before 2^32 - 1, so its offset is below
+   [REN_SV_ESCAPE] and a part of it (a slice, a view) fits too: only an
+   escape's parts can be one. [ren_sv_len] and [ren_sv_data] test the
+   offset field once each, which a loop does once before it starts
+   (hoist.ml); a check of an index or a room against the length field
+   alone fails for the escape, whose length field is 0, so a checked read
+   or write tests for it only on its cold path. */
+#define REN_SV_ESCAPE UINT32_MAX
+/* What the C compiler may take as true: an escape's length is a length
+   of memory, below 2^56, as it knew an ordinary value's is below 2^32,
+   so a loop's index counted up to it can't overflow (and isn't checked
+   for that again). */
+#if defined(__GNUC__) && !defined(__TINYC__)
+#define REN_ASSUME(c) ((c) ? (void)0 : __builtin_unreachable())
+#else
+#define REN_ASSUME(c) ((void)0)
+#endif
+static inline bool ren_sv_is_escape(ren_sv v) {
+  return __builtin_expect((uint32_t)(uint64_t)v.s[1].i == REN_SV_ESCAPE, 0);
+}
+
+/* An ordinary value's offset: an escape's is [REN_SV_ESCAPE]
+   ([ren_sv_owner] has its real one). */
 static inline int64_t ren_sv_off(ren_sv v) {
   return (int64_t)(uint32_t)(uint64_t)v.s[1].i;
 }
 static inline int64_t ren_sv_len(ren_sv v) {
+  if (ren_sv_is_escape(v)) {
+    int64_t n = ((ren_str *)v.s[0].o)->len;
+    REN_ASSUME((uint64_t)n < (UINT64_C(1) << 56));
+    return n;
+  }
   return (int64_t)((uint64_t)v.s[1].i >> 32);
 }
 static inline const char *ren_sv_data(ren_sv v) {
+  if (ren_sv_is_escape(v))
+    return ((ren_str *)v.s[0].o)->data;
   return ((ren_str *)v.s[0].o)->bytes + ren_sv_off(v);
 }
 
-/* An offset or a length past 32 bits: the escape, not built yet. */
-__attribute__((cold, noinline)) _Noreturn void ren_sv_too_big(int64_t off,
-                                                             int64_t len);
-
-/* [len] bytes of [root]'s from [off], taking a count of [root]. */
-static inline ren_sv ren_sv_make(ren_obj *root, int64_t off, int64_t len) {
-  if (__builtin_expect((uint64_t)off > UINT32_MAX || (uint64_t)len >= UINT32_MAX,
-                       0))
-    ren_sv_too_big(off, len);
+/* [root]'s bytes from [off], [len] of them, as two words, with no test:
+   only for a value whose end, [off + len], is below 2^32 - 1. */
+static inline ren_sv ren_sv_raw(ren_obj *root, int64_t off, int64_t len) {
   ren_sv v;
   v.s[0].o = root;
   v.s[1].i = (int64_t)((uint64_t)off | (uint64_t)len << 32);
   return v;
+}
+
+/* The escape of [len] bytes of the owner [root]'s from [off], taking a
+   count of [root]: a new slice object, which holds it. */
+__attribute__((cold, noinline)) ren_sv ren_sv_escape(ren_obj *root, int64_t off,
+                                                     int64_t len);
+
+/* [len] bytes of [root]'s, an owner, from [off], taking a count of
+   [root]: the escape if they end past 2^32 - 2. */
+static inline ren_sv ren_sv_make(ren_obj *root, int64_t off, int64_t len) {
+  if (__builtin_expect((uint64_t)off + (uint64_t)len >= REN_SV_ESCAPE, 0))
+    return ren_sv_escape(root, off, len);
+  return ren_sv_raw(root, off, len);
+}
+
+/* [v]'s owner, and where its bytes start in the owner's: an ordinary
+   value's root and offset, an escape's through its object. */
+static inline ren_obj *ren_sv_owner(ren_sv v, int64_t *off) {
+  ren_str *r = (ren_str *)v.s[0].o;
+  if (!ren_sv_is_escape(v)) {
+    *off = ren_sv_off(v);
+    return &r->h;
+  }
+  if (ren_str_is_slice(&r->h)) {
+    ren_str *o = (ren_str *)r->root;
+    *off = r->data - o->bytes;
+    return &o->h;
+  }
+  *off = 0;
+  return &r->h;
 }
 
 /* An owner, taken, as all of it. */
@@ -311,11 +372,13 @@ static inline ren_sv ren_sv_of(ren_obj *o) {
 }
 
 /* [v] as an A object for a function that only reads it: the root
-   itself if [v] is all of it, else [tmp], made a slice of the root whose
-   count is 0. */
+   itself if [v] is all of it or the escape, else [tmp], made a slice of
+   the root whose count is 0. */
 static inline ren_obj *ren_sv_view(ren_str *tmp, ren_sv v) {
   ren_str *r = (ren_str *)v.s[0].o;
-  int64_t off = ren_sv_off(v), len = ren_sv_len(v);
+  if (ren_sv_is_escape(v))
+    return &r->h;
+  int64_t off = ren_sv_off(v), len = (int64_t)((uint64_t)v.s[1].i >> 32);
   if (off == 0 && len == r->len)
     return &r->h;
   tmp->h.rc = 0;
@@ -1668,15 +1731,17 @@ static inline int64_t ren_bytes_set_var(ren_obj **cell, int64_t at, int64_t x,
    results, small records and arrays (a struct of two slots, the root's
    counted: Mem's [Struct]), and in an object's field declared one, two
    words, which [ren_ctor_info]'s [at] marks (128 bits). Where a value
-   must be one word (a type variable's, a map's key or value, a block's
+   must be one word (a type variable's, a block's
    argument) it's boxed: representation A, [ren_str], is the box, the
    root itself when the value is all of it, else a 32-byte slice object
    ([ren_sv_box]); [ren_sv_unbox] is the way back. A debug build keeps
    representation A throughout.
 
-   An offset or a length that doesn't fit 32 bits would be the 4 GiB
-   escape (compiler.md, "The 4 GiB escape"), which isn't built yet: such
-   a value panics where it's made ([ren_sv_too_big]).
+   A value whose bytes end past the first 4 GiB of its owner's is the
+   escape ([ren_sv_is_escape], above): its root an A object holding its
+   real [data] and [len]. Each function here tests for it where it reads
+   an offset, and goes to a cold path of its own if it's one; nothing it
+   does is faster for a value that fits.
 
    Every function below borrows the values it's given and counts what it
    keeps, as the rest of the runtime's do, but for those named
@@ -1706,13 +1771,21 @@ ren_sv ren_sv_take(ren_obj *o);
 /* The same, [ren_sv_box] taking [v]; and [o] as two words borrowed from
    it, counting nothing, which live while [o] does. */
 ren_obj *ren_sv_box_taking(ren_sv v);
+ren_sv ren_sv_peek_owner(ren_obj *o);
 static inline ren_sv ren_sv_peek(ren_obj *o) {
   ren_str *s = (ren_str *)o;
+  ren_obj *r = o;
+  int64_t off = 0;
   if (ren_str_is_slice(o)) {
-    ren_str *r = (ren_str *)s->root;
-    return ren_sv_make(&r->h, s->data - r->bytes, s->len);
+    r = s->root;
+    off = s->data - ((ren_str *)r)->bytes;
   }
-  return ren_sv_make(o, 0, s->len);
+  /* past the edge: a slice [o] is the escape's object itself, which
+     lives as long as the two words do; an owner is given one */
+  if (__builtin_expect((uint64_t)off + (uint64_t)s->len >= REN_SV_ESCAPE, 0))
+    return ren_str_is_slice(o) ? ren_sv_raw(o, REN_SV_ESCAPE, 0)
+                               : ren_sv_peek_owner(o);
+  return ren_sv_raw(r, off, s->len);
 }
 
 static inline bool ren_sv_eq(ren_sv a, ren_sv b) {
@@ -1729,25 +1802,44 @@ ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
 static inline bool ren_sv_boundary(ren_sv s, int64_t i) {
   return i == ren_sv_len(s) || ((unsigned char)ren_sv_data(s)[i] & 0xc0) != 0x80;
 }
+/* A part of an ordinary value fits, so neither tests its result; a
+   part of an escape is [ren_sv_slice_escape]'s or [ren_sv_view_escape]'s,
+   which check it as these do, so these test for one once, first. */
+ren_sv ren_sv_slice_escape(ren_sv s, int64_t i, int64_t j, bool str,
+                           const ren_site *site);
+ren_sv ren_sv_view_escape(ren_sv s, int64_t i, int64_t j, bool str,
+                          const ren_site *site);
+static inline bool ren_sv_slice_bad(ren_sv s, int64_t i, int64_t j, bool str) {
+  /* [s] isn't the escape: its length and data with no test */
+  int64_t n = (int64_t)((uint64_t)s.s[1].i >> 32);
+  const char *d = ((ren_str *)s.s[0].o)->bytes + ren_sv_off(s);
+  return __builtin_expect(
+      i > j || i < 0 || j > n ||
+          (str && !((i == n || ((unsigned char)d[i] & 0xc0) != 0x80) &&
+                    (j == n || ((unsigned char)d[j] & 0xc0) != 0x80))),
+      0);
+}
 static inline ren_sv ren_sv_slice(ren_sv s, int64_t i, int64_t j, bool str,
                                   const ren_site *site) {
-  if (__builtin_expect(i > j || i < 0 || j > ren_sv_len(s) ||
-                           (str && !(ren_sv_boundary(s, i) && ren_sv_boundary(s, j))),
-                       0))
+  if (ren_sv_is_escape(s))
+    return ren_sv_slice_escape(s, i, j, str, site);
+  if (ren_sv_slice_bad(s, i, j, str))
     ren_sv_slice_panic(s, i, j, str, site);
   ren_dup(s.s[0].o);
-  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+  return ren_sv_raw(s.s[0].o, ren_sv_off(s) + i, j - i);
 }
 /* The same, its root not counted: the uncounted view, a part of [s]
    that the compiler counts where it's kept (compiler.md, "Bytes stage,
-   part two", "The uncounted view"). */
+   part two", "The uncounted view"). A view of an escape that is itself
+   an escape is the one view that needs an object of its own, which
+   [s]'s object holds ([ren_sv_view_escape]). */
 static inline ren_sv ren_sv_view_slice(ren_sv s, int64_t i, int64_t j, bool str,
                                        const ren_site *site) {
-  if (__builtin_expect(i > j || i < 0 || j > ren_sv_len(s) ||
-                           (str && !(ren_sv_boundary(s, i) && ren_sv_boundary(s, j))),
-                       0))
+  if (ren_sv_is_escape(s))
+    return ren_sv_view_escape(s, i, j, str, site);
+  if (ren_sv_slice_bad(s, i, j, str))
     ren_sv_slice_panic(s, i, j, str, site);
-  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+  return ren_sv_raw(s.s[0].o, ren_sv_off(s) + i, j - i);
 }
 
 /* A `split_at`'s halves, and the two joined back: one value if they're
@@ -1775,11 +1867,15 @@ ren_sv ren_sv_concat_slow(ren_sv a, ren_sv b, ren_append *site);
 #endif
 static inline ren_sv ren_sv_concat_taking(ren_sv a, ren_sv b, ren_append *site) {
   ren_str *x = (ren_str *)a.s[0].o;
-  int64_t off = ren_sv_off(a), la = ren_sv_len(a), lb = ren_sv_len(b);
+  /* an escape's object is a slice, so [a] isn't one here; [b] is
+     [ren_sv_concat_slow]'s if it is */
+  int64_t off = ren_sv_off(a), la = (int64_t)((uint64_t)a.s[1].i >> 32),
+          lb = (int64_t)((uint64_t)b.s[1].i >> 32);
   if (__builtin_expect(ren_rc(&x->h) == 1 && !ren_str_is_slice(&x->h) &&
-                           lb <= x->cap - off - la,
+                           !ren_sv_is_escape(b) && lb <= x->cap - off - la,
                        1)) {
-    memcpy(x->bytes + off + la, ren_sv_data(b), (size_t)lb);
+    memcpy(x->bytes + off + la, ((ren_str *)b.s[0].o)->bytes + ren_sv_off(b),
+           (size_t)lb);
     x->len = off + la + lb;
     return ren_sv_make(&x->h, off, la + lb);
   }
@@ -1797,35 +1893,61 @@ ren_sv ren_sv_trim(ren_sv s);
 /* `xs.join(sep)` of an array of two-word strings. */
 ren_sv ren_sv_strs_join(ren_obj *xs, ren_sv sep);
 
-/* `Bytes`' byte [i], as [ren_bytes_at]. */
+/* `Bytes`' byte [i], as [ren_bytes_at]: checked, as layer 3's reads
+   are below, against the length field alone, which an escape's is 0 of,
+   so it tests for one only where the check fails, with no call but
+   the panic's. */
 static inline int64_t ren_sv_at(ren_sv b, int64_t i, const ren_site *site) {
-  if (site != REN_IN_BOUNDS &&
-      __builtin_expect((uint64_t)i >= (uint64_t)ren_sv_len(b), 0))
-    ren_bytes_index_panic(ren_sv_len(b), i, site);
-  return (unsigned char)ren_sv_data(b)[i];
+  if (site == REN_IN_BOUNDS)
+    return (unsigned char)ren_sv_data(b)[i];
+  if (__builtin_expect((uint64_t)i >= (uint64_t)b.s[1].i >> 32, 0)) {
+    if (!ren_sv_is_escape(b) || (uint64_t)i >= (uint64_t)ren_sv_len(b))
+      ren_bytes_index_panic(ren_sv_len(b), i, site);
+    return (unsigned char)ren_sv_data(b)[i];
+  }
+  return (unsigned char)(((ren_str *)b.s[0].o)->bytes + ren_sv_off(b))[i];
 }
 
 /* Layer 3's reads and writes, as [ren_bytes_load], [ren_bytes_store] and
    [ren_bytes_set_var]. A write is in place if it's [taking] and the
    root's count is 1, whatever the range: nothing else sees the root
    (rule U, "Uniqueness under B"); else the range is copied into an owner
-   of its own first ([ren_sv_unshare], which drops [*cell]'s root). */
+   of its own first ([ren_sv_unshare], which drops [*cell]'s root).
+   Each checks its room against the length field alone, which fails
+   for the escape (its length field is 0), and tests for one only where
+   that fails ([ren_sv_load_slow], [ren_sv_room_slow], which read its
+   object's length and panic only if that hasn't the room either); an
+   escape's object is a slice, so a write to one is
+   [ren_sv_writable_slow]'s. */
+static inline int64_t ren_sv_room_len(ren_sv v) {
+  return (int64_t)((uint64_t)v.s[1].i >> 32);
+}
+void ren_sv_room_slow(ren_sv b, int64_t at, int width, const ren_site *site);
+int64_t ren_sv_load_slow(ren_sv b, int64_t at, int width, bool sgn, bool big,
+                         const ren_site *site);
 static inline int64_t ren_sv_load(ren_sv b, int64_t at, int width, bool sgn,
                                   bool big, const ren_site *site) {
-  return ren_load_at(ren_sv_data(b), ren_sv_len(b), at, width, sgn, big, site);
+  int64_t len = ren_sv_room_len(b);
+  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0))
+    return ren_sv_load_slow(b, at, width, sgn, big, site);
+  return ren_load_at(((ren_str *)b.s[0].o)->bytes + ren_sv_off(b), len, at,
+                     width, sgn, big, site);
 }
 ren_sv ren_sv_unshare(ren_sv b);
+char *ren_sv_writable_slow(ren_sv *cell, bool taking);
 static inline char *ren_sv_writable(ren_sv *cell, bool taking) {
   ren_obj *r = cell->s[0].o;
   if (!taking || __builtin_expect(!(ren_rc(r) == 1 && !ren_str_is_slice(r)), 0))
-    *cell = ren_sv_unshare(*cell);
-  return ((ren_str *)cell->s[0].o)->bytes + ren_sv_off(*cell);
+    return ren_sv_writable_slow(cell, taking);
+  return ((ren_str *)r)->bytes + ren_sv_off(*cell);
 }
 static inline void ren_sv_store(ren_sv *cell, int64_t at, int64_t x, int width,
                                 bool sgn, bool big, bool taking,
                                 const ren_site *site) {
   ren_bytes_fits(x, width, sgn, site);
-  ren_bytes_room(ren_sv_len(*cell), at, width, site);
+  int64_t len = ren_sv_room_len(*cell);
+  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0))
+    ren_sv_room_slow(*cell, at, width, site);
   ren_store_at(ren_sv_writable(cell, taking) + at, (uint64_t)x, width, big);
 }
 static inline int64_t ren_sv_set_var(ren_sv *cell, int64_t at, int64_t x,
@@ -1833,7 +1955,9 @@ static inline int64_t ren_sv_set_var(ren_sv *cell, int64_t at, int64_t x,
                                      const ren_site *site) {
   uint64_t z = ren_var_bits(x, sgn, site);
   int n = ren_var_len(z);
-  ren_bytes_room(ren_sv_len(*cell), at, n, site);
+  int64_t len = ren_sv_room_len(*cell);
+  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < n, 0))
+    ren_sv_room_slow(*cell, at, n, site);
   ren_var_write((unsigned char *)ren_sv_writable(cell, taking) + at, z, n);
   return n;
 }
@@ -2275,7 +2399,11 @@ ren_val ren_value_any(ren_obj *d, bool one);
    Python's dict and Rust's indexmap: a dense array of entries in the
    order each key was first set, and an index of where each is, found by
    the key's hash. An entry is its hash, its key and, a map's, its value,
-   each a word, counted through the map's [objs]; a removed one's hash is
+   each a word, counted through the map's [objs], but that a release
+   build's `Str` or `Bytes` key or value is its two words, unboxed, the
+   root counted ([REN_MAP_KEY_SV], [REN_MAP_VAL_SV], which the first
+   change of an empty map sets from the descriptors it's given, so the
+   same in generic code); a removed one's hash is
    0, which no live one's is, and its key and value are gone. The index
    has 2^[shift] slots, each an entry's number, [REN_MAP_EMPTY], or
    [REN_MAP_GONE] for a removed one's, probed linearly from the hash's
@@ -2298,15 +2426,27 @@ ren_val ren_value_any(ren_obj *d, bool one);
 
 typedef struct {
   ren_obj h;      /* [objs]: 1 if keys are objects, 2 if values are;
-                     [nfields]: 1 for a `Set`, whose entries have no value */
+                     [nfields]: [REN_MAP_SET] and the entry's layout */
   int64_t len;    /* live entries */
   int64_t used;   /* entries used, removed ones included */
   int64_t cap;    /* room for entries */
   int32_t shift;  /* the index has 1 << shift slots, or none if 0 */
-  int32_t width;  /* words an entry: 3, or 2 for a set's */
+  int32_t width;  /* words an entry: 1, the key's and the value's */
   ren_val *entries;
   int32_t *index;
 } ren_map;
+
+/* [h.nfields]: a `Set`, whose entries have no value; a key of two words;
+   a value of two words */
+enum { REN_MAP_SET = 1, REN_MAP_KEY_SV = 2, REN_MAP_VAL_SV = 4 };
+
+static inline bool ren_map_is_set(const ren_map *m) {
+  return m->h.nfields & REN_MAP_SET;
+}
+/* The word of an entry its value starts at: after its hash and key. */
+static inline int ren_map_vat(const ren_map *m) {
+  return m->h.nfields & REN_MAP_KEY_SV ? 3 : 2;
+}
 
 enum { REN_MAP_EMPTY = -1, REN_MAP_GONE = -2 };
 
@@ -2321,13 +2461,39 @@ static inline int64_t ren_map_len(ren_obj *m) { return ((ren_map *)m)->len; }
 /* The number of the entry whose key is [k], of the type [kd] describes,
    or -1. A NaN in [k] panics at [site], as hashing one does. */
 int64_t ren_map_find(ren_obj *m, ren_val k, ren_obj *kd, const ren_site *site);
+/* The same of a release build's `Str` or `Bytes` key, two words, looked
+   up by its bytes where it can be, with no A slice made for it. */
+int64_t ren_map_find_sv(ren_obj *m, ren_sv k, ren_obj *kd, const ren_site *site);
 
-/* Entry [i]'s value, counted again: [i] is one [ren_map_find] gave. */
+/* Entry [i]'s value, counted again, as a word, a two-word one's box:
+   [i] is one [ren_map_find] gave. */
+ren_obj *ren_map_value_box(ren_map *m, int64_t i);
 static inline ren_val ren_map_value(ren_obj *m, int64_t i) {
   ren_map *map = (ren_map *)m;
-  ren_val v = map->entries[i * map->width + 2];
-  if (m->objs & 2)
+  ren_val v = map->entries[i * map->width + ren_map_vat(map)];
+  if (__builtin_expect(m->nfields & REN_MAP_VAL_SV, 0))
+    v.o = ren_map_value_box(map, i);
+  else if (m->objs & 2)
     ren_dup(v.o);
+  return v;
+}
+/* The same of a release build's `Str` or `Bytes` value, its two words;
+   and either not counted, a part of the map (rc.ml, [lent_reads]). */
+static inline ren_sv ren_map_value_sv(ren_obj *m, int64_t i) {
+  ren_map *map = (ren_map *)m;
+  ren_sv v;
+  memcpy(&v, &map->entries[i * map->width + ren_map_vat(map)], sizeof v);
+  ren_dup(v.s[0].o);
+  return v;
+}
+static inline ren_val ren_map_peek(ren_obj *m, int64_t i) {
+  ren_map *map = (ren_map *)m;
+  return map->entries[i * map->width + ren_map_vat(map)];
+}
+static inline ren_sv ren_map_peek_sv(ren_obj *m, int64_t i) {
+  ren_map *map = (ren_map *)m;
+  ren_sv v;
+  memcpy(&v, &map->entries[i * map->width + ren_map_vat(map)], sizeof v);
   return v;
 }
 
@@ -2339,11 +2505,16 @@ static inline ren_val ren_map_value(ren_obj *m, int64_t i) {
 void ren_map_set(ren_obj **cell, ren_val k, ren_val v, ren_obj *kd,
                  ren_obj *vd, bool taking, const ren_site *site);
 
-/* The same of a release build's `Str` key, two words, which is boxed
-   only if the map keeps it, a key it hasn't yet: a key it has is only
-   looked up, through an A slice on the stack. */
+/* The same of a release build's `Str` or `Bytes` key, or value, or both,
+   two words: kept as they are where the map's entries keep two words,
+   as a box otherwise. A key the map has is only looked up, through an A
+   slice on the stack. */
 void ren_map_set_sv(ren_obj **cell, ren_sv k, ren_val v, ren_obj *kd,
                     ren_obj *vd, bool taking, const ren_site *site);
+void ren_map_set_vsv(ren_obj **cell, ren_val k, ren_sv v, ren_obj *kd,
+                     ren_obj *vd, bool taking, const ren_site *site);
+void ren_map_set_svsv(ren_obj **cell, ren_sv k, ren_sv v, ren_obj *kd,
+                      ren_obj *vd, bool taking, const ren_site *site);
 
 /* `&m.remove(k)`, the same way, which borrows [k]: removing a key
    that isn't there changes nothing, and copies nothing. */

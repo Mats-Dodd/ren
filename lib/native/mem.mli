@@ -347,9 +347,14 @@ type rt =
       (** the number of a map's or a set's entry whose key is the [Word] after
           it, of the descriptor after that, or -1, an [Int]: hashing a NaN
           panics at its site *)
-  | Map_value
-      (** the value, a [Word], of a map's entry whose number [Map_find] gave,
-          counted again *)
+  | Map_value of layout
+      (** the value, of this layout, of a map's entry whose number [Map_find]
+          gave, counted again: a [Word], a scalar's, or a release build's
+          `Str` or `Bytes`, two words, which the map's entries keep as they
+          are *)
+  | Map_peek of layout
+      (** [Map_value] not counted: a part of the map, as [Array_peek]'s
+          element is of its array (rc.ml, [lent_reads]) *)
   | Map_set
       (** `&m.set(k, v)`, through a [Cell] of a map, of [Word]s [k] and [v] and
           their descriptors: a copy with [k] set put back, counting [k] and

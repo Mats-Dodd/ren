@@ -67,6 +67,8 @@ let rt h (r : rt) : rt =
   | Buf_get l -> Buf_get (lay h l)
   | Array_peek l -> Array_peek (lay h l)
   | Buf_peek l -> Buf_peek (lay h l)
+  | Map_value l -> Map_value (lay h l)
+  | Map_peek l -> Map_peek (lay h l)
   | Buf_take l -> Buf_take (lay h l)
   | Buf_set l -> Buf_set (lay h l)
   | Buf_set_field (n, k, l) -> Buf_set_field (h.st n, k, lay h l)
@@ -81,7 +83,7 @@ let rt h (r : rt) : rt =
     | Console_write | Console_error | Show_any | Equal_any _ | Compare_any _
     | Op_any _ | Value_any _ | New_desc _ | Nan_check _ | Nan_check_any _
     | Float_lanes | Float_sum | Here_set | Here_get | Here_put | Map_new _
-    | Map_len | Map_find | Map_value | Map_set | Map_set_taking | Set_add
+    | Map_len | Map_find | Map_set | Map_set_taking | Set_add
     | Set_add_taking | Map_remove | Map_remove_taking | Map_of _ | Set_of
     | Map_entries _ | Map_keys | Map_values | Hash_fixed | Array_sort _
     | Str_lower | Char_bound _ | Str_code | Str_of_code | Str_join | Panic_str

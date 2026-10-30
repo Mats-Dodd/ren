@@ -9645,6 +9645,30 @@ Choices where strings.md, decision 17 and the brief are silent:
 - Step 4 (part 2): freeing an array drops a run of elements that hold
   one object at once (`ren_release_n`), a release build's slices of one
   input most often.
+- Step 4 (part 3): a value is the escape when its bytes *end* past the
+  first 2^32 - 2 of its owner's (`off + len >= 2^32 - 1`), not when its
+  offset or its length doesn't fit, as "The 4 GiB escape" says: so every
+  part of a value that isn't one fits too, and a slice or a view of an
+  ordinary value is made with no test and never allocates. A slice of
+  a large owner that ends past 4 GiB pays where the spec's wouldn't.
+- Step 4 (part 3): the escape's object is a slice object made for it,
+  even for the whole of an owner, never the owner itself (but where
+  `ren_sv_peek` is given an owner past the edge, which a release build
+  doesn't make), so a view of an escape that is itself one has an object
+  to be held by: `ren_sv_view_escape` makes it a slice object of its
+  own, which the escape's object holds until it's freed (ren_rt.c,
+  `ren_kids`). It's 32 bytes a view past the edge, kept as long as the
+  escape it's of.
+- Step 4 (part 3): an escape appends and is written in place when its
+  object and its owner are each held once (`ren_sv_escape_unique`), as
+  an owner is; A's rule (an owner only) would copy every append past
+  the edge, since its object is a slice.
+- Step 4 (part 3): a map's entries keep a `Str` or `Bytes` key or value
+  as two words whatever the map's code, generic or not: the layout is
+  set by a map's first change from the descriptors it's given
+  (`ren_map_layout`), and generic code's words are boxes, unboxed into
+  the entry and boxed out. A `for` over a map still makes a tuple a
+  pair, its `Str` part a box (a tuple's parts are words, part one).
 
 ### Step 1, as built
 

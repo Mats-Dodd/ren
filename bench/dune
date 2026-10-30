@@ -124,10 +124,11 @@
   (glob_files strs/*.ren)
   (glob_files strs/*.expected)))
 
-; strs_lent.t, step 4's lent reads (part two), as strs.t checks its programs.
+; strs_lent.t, step 4's lent reads (part two), and strs_maps.t, its maps of
+; strings (part three), as strs.t checks its programs.
 
 (cram
- (applies_to strs_lent)
+ (applies_to strs_lent strs_maps)
  (deps
   %{bin:ren}
   (env_var REN_TCC)

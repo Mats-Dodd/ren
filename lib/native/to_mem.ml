@@ -1845,16 +1845,6 @@ let as_word fs (x : atom) : atom =
   | l when is_sv fs.cx l -> x
   | _ -> borrowed fs "$word" (Word 0) (To_word x)
 
-(* [x] as a word, borrowed, for a runtime function that keeps it, a map's
-   key or value: a `Str` or `Bytes` as its box, owned, which the caller
-   drops when it's done ([kept]). *)
-let kept_word fs env (x : atom) : atom * atom list =
-  match atom_layout x with
-  | l when is_sv fs.cx l ->
-      let b = owned fs env "$box" Boxed (Runtime (Str_box, [ x ], None)) in
-      (as_word fs b, [ b ])
-  | _ -> (as_word fs x, [])
-
 (* What [rhs] gives, a word, as an owned value of [l]: a type
    variable's word as it is, anything else taken out of it; a `Str` or
    `Bytes` unboxed, its box dropped. *)
@@ -3607,7 +3597,8 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
       | _ -> bug "a layer 3 write without `&`")
   (* maps and sets (ren_rt.c, "maps and sets"): their keys and values
      are words, each with its descriptor, so a struct's type is kept boxed
-     ([words]) *)
+     ([words]); a release build's `Str` or `Bytes` is two words, as the
+     entries keep it *)
   | (Map_empty | Set_empty), _, _ ->
       owned fs env "$empty" Boxed (Runtime (Map_new (x = Set_empty), [], None))
   | (Map_len | Set_len), _, _ -> runtime Map_len
@@ -3643,8 +3634,12 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
           in
           let yes =
             arm (fun () ->
+                (* a word as it is, a scalar or a `Str` read as what it is *)
                 let value =
-                  from_word fs env "$value" (Runtime (Map_value, [ m; i ], None)) (lay v)
+                  match lay v with
+                  | Word _ as l ->
+                      from_word fs env "$value" (Runtime (Map_value l, [ m; i ], None)) l
+                  | l -> owned fs env "$value" l (Runtime (Map_value l, [ m; i ], None))
                 in
                 let cv : C.var = { id = -1 - fs.next_id; name = "$value"; ty = v } in
                 let m' = match value with Var m' -> m' | _ -> bug "a value that isn't a variable" in
@@ -3688,21 +3683,12 @@ and intrinsic fs env (e : C.expr) (x : Intrinsic.t) tys descs args =
         | Set_add -> Set_add
         | _ -> Map_remove
       in
-      (* a map keeps its keys and values as words: a `Str` value's box,
-         made for it ([kept_word]) *)
-      let words, boxes =
-        List.split
-          (List.mapi
-             (fun i x ->
-               (* a key [Map_remove] only reads, and one [Map_set] and
-                  [Set_add] box only if they keep it (ren_rt.h,
-                  [ren_map_set_sv]) *)
-               if rt = Map_remove || i = 0 then (as_word fs x, [])
-               else kept_word fs env x)
-             xs)
-      in
+      (* a map keeps its keys and values as words, but a release build's
+         `Str` or `Bytes`, which its entries keep as two (ren_rt.h,
+         [ren_map_set_sv]); a key [Map_remove] only reads *)
+      let words = List.map (as_word fs) xs in
       emit fs (Do (Runtime (rt, (cell :: words) @ ds, Some (site ()))));
-      List.iter (drop fs env) (xs @ List.concat boxes @ ds);
+      List.iter (drop fs env) (xs @ ds);
       Unit)
   | Map_of, [ k; v ], [ dk; dv ] -> (
       match values () with

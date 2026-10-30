@@ -1,0 +1,17 @@
+4294967302
+<bytes 01 09 03>
+9
+true
+true
+<bytes 00 01>
+<bytes 03>
+<bytes 00 00>
+4294967298
+Some(1)
+Some(2)
+Some(3)
+3
+4294967302
+<bytes 09 03>
+<bytes 00 00 01>
+exit 0

@@ -775,15 +775,28 @@ let rec runtime ?result rt args site_arg =
      each with its descriptor *)
   | Map_new set -> sprintf "ren_map_new(%b)" set
   | Map_len -> sprintf "ren_map_len(%s)" (a 0)
+  | Map_find when svx 1 ->
+      sprintf "ren_map_find_sv(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (site ())
   | Map_find ->
       sprintf "ren_map_find(%s, %s, %s, %s)" (a 0) (to_val (List.nth args 1)) (a 2)
         (site ())
-  | Map_value -> sprintf "ren_map_value(%s, %s)" (a 0) (a 1)
-  (* a release build's `Str` key, boxed only if it's new *)
-  | (Map_set | Map_set_taking) when svx 1 ->
-      sprintf "ren_map_set_sv(%s, %s, %s, %s, %s, %b, %s)" (a 0) (a 1)
-        (to_val (List.nth args 2))
-        (a 3) (a 4) (rt = Map_set_taking) (site ())
+  (* a release build's `Str` value, two words, as the entry keeps it *)
+  | Map_value (Struct _) -> sprintf "ren_map_value_sv(%s, %s)" (a 0) (a 1)
+  | Map_value l -> of_val l (sprintf "ren_map_value(%s, %s)" (a 0) (a 1))
+  | Map_peek (Struct _) -> sprintf "ren_map_peek_sv(%s, %s)" (a 0) (a 1)
+  | Map_peek l -> of_val l (sprintf "ren_map_peek(%s, %s)" (a 0) (a 1))
+  (* a release build's `Str` key or value, two words, which the entries
+     keep as they are *)
+  | (Map_set | Map_set_taking) when svx 1 || svx 2 ->
+      let f =
+        match (svx 1, svx 2) with
+        | true, true -> "ren_map_set_svsv"
+        | true, false -> "ren_map_set_sv"
+        | _ -> "ren_map_set_vsv"
+      in
+      let w i = if svx i then a i else to_val (List.nth args i) in
+      sprintf "%s(%s, %s, %s, %s, %s, %b, %s)" f (a 0) (w 1) (w 2) (a 3) (a 4)
+        (rt = Map_set_taking) (site ())
   | (Set_add | Set_add_taking) when svx 1 ->
       sprintf "ren_map_set_sv(%s, %s, (ren_val){0}, %s, NULL, %b, %s)" (a 0)
         (a 1) (a 2) (rt = Set_add_taking) (site ())

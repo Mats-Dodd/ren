@@ -391,6 +391,39 @@ __attribute__((noinline)) static void ren_release_elems(ren_todo_t *t, ren_obj *
     ren_release_n(t, run, runs);
 }
 
+/* The objects views of the 4 GiB escape needed (ren_rt.h,
+   [ren_sv_view_escape]), each with the escape's object that holds it:
+   a view holds no reference, so what it's of holds the one its object
+   was made with, dropped when that's freed. An object with any has
+   [REN_STR_KIDS] set. They're rare, so this is a list, looked through
+   when one is freed. */
+typedef struct {
+  ren_obj *of, *kid;
+} ren_kid;
+static REN_THREAD_LOCAL ren_kid *ren_kids;
+static REN_THREAD_LOCAL int64_t ren_nkids, ren_kids_cap;
+
+static void ren_kid_add(ren_obj *of, ren_obj *kid) {
+  if (ren_nkids == ren_kids_cap) {
+    ren_kids_cap = ren_kids_cap ? ren_kids_cap * 2 : 16;
+    ren_kids = realloc(ren_kids, (size_t)ren_kids_cap * sizeof(ren_kid));
+    if (ren_kids == NULL)
+      ren_out_of_memory();
+  }
+  of->nfields |= REN_STR_KIDS;
+  ren_kids[ren_nkids++] = (ren_kid){of, kid};
+}
+
+static void ren_release(ren_todo_t *t, ren_obj *o);
+static void ren_kids_release(ren_todo_t *t, ren_obj *of) {
+  for (int64_t i = 0; i < ren_nkids;)
+    if (ren_kids[i].of == of) {
+      ren_release(t, ren_kids[i].kid);
+      ren_kids[i] = ren_kids[--ren_nkids];
+    } else
+      i++;
+}
+
 /* Free one object whose count reached 0, its children going on the
    list. */
 static void ren_free_one(ren_todo_t *t, ren_obj *o) {
@@ -429,6 +462,8 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
   }
   case REN_TAG_STR: {
     ren_str *s = (ren_str *)o;
+    if (__builtin_expect(o->nfields & REN_STR_KIDS, 0))
+      ren_kids_release(t, o);
     if (ren_str_is_slice(o)) {
       ren_release(t, s->root);
       size = sizeof(ren_str);
@@ -445,8 +480,8 @@ static void ren_free_one(ren_todo_t *t, ren_obj *o) {
         continue;
       if (o->objs & 1)
         ren_release(t, ent[1].o);
-      if ((o->objs & 2) && m->width > 2)
-        ren_release(t, ent[2].o);
+      if ((o->objs & 2) && !ren_map_is_set(m))
+        ren_release(t, ent[ren_map_vat(m)].o);
     }
     bytes = (int64_t)sizeof(ren_map) +
             m->cap * m->width * (int64_t)sizeof(ren_val) +
@@ -565,8 +600,8 @@ void ren_mark_shared(ren_obj *o) {
           continue;
         if (x->objs & 1)
           todo[len++] = ent[1].o;
-        if ((x->objs & 2) && m->width > 2)
-          todo[len++] = ent[2].o;
+        if ((x->objs & 2) && !ren_map_is_set(m))
+          todo[len++] = ent[ren_map_vat(m)].o;
       }
       break;
     }
@@ -1557,16 +1592,98 @@ ren_obj *ren_bytes_unshare(ren_obj *b) {
 
 /* ---- representation B (ren_rt.h) ---- */
 
-void ren_sv_too_big(int64_t off, int64_t len) {
-  fflush(stdout);
-  fprintf(stderr,
-          "error: a string of %" PRId64 " bytes from %" PRId64
-          " is past 4 GiB, which a release build's strings don't hold yet\n",
-          len, off);
-  exit(1);
+/* A slice object of [len] of [root]'s bytes from [off], taking a count
+   of [root], an owner: the 4 GiB escape's object, as A's [ren_str_part]
+   makes one. */
+static ren_obj *ren_str_window(ren_obj *root, int64_t off, int64_t len) {
+  ren_str *s = ren_alloc_bytes(sizeof(ren_str));
+#ifdef REN_STATS
+  ren_count_alloc((int64_t)sizeof(ren_str));
+#endif
+  s->h.rc = 1;
+  s->h.tag = REN_TAG_STR;
+  s->h.nfields = REN_STR_SLICE;
+  s->h.objs = 0;
+  s->len = len;
+  s->data = ((ren_str *)root)->bytes + off;
+  s->root = root;
+  return &s->h;
 }
 
+ren_sv ren_sv_escape(ren_obj *root, int64_t off, int64_t len) {
+  return ren_sv_raw(ren_str_window(root, off, len), REN_SV_ESCAPE, 0);
+}
+
+/* [s]'s bytes from [i], [n] of them, counting their owner: [s] itself,
+   counted again, if that's all of it. */
+static ren_sv ren_sv_part(ren_sv s, int64_t i, int64_t n) {
+  if (i == 0 && n == ren_sv_len(s)) {
+    ren_dup(s.s[0].o);
+    return s;
+  }
+  int64_t off;
+  ren_obj *o = ren_sv_owner(s, &off);
+  ren_dup(o);
+  return ren_sv_make(o, off + i, n);
+}
+
+/* [ren_sv_slice]'s checks, of any value */
+static void ren_sv_slice_check(ren_sv s, int64_t i, int64_t j, bool str,
+                               const ren_site *site) {
+  if (i > j || i < 0 || j > ren_sv_len(s) ||
+      (str && !(ren_sv_boundary(s, i) && ren_sv_boundary(s, j))))
+    ren_sv_slice_panic(s, i, j, str, site);
+}
+
+ren_sv ren_sv_slice_escape(ren_sv s, int64_t i, int64_t j, bool str,
+                           const ren_site *site) {
+  ren_sv_slice_check(s, i, j, str, site);
+  return ren_sv_part(s, i, j - i);
+}
+
+/* A view of an escape, which holds no reference: a value that fits, of
+   the owner, which the escape's object holds while what the view is a
+   part of is held; [s] itself if it's all of it; and otherwise an object
+   of its own, which [s]'s object holds (ren_rt.c, [ren_kids]) for as
+   long as it lives, so for as long as the view is uncounted, and which a
+   count of the view, a count of the object, keeps after. */
+ren_sv ren_sv_view_escape(ren_sv s, int64_t i, int64_t j, bool str,
+                          const ren_site *site) {
+  ren_sv_slice_check(s, i, j, str, site);
+  if (i == 0 && j == ren_sv_len(s))
+    return s;
+  int64_t off;
+  ren_obj *o = ren_sv_owner(s, &off);
+  if ((uint64_t)(off + j) < REN_SV_ESCAPE)
+    return ren_sv_raw(o, off + i, j - i);
+  ren_dup(o);
+  ren_obj *kid = ren_str_window(o, off + i, j - i);
+  ren_kid_add(s.s[0].o, kid);
+  return ren_sv_raw(kid, REN_SV_ESCAPE, 0);
+}
+
+/* Whether the escape [v]'s bytes can be changed in place: its object and
+   its owner each held once, by [v] (its object is an owner only where
+   [ren_sv_peek] made it, never held once). */
+static bool ren_sv_escape_unique(ren_sv v) {
+  ren_obj *e = v.s[0].o;
+  int64_t off;
+  ren_obj *o = ren_sv_owner(v, &off);
+  return ren_rc(e) == 1 && (o == e || ren_rc(o) == 1);
+}
+
+char *ren_sv_writable_slow(ren_sv *cell, bool taking) {
+  if (!(taking && ren_sv_is_escape(*cell) && ren_sv_escape_unique(*cell)))
+    *cell = ren_sv_unshare(*cell);
+  return (char *)ren_sv_data(*cell);
+}
+
+
 ren_obj *ren_sv_box(ren_sv v) {
+  if (ren_sv_is_escape(v)) {
+    ren_dup(v.s[0].o);
+    return v.s[0].o;
+  }
   int64_t off = ren_sv_off(v);
   return ren_str_part(v.s[0].o, off, off + ren_sv_len(v));
 }
@@ -1578,20 +1695,44 @@ ren_obj *ren_sv_box_taking(ren_sv v) {
 }
 
 ren_sv ren_sv_unbox(ren_obj *o) {
-  ren_str *s = (ren_str *)o;
-  if (ren_str_is_slice(o)) {
-    ren_str *r = (ren_str *)s->root;
-    ren_dup(&r->h);
-    return ren_sv_make(&r->h, s->data - r->bytes, s->len);
+  /* an owner past the edge gets a slice object of its own as the
+     escape's: an escape's object is always a slice */
+  if (!ren_str_is_slice(o) && (uint64_t)((ren_str *)o)->len >= REN_SV_ESCAPE) {
+    ren_dup(o);
+    return ren_sv_escape(o, 0, ((ren_str *)o)->len);
   }
+  ren_sv v = ren_sv_peek(o);
+  ren_dup(v.s[0].o);
+  return v;
+}
+
+/* [ren_sv_peek] of an owner past the edge, which counts nothing and so
+   can't make an object something drops: a slice object of all of it,
+   which the owner holds as it holds a view's ([ren_kids]). The slice
+   counts the owner, so the two live until the program ends, the one
+   leak the escape has; a release build never has such an owner as a
+   word (a box of an escape is its slice object), so nothing reaches
+   it but a `key` given one by generic code. */
+ren_sv ren_sv_peek_owner(ren_obj *o) {
   ren_dup(o);
-  return ren_sv_make(o, 0, s->len);
+  ren_obj *e = ren_str_window(o, 0, ((ren_str *)o)->len);
+  ren_kid_add(o, e);
+  return ren_sv_raw(e, REN_SV_ESCAPE, 0);
 }
 
 ren_sv ren_sv_take(ren_obj *o) {
   ren_sv v = ren_sv_unbox(o);
   ren_drop(o);
   return v;
+}
+
+void ren_sv_room_slow(ren_sv b, int64_t at, int width, const ren_site *site) {
+  ren_bytes_room(ren_sv_len(b), at, width, site);
+}
+
+int64_t ren_sv_load_slow(ren_sv b, int64_t at, int width, bool sgn, bool big,
+                         const ren_site *site) {
+  return ren_load_at(ren_sv_data(b), ren_sv_len(b), at, width, sgn, big, site);
 }
 
 void ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
@@ -1604,19 +1745,19 @@ void ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
 
 ren_sv ren_sv_before(ren_sv s, int64_t n, bool str, const ren_site *site) {
   ren_split_check(REN_SV_VIEW(s), ren_sv_len(s), n, str, site);
-  ren_dup(s.s[0].o);
-  return ren_sv_make(s.s[0].o, ren_sv_off(s), n);
+  return ren_sv_part(s, 0, n);
 }
 
 ren_sv ren_sv_after(ren_sv s, int64_t n) {
-  ren_dup(s.s[0].o);
-  return ren_sv_make(s.s[0].o, ren_sv_off(s) + n, ren_sv_len(s) - n);
+  return ren_sv_part(s, n, ren_sv_len(s) - n);
 }
 
 ren_sv ren_sv_join(ren_sv a, ren_sv b) {
-  if (a.s[0].o == b.s[0].o && ren_sv_off(a) + ren_sv_len(a) == ren_sv_off(b)) {
-    ren_dup(a.s[0].o);
-    return ren_sv_make(a.s[0].o, ren_sv_off(a), ren_sv_len(a) + ren_sv_len(b));
+  int64_t oa, ob;
+  ren_obj *ra = ren_sv_owner(a, &oa), *rb = ren_sv_owner(b, &ob);
+  if (ra == rb && oa + ren_sv_len(a) == ob) {
+    ren_dup(ra);
+    return ren_sv_make(ra, oa, ren_sv_len(a) + ren_sv_len(b));
   }
   return ren_sv_concat(a, b);
 }
@@ -1629,7 +1770,52 @@ ren_sv ren_sv_concat(ren_sv a, ren_sv b) {
   return ren_sv_of(o);
 }
 
+/* [ren_sv_concat_slow] of an escape: in place, growing its owner if it
+   must, when [ren_sv_escape_unique] says so, as an owner is; otherwise
+   copied, as a shared owner is. */
+static ren_sv ren_sv_concat_escape(ren_sv a, ren_sv b, ren_append *site) {
+  ren_str *e = (ren_str *)a.s[0].o;
+  int64_t la = ren_sv_len(a), lb = ren_sv_len(b), off;
+  ren_str *x = (ren_str *)ren_sv_owner(a, &off);
+  if (ren_sv_escape_unique(a)) {
+    /* [b] may be in [a]'s range, which growing moves */
+    const char *from = ren_sv_data(b);
+    bool inside = from >= x->bytes + off && from < x->bytes + off + la;
+    int64_t at = inside ? from - x->bytes : 0;
+    x->len = off + la;
+    if (lb > x->cap - off - la) {
+      bool whole = &x->h == &e->h;
+      x = (ren_str *)ren_str_grow(&x->h, ren_str_room(x->cap, off + la + lb));
+      if (whole)
+        e = x;
+      else {
+        e->root = &x->h;
+        e->data = x->bytes + off;
+      }
+      if (inside)
+        from = x->bytes + at;
+    }
+    memcpy(x->bytes + off + la, from, (size_t)lb);
+    x->len = off + la + lb;
+    if (&x->h == &e->h)
+      return ren_sv_escape(&x->h, 0, x->len);
+    e->len = la + lb;
+    return ren_sv_raw(&e->h, REN_SV_ESCAPE, 0);
+  }
+  if (site != NULL && site->copies++ == 0) {
+    site->next = ren_appends;
+    ren_appends = site;
+  }
+  ren_obj *o = ren_alloc_str_cap(la + lb, ren_str_room(la, la + lb));
+  memcpy(((ren_str *)o)->bytes, ren_sv_data(a), (size_t)la);
+  memcpy(((ren_str *)o)->bytes + la, ren_sv_data(b), (size_t)lb);
+  ren_drop(&e->h);
+  return ren_sv_of(o);
+}
+
 ren_sv ren_sv_concat_slow(ren_sv a, ren_sv b, ren_append *site) {
+  if (ren_sv_is_escape(a))
+    return ren_sv_concat_escape(a, b, site);
   ren_str *x = (ren_str *)a.s[0].o;
   int64_t off = ren_sv_off(a), la = ren_sv_len(a), lb = ren_sv_len(b);
   if (ren_rc(&x->h) == 1 && !ren_str_is_slice(&x->h)) {
@@ -1665,18 +1851,19 @@ ren_sv ren_sv_concat_slow(ren_sv a, ren_sv b, ren_append *site) {
 }
 
 ren_sv ren_sv_copied(ren_sv s) {
-  ren_str *r = (ren_str *)s.s[0].o;
-  if (ren_sv_off(s) == 0 && ren_sv_len(s) == r->len) {
-    ren_dup(&r->h);
+  int64_t off;
+  ren_str *r = (ren_str *)ren_sv_owner(s, &off);
+  if (off == 0 && ren_sv_len(s) == r->len) {
+    ren_dup(s.s[0].o);
     return s;
   }
   return ren_sv_of(ren_str_of(ren_sv_data(s), ren_sv_len(s)));
 }
 
 ren_obj *ren_sv_split(ren_sv s, ren_sv sep, const ren_site *site) {
-  int64_t n = ren_sv_len(s), m = ren_sv_len(sep), off = ren_sv_off(s);
+  int64_t n = ren_sv_len(s), m = ren_sv_len(sep), off;
   const char *d = ren_sv_data(s), *p = ren_sv_data(sep);
-  ren_obj *root = s.s[0].o;
+  ren_obj *root = ren_sv_owner(s, &off);
   if (m == 0)
     ren_panic(site, "`split` needs a separator that isn't empty");
   int64_t parts = 1;
@@ -1709,8 +1896,7 @@ ren_sv ren_sv_trim(ren_sv s) {
     i++;
   while (j > i && ren_trimmed(d[j - 1]))
     j--;
-  ren_dup(s.s[0].o);
-  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+  return ren_sv_part(s, i, j - i);
 }
 
 ren_sv ren_sv_strs_join(ren_obj *xs, ren_sv sep) {
@@ -2424,6 +2610,25 @@ static inline void ren_key_done(const ren_decl *decl, ren_val k) {
        e < e##_end; e += (map)->width)                                        \
     if (e[0].i != 0)
 
+/* Entry [e]'s key, and its value, as a word a walk reads: a two-word one
+   an A slice made in [tmp] ([REN_SV_VIEW]), which it only reads. */
+static inline ren_val ren_map_word(ren_val *e, int at, bool sv, ren_str *tmp) {
+  if (sv) {
+    ren_sv v;
+    v.s[0] = e[at];
+    v.s[1] = e[at + 1];
+    return (ren_val){.o = ren_sv_view(tmp, v)};
+  }
+  return e[at];
+}
+static inline ren_val ren_map_key_at(const ren_map *m, ren_val *e, ren_str *tmp) {
+  return ren_map_word(e, 1, m->h.nfields & REN_MAP_KEY_SV, tmp);
+}
+static inline ren_val ren_map_value_at(const ren_map *m, ren_val *e,
+                                       ren_str *tmp) {
+  return ren_map_word(e, ren_map_vat(m), m->h.nfields & REN_MAP_VAL_SV, tmp);
+}
+
 static int64_t ren_map_find_in(ren_map *m, ren_val k, const ren_desc *kd,
                                const ren_tenv *env, const ren_walk *w);
 
@@ -2547,16 +2752,17 @@ static void ren_show_val(ren_buf *b, const ren_desc *d, const ren_tenv *env,
     ren_puts(b, set ? "Set.of([" : "Map.of([");
     bool first = true;
     REN_MAP_EACH(m, e) {
+      ren_str tk, tv;
       if (!first)
         ren_puts(b, ", ");
       first = false;
       if (set)
-        ren_show_val(b, d->args[0], env, e[1], w);
+        ren_show_val(b, d->args[0], env, ren_map_key_at(m, e, &tk), w);
       else {
         ren_puts(b, "(");
-        ren_show_val(b, d->args[0], env, e[1], w);
+        ren_show_val(b, d->args[0], env, ren_map_key_at(m, e, &tk), w);
         ren_puts(b, ", ");
-        ren_show_val(b, d->args[1], env, e[2], w);
+        ren_show_val(b, d->args[1], env, ren_map_value_at(m, e, &tv), w);
         ren_puts(b, ")");
       }
     }
@@ -2681,11 +2887,13 @@ static bool ren_equal_in(const ren_desc *d, const ren_tenv *env, ren_val a,
     if (x->len != y->len)
       return false;
     REN_MAP_EACH(x, e) {
-      int64_t i = ren_map_find_in(y, e[1], d->args[0], env, w);
+      ren_str tk, tv, tw;
+      int64_t i = ren_map_find_in(y, ren_map_key_at(x, e, &tk), d->args[0], env, w);
       if (i < 0)
         return false;
       if (d->kind == REN_D_MAP &&
-          !ren_equal_in(d->args[1], env, e[2], y->entries[i * y->width + 2], w))
+          !ren_equal_in(d->args[1], env, ren_map_value_at(x, e, &tv),
+                        ren_map_value_at(y, &y->entries[i * y->width], &tw), w))
         return false;
     }
     return true;
@@ -2826,24 +3034,38 @@ static inline int ren_sv_order(ren_sv a, ren_sv b) {
   int c = memcmp(ren_sv_data(a), ren_sv_data(b), (size_t)(la < lb ? la : lb));
   return c != 0 ? c : (la > lb) - (la < lb);
 }
+/* The same of two values neither of which is the escape, with no test. */
+static inline int ren_sv_order_fits(ren_sv a, ren_sv b) {
+  int64_t la = (int64_t)((uint64_t)a.s[1].i >> 32),
+          lb = (int64_t)((uint64_t)b.s[1].i >> 32);
+  int c = memcmp(((ren_str *)a.s[0].o)->bytes + ren_sv_off(a),
+                 ((ren_str *)b.s[0].o)->bytes + ren_sv_off(b),
+                 (size_t)(la < lb ? la : lb));
+  return c != 0 ? c : (la > lb) - (la < lb);
+}
 
 /* [ren_merge_sort] of a release build's strings, two words each, which
-   it compares directly: no walk, no NaN to look for. */
-static void ren_sv_merge_sort(ren_sv *xs, ren_sv *tmp, int64_t n) {
-  if (n < 2)
-    return;
-  int64_t h = n / 2;
-  ren_sv_merge_sort(xs, tmp, h);
-  ren_sv_merge_sort(xs + h, tmp, n - h);
-  int64_t i = 0, j = h, k = 0;
-  while (i < h && j < n)
-    tmp[k++] = ren_sv_order(xs[j], xs[i]) < 0 ? xs[j++] : xs[i++];
-  while (i < h)
-    tmp[k++] = xs[i++];
-  while (j < n)
-    tmp[k++] = xs[j++];
-  memcpy(xs, tmp, (size_t)n * sizeof(ren_sv));
-}
+   it compares directly: no walk, no NaN to look for. [_fits] sorts an
+   array with no escape in it, which the caller has looked for once,
+   so a comparison doesn't test for one. */
+#define REN_SV_MERGE_SORT(name, order)                                        \
+  static void name(ren_sv *xs, ren_sv *tmp, int64_t n) {                      \
+    if (n < 2)                                                                \
+      return;                                                                 \
+    int64_t h = n / 2;                                                        \
+    name(xs, tmp, h);                                                         \
+    name(xs + h, tmp, n - h);                                                 \
+    int64_t i = 0, j = h, k = 0;                                              \
+    while (i < h && j < n)                                                    \
+      tmp[k++] = order(xs[j], xs[i]) < 0 ? xs[j++] : xs[i++];                 \
+    while (i < h)                                                             \
+      tmp[k++] = xs[i++];                                                     \
+    while (j < n)                                                             \
+      tmp[k++] = xs[j++];                                                     \
+    memcpy(xs, tmp, (size_t)n * sizeof(ren_sv));                              \
+  }
+REN_SV_MERGE_SORT(ren_sv_merge_sort, ren_sv_order)
+REN_SV_MERGE_SORT(ren_sv_merge_sort_fits, ren_sv_order_fits)
 
 ren_obj *ren_array_sort(ren_obj *a, ren_obj *d, const char *what,
                         const ren_site *site) {
@@ -2856,12 +3078,18 @@ ren_obj *ren_array_sort(ren_obj *a, ren_obj *d, const char *what,
     ren_obj *r = ren_alloc_array_n(n, 2, 1);
     ren_sv *xs = (ren_sv *)ren_elems(r);
     memcpy(xs, ren_elems(a), (size_t)n * sizeof(ren_sv));
-    for (int64_t i = 0; i < n; i++)
+    bool escape = false;
+    for (int64_t i = 0; i < n; i++) {
       ren_dup(xs[i].s[0].o);
+      escape |= ren_sv_is_escape(xs[i]);
+    }
     ren_sv *tmp = malloc((size_t)(n + 1) * sizeof(ren_sv));
     if (tmp == NULL)
       ren_out_of_memory();
-    ren_sv_merge_sort(xs, tmp, n);
+    if (escape)
+      ren_sv_merge_sort(xs, tmp, n);
+    else
+      ren_sv_merge_sort_fits(xs, tmp, n);
     free(tmp);
     (void)d;
     (void)what;
@@ -2932,9 +3160,10 @@ static void ren_nan_val(const ren_desc *d, const ren_tenv *env, ren_val v,
   case REN_D_SET: {
     ren_map *m = (ren_map *)v.o;
     REN_MAP_EACH(m, e) {
-      ren_nan_val(d->args[0], env, e[1], w);
+      ren_str tk, tv;
+      ren_nan_val(d->args[0], env, ren_map_key_at(m, e, &tk), w);
       if (d->kind == REN_D_MAP)
-        ren_nan_val(d->args[1], env, e[2], w);
+        ren_nan_val(d->args[1], env, ren_map_value_at(m, e, &tv), w);
     }
     break;
   }
@@ -3126,9 +3355,11 @@ static uint64_t ren_hash_in(const ren_desc *d, const ren_tenv *env, ren_val v,
     ren_map *m = (ren_map *)v.o;
     uint64_t h = d->kind == REN_D_MAP ? 12 : 13;
     REN_MAP_EACH(m, e) {
-      uint64_t k = ren_hash_in(d->args[0], env, e[1], w);
+      ren_str tk, tv;
+      uint64_t k = ren_hash_in(d->args[0], env, ren_map_key_at(m, e, &tk), w);
       h += d->kind == REN_D_MAP
-               ? ren_mix(w, k, ren_hash_in(d->args[1], env, e[2], w))
+               ? ren_mix(w, k,
+                         ren_hash_in(d->args[1], env, ren_map_value_at(m, e, &tv), w))
                : k;
     }
     return h;
@@ -3166,6 +3397,14 @@ int64_t ren_hash_fixed(ren_obj *d, ren_val v, const ren_site *site) {
 
 /* ---- maps and sets ---- */
 
+/* A `Str` key's hash, as a map keeps it, from its bytes. */
+static inline uint64_t ren_str_key_hash(const ren_walk *w, const char *p,
+                                        int64_t n) {
+  uint64_t h = ren_mix(w, 3, ren_wyhash((const unsigned char *)p, (size_t)n,
+                                        ren_map_seed));
+  return h ? h : 1;
+}
+
 /* A key's hash, as a map keeps it: never 0, which marks a removed
    entry. An `Int`'s and a `Str`'s without the walk's switch. */
 static inline uint64_t ren_key_hash(const ren_desc *kd, const ren_tenv *env,
@@ -3176,9 +3415,7 @@ static inline uint64_t ren_key_hash(const ren_desc *kd, const ren_tenv *env,
     h = ren_mix(w, 1, (uint64_t)k.i);
     break;
   case REN_D_STR:
-    h = ren_mix(w, 3, ren_wyhash((const unsigned char *)ren_str_data(k.o),
-                                 (size_t)ren_str_len(k.o), ren_map_seed));
-    break;
+    return ren_str_key_hash(w, ren_str_data(k.o), ren_str_len(k.o));
   default:
     h = ren_hash_in(kd, env, k, w);
   }
@@ -3212,7 +3449,7 @@ ren_obj *ren_map_new(bool set) {
 #endif
   m->h.rc = 1;
   m->h.tag = REN_TAG_MAP;
-  m->h.nfields = set;
+  m->h.nfields = set ? REN_MAP_SET : 0;
   m->h.objs = 0;
   m->len = m->used = m->cap = 0;
   m->shift = 0;
@@ -3220,6 +3457,31 @@ ren_obj *ren_map_new(bool set) {
   m->entries = NULL;
   m->index = NULL;
   return &m->h;
+}
+
+/* The entries of [m], which has none, laid out for keys [kd] and values
+   [vd] describe: two words for a release build's `Str` or `Bytes`
+   ([ren_desc_sv]), else one. Every map of one type is laid out the same,
+   so it's set once, by its first key. */
+static void ren_map_layout(ren_map *m, ren_obj *kd, ren_obj *vd) {
+  bool set = ren_map_is_set(m);
+  uint8_t f = (uint8_t)((set ? REN_MAP_SET : 0) |
+                        (ren_desc_sv(kd) ? REN_MAP_KEY_SV : 0) |
+                        (!set && ren_desc_sv(vd) ? REN_MAP_VAL_SV : 0));
+  if (f == m->h.nfields)
+    return;
+#ifdef REN_STATS
+  ren_stats.live_bytes -= ren_map_bytes(m->cap, m->width, m->shift);
+#endif
+  free(m->entries);
+  free(m->index);
+  m->entries = NULL;
+  m->index = NULL;
+  m->cap = m->used = 0;
+  m->shift = 0;
+  m->h.nfields = f;
+  m->width = 1 + (f & REN_MAP_KEY_SV ? 2 : 1) +
+             (set ? 0 : f & REN_MAP_VAL_SV ? 2 : 1);
 }
 
 /* The index made again for [m]'s entries, its size for [m->cap] of them,
@@ -3299,16 +3561,17 @@ static void ren_map_room(ren_map *m) {
   ren_map_reindex(m);
 }
 
-/* The entry whose key is [k], of hash [h], or -1, with [*slot] the
-   empty slot the probe ended at. */
-static inline int64_t ren_map_probe(ren_map *m, uint64_t h, ren_val k,
-                                    const ren_desc *kd, const ren_tenv *env,
-                                    const ren_walk *w, uint64_t *slot) {
-  if (m->shift == 0)
-    return -1;
+/* The entry whose key is [k], a word, of hash [h], or -1, with [*slot]
+   the empty slot the probe ended at. A two-word `Str` or `Bytes` key is
+   compared by its bytes, with no walk, unless its type has a `key` of
+   its own. It, and the setting below, are inlined into each caller
+   (REN_INLINE), where what's known of the key and the layout folds
+   away: out of line, they cost maps a third more. */
+static REN_INLINE int64_t ren_map_probe_bytes(ren_map *m, uint64_t h,
+                                              const char *kp, int64_t kn,
+                                              uint64_t *slot) {
   uint64_t mask = ((uint64_t)1 << m->shift) - 1;
-  uint64_t i = h >> (64 - m->shift);
-  for (;; i = (i + 1) & mask) {
+  for (uint64_t i = h >> (64 - m->shift);; i = (i + 1) & mask) {
     int32_t e = m->index[i];
     if (e == REN_MAP_EMPTY) {
       *slot = i;
@@ -3316,7 +3579,37 @@ static inline int64_t ren_map_probe(ren_map *m, uint64_t h, ren_val k,
     }
     if (e >= 0) {
       ren_val *ent = &m->entries[(int64_t)e * m->width];
-      if ((uint64_t)ent[0].i == h && ren_key_eq(kd, env, ent[1], k, w))
+      if ((uint64_t)ent[0].i != h)
+        continue;
+      ren_sv x;
+      x.s[0] = ent[1];
+      x.s[1] = ent[2];
+      if (ren_sv_len(x) == kn && memcmp(ren_sv_data(x), kp, (size_t)kn) == 0)
+        return e;
+    }
+  }
+}
+
+static REN_INLINE int64_t ren_map_probe(ren_map *m, uint64_t h, ren_val k,
+                                        const ren_desc *kd, const ren_tenv *env,
+                                        const ren_walk *w, uint64_t *slot) {
+  if (m->shift == 0)
+    return -1;
+  bool sv = m->h.nfields & REN_MAP_KEY_SV;
+  if (sv && (kd->kind == REN_D_STR || kd->kind == REN_D_BYTES))
+    return ren_map_probe_bytes(m, h, ren_str_data(k.o), ren_str_len(k.o), slot);
+  uint64_t mask = ((uint64_t)1 << m->shift) - 1;
+  for (uint64_t i = h >> (64 - m->shift);; i = (i + 1) & mask) {
+    int32_t e = m->index[i];
+    if (e == REN_MAP_EMPTY) {
+      *slot = i;
+      return -1;
+    }
+    if (e >= 0) {
+      ren_val *ent = &m->entries[(int64_t)e * m->width];
+      ren_str tmp;
+      if ((uint64_t)ent[0].i == h &&
+          ren_key_eq(kd, env, ren_map_word(ent, 1, sv, &tmp), k, w))
         return e;
     }
   }
@@ -3331,6 +3624,20 @@ static int64_t ren_map_find_in(ren_map *m, ren_val k, const ren_desc *kd,
   return ren_map_probe(m, ren_key_hash(rd, env, k, w), k, rd, env, w, &slot);
 }
 
+int64_t ren_map_find_sv(ren_obj *m, ren_sv k, ren_obj *kd, const ren_site *site) {
+  ren_map *map = (ren_map *)m;
+  if (((ren_desc *)kd)->kind == REN_D_STR && (m->nfields & REN_MAP_KEY_SV)) {
+    ren_walk w = {site, "`hash` of a NaN", true, false};
+    uint64_t slot;
+    const char *p = ren_sv_data(k);
+    int64_t n = ren_sv_len(k);
+    return map->shift == 0 ? -1
+                           : ren_map_probe_bytes(map, ren_str_key_hash(&w, p, n),
+                                                 p, n, &slot);
+  }
+  return ren_map_find(m, (ren_val){.o = REN_SV_VIEW(k)}, kd, site);
+}
+
 int64_t ren_map_find(ren_obj *m, ren_val k, ren_obj *kd, const ren_site *site) {
   ren_walk w = {site, "`hash` of a NaN", true, false};
   uint64_t slot;
@@ -3339,11 +3646,19 @@ int64_t ren_map_find(ren_obj *m, ren_val k, ren_obj *kd, const ren_site *site) {
                        &w, &slot);
 }
 
+ren_obj *ren_map_value_box(ren_map *m, int64_t i) {
+  ren_sv v;
+  memcpy(&v, &m->entries[i * m->width + ren_map_vat(m)], sizeof v);
+  return ren_sv_box(v);
+}
+
 /* A copy of [m] with room for [extra] entries more, its removed ones
    left out, each key and value counted again. */
 static ren_map *ren_map_copy(ren_map *m, int64_t extra) {
-  ren_map *c = (ren_map *)ren_map_new(m->h.nfields);
+  ren_map *c = (ren_map *)ren_map_new(ren_map_is_set(m));
   c->h.objs = m->h.objs;
+  c->h.nfields = m->h.nfields;
+  c->width = m->width;
   int64_t cap = m->len + extra;
   c->cap = cap < 8 ? 8 : cap;
   c->entries = ren_malloc((size_t)c->cap * (size_t)c->width * sizeof(ren_val));
@@ -3351,12 +3666,13 @@ static ren_map *ren_map_copy(ren_map *m, int64_t extra) {
   ren_stats.live_bytes += c->cap * c->width * (int64_t)sizeof(ren_val);
 #endif
   int64_t to = 0;
+  int vat = ren_map_vat(m);
   REN_MAP_EACH(m, e) {
     memcpy(&c->entries[to * c->width], e, (size_t)c->width * sizeof(ren_val));
     if (m->h.objs & 1)
       ren_dup(e[1].o);
-    if ((m->h.objs & 2) && c->width > 2)
-      ren_dup(e[2].o);
+    if ((m->h.objs & 2) && !ren_map_is_set(m))
+      ren_dup(e[vat].o);
     to++;
   }
   c->len = c->used = to;
@@ -3376,43 +3692,72 @@ static ren_map *ren_map_writable(ren_obj **cell, bool taking) {
   return c;
 }
 
-/* [k] set to [v] in [m], unique, [k] of hash [h]: [owned] says whether
-   [k] and [v] are taken or counted again where they're kept. */
-static void ren_map_put(ren_map *m, uint64_t h, ren_val k, ren_val v,
-                        const ren_desc *kd, const ren_walk *w, bool owned) {
+/* A key or a value as an entry keeps it, at [to]: [x] given as two words
+   if [xsv], else a word, [x.s[0]], and kept as two if [tsv]; taken if
+   [owned], else counted again if [counted]. A word given where two are
+   kept is a box, unboxed; two given where one is kept are boxed. */
+static REN_INLINE void ren_map_keep(ren_val *to, ren_sv x, bool xsv, bool tsv,
+                         bool counted, bool owned) {
+  if (xsv == tsv) {
+    to[0] = x.s[0];
+    if (tsv)
+      to[1] = x.s[1];
+    if (!owned && counted)
+      ren_dup(x.s[0].o);
+  } else if (tsv) {
+    ren_sv u = owned ? ren_sv_take(x.s[0].o) : ren_sv_unbox(x.s[0].o);
+    to[0] = u.s[0];
+    to[1] = u.s[1];
+  } else
+    to[0].o = owned ? ren_sv_box_taking(x) : ren_sv_box(x);
+}
+
+/* [k] set to [v] in [m], unique and laid out, [k] of hash [h] and [kw]
+   as a word for the probe: each given as [ren_map_keep] says, [owned]
+   whether they're taken or counted again where they're kept. A key
+   that's there keeps its first key, and gets [v]. */
+static REN_INLINE void ren_map_put(ren_map *m, uint64_t h, ren_val kw, ren_sv k, bool ksv,
+                        ren_sv v, bool vsv, const ren_desc *kd,
+                        const ren_walk *w, bool owned) {
   uint64_t slot;
-  int64_t e = ren_map_probe(m, h, k, kd, NULL, w, &slot);
-  bool kobj = m->h.objs & 1, vobj = m->h.objs & 2;
+  /* a two-word `Str` key into entries of two-word keys: its bytes, as
+     [ren_map_find_sv] looks them up, with no A slice made for it */
+  bool bytes = ksv && kd->kind == REN_D_STR && (m->h.nfields & REN_MAP_KEY_SV);
+#define REN_MAP_PUT_PROBE()                                                    \
+  (bytes ? (m->shift == 0 ? -1                                                 \
+                          : ren_map_probe_bytes(m, h, ren_sv_data(k),          \
+                                                ren_sv_len(k), &slot))         \
+         : ren_map_probe(m, h, kw, kd, NULL, w, &slot))
+  int64_t e = REN_MAP_PUT_PROBE();
+  bool kobj = m->h.objs & 1, vobj = m->h.objs & 2, set = ren_map_is_set(m);
+  bool tk = m->h.nfields & REN_MAP_KEY_SV, tv = m->h.nfields & REN_MAP_VAL_SV;
+  int vat = ren_map_vat(m);
   if (e >= 0) {
-    /* there: its first key stays, with the new value */
     if (owned && kobj)
-      ren_drop(k.o);
-    if (m->width > 2) {
-      ren_val *at = &m->entries[e * m->width + 2];
-      if (!owned && vobj)
-        ren_dup(v.o);
+      ren_drop(k.s[0].o);
+    if (!set) {
+      /* kept before the old one is dropped, which may be [v]'s */
+      ren_val *at = &m->entries[e * m->width + vat], nv[2];
+      ren_map_keep(nv, v, vsv, tv, vobj, owned);
       if (vobj)
         ren_drop(at->o);
-      *at = v;
+      at[0] = nv[0];
+      if (tv)
+        at[1] = nv[1];
     } else if (owned && vobj)
-      ren_drop(v.o);
+      ren_drop(v.s[0].o);
     return;
   }
   if (m->used == m->cap) {
     ren_map_room(m);
-    ren_map_probe(m, h, k, kd, NULL, w, &slot);
+    REN_MAP_PUT_PROBE();
   }
-  if (!owned) {
-    if (kobj)
-      ren_dup(k.o);
-    if (vobj && m->width > 2)
-      ren_dup(v.o);
-  }
+#undef REN_MAP_PUT_PROBE
   ren_val *ent = &m->entries[m->used * m->width];
   ent[0].i = (int64_t)h;
-  ent[1] = k;
-  if (m->width > 2)
-    ent[2] = v;
+  ren_map_keep(ent + 1, k, ksv, tk, kobj, owned);
+  if (!set)
+    ren_map_keep(ent + vat, v, vsv, tv, vobj, owned);
   m->index[slot] = (int32_t)m->used;
   m->used++;
   m->len++;
@@ -3424,46 +3769,56 @@ static inline uint8_t ren_map_objs(ren_obj *kd, ren_obj *vd) {
                    (vd != NULL && ren_desc_counted(vd) ? 2 : 0));
 }
 
+/* Every `&m.set` and `&s.add`, its key and value given as words or two
+   words, [ksv] and [vsv]. */
+static REN_INLINE void ren_map_set_in(ren_obj **cell, ren_sv k, bool ksv, ren_sv v,
+                           bool vsv, ren_obj *kd, ren_obj *vd, bool taking,
+                           const ren_site *site) {
+  ren_walk w = {site, "`hash` of a NaN", true, false};
+  ren_str tmp;
+  ren_val kw = {0};
+  uint64_t h;
+  /* hashed first, so a NaN panics before anything changes; a two-word
+     `Str` from its bytes, as [ren_key_hash] would hash its A slice */
+  if (ksv && ((ren_desc *)kd)->kind == REN_D_STR)
+    h = ren_str_key_hash(&w, ren_sv_data(k), ren_sv_len(k));
+  else {
+    kw = ksv ? (ren_val){.o = ren_sv_view(&tmp, k)} : k.s[0];
+    h = ren_key_hash((ren_desc *)kd, NULL, kw, &w);
+  }
+  ren_map *m = ren_map_writable(cell, taking);
+  if (__builtin_expect(m->used == 0, 0))
+    ren_map_layout(m, kd, vd);
+  m->h.objs = ren_map_objs(kd, vd);
+  ren_map_put(m, h, kw, k, ksv, v, vsv, (ren_desc *)kd, &w, taking);
+}
+
+static inline ren_sv ren_sv_word(ren_val x) {
+  ren_sv v;
+  v.s[0] = x;
+  v.s[1].i = 0;
+  return v;
+}
+
 void ren_map_set(ren_obj **cell, ren_val k, ren_val v, ren_obj *kd,
                  ren_obj *vd, bool taking, const ren_site *site) {
-  ren_walk w = {site, "`hash` of a NaN", true, false};
-  /* hashed first, so a NaN panics before anything changes */
-  uint64_t h = ren_key_hash((ren_desc *)kd, NULL, k, &w);
-  ren_map *m = ren_map_writable(cell, taking);
-  m->h.objs = ren_map_objs(kd, vd);
-  ren_map_put(m, h, k, v, (ren_desc *)kd, &w, taking);
+  ren_map_set_in(cell, ren_sv_word(k), false, ren_sv_word(v), false, kd, vd,
+                 taking, site);
 }
 
 void ren_map_set_sv(ren_obj **cell, ren_sv k, ren_val v, ren_obj *kd,
                     ren_obj *vd, bool taking, const ren_site *site) {
-  ren_walk w = {site, "`hash` of a NaN", true, false};
-  ren_str tmp;
-  ren_val kv = {.o = ren_sv_view(&tmp, k)};
-  uint64_t h = ren_key_hash((ren_desc *)kd, NULL, kv, &w), slot;
-  ren_map *m = ren_map_writable(cell, taking);
-  m->h.objs = ren_map_objs(kd, vd);
-  bool vobj = m->h.objs & 2;
-  int64_t e = ren_map_probe(m, h, kv, (ren_desc *)kd, NULL, &w, &slot);
-  if (e >= 0) {
-    /* there: its first key stays, with the new value, as [ren_map_put] */
-    if (taking)
-      ren_drop(k.s[0].o);
-    if (m->width > 2) {
-      ren_val *at = &m->entries[e * m->width + 2];
-      if (!taking && vobj)
-        ren_dup(v.o);
-      if (vobj)
-        ren_drop(at->o);
-      *at = v;
-    } else if (taking && vobj)
-      ren_drop(v.o);
-    return;
-  }
-  /* a new key: its box, which the map keeps */
-  if (!taking && vobj && m->width > 2)
-    ren_dup(v.o);
-  kv.o = taking ? ren_sv_box_taking(k) : ren_sv_box(k);
-  ren_map_put(m, h, kv, v, (ren_desc *)kd, &w, true);
+  ren_map_set_in(cell, k, true, ren_sv_word(v), false, kd, vd, taking, site);
+}
+
+void ren_map_set_vsv(ren_obj **cell, ren_val k, ren_sv v, ren_obj *kd,
+                     ren_obj *vd, bool taking, const ren_site *site) {
+  ren_map_set_in(cell, ren_sv_word(k), false, v, true, kd, vd, taking, site);
+}
+
+void ren_map_set_svsv(ren_obj **cell, ren_sv k, ren_sv v, ren_obj *kd,
+                      ren_obj *vd, bool taking, const ren_site *site) {
+  ren_map_set_in(cell, k, true, v, true, kd, vd, taking, site);
 }
 
 void ren_map_remove(ren_obj **cell, ren_val k, ren_obj *kd, bool taking,
@@ -3484,8 +3839,8 @@ void ren_map_remove(ren_obj **cell, ren_val k, ren_obj *kd, bool taking,
   ren_val *ent = &m->entries[e * m->width];
   if (m->h.objs & 1)
     ren_drop(ent[1].o);
-  if ((m->h.objs & 2) && m->width > 2)
-    ren_drop(ent[2].o);
+  if ((m->h.objs & 2) && !ren_map_is_set(m))
+    ren_drop(ent[ren_map_vat(m)].o);
   ent[0].i = 0;
   m->len--;
 }
@@ -3495,34 +3850,47 @@ ren_obj *ren_map_of(ren_obj *pairs, ren_obj *kd, ren_obj *vd, bool flat,
   ren_walk w = {site, "`hash` of a NaN", true, false};
   bool set = vd == NULL;
   ren_map *m = (ren_map *)ren_map_new(set);
+  ren_map_layout(m, kd, vd);
   m->h.objs = ren_map_objs(kd, vd);
   int64_t n = ren_array_len(pairs);
   for (int64_t i = 0; i < n; i++) {
-    ren_val k, v = {0};
+    ren_sv k, v = ren_sv_word((ren_val){0});
+    bool ksv = false;
     if (set && ren_stride(pairs) == 2) {
-      /* a release build's `Str`s, two words each: each one's box, which
-         the map counts again, so it's dropped after */
-      ren_obj *box = ren_sv_box_at(pairs, i);
-      k.o = box;
-      ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, k, &w), k, v,
-                  (ren_desc *)kd, &w, false);
-      ren_drop(box);
-      continue;
-    }
-    if (set)
-      k = ren_array_load(pairs, i);
+      /* a release build's `Str`s, two words each */
+      k = ((ren_sv *)ren_elems(pairs))[i];
+      ksv = true;
+    } else if (set)
+      k = ren_sv_word(ren_array_load(pairs, i));
     else if (flat) {
-      k = ren_elems(pairs)[2 * i];
-      v = ren_elems(pairs)[2 * i + 1];
+      k = ren_sv_word(ren_elems(pairs)[2 * i]);
+      v = ren_sv_word(ren_elems(pairs)[2 * i + 1]);
     } else {
+      /* a tuple, whose parts are words, a `Str`'s its box */
       ren_obj *t = ren_elems(pairs)[i].o;
-      k = ren_fields(t)[0];
-      v = ren_fields(t)[1];
+      k = ren_sv_word(ren_fields(t)[0]);
+      v = ren_sv_word(ren_fields(t)[1]);
     }
-    ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, k, &w), k, v,
-                (ren_desc *)kd, &w, false);
+    ren_str tmp;
+    ren_val kw = ksv ? (ren_val){.o = ren_sv_view(&tmp, k)} : k.s[0];
+    ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, kw, &w), kw, k, ksv, v,
+                false, (ren_desc *)kd, &w, false);
   }
   return &m->h;
+}
+
+/* Words [at] of entry [e], counted again, as a word: a two-word one's
+   box. */
+static inline ren_val ren_map_word_kept(const ren_map *m, ren_val *e, int at, bool sv) {
+  if (sv) {
+    ren_sv v;
+    v.s[0] = e[at];
+    v.s[1] = e[at + 1];
+    return (ren_val){.o = ren_sv_box(v)};
+  }
+  if (m->h.objs & (at == 1 ? 1 : 2))
+    ren_dup(e[at].o);
+  return e[at];
 }
 
 ren_obj *ren_map_entries(ren_obj *o, bool flat) {
@@ -3540,40 +3908,47 @@ ren_obj *ren_map_entries(ren_obj *o, bool flat) {
   }
   ren_obj *a = ren_alloc_array(m->len, true);
   int64_t i = 0;
+  int vat = ren_map_vat(m);
   REN_MAP_EACH(m, e) {
-    /* a tuple's fields that hold objects, as the map's do */
+    /* a tuple's fields that hold objects, as the map's do; a tuple's
+       part is a word, a two-word `Str`'s box */
     ren_obj *t = ren_alloc_ctor(0, 2, o->objs);
-    ren_fields(t)[0] = e[1];
-    ren_fields(t)[1] = e[2];
-    if (o->objs & 1)
-      ren_dup(e[1].o);
-    if (o->objs & 2)
-      ren_dup(e[2].o);
+    ren_fields(t)[0] = ren_map_word_kept(m, e, 1, o->nfields & REN_MAP_KEY_SV);
+    ren_fields(t)[1] = ren_map_word_kept(m, e, vat, o->nfields & REN_MAP_VAL_SV);
     ren_elems(a)[i++].o = t;
   }
   return a;
 }
 
-/* Word [at] of each live entry of [o], as an array of [d]'s, counted
-   again if [counted]. */
-static ren_obj *ren_map_column(ren_obj *o, ren_obj *d, int at, bool counted) {
+/* Words [at] of each live entry of [o], two if [sv], as an array of
+   [d]'s, counted again if [counted]: an array of two-word strings if
+   they're two. */
+static ren_obj *ren_map_column(ren_obj *o, ren_obj *d, int at, bool sv,
+                               bool counted) {
   ren_map *m = (ren_map *)o;
   ren_obj *a = ren_alloc_array_d(m->len, d);
   int64_t i = 0;
   REN_MAP_EACH(m, e) {
     if (counted)
       ren_dup(e[at].o);
-    ren_array_init_w(a, i++, e[at]);
+    if (sv) {
+      ren_sv *xs = (ren_sv *)ren_elems(a);
+      xs[i].s[0] = e[at];
+      xs[i].s[1] = e[at + 1];
+      i++;
+    } else
+      ren_array_init_w(a, i++, e[at]);
   }
   return a;
 }
 
 ren_obj *ren_map_keys(ren_obj *m, ren_obj *d) {
-  return ren_map_column(m, d, 1, m->objs & 1);
+  return ren_map_column(m, d, 1, m->nfields & REN_MAP_KEY_SV, m->objs & 1);
 }
 
 ren_obj *ren_map_values(ren_obj *m, ren_obj *d) {
-  return ren_map_column(m, d, 2, m->objs & 2);
+  return ren_map_column(m, d, ren_map_vat((ren_map *)m),
+                        m->nfields & REN_MAP_VAL_SV, m->objs & 2);
 }
 
 /* The seed, from the system's randomness, once, when the program

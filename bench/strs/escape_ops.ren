@@ -1,0 +1,44 @@
+// More of the 4 GiB escape (compiler.md, "Bytes stage, part two", "Step
+// 4 (part 3), as built"): `+=` in place on a unique value past the edge;
+// views of one that are themselves past it, only read, returned, kept in
+// an array and in a map's keys after what they're views of is gone;
+// `==`, hashing, sorting, layer 3's reads and `Str.from_utf8` of one.
+// It needs about 4 GiB natively and 8 in `ren run`, whose `+=` copies, so
+// bench/strs_big.t runs it only with REN_BIG_TESTS=1.
+
+// a view of a borrowed parameter, returned
+fn tail(b: Bytes, from: Int) -> Bytes = b[from..b.len()]
+
+fn keep(all: Bytes, n: Int) -> Array<Bytes> =
+  [all[n - 1..n + 1], tail(all, n + 2), all[0..2], all[4..n + 3]]
+
+fn main() uses Console =
+  let n = 4_294_967_299
+  var big = Bytes.zeros(n)
+  big += Bytes.of([1, 9, 3])
+  print(big.len())
+  let all = big
+  let hi = all[n..n + 3]
+  print(hi)
+  print(hi.u8(1))
+  print(hi == Bytes.of([1, 9, 3]))
+  print(hi.hash() == Bytes.of([1, 9, 3]).hash())
+  let parts = keep(all, n)
+  print(parts[0])
+  print(parts[1])
+  print(parts[2])
+  print(parts[3].len())
+  var m: Map<Bytes, Int> = Map.empty
+  &m.set(hi, 1)
+  &m.set(all[n - 1..n + 3], 2)
+  &m.set(all[0..3], 3)
+  print(m.get(Bytes.of([1, 9, 3])))
+  print(m.get(Bytes.of([0, 1, 9, 3])))
+  print(m.get(Bytes.of([0, 0, 0])))
+  print(m.len())
+  match attempt Str.from_utf8(all)
+    Ok(s) =>
+      print(s.byte_len())
+      print(s[n + 1..n + 3].bytes())
+      print([s[n..n + 3], "a", s[n - 2..n + 1]].sort()[0].bytes())
+    Err(_) => print("not UTF-8")

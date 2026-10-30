@@ -1,0 +1,86 @@
+// Maps and sets of `Str` and `Bytes` (compiler.md, "Bytes stage, part
+// two", "Step 4 (part 3), as built"), whose entries a release build keeps
+// as two words each, unboxed: keys and values that are slices of a root
+// dropped before they're read, set again, removed, the entries grown and
+// compacted, a shared map changed (a copy), shown, compared, hashed, gone
+// over, and read by generic code, which sees each as its box.
+
+// generic code over a map's values and keys, which it sees as words
+fn firsts<K, V>(m: Map<K, V>) -> Array<K> = m.keys()
+fn lookup<K, V>(m: Map<K, V>, k: K) -> Option<V> = m.get(k)
+fn put<K, V>(m: Map<K, V>, k: K, v: V) -> Map<K, V> =
+  var c = m
+  &c.set(k, v)
+  c
+
+// a map that doesn't change, read: its value lent
+fn total(m: Map<Str, Str>, ks: Array<Str>) -> Int =
+  var n = 0
+  for k in ks
+    match m.get(k)
+      Some(v) => n += v.byte_len()
+      None => n -= 1
+  n
+
+fn main() uses Console =
+  var text = "alpha,beta,gamma,delta,alpha,epsilon"
+  text += ",zeta"
+  let words = text.split(",")
+  var count: Map<Str, Int> = Map.empty
+  var next: Map<Str, Str> = Map.empty
+  var prev = "start"
+  for w in words
+    match count.get(w)
+      Some(c) => &count.set(w, c + 1)
+      None => &count.set(w, 1)
+    &next.set(prev, w[0..2])
+    prev = w
+  print(count)
+  print(next)
+  print(next.get("alpha"))
+  print(total(next, ["alpha", "beta", "nope"]))
+  let shared = next
+  &next.set("beta", "changed")
+  &next.remove("gamma")
+  print(shared.get("beta"))
+  print(next.get("beta"))
+  print(shared == next)
+  print(shared.len() - next.len())
+  for (k, v) in next
+    print(k + "=" + v)
+  print(next.keys())
+  print(next.values())
+  print(firsts(count))
+  print(lookup(next, "delta"))
+  print(put(count, "omega", 9).get("omega"))
+  let again = put(next, "gamma", "ga")
+  print(again.len())
+  // grown, then a third removed and compacted
+  var big: Map<Str, Str> = Map.empty
+  for i in 0..200
+    let s = "k" + show(i) + "-" + show(i * i)
+    &big.set(s[0..s.byte_len() - 1], s)
+  for i in 0..200
+    if i % 3 != 0 then &big.remove("k" + show(i) + "-" + show(i * i)[0..show(i * i).byte_len() - 1])
+  for i in 0..30
+    &big.set("n" + show(i), "v")
+  print(big.len())
+  print(big.get("k3-"))
+  print(big.get("k99-980"))
+  print(big.hash() == big.hash())
+  // sets, and `Bytes`
+  let s = Set.of(words)
+  print(s)
+  print(s.includes("zeta"))
+  var bs: Set<Bytes> = Set.empty
+  let raw = text.bytes()
+  &bs.add(raw[0..5])
+  &bs.add(raw[6..10])
+  &bs.add(raw[0..5])
+  print(bs.len())
+  print(bs.includes(Bytes.of([98, 101, 116, 97])))
+  var bm: Map<Int, Bytes> = Map.empty
+  &bm.set(1, raw[0..3])
+  &bm.set(2, raw[3..6])
+  print(bm)
+  print(Map.of([("x", raw[0..1]), ("y", raw[1..2])]))
