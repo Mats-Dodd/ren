@@ -1,0 +1,30 @@
+lostwake: c-release runs=1000 jobs=2 tmo=10s loadavg_start=0.47 2026-10-30T21:27:13Z
+cell w1 epoll x4: ok=1000 fail=0 hang=0 of 1000 (9s)
+cell w1 epoll x8: ok=1000 fail=0 hang=0 of 1000 (12s)
+cell w1 uring x4: ok=1000 fail=0 hang=0 of 1000 (10s)
+cell w1 uring x8: ok=1000 fail=0 hang=0 of 1000 (14s)
+cell w2 epoll x4: ok=1000 fail=0 hang=0 of 1000 (7s)
+cell w2 epoll x8: ok=1000 fail=0 hang=0 of 1000 (9s)
+cell w2 uring x4: ok=1000 fail=0 hang=0 of 1000 (8s)
+cell w2 uring x8: ok=1000 fail=0 hang=0 of 1000 (10s)
+cell t_cancel epoll x4: ok=1000 fail=0 hang=0 of 1000 (9s)
+cell t_cancel epoll x8: ok=1000 fail=0 hang=0 of 1000 (10s)
+cell t_cancel uring x4: ok=1000 fail=0 hang=0 of 1000 (9s)
+cell t_cancel uring x8: ok=1000 fail=0 hang=0 of 1000 (10s)
+cell w3 epoll x4: ok=1000 fail=0 hang=0 of 1000 (13s)
+cell w3 epoll x8: ok=1000 fail=0 hang=0 of 1000 (16s)
+cell w3 uring x4: ok=1000 fail=0 hang=0 of 1000 (12s)
+cell w3 uring x8: ok=1000 fail=0 hang=0 of 1000 (15s)
+cell t_timer epoll x4: ok=999 fail=1 hang=0 of 1000 (16s)
+     | t_timer: order or timing wrong
+     | harness: t_timer: workload check failed
+     | result: t_timer order=0,3,2,4,1
+     | metric: harness workload=t_timer driver=epoll workers=4 wall_s=0.031876
+cell t_timer epoll x8: ok=998 fail=2 hang=0 of 1000 (17s)
+     | t_timer: order or timing wrong
+     | harness: t_timer: workload check failed
+     | result: t_timer order=4,2,3,0,1
+     | metric: harness workload=t_timer driver=epoll workers=8 wall_s=0.034868
+cell t_timer uring x4: ok=1000 fail=0 hang=0 of 1000 (17s)
+cell t_timer uring x8: ok=1000 fail=0 hang=0 of 1000 (18s)
+lostwake total: hang=0 fail=3 loadavg_end=6.21
