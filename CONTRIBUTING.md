@@ -6,8 +6,8 @@ in `devenv.nix` and `devenv.lock`. Dune remains the build system.
 
 ## Setup
 
-Install [Nix](https://devenv.sh/getting-started/) and Git. The bootstrap
-script also needs Python 3. Clone this repository, then run:
+Install [Nix](https://devenv.sh/getting-started/) and Git. Clone this
+repository, then run:
 
 ```sh
 bash tools/bootstrap-devenv.sh
@@ -48,7 +48,11 @@ CI additionally checks that no tracked files changed.
 
 The environment supplies OCaml 5.5.2, Dune 3.24.2, ppx_deriving 6.2.0,
 ppx_expect 0.17.3, OCaml LSP 1.28.0, OCamlFormat 0.29.0, Node 26 LTS,
-Python 3.15, and LLVM/Clang 23. The exact package revisions are locked.
+Python 3.15, and LLVM/Clang 23.1.3. The exact package revisions are locked.
+As of 2026-10-30, Clang is one patch behind upstream 23.1.4: this is the
+newest stable LLVM package in the locked nixpkgs collection, retaining
+binary-cache support rather than requiring every contributor and CI runner
+to compile LLVM. Advance it with nixpkgs when that package is available.
 Tree-sitter CLI 0.27.1 is pinned separately by the npm lockfile; generation
 explicitly targets ABI 14 for editor compatibility.
 
