@@ -196,7 +196,7 @@ type place = {
 
 let elem_of (rt : rt) =
   match rt with
-  | Array_get l | Array_take l | Array_set_taking l -> Some l
+  | Array_get l | Array_peek l | Array_take l | Array_set_taking l -> Some l
   | Array_set_field_taking (n, _, _) -> Some (Struct (n, false))
   | _ -> None
 
@@ -288,8 +288,8 @@ let places facts (b : block) =
                   match rt with
                   | Array_len -> true
                   | Array_check -> true
-                  | Array_get _ | Array_take _ | Array_set_taking _
-                  | Array_set_field_taking _ ->
+                  | Array_get _ | Array_peek _ | Array_take _
+                  | Array_set_taking _ | Array_set_field_taking _ ->
                       Option.iter (agree pl) (elem_of rt);
                       true
                   | _ -> false))
@@ -379,6 +379,8 @@ let rec rewrite (pls : place list) (b : block) : block =
           | Array_check -> [ let_ (Runtime (Buf_check, len pl :: rest, site)) ]
           | Array_get l ->
               [ let_ (Runtime (Buf_get l, buf pl :: len pl :: rest, site)) ]
+          | Array_peek l ->
+              [ let_ (Runtime (Buf_peek l, buf pl :: len pl :: rest, site)) ]
           (* the array is unique now, so the element is moved out; its
              write back is the [Buf_set] it pairs with (swap.ml) *)
           | Array_take l ->

@@ -395,6 +395,11 @@ let rec runtime ?result rt args site_arg =
           Some
             (sprintf "ren_sv_slice(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2) (str s)
                (site ()))
+      (* the uncounted view: the same checks, the root not counted *)
+      | Str_view s when svx 0 ->
+          Some
+            (sprintf "ren_sv_view_slice(%s, %s, %s, %s, %s)" (a 0) (a 1) (a 2)
+               (str s) (site ()))
       | Slice (s, Before) when svx 0 ->
           Some (sprintf "ren_sv_before(%s, %s, %s, %s)" (a 0) (a 1) (str s) (site ()))
       | Slice (_, After) when svx 0 -> Some (sprintf "ren_sv_after(%s, %s)" (a 0) (a 1))
@@ -470,6 +475,19 @@ let rec runtime ?result rt args site_arg =
   match rt with
   | Array_len -> sprintf "ren_array_len(%s)" (a 0)
   (* an array of structs: each element its words, a stride the C knows *)
+  (* an element not counted, a part of the array (rc.ml, [lent_reads]):
+     its words, as an uncounted struct's or a scalar's are read *)
+  | Array_peek (Struct (n, _)) ->
+      sprintf "(*(ren_struct_%d*)ren_array_slots_k(%s, %s, %d, %s))" n (a 0)
+        (a 1) (struct_words n) (isite ())
+  | Array_peek l ->
+      of_val l (sprintf "ren_array_get_s(%s, %s, %s)" (a 0) (a 1) (isite ()))
+  | Buf_peek (Struct (n, _)) ->
+      sprintf "(*(ren_struct_%d*)ren_buf_slots(%s, %s, %s, %d, %s))" n (a 0)
+        (a 1) (a 2) (struct_words n) (isite ())
+  | Buf_peek l ->
+      of_val l
+        (sprintf "ren_buf_get_s(%s, %s, %s, %s)" (a 0) (a 1) (a 2) (isite ()))
   | Array_get (Struct (n, false)) ->
       sprintf "(*(ren_struct_%d*)ren_array_slots_k(%s, %s, %d, %s))" n (a 0)
         (a 1) (struct_words n) (isite ())
@@ -801,6 +819,7 @@ let rec runtime ?result rt args site_arg =
   | Str_join -> sprintf "ren_strs_join(%s, %s)" (a 0) (a 1)
   | Panic_str -> sprintf "ren_panic_str(%s, %s)" (site ()) (a 0)
   | Str_box | Str_unbox -> bug "a box of a string that isn't two words"
+  | Str_view _ -> bug "a view of a string that isn't two words"
   | New_desc _ -> bug "a descriptor built outside a Let"
 
 (* Whether the runtime's [rt] gives nothing, so a [Let] of it gives [Unit]

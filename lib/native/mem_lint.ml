@@ -128,7 +128,7 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
   let of_ (s : sliced) = match s with Of_array_elems -> Boxed | _ -> str in
   match rt with
   | Array_len -> ([ Boxed ], Int)
-  | Array_get l | Array_take l -> ([ Boxed; Int ], l)
+  | Array_get l | Array_take l | Array_peek l -> ([ Boxed; Int ], l)
   | Array_set l -> ([ Boxed; Int; l ], Boxed)
   | Array_push l | Array_push_taking l -> ([ Cell Boxed; l ], Unit)
   | Array_set_taking l -> ([ Boxed; Int; l ], Boxed)
@@ -137,7 +137,7 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
       ([ Boxed; Int; l ], Boxed)
   | Array_own -> ([ Boxed ], Boxed)
   | Array_data -> ([ Boxed ], Ptr)
-  | Buf_get l | Buf_take l -> ([ Ptr; Int; Int ], l)
+  | Buf_get l | Buf_take l | Buf_peek l -> ([ Ptr; Int; Int ], l)
   | Buf_set l -> ([ Ptr; Int; Int; l ], Unit)
   | Buf_set_field (_, _, l) -> ([ Ptr; Int; Int; l ], Unit)
   | Buf_check -> ([ Int; Int ], Unit)
@@ -150,7 +150,7 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
   | Str_lookup _ -> ([ str ], Int)
   | Str_box -> ([ str ], Boxed)
   | Str_unbox -> ([ Boxed ], str)
-  | Slice (s, Range) -> ([ of_ s; Int; Int ], of_ s)
+  | Slice (s, Range) | Str_view s -> ([ of_ s; Int; Int ], of_ s)
   | Slice (s, Before) -> ([ of_ s; Int ], of_ s)
   | Slice (s, After) -> ([ of_ s; Int; of_ s ], of_ s)
   | Vacant -> ([], Unit) (* its operand's, which [rhs] checks *)
@@ -899,6 +899,8 @@ type rc_env = {
   rfns : (string, fn) Hashtbl.t;
   next : int ref;
   addressed : Ids.t;  (** the locals whose address is taken *)
+  bufs : (int, atom) Hashtbl.t;
+      (** the array each buffer is of, by the [Ptr] [Array_data] gives *)
   scope : Ids.t;  (** the variables defined around here *)
   rloops : (int * (Ids.t * rc_state list ref)) list;
   rjoins : (int * rc_state list ref) list;
@@ -1367,6 +1369,37 @@ let keep_part env st (x : atom) (k : atom) =
                (show_atom x)))
   | _ -> st
 
+(* The array a buffer is of. *)
+let buffer_of env (p : var) =
+  match Hashtbl.find_opt env.bufs p.id with
+  | Some x -> x
+  | None -> rc_fail env (sprintf "%s isn't an array's buffer" (show_var p))
+
+(* [v] lent from [x]: a part of it, with no reference of its own, as a
+   field read is (rc.ml, [lent_reads]). *)
+let lent_part env st (v : var) (x : atom) =
+  match bundle_of st x with
+  | Some p -> fresh_var env st v ~count:0 (B_part p)
+  | None -> fresh_var env st v ~count:0 B_static
+
+(* An element of [x]'s moved out or written in place: an element lent
+   from it before, a part with no reference of its own, may be gone, so
+   it's dead from here, and reading it is an error. *)
+let unlend st (x : atom) =
+  match bundle_of st x with
+  | None -> st
+  | Some a ->
+      {
+        st with
+        kind =
+          IM.mapi
+            (fun b k ->
+              match k with
+              | B_part p when p = a && get st.count b = 0 -> B_owned
+              | k -> k)
+            st.kind;
+      }
+
 (* What [Let (v, r)] does to the counts. *)
 let rc_let env st (v : var) (r : rhs) =
   let same x =
@@ -1468,7 +1501,21 @@ let rc_let env st (v : var) (r : rhs) =
       let st = call_args env st name xs in
       let st = call_changes env st in
       fresh_var env st v B_owned
+  (* an element, or a slice, lent: a part of what it's read from *)
+  | Runtime ((Array_peek _ | Str_view _), (x :: _ as xs), _) ->
+      List.iter (read env st) xs;
+      lent_part env st v x
+  | Runtime (Buf_peek _, (Var p :: _ as xs), _) ->
+      List.iter (read env st) xs;
+      lent_part env st v (buffer_of env p)
   | Runtime (rt, xs, _) ->
+      let st =
+        match (rt, xs) with
+        | (Buf_set _ | Buf_take _ | Buf_set_field _), Var p :: _ ->
+            unlend st (buffer_of env p)
+        | Array_take _, x :: _ -> unlend st x
+        | _ -> st
+      in
       let st =
         List.fold_left
           (fun (st, i) x ->
@@ -1719,13 +1766,14 @@ and rc_block env st (b : block) : rc_state option =
         }
 
 let counting fns (f : fn) =
-  let addressed = ref Ids.empty in
+  let addressed = ref Ids.empty and bufs = Hashtbl.create 8 in
   let rec scan b =
     List.iter
       (fun (s : stmt) ->
         (match s with
         | Let (_, Addr m) when counted m.layout ->
             addressed := Ids.add m.id !addressed
+        | Let (p, Runtime (Array_data, [ x ], _)) -> Hashtbl.replace bufs p.id x
         | _ -> ());
         List.iter scan (sub_blocks s))
       b
@@ -1737,6 +1785,7 @@ let counting fns (f : fn) =
       rfns = fns;
       next = ref 1;
       addressed = !addressed;
+      bufs;
       scope = Ids.of_list (List.map (fun (v : var) -> v.id) f.params);
       rloops = [];
       rjoins = [];

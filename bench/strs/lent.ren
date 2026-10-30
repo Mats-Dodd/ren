@@ -1,0 +1,116 @@
+// Reads lent rather than counted (compiler.md, "Bytes stage, part two",
+// "Step 4 (part 2), as built"): a slice of a string a function was lent
+// or holds, the uncounted view, and an element read of an array the
+// function holds and doesn't change, each a part of what it's read from.
+// Each case is one where the part must be counted after all: it's
+// stored, returned, captured, given to a callee that keeps it, or
+// outlives what it's a part of, or its array is changed while it's held.
+// No object is alive at the end, and every build prints what `ren run`
+// does.
+
+type Tok = { kind: Int, text: Str }
+type Rec = { key: Bytes, value: Bytes }
+
+// a view only read: compared, its length and a byte
+fn words(l: Str) -> Int =
+  var n = 0
+  var start = 0
+  for k in 0..l.byte_len() + 1
+    if k == l.byte_len() || l.bytes().at(k) == 32 then
+      let w = l[start..k]
+      if w == "beta" then n += 100
+      n += w.byte_len()
+      start = k + 1
+  n
+
+// a view returned, and one stored, of a string this function was lent
+fn last(l: Str) -> Str = l[l.byte_len() - 3..l.byte_len()]
+fn keep(l: Str, inout out: Array<Str>) = &out.push(l[0..2])
+
+// kept by a callee that takes it
+fn own(s: Str) -> Str = s + "!"
+
+// a view of a string that dies first: `copy()` makes one that nothing
+// else holds, which dies after the view is made but before it's read
+fn outlives(n: Int) -> Str =
+  let s = "local \{n} string".copy()
+  let v = s[0..5]
+  v
+
+// a view a block reads, and one a block returns
+fn captured(s: Str) -> Str =
+  let v = s[1..4]
+  let f = fn() => v
+  f()
+
+// element reads: only read, kept, outliving their array, nested
+fn total(toks: Array<Tok>) -> Int =
+  var n = 0
+  for i in 0..toks.len()
+    let t = toks[i]
+    if t.text == "b" then n += 10
+    n += t.kind + t.text.byte_len()
+  n
+
+fn firsts(toks: Array<Tok>) -> Array<Str> =
+  var out: Array<Str> = []
+  for t in toks
+    &out.push(t.text)
+  out
+
+fn pick(n: Int) -> Tok =
+  let toks = [Tok { kind: 1, text: "x\{n}".copy() }, Tok { kind: 2, text: "y" }]
+  let t = toks[0]
+  t
+
+fn corner(grid: Array<Array<Str>>) -> Str =
+  let row = grid[1]
+  let s = row[0]
+  s + row[1]
+
+// an element read while its array is changed: the read must see the old
+// element, which the array no longer holds
+fn changed(n: Int) -> Str =
+  var xs = ["a\{n}".copy(), "b".copy()]
+  let a = xs[0]
+  xs[0] = "c"
+  &xs.push("d")
+  a + xs[0]
+
+fn swapped(n: Int) -> Int =
+  var grid = [[1, 2], [3, n]]
+  let row = grid[1]
+  grid[1][0] = 30
+  row[0] + grid[1][0]
+
+// records of `Bytes` slices, read without counting their roots
+fn query(recs: Array<Rec>) -> Int =
+  var n = 0
+  for r in recs
+    if r.key.at(r.key.len() - 1) == 55 then n += r.value.len()
+    if r.value.at(0) == 97 then n += 1
+  n
+
+fn main() uses Console =
+  let text = "alpha beta gamma".copy()
+  print(words(text))
+  print(last(text))
+  var kept: Array<Str> = []
+  keep(text, &kept)
+  keep(text[6..10], &kept)
+  print(kept)
+  print(own(text[0..5]))
+  print(outlives(3))
+  print(captured(text))
+  let toks = [Tok { kind: 1, text: text[0..1] }, Tok { kind: 2, text: "b" }, Tok { kind: 3, text: text[6..10] }]
+  print(total(toks))
+  print(firsts(toks))
+  print(pick(7))
+  print(corner([["a", "b"], [text[0..2], text[11..16]]]))
+  print(changed(5))
+  print(swapped(4))
+  let raw = "k17abc|k27ddd|k10aaa".bytes().copy()
+  var recs: Array<Rec> = []
+  for i in 0..3
+    &recs.push(Rec { key: raw[i * 7..i * 7 + 3], value: raw[i * 7 + 3..i * 7 + 6] })
+  print(query(recs))

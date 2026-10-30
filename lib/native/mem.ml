@@ -234,6 +234,12 @@ type rt =
   | Buf_set_field of int * int * layout
       (** [Array_set_field_taking] once the array is known unique *)
   | Buf_check  (** [Array_check] of a length *)
+  | Array_peek of layout
+      (** [Array_get] not counted: the element is a part of the array, as a
+          field read is of its object, which Perceus counts again where it's
+          kept (rc.ml, [lent_reads]; compiler.md, "Bytes stage, part two",
+          "Step 4 (part 2), as built") *)
+  | Buf_peek of layout  (** [Buf_get] not counted: [Array_peek]'s, hoisted *)
   | Array_reserve of layout
       (** an empty array of these elements, with room for as many as the [Int]
           given; a [Word]'s descriptor after it says whether they're objects *)
@@ -272,6 +278,10 @@ type rt =
           panic as the interpreter does at their site; [After]'s, made after
           [Before]'s, doesn't check again, and has none, and is given the
           first half too, after the [Int] *)
+  | Str_view of sliced
+      (** a release build's [Slice (_, Range)] of a `Str` or `Bytes`, its root
+          not counted: a part of the value it's of, as a field read is (the
+          uncounted view, compiler.md, "Bytes stage, part two") *)
   | Splice of sliced
       (** a new owner: the first with its range from the first [Int] up to
           the second replaced by the last, what `&xs[a..b]` writes back *)
@@ -906,6 +916,8 @@ let show_rt = function
   | Buf_take l -> "buf-take:" ^ show_layout l
   | Buf_set_field (n, k, _) -> Printf.sprintf "buf-set-field:%d.%d" n k
   | Buf_check -> "buf-check"
+  | Array_peek l -> "array-peek:" ^ show_layout l
+  | Buf_peek l -> "buf-peek:" ^ show_layout l
   | Array_reserve l -> "array-reserve:" ^ show_layout l
   | Str_len -> "str-len"
   | Str_concat -> "str-concat"
@@ -919,6 +931,7 @@ let show_rt = function
   | Slice (s, p) ->
       (match p with Range -> "slice" | Before -> "before" | After -> "after")
       ^ ":" ^ show_sliced s
+  | Str_view s -> "view:" ^ show_sliced s
   | Splice s -> "splice:" ^ show_sliced s
   | Join s -> "join:" ^ show_sliced s
   | Copied s -> "copy:" ^ show_sliced s

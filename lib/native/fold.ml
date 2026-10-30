@@ -65,12 +65,14 @@ let rt h (r : rt) : rt =
   | Array_set_field_taking (n, k, l) ->
       Array_set_field_taking (h.st n, k, lay h l)
   | Buf_get l -> Buf_get (lay h l)
+  | Array_peek l -> Array_peek (lay h l)
+  | Buf_peek l -> Buf_peek (lay h l)
   | Buf_take l -> Buf_take (lay h l)
   | Buf_set l -> Buf_set (lay h l)
   | Buf_set_field (n, k, l) -> Buf_set_field (h.st n, k, lay h l)
   | Array_reserve l -> Array_reserve (lay h l)
   | ( Array_len | Array_check | Array_own | Array_data | Buf_check | Str_len
-    | Str_concat | Str_concat_taking | Str_eq | Str_is _ | Str_affix _ | Str_lookup _ | Slice _ | Splice _ | Join _ | Copied _ | Str_split | Str_trim | Vacant | Bytes_at
+    | Str_concat | Str_concat_taking | Str_eq | Str_is _ | Str_affix _ | Str_lookup _ | Slice _ | Str_view _ | Splice _ | Join _ | Copied _ | Str_split | Str_trim | Vacant | Bytes_at
     | Str_data | Bytes_get
     | Bytes_of | Bytes_load _ | Bytes_store _ | Bytes_store_taking _ | Bytes_set_var _
     | Bytes_set_var_taking _ | Bytes_zeros | U64_read _ | Utf8_error | Utf8_incomplete | Utf8_lossy | Var_size _ | Show_int | Show_float | Show_bool | Float_of_int

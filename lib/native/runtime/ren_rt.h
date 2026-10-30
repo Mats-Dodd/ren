@@ -1725,6 +1725,17 @@ static inline ren_sv ren_sv_slice(ren_sv s, int64_t i, int64_t j, bool str,
   ren_dup(s.s[0].o);
   return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
 }
+/* The same, its root not counted: the uncounted view, a part of [s]
+   that the compiler counts where it's kept (compiler.md, "Bytes stage,
+   part two", "The uncounted view"). */
+static inline ren_sv ren_sv_view_slice(ren_sv s, int64_t i, int64_t j, bool str,
+                                       const ren_site *site) {
+  if (__builtin_expect(i > j || i < 0 || j > ren_sv_len(s) ||
+                           (str && !(ren_sv_boundary(s, i) && ren_sv_boundary(s, j))),
+                       0))
+    ren_sv_slice_panic(s, i, j, str, site);
+  return ren_sv_make(s.s[0].o, ren_sv_off(s) + i, j - i);
+}
 
 /* A `split_at`'s halves, and the two joined back: one value if they're
    next to each other in one root, else a new owner. */

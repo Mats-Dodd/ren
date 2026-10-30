@@ -9630,6 +9630,20 @@ Choices where strings.md, decision 17 and the brief are silent:
   where they meet a string, and two words where an array or a field
   holds them. A map's key is boxed only if the map keeps it.
 - Step 4: a value past 4 GiB panics where it's made, until the escape.
+- Step 4 (part 2): the uncounted view is a slice of any `Str` or `Bytes`
+  a function holds in a variable that never changes, not only a borrowed
+  parameter's: a local's, a field's or an element's is a part of what
+  holds it as a borrowed parameter's is. A slice a block captures is
+  counted once, where it's put in the captured local, which is a slot
+  that owns a reference, not uncounted as "The uncounted view" says.
+- Step 4 (part 2): element reads are lent too, in both builds, an
+  array's element a part of the array as a field read is of its object
+  (the data stage's "a borrowed read", left for later there), where the
+  array's variable never changes and nothing in the function takes the
+  array; an array that's written keeps its reads counted, for swap.ml.
+- Step 4 (part 2): freeing an array drops a run of elements that hold
+  one object at once (`ren_release_n`), a release build's slices of one
+  input most often.
 
 ### Step 1, as built
 
@@ -10011,6 +10025,183 @@ ren_rt.h); and a release build's `--rc naive` is quadratic on
 bench/data/rows.ren before and after (25 s against 33 s here), which
 nothing tests.
 
+### Step 4 (part 2), as built: the uncounted view
+
+Part one left slices' json and pages short of their `_r` forms by what
+counting the input's root costs (above). This part removes the counting
+of reads that keep nothing: a slice of a string a function holds, the
+uncounted view, and an element read of an array it holds and doesn't
+change, each made a part of what it's read from, as a field read is.
+Both are rc.ml's (`lent_reads`), decided after borrow inference, and Mem
+Lint checks each as a part. Release builds have both; a debug build has
+the element reads, since its slices are A objects.
+
+**The uncounted view.** A slice, `s[i..j]`, of a release build's `Str`
+or `Bytes` whose variable never changes is `Str_view` (mem.ml), the
+runtime's `ren_sv_view_slice`: the same checks as `ren_sv_slice`, and
+no count. Perceus makes its variable a part of the sliced value's group
+(`Part (g, -1)`, at no slot, so no specialized drop keeps it), and so
+counts it again exactly where it would count a field it read: where it's
+stored (in a record, an array, a map, a set, a handler's description),
+returned, given to a callee that owns its parameter, captured (a local a
+block captures is a slot, which owns a reference), or where what it's a
+part of dies before it. What's sliced needn't be a borrowed parameter:
+any string held by a variable that never changes is held for as long as
+its parts are, or its parts are counted first, so the view is the same
+for a local, a field read and an element read.
+
+Why it's sound, in the spec's terms. Rule B (Perceus's parts): a part
+is borrowed from its parent while the parent is held, and counted again
+before the parent is consumed or dropped (rc.ml's `promote`); a view's
+root slot is its parent's root slot, so while the parent is held the
+root is alive, and once the view is counted it holds the root itself.
+Nothing changes a value's root or the bytes in its range while the value
+is held: the value is immutable, and every write or append in place
+takes the value it writes (`takes`: `Str_concat_taking`'s left side;
+layer 3's writes through a cell, `changes_cell`, whose old value a view
+of the cell's value keeps by a snapshot), and taking it counts its live
+parts first. Rule U: a root whose count is 1 is seen by one value; a view
+doesn't count it, but it's counted before the value it's a part of is
+taken, so a write in place through a root of count 1 never runs while
+an uncounted view of it is live. An append to the view itself takes the
+view only where it owns a reference (its parent dead, so it was counted
+when the parent died); anywhere else rc.ml makes it the `+` that copies,
+as it does for any left side still held.
+
+**Lent element reads.** `xs[i]` of an array whose elements are objects
+or counted structs (a release build's `Str`, two words, or a record of
+them) is `Array_peek`, and `Buf_peek` once hoist.ml has the loop index
+the buffer: the element's words, no count, a part of the array's group.
+That's the data stage's code, not strings': it holds for any small
+struct that holds an object, and for an array of objects, in both
+builds. It's lent only where the element can't change or go while the
+part is held: the element's variable never changes; the array's
+variable never changes and isn't a view of one that does, nor a part of
+such a view (a field of a `var`'s record), so it's held by the function
+or its caller as one value; and nothing in the function takes the array
+or moves an element out of it (`Array_take`). The last is what makes it
+sound beside swap.ml, which moves an element out uncounted where it's
+written back: an array that's written is taken by its write, so its
+reads stay counted. With those, the argument for a field holds of an
+element: the array holds the element while the array is held, and the
+array is held across the part's uses, or the part is counted before
+it's dropped (`promote`'s count again, never a specialized drop's kept
+slot).
+
+**`lend_parts`, again.** Part one's pass removed the count and drop
+around a struct made of a field's part, only read. Two cases it missed:
+an outer pair whose interval held an inner pair (`r.key.at(r.key.len()
+- 1)`), now lent on a second pass, and a call between that takes
+nothing counted (`parse_int(v.text)`), now quiet when the part is read
+from what only the function's own variables that never change hold
+(`settled`: a parameter, a value it made, or a part of one, never what
+a cell holds), since a callee can reach what the function holds only
+through a cell or what it's given.
+
+**Freeing an array of slices** (ren_rt.c, `ren_release_elems`). With
+the reads lent, what's left of counting the input's root in json and
+pages is one count where each token or record is pushed, and one drop
+of it where the array is freed. The free drops a run of elements that
+hold one object at once (`ren_release_n`: one subtraction while the
+count stays above what's dropped, else one `ren_release` each, as
+before), and its loop is written out for elements of one object and of
+two, where the loop over the mask cost pages 34 instructions a record.
+Shared and atomic counting (`REN_RC_SHARED`, `REN_RC_ATOMIC`) drop one
+at a time, as before. It's out of line: inlined, it changed how GCC
+compiled unrelated loops of the program in the same file.
+
+**Mem Lint.** A view or a lent element is a part of what it's read from
+with no reference of its own (`lent_part`), as a field read is; a
+`Buf_peek`'s array is the one its buffer's `Array_data` read. An element
+moved out (`Array_take`, `Buf_take`) or written in place (`Buf_set`,
+`Buf_set_field`) makes every part of that array with no reference of
+its own dead (`unlend`), so a lent element read after its array changes
+is an error, which rc.ml's conditions never make.
+
+**The tests.** bench/strs_lent.t's strs/lent.ren: views only read,
+returned, stored, given to a callee that keeps them, captured, and of a
+string that dies before the view is read; element reads only read,
+kept, outliving their array, nested (an array of arrays), and an array
+changed while an element read from it is held, and swapped out; records
+of `Bytes` slices read. The same in every build under the sanitizers
+with no object alive at the end, and as `ren run` prints. test_native's
+printed Mem of a release build's element read changes (`array-peek`, a
+`dup` of the slot kept where the `free` kept it).
+
+**Measured** (x86_64 cloud container, 4 cores, shared, GCC 13.3 -O2,
+wall time, ms a round, interleaved; before is 3b649c6, part one;
+bench/native/RESULTS.md, "Bytes stage, part two, step 4, part 2", has
+the spreads, the twins and the commands; callgrind's instructions a
+round beside the times, since this machine's wall times move 5 to 10%
+between runs). Fix by fix, the slices parsers at 60 (json), 200 (pages)
+and 100 (logs) rounds, 9 runs, and instructions at 2 rounds:
+
+| | part one | (1) the view | (2) lent elements | (3) `lend_parts` | (4) runs dropped | (5) loops written out |
+|---|---|---|---|---|---|---|
+| json, ms | 111.1 | 107.1 | 104.4 | 102.9 | 101.0 | 98.9 (11 runs; part one 104.9) |
+| json, M instructions | 425.8 | 425.5 | 366.3 | 367.9 | 345.5 | 313.5 |
+| pages, ms | 5.88 | 6.11 | 5.72 | 5.09 | 4.98 | 4.93 (11 runs; part one 5.95) |
+| pages, M instructions | 51.2 | 50.0 | 40.6 | 39.0 | 36.0 | 31.9 |
+| logs, ms | 21.8 | 20.6 | 20.1 | 21.2 | 20.9 | |
+
+logs' instructions go from 196.4 to 205.8 million at (1) and stay
+there, on C with only fewer counts in it: GCC compiles `logs`' byte loop
+to more instructions a byte (its bounds test twice as often), as it does
+`group`'s, in both cases moved by code elsewhere in the file. The
+`_r` forms are the same C throughout.
+
+All five against part one (7 runs at part one's rounds; the slices
+parsers again at many rounds, 11 runs, beside their Rust twins):
+
+| kernel | part one | after | after / part one | M instructions a round | after / Rust |
+|---|---|---|---|---|---|
+| tok | 38.63 | 36.35 | 0.94 | 205.5 / 171.4, 0.83 | |
+| sort | 433.7 | 446.5 | 1.03 | 1652.9 / 1618.4, 0.98 | |
+| map | 1921.2 | 1793.4 | 0.93 | 4049.7 / 3968.9, 0.98 | |
+| group | 446.4 | 430.3 | 0.96 | 4017.4 / 4002.4, 1.00 | |
+| logs | 273.4 | 237.1 | 0.87 | 1967.0 / 1898.0, 0.96 | |
+| out json `+=`, 1M | 253.6 | 260.2 | 1.03 | 2398.0 / 2226.1, 0.93 | |
+| out logfmt `+=`, 1M | 170.7 | 182.4 | 1.07 | 1204.7 / 1161.9, 0.96 | |
+| slices logs | 19.38 | 19.12 | 0.99 | 206.4 / 205.2, 0.99 | 1.41 |
+| slices logs_r | 19.82 | 17.92 | 0.90 | 227.7 / 218.2, 0.96 | 0.91 |
+| slices json | 100.15 | 91.62 | 0.91 | 423.1 / 310.9, 0.73 | 1.39 |
+| slices json_r | 83.57 | 82.72 | 0.99 | 328.8 / 328.7, 1.00 | 2.08 |
+| slices pages | 5.25 | 4.48 | 0.85 | 50.8 / 31.2, 0.61 | 1.97 |
+| slices pages_r | 3.67 | 3.63 | 0.99 | 23.1 / 23.1, 1.00 | 1.82 |
+| maps | 146.1 | 134.8 | 0.92 | 310.2 / 296.2, 0.96 | |
+
+**Against the targets.** Slices json at 1.11 of its `_r` form (1.2)
+and logs at 1.07 (1.1) hold, logs at 1.07 to 1.11 over three runs of 9
+to 15. Pages misses: 1.23 of `_r` here, 1.19 to 1.28 over four runs
+(part one: 1.43 to 1.51 at these rounds), and 1.97 to 2.15 of Rust
+(2.0). What's left is the free walk (below, "For the next part"), and
+`json_r` at 1.99 to 2.08 of Rust is the offsets form's own, the same C
+as part one's (1.96 there), with no strings counted. Part one's targets
+(tok 0.65, sort 0.35, map 0.85, group 1.00, logs 0.62 of step 3) still
+hold: no kernel has more instructions than at part one, and none is
+slower beyond this machine's noise. The rest of bench/native compiles
+to the same C but for ren_rt.c, and runs within noise of part one
+(0.85 to 1.06, 5 runs; fannkuch's, vec's, blocks', nested's and nbody's
+instructions are the same within 0.01%).
+
+**For the next part** (the 4 GiB escape and unboxed map entries).
+`ren_sv_view_slice` can't allocate: a view holds no reference, so
+nothing would drop an object it made. Where the escape lands, a view
+whose result is the escape (a slice past 4 GiB of its buffer, or 4 GiB
+long) needs an A slice object, which must be counted: either
+`ren_sv_view_slice` makes the escape's result from the parent's own A
+object where it can (the whole of it), or rc.ml stops lending slices of
+values that may be the escape, which it can't know statically, so the
+first is the way; Mem Lint's rule (a view is a part, with no reference)
+doesn't change. A map's `get` and its entries' readers (`REN_MAP_EACH`)
+give owned values; lending them as `Array_peek` does, a part of the map
+where nothing takes the map, is the same rule, with the same exclusion
+for a map that's written. What's left of pages' gap is the free walk:
+freeing an array of slices reads every element to drop its root (6.4 MB
+in pages, 0.3 to 0.6 ms of its 1.1 ms over `_r`, measured by skipping
+it); an array header that knew every element holds one root could drop
+it once, but every element write would have to keep that true.
+
 ### Progress log
 
 | step | commit | what's done | what's left |
@@ -10019,6 +10210,7 @@ nothing tests.
 | 2 | "Bytes stage, part two, step 2: the API" | `'a'`, interpolation with `\{x=}`, `ascii_lower`, `byte_len`, `is_empty`, the `len`/`s[i]`/`lower`/`concat` errors, `+` and `+=` (copying), `char_floor`/`char_ceil` and the cut panic's help natively, `chars`, `code`, `of_code`, `join`, `cursor(from:)`; tree-sitter and Zed; every program moved; s2 on | in-place `+=` (step 3); excl.ml got one constructor in its list of nodes to walk, the only touch of the services stage's files beyond the shared ones |
 | 3 | "Bytes stage, part two, step 3: appending in place" | the owner's `cap` and `REN_STR_SLICE`; `ren_str_concat_taking` (in place, doubling, copying with room) where the left side dies, `Bytes` too; the debug report with `REN_NOTES`; append_count and the report's block on; `+=` 1.06× Rust on logfmt, linear on both | json's `+=` at 1.41× of Rust, not 1.1×: A's slice objects and `show`'s strings, not the appending (step 4 makes the slices values) |
 | 4, part 1 | "Bytes stage, part two, step 4 (part 1): representation B" | `Str` and `Bytes` two words in release builds (`ren_sv`), inline in locals, small records, arrays and declared fields; boxed (A) at words, blocks, handlers, tuples' and errors' fields and map values; walks given a stack view; `ren_map_set_sv`; literals uncounted; `lend_parts`; tok 0.65, sort 0.35, map 0.85, group 1.00, logs 0.62 of step 3; slices_count's objects on | the uncounted view, the 4 GiB escape (a value past it panics), unboxed map entries, the 16-byte owner experiment; slices json and pages at 1.2× and 1.2 to 1.6× of `_r` and pages 2.8× of Rust, from counting the root on each element read and free |
+| 4, part 2 | "Bytes stage, part two, step 4 (part 2): the uncounted view" | the uncounted view (`Str_view`, `ren_sv_view_slice`), a slice a part of what it's of; lent element reads (`Array_peek`, `Buf_peek`) of arrays nothing takes, in both builds; `lend_parts` to a fixpoint and through calls that take nothing counted; Mem Lint's lent parts and `unlend`; a run of one root dropped at once when an array is freed; strs_lent.t; slices json 1.11 and logs 1.07 of their `_r` forms, json 0.73 and pages 0.61 of part one's instructions | pages at 1.23 of `_r` and 1.97 to 2.15 of Rust, from the free walk; json_r at 2.0 to 2.1 of Rust, its own; the 4 GiB escape (a view of one), unboxed map entries, the 16-byte owner experiment |
 
 ## Services stage
 
