@@ -13,8 +13,8 @@ for everything that isn't a specification. What runs today, `test`,
 > and the console's effects shown as they happen, `:reload` and `:spec`.
 > Stage 11a runs tests' tasks on `sim`, and the services stage adds its
 > fair choice, `release` as a scheduling point, two virtual workers,
-> chaos eviction through `actors(h, chaos: true)`, families' high-water
-> marks, and journal version 3, which names a family's instances.
+> chaos eviction through `actors(h, chaos: true)`, and journal version
+> 3, which names a family's instances.
 > Property tests come with the standard library in stage 12. See
 > [Roadmap](#roadmap).
 
@@ -591,7 +591,7 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **10** | the journal: effects shown in the console, `:reload`, `:spec`, journals as tests (done, stage 10b) |
 | **native slice** | every binary `ren build` makes compared with `ren run`, under ASan and UBSan, with no object left alive, in both counting modes and the release build, and H1's allocations and H3's counts; `ren run --release` against `ren run` on the whole test suite (done; the timings in bench/native/RESULTS.md) |
 | **11a** | `ren test --sim --seeds` on the `sim` runtime (done, step 5: `sim.scheduler`, `sim.clock()`, `--seeds` and `--seed`); journals as tests with a schedule prefix |
-| **services** | `sim`'s fair choice, `release` as a scheduling point, two virtual workers, chaos eviction as `actors`' parameter, families' high-water marks, journal version 3; a lost update split over two operations of one actor found by seed (done, in the interpreter) |
+| **services** | `sim`'s fair choice, `release` as a scheduling point, two virtual workers, chaos eviction as `actors`' parameter, journal version 3; a lost update split over two operations of one actor found by seed (done, in the interpreter) |
 | **12** | property tests: derived generation, generation through constructors, `arbitrary`, shaped parameters, shrinking by replay, saved failures, the report, `ren fuzz`; schedules from 11a's `sim` in the choice sequence |
 | **Later** | generated call sequences, programs as properties, swarm testing, attaching the console |
 
