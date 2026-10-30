@@ -1,0 +1,26 @@
+Investigations run while checking surprising numbers (one line per run, as printed).
+
+1. A 1-worker cell where every scheme beat `none` (1.2x) at spin 100 was noise:
+   back to back, W1, 1 worker, 600k deliveries:
+   none   spin=0 119.5/121.4  spin=50 16.0/16.0  spin=100 8.8/9.0  spin=200 3.7/4.5 M/s
+   credit spin=0  53.0/53.1   spin=50 14.4/14.5  spin=100 8.1/8.1  spin=200 4.6/4.5 M/s
+   A lone unpinned thread may run on an E core; 1-worker cells carry ~+-25%.
+   The spin-0 gap (credit 0.44x none on ONE core) is real: ~10 ns per delivery of
+   per-origin bookkeeping every scheme shares (slot pop, home record init, the
+   close-latency timestamps and histograms), not cross-core cost.
+
+2. W3 (chain), 8 workers, spin 0: credit beat none 1.14x in all 4 passes.
+   Admission is not why (credit N=4096 296/304, N=65536 311/289, N=512 253/263 M/s;
+   none 259/278; home 153/154). The edge's intake threshold is (RQ_OPEN, scratch
+   builds, two runs each, M/s):
+     RQ_OPEN=16   none 218.0/230.0  credit 194.2/194.6
+     RQ_OPEN=64   none 299.0/277.5  credit 298.5/304.6   (the shipped value)
+     RQ_OPEN=256  none 277.9/274.7  credit 336.8/332.9
+   At spin 0, ordering within ~20% between cheap schemes is queueing/intake
+   dynamics, not accounting cost.
+
+3. Superseded first matrix (results/v1-unbounded-baseline/): `none` had no intake
+   bound (edge opened while its run queue was short; posts leave the core, so it
+   opened its whole quota at once), giving schemes up to 1.8x `none`. Fixed by the
+   backlog rule in c/origins.c (run queue + unread inbound ring entries + spill <
+   RQ_OPEN), applied to every scheme. Its fuel numbers agree with the rerun.

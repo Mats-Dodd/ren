@@ -1,0 +1,231 @@
+failed lines: 0
+configs: 144  reps: ['1', '2', '3']
+load1 during runs: min 6.7 median 7.7 max 8.7
+
+== W1 N=4096 spin=0: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan  398.5  394.5    nan
+  atomic          nan    nan    nan   0.24   0.26    nan
+  vector          nan    nan    nan   0.46   0.53    nan
+  credit          nan    nan    nan   0.49   0.43    nan
+  credit_soft     nan    nan    nan   0.55   0.52    nan
+  home            nan    nan    nan   0.47   0.40    nan
+
+== W1 N=4096 spin=100: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan   63.6   89.2    nan
+  atomic          nan    nan    nan   0.63   0.66    nan
+  vector          nan    nan    nan   0.91   0.84    nan
+  credit          nan    nan    nan   0.88   0.81    nan
+  credit_soft     nan    nan    nan   0.84   0.83    nan
+  home            nan    nan    nan   0.87   0.80    nan
+
+== W1 N=4096 spin=1000: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan    8.2   11.2    nan
+  atomic          nan    nan    nan   0.91   0.96    nan
+  vector          nan    nan    nan   0.94   1.01    nan
+  credit          nan    nan    nan   0.92   0.99    nan
+  credit_soft     nan    nan    nan   0.95   0.99    nan
+  home            nan    nan    nan   0.91   0.98    nan
+
+== W2 N=4096 spin=0: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan  431.9  705.6    nan
+  atomic          nan    nan    nan   0.37   0.24    nan
+  vector          nan    nan    nan   0.66   0.41    nan
+  credit          nan    nan    nan   0.69   0.36    nan
+  credit_soft     nan    nan    nan   0.65   0.35    nan
+  home            nan    nan    nan   0.58   0.32    nan
+
+== W2 N=4096 spin=100: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan   59.9   95.6    nan
+  atomic          nan    nan    nan   0.82   0.64    nan
+  vector          nan    nan    nan   1.03   0.85    nan
+  credit          nan    nan    nan   1.09   0.91    nan
+  credit_soft     nan    nan    nan   1.04   0.85    nan
+  home            nan    nan    nan   0.95   0.88    nan
+
+== W2 N=4096 spin=1000: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan    8.2   11.6    nan
+  atomic          nan    nan    nan   0.95   0.95    nan
+  vector          nan    nan    nan   0.98   0.97    nan
+  credit          nan    nan    nan   0.95   0.96    nan
+  credit_soft     nan    nan    nan   0.95   0.95    nan
+  home            nan    nan    nan   0.94   0.99    nan
+
+== W3 N=4096 spin=0: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan  238.7  249.4    nan
+  atomic          nan    nan    nan   0.37   0.39    nan
+  vector          nan    nan    nan   0.69   0.49    nan
+  credit          nan    nan    nan   1.15   0.66    nan
+  credit_soft     nan    nan    nan   1.17   0.61    nan
+  home            nan    nan    nan   0.61   0.22    nan
+
+== W3 N=4096 spin=100: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan   56.7   83.8    nan
+  atomic          nan    nan    nan   0.59   0.66    nan
+  vector          nan    nan    nan   0.84   0.80    nan
+  credit          nan    nan    nan   1.01   0.98    nan
+  credit_soft     nan    nan    nan   1.06   0.96    nan
+  home            nan    nan    nan   0.92   0.76    nan
+
+== W3 N=4096 spin=1000: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan    7.9   11.2    nan
+  atomic          nan    nan    nan   0.93   0.95    nan
+  vector          nan    nan    nan   0.94   0.98    nan
+  credit          nan    nan    nan   0.96   1.01    nan
+  credit_soft     nan    nan    nan   0.98   1.00    nan
+  home            nan    nan    nan   0.95   0.98    nan
+
+== W4 N=4 spin=0: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan  281.8  352.4    nan
+  atomic          nan    nan    nan   0.12   0.08    nan
+  vector          nan    nan    nan   0.97   0.72    nan
+  credit          nan    nan    nan   1.02   0.69    nan
+  credit_soft     nan    nan    nan   1.03   0.63    nan
+  home            nan    nan    nan   0.66   0.20    nan
+
+== W4 N=4 spin=100: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan   59.5   85.6    nan
+  atomic          nan    nan    nan   0.40   0.30    nan
+  vector          nan    nan    nan   0.98   1.00    nan
+  credit          nan    nan    nan   0.97   0.98    nan
+  credit_soft     nan    nan    nan   1.03   0.90    nan
+  home            nan    nan    nan   0.94   0.84    nan
+
+== W4 N=4 spin=1000: deliveries/s ratio to `none` (median of per-rep ratios); `none` row is M/s
+  scheme            1      2      4      8     12     16
+  none M/s        nan    nan    nan    8.2   11.3    nan
+  atomic          nan    nan    nan   0.86   0.88    nan
+  vector          nan    nan    nan   0.97   0.96    nan
+  credit          nan    nan    nan   0.93   0.94    nan
+  credit_soft     nan    nan    nan   0.95   0.98    nan
+  home            nan    nan    nan   0.93   0.83    nan
+
+== W4 N=4 spin=0: ratio to `credit`
+  scheme            1      2      4      8     12     16
+  atomic          nan    nan    nan   0.12   0.12    nan
+  vector          nan    nan    nan   0.95   1.05    nan
+  credit_soft     nan    nan    nan   0.99   0.81    nan
+  home            nan    nan    nan   0.65   0.30    nan
+  none            nan    nan    nan   0.98   1.46    nan
+
+== W4 N=4 spin=100: ratio to `credit`
+  scheme            1      2      4      8     12     16
+  atomic          nan    nan    nan   0.39   0.31    nan
+  vector          nan    nan    nan   1.00   1.01    nan
+  credit_soft     nan    nan    nan   1.00   0.96    nan
+  home            nan    nan    nan   0.94   0.85    nan
+  none            nan    nan    nan   1.04   1.02    nan
+
+== W4 N=4 spin=1000: ratio to `credit`
+  scheme            1      2      4      8     12     16
+  atomic          nan    nan    nan   0.92   0.94    nan
+  vector          nan    nan    nan   0.99   1.02    nan
+  credit_soft     nan    nan    nan   1.02   1.05    nan
+  home            nan    nan    nan   1.00   0.89    nan
+  none            nan    nan    nan   1.08   1.06    nan
+
+== control messages and atomics per delivery (16 workers, spin 100)
+  W1: atomic=nan/nan  vector=nan/nan  credit=nan/nan  credit_soft=nan/nan  home=nan/nan
+  W2: atomic=nan/nan  vector=nan/nan  credit=nan/nan  credit_soft=nan/nan  home=nan/nan
+  W3: atomic=nan/nan  vector=nan/nan  credit=nan/nan  credit_soft=nan/nan  home=nan/nan
+  W4: atomic=nan/nan  vector=nan/nan  credit=nan/nan  credit_soft=nan/nan  home=nan/nan
+
+== close latency, us: p50 / p99 (median over reps)
+  W1 spin=   0 w= 8: atomic=3.9/12  vector=2.3/5  credit=2.3/5  credit_soft=2.2/5  home=2.5/5
+  W1 spin=   0 w=12: atomic=5.3/12  vector=2.8/6  credit=2.8/7  credit_soft=2.8/9  home=3.1/8
+  W1 spin= 100 w= 8: atomic=9.5/23  vector=8.2/18  credit=8.3/17  credit_soft=8.5/19  home=8.5/17
+  W1 spin= 100 w=12: atomic=9.3/23  vector=8.2/18  credit=7.8/18  credit_soft=7.5/18  home=7.7/19
+  W1 spin=1000 w= 8: atomic=58.7/117  vector=62.7/117  credit=61.3/115  credit_soft=61.3/117  home=64.0/117
+  W1 spin=1000 w=12: atomic=57.3/120  vector=57.3/117  credit=58.7/120  credit_soft=58.7/120  home=58.7/117
+  W2 spin=   0 w= 8: atomic=3.9/14  vector=4.1/11  credit=3.9/10  credit_soft=3.9/10  home=3.7/10
+  W2 spin=   0 w=12: atomic=5.7/23  vector=5.2/13  credit=5.0/16  credit_soft=4.2/16  home=4.6/17
+  W2 spin= 100 w= 8: atomic=9.3/47  vector=10.7/43  credit=12.7/41  credit_soft=13.0/42  home=13.3/41
+  W2 spin= 100 w=12: atomic=10.7/55  vector=11.0/41  credit=10.2/40  credit_soft=9.7/41  home=9.7/41
+  W2 spin=1000 w= 8: atomic=154.7/437  vector=138.7/315  credit=141.3/325  credit_soft=141.3/320  home=144.0/325
+  W2 spin=1000 w=12: atomic=62.7/304  vector=52.0/272  credit=52.0/267  credit_soft=50.7/267  home=48.0/272
+  W3 spin=   0 w= 8: atomic=1.6/12  vector=2.9/9  credit=1.8/5  credit_soft=1.8/5  home=2.5/7
+  W3 spin=   0 w=12: atomic=6.7/32  vector=4.0/18  credit=2.8/14  credit_soft=2.8/16  home=3.2/15
+  W3 spin= 100 w= 8: atomic=7.0/51  vector=5.0/28  credit=5.5/27  credit_soft=5.5/27  home=5.5/20
+  W3 spin= 100 w=12: atomic=10.7/48  vector=7.5/42  credit=7.5/36  credit_soft=7.3/33  home=6.3/27
+  W3 spin=1000 w= 8: atomic=48.0/219  vector=57.3/152  credit=66.7/197  credit_soft=68.0/219  home=48.0/131
+  W3 spin=1000 w=12: atomic=65.3/251  vector=54.7/213  credit=64.0/245  credit_soft=65.3/240  home=48.0/149
+  W4 spin=   0 w= 8: atomic=16.7/133  vector=3.8/20  credit=3.5/21  credit_soft=2.7/22  home=2.5/12
+  W4 spin=   0 w=12: atomic=26.7/149  vector=2.8/18  credit=2.2/20  credit_soft=5.5/21  home=3.0/22
+  W4 spin= 100 w= 8: atomic=36.0/197  vector=15.0/99  credit=16.3/96  credit_soft=16.0/85  home=8.0/88
+  W4 spin= 100 w=12: atomic=26.0/165  vector=13.7/60  credit=14.7/59  credit_soft=11.3/63  home=6.2/45
+  W4 spin=1000 w= 8: atomic=48.0/619  vector=192.0/811  credit=170.7/661  credit_soft=170.7/704  home=93.3/661
+  W4 spin=1000 w=12: atomic=45.3/405  vector=74.7/448  credit=77.3/544  credit_soft=73.3/416  home=57.3/672
+
+== side: admission N=64 (W1, W2) and W4 N=16, spin 100: M/s, ratio to credit, lifetime p50 us
+  W1 N=64
+    none         M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    atomic       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    vector       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    credit       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    credit_soft  M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    home         M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    Little atomic N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+    Little credit N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+    Little home   N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+  W2 N=64
+    none         M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    atomic       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    vector       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    credit       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    credit_soft  M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    home         M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    Little atomic N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+    Little credit N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+    Little home   N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+  W4 N=16
+    none         M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    atomic       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    vector       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    credit       M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    credit_soft  M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    home         M/s    nan    nan    nan    nan    nan    nan  | /credit   nan   nan   nan   nan   nan   nan  | life_p50    nan    nan    nan    nan    nan    nan
+    Little atomic N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+    Little credit N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+    Little home   N*size/life_p50 M/s    nan    nan    nan    nan    nan    nan
+
+== spread: (max-min)/median of mdps over reps, configs > 25%
+  ('atomic', 1, 0, 4096, 12) 117.7 82.3 101.8
+  ('atomic', 1, 100, 4096, 8) 42.7 36.2 29.7
+  ('credit', 1, 0, 4096, 8) 226.2 158.6 184.9
+  ('credit', 1, 0, 4096, 12) 266.9 77.9 168.8
+  ('credit', 2, 0, 4096, 12) 297.9 237.3 234.0
+  ('credit', 3, 0, 4096, 12) 165.8 127.3 235.9
+  ('credit', 4, 0, 4, 12) 242.1 289.8 171.1
+  ('credit_soft', 1, 0, 4096, 12) 268.7 143.6 64.5
+  ('credit_soft', 3, 0, 4096, 12) 118.4 219.8 219.2
+  ('credit_soft', 4, 0, 4, 12) 221.1 235.4 128.9
+  ('home', 1, 0, 4096, 8) 221.0 151.5 180.5
+  ('home', 1, 0, 4096, 12) 267.2 65.6 158.0
+  ('home', 2, 0, 4096, 8) 307.3 212.9 282.2
+  ('home', 4, 0, 4, 12) 92.5 59.4 51.7
+  ('home', 4, 1000, 4, 12) 7.8 9.5 10.8
+  ('none', 1, 0, 4096, 12) 473.8 277.7 394.5
+  ('none', 2, 0, 4096, 8) 534.4 397.0 431.9
+  ('none', 3, 0, 4096, 12) 244.1 249.4 359.0
+  ('none', 4, 0, 4, 12) 352.4 290.1 385.8
+  ('vector', 1, 0, 4096, 8) 217.1 150.7 178.9
+  ('vector', 1, 0, 4096, 12) 253.5 147.8 191.4
+  ('vector', 2, 0, 4096, 12) 305.3 223.6 289.8
+  ('vector', 4, 0, 4, 12) 254.5 309.8 170.0
+  noisy configs: 23 of 144
+== spread of ratios to none over reps (max-min), median across configs, by scheme
+  atomic       median 12%  p90 34%
+  vector       median 13%  p90 23%
+  credit       median 16%  p90 26%
+  credit_soft  median 11%  p90 65%
+  home         median 15%  p90 34%

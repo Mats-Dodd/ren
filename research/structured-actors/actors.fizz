@@ -1,0 +1,613 @@
+---
+# Structured actors: decision 18's actor families, with the family DAG
+# replacing mailbox meters, headroom panics and origins.
+#
+#   1. Families form a DAG by install order (ORDER, outermost first). A
+#      family's handler may name only families installed outside it.
+#   2. Nothing reaches family F from inside F: no `at`/`post` to F from an F
+#      op or from inside an F `at` block. NEST says what else an `at` block
+#      may reach: "outer" (only families outside every family it is inside)
+#      or "notself" (anything but the families it is inside). The compiler
+#      refuses the rest; ProgramsLegal checks the programs obey it.
+#   3. post(k, call) waits only for room in key k's mailbox (CAP per key),
+#      returns once queued, and the op can't fail. Posts from one task to one
+#      key run in order, on the key's delivery, which the family owns.
+#   4. Eager setup: post and `at` make the actor, so setup errors go to the
+#      poster or caller and nothing is queued. An actor with mail, pinned or
+#      mid-op is never evicted. Making one past max: evicts any evictable one
+#      (a superset of LRU); with none, the maker waits, unless it pins or
+#      runs an op in a family not outside the target (then `Full`). Under
+#      NEST="outer" that pin rule never fires (every wait is outward);
+#      PIN_RULE=False checks so. Under NEST="notself" it is needed but not
+#      enough (MODEL.md).
+#   5. Teardown drains, inner family first. 6. No panics, no supervision.
+#
+# Every step is one atomic action; waits are `require`s (a step that must
+# wait is simply not enabled).
+options:
+  max_actions: 400
+  crash_on_yield: false
+deadlock_detection: true
+liveness: "false"     # run.sh turns it on for the termination runs
+---
+
+# ---- knobs (override with --preinit-hook) ------------------------------------
+ORDER = ["Log", "Index", "Docs"]   # install order, outermost first
+KEYS = 2
+MAX = 1                  # max: live actors per family (an int, or {family: n})
+CAP = 1                  # mailbox bound, per key
+FAIL_KEYS = []           # e.g. ["Index1"]: setup of these may fail (each attempt)
+CHAOS = False            # evict any evictable actor at any point
+NEST = "outer"           # what an `at` block may reach: outer | notself
+
+# mutants
+SAME_FAMILY = "no"       # (a) an op may post into its own family: no | wait | nowait
+BOUND = "key"            # (b) key: CAP per key | family: FAMCAP mail per family
+FAMCAP = 1
+PIN_RULE = True          # (c) False: a pinning task may wait for a slot anywhere
+PIN_MAIL = False         # the pin rule also covers mailbox waits (a `post` gets `Full`)
+EAGER = True             # (d) False: a post just queues; the delivery makes the actor
+OVER_MAX = False         # non-eager only: a delivery may exceed max: when nothing is evictable
+SEQMOD = 4               # post sequence numbers mod this (FIFO check; keeps loops finite)
+CHECK_LIVE = True        # False switches MailImpliesLive off (to see what else the lazy mutant breaks)
+CHECK_MAXCAP = True      # False switches MailWithinMaxTimesCap off (likewise)
+
+COVER = []               # exists-checks expected in this run (see the end)
+
+# Ops, per family. Steps: ["post", F, k, op] | ["at", F, k] | ["call", op] |
+# ["end"] | ["io"] (a suspension). k is a key or "same" (the actor's own key).
+OPS = {
+    "Docs": {
+        "nop":  [],
+        "edit": [["io"], ["post", "Index", "same", "nop"]],     # save, then tell Index
+        "tell": [["post", "Index", "same", "nop"], ["io"]],     # tell Index, then save
+        "look": [["at", "Index", "same"], ["call", "log"], ["end"]],
+        "look1": [["at", "Index", 1], ["call", "nop"], ["end"]],
+        "save": [["io"], ["post", "Index", 0, "nop"]],          # the load case: I/O, then post
+        "tolog": [["io"], ["post", "Index", "same", "log"]],
+        "poke": [["post", "Docs", "next", "nop"]],              # mutant (a) only: into its own family
+        "double": [["post", "Docs", "next", "double"], ["post", "Docs", "next", "double"]],
+    },
+    "Index": {
+        "nop":  [],
+        "log":  [["at", "Log", 0], ["call", "nop"], ["end"]],   # Index op `at`s Log
+        "note": [["post", "Log", 0, "nop"]],
+        "slow": [["io"], ["io"]],
+        "up":   [["post", "Docs", "same", "nop"]],              # legal only with Docs outside Index
+    },
+    "Log": {
+        "nop":  [],
+    },
+}
+
+# Outside tasks. Steps as above, plus ["calls", op] and ["posts", F, k, op]:
+# do it any number of times (a loop).
+PROGS = [
+    [["post", "Docs", 0, "edit"], ["post", "Docs", 1, "tell"]],
+    [["at", "Docs", 0], ["call", "look"], ["post", "Index", 1, "note"], ["end"]],
+]
+
+# ---- helpers -------------------------------------------------------------------
+atomic func rank(f):
+    return ORDER.index(f)
+
+atomic func cap(f):
+    if type(MAX) == "dict":
+        return MAX[f]
+    return MAX
+
+atomic func code_of(name):
+    if name[0] == "#":
+        return PROGS[int(name[1:])]
+    ps = name.split(".")
+    return OPS[ps[0]][ps[1]]
+
+atomic func resolve(k, fr):
+    if k == "same":
+        return fr[2][1]
+    if k == "next":
+        return (fr[2][1] + 1) % KEYS
+    return k
+
+# Families a frame is inside: its actor's (an op frame) and its open `at` blocks'.
+atomic func inside(fr):
+    fs = []
+    if fr[2] != None:
+        fs.append(fr[2][0])
+    for p in fr[3]:
+        fs.append(p[0])
+    return fs
+
+# Families task t holds: every frame's actor and pins.
+atomic func held(t):
+    hs = []
+    for fr in stacks[t]:
+        fs = inside(fr)
+        for f in fs:
+            hs.append(f)
+    return hs
+
+atomic func outside_all(f, hs):
+    for h in hs:
+        if ORDER.index(f) >= ORDER.index(h):
+            return False
+    return True
+
+atomic func may_wait(t, f):
+    if not PIN_RULE:
+        return True
+    hs = held(t)
+    r = outside_all(f, hs)
+    return r
+
+atomic func evictable(f, k):
+    return (k in live[f]) and live[f][k] == 0 and busy[f][k] == "" and len(mbox[f][k]) == 0
+
+atomic func victims(f):
+    vs = []
+    for k in live[f]:
+        e = evictable(f, k)
+        if e:
+            vs.append(k)
+    return vs
+
+atomic func fam_mail(f):
+    n = 0
+    for k in range(KEYS):
+        n = n + len(mbox[f][k])
+    return n
+
+atomic func room(f, k):
+    if BOUND == "family":
+        n = fam_mail(f)
+        return n < FAMCAP
+    return len(mbox[f][k]) < CAP
+
+# Make f's actor for k. Returns ok | fail (setup failed) | wait | full.
+atomic func make(f, k, can_wait, over):
+    if k in live[f]:
+        return "ok"
+    c = cap(f)
+    if len(live[f]) >= c:
+        vs = victims(f)
+        if len(vs) > 0:
+            v = oneof vs
+            live[f].pop(v)
+        elif over:
+            pass
+        elif can_wait:
+            return "wait"
+        else:
+            return "full"
+    if (f + str(k)) in FAIL_KEYS:
+        r = oneof ["ok", "fail"]
+        if r == "fail":
+            return "fail"
+    live[f][k] = 0
+    return "ok"
+
+atomic func next_seq(t, f, k):
+    key = t + ">" + f + str(k)
+    s = (seq.get(key, 0) + 1) % SEQMOD  # keeps loops finite
+    seq[key] = s
+    return s
+
+# Task t posts op to f's key k from frame fr. Returns ok | wait | an error.
+atomic func do_post(t, fr, f, k, op):
+    if ended[f]:
+        post_after_end.append(t)
+    if EAGER:
+        mw = may_wait(t, f)
+        r = make(f, k, mw, False)
+        if r != "ok":
+            return r
+    mine = fr[2] != None and fr[2][0] == f
+    if not (SAME_FAMILY == "nowait" and mine):
+        ok = room(f, k)
+        if not ok:
+            if PIN_MAIL:
+                mw = may_wait(t, f)
+                if not mw:
+                    return "full"
+            return "wait"
+    s = next_seq(t, f, k)
+    mbox[f][k].append([t, s, op])
+    owed[f + str(k)] = owed.get(f + str(k), 0) + 1
+    return "ok"
+
+# The step after the `end` matching the `at` at pc.
+atomic func skip_block(code, pc):
+    depth = 0
+    for i in range(pc, len(code)):
+        if code[i][0] == "at":
+            depth = depth + 1
+        elif code[i][0] == "end":
+            depth = depth - 1
+            if depth == 0:
+                return i + 1
+    return len(code)
+
+# ---- the compiler's check (rule 2) ---------------------------------------------
+atomic func legal_code(fam, code):
+    ins = []
+    if fam != None:
+        ins.append(fam)
+    for st in code:
+        if st[0] in ["post", "posts", "at"]:
+            g = st[1]
+            same_ok = SAME_FAMILY != "no" and st[0] == "post" and len(ins) == 1 and ins[0] == fam and g == fam
+            if not same_ok:
+                if g in ins:
+                    return False
+                if NEST == "outer" or fam != None:
+                    ok = outside_all(g, ins)
+                    if not ok:
+                        return False
+            if st[0] == "at":
+                ins.append(g)
+        elif st[0] == "end":
+            ins.pop()
+    return True
+
+# Only the ops the programs can reach are compiled into this run.
+atomic func all_legal():
+    for p in PROGS:
+        ok = legal_code(None, p)
+        if not ok:
+            return False
+    work = []
+    for p in PROGS:
+        work.append([None, p])
+    seen = []
+    while len(work) > 0:
+        w = work.pop()
+        ins = []
+        if w[0] != None:
+            ins.append(w[0])
+        for st in w[1]:
+            g = None
+            op = None
+            if st[0] in ["post", "posts"]:
+                g = st[1]
+                op = st[3]
+            elif st[0] == "at":
+                ins.append(st[1])
+            elif st[0] == "end":
+                ins.pop()
+            elif st[0] in ["call", "calls"]:
+                g = ins[-1]
+                op = st[1]
+            if op != None and not ((g + "." + op) in seen):
+                seen.append(g + "." + op)
+                ok = legal_code(g, OPS[g][op])
+                if not ok:
+                    return False
+                work.append([g, OPS[g][op]])
+    return True
+
+# ---- state ------------------------------------------------------------------------
+atomic action Init:
+    live = {}          # family -> {key: pins}
+    mbox = {}          # family -> key -> [[poster, seq, op]]
+    busy = {}          # family -> key -> task running an op on it, or ""
+    ended = {}
+    stacks = {}        # task -> frames [code, pc, actor [f, k] or None, pins [[f, k]]]
+    for f in ORDER:
+        live[f] = {}
+        mbox[f] = {}
+        busy[f] = {}
+        ended[f] = False
+        for k in range(KEYS):
+            mbox[f][k] = []
+            busy[f][k] = ""
+            stacks["D" + f + str(k)] = []
+    for i in range(len(PROGS)):
+        stacks["T" + str(i)] = [["#" + str(i), 0, None, []]]
+    seq = {}
+    done_seq = {}
+    owed = {}          # per key: posts accepted and not yet delivered (or lost)
+    lost = []          # posts whose setup failed at delivery (non-eager)
+    errs = []          # [task, family+key, error]: setup failure or Full, back to the caller
+    fifo_bad = False
+    post_after_end = []
+    legal = all_legal()
+    last = ""
+
+# ---- tasks: outside programs and deliveries take one step at a time -----------------
+atomic fair action Step:
+    t = oneof [x for x in stacks if len(stacks[x]) > 0]
+    fr = stacks[t][-1]
+    code = code_of(fr[0])
+    pc = fr[1]
+    if pc >= len(code):
+        stacks[t] = stacks[t][:-1]
+        if fr[2] != None:
+            busy[fr[2][0]][fr[2][1]] = ""
+            last = t + " returns from " + fr[0] + " on " + fr[2][0] + str(fr[2][1])
+        else:
+            last = t + " done"
+        return
+    st = code[pc]
+    kind = st[0]
+    if kind == "io":
+        fr[1] = pc + 1
+        last = t + " " + fr[0] + ": io"
+    elif kind == "post" or kind == "posts":
+        f = st[1]
+        k = resolve(st[2], fr)
+        r = do_post(t, fr, f, k, st[3])
+        require r != "wait"
+        if r != "ok" and not ([t, f + str(k), r] in errs):
+            errs.append([t, f + str(k), r])
+        if kind == "post":
+            fr[1] = pc + 1
+        else:
+            more = oneof [True, False]
+            if not more:
+                fr[1] = pc + 1
+        last = t + " post " + f + str(k) + "." + st[3] + ": " + r
+    elif kind == "at":
+        f = st[1]
+        k = resolve(st[2], fr)
+        mw = may_wait(t, f)
+        r = make(f, k, mw, False)
+        require r != "wait"
+        if r == "ok":
+            live[f][k] = live[f][k] + 1
+            fr[3].append([f, k])
+            fr[1] = pc + 1
+        else:
+            if not ([t, f + str(k), r] in errs):
+                errs.append([t, f + str(k), r])
+            nxt = skip_block(code, pc)
+            fr[1] = nxt
+        last = t + " at " + f + str(k) + ": " + r
+    elif kind == "call" or kind == "calls":
+        a = fr[3][-1]
+        f = a[0]
+        k = a[1]
+        if kind == "calls":
+            more = oneof [True, False]
+            if not more:
+                fr[1] = pc + 1
+                last = t + " leaves loop"
+                return
+        else:
+            fr[1] = pc + 1
+        require busy[f][k] == ""
+        busy[f][k] = t
+        stacks[t].append([f + "." + st[1], 0, [f, k], []])
+        last = t + " calls " + f + str(k) + "." + st[1]
+    elif kind == "end":
+        a = fr[3].pop()
+        live[a[0]][a[1]] = live[a[0]][a[1]] - 1
+        fr[1] = pc + 1
+        last = t + " end at " + a[0] + str(a[1])
+
+atomic fair action Deliver:
+    cands = []
+    for f in ORDER:
+        for k in range(KEYS):
+            if len(mbox[f][k]) > 0 and busy[f][k] == "" and len(stacks["D" + f + str(k)]) == 0:
+                cands.append([f, k])
+    c = oneof cands
+    f = c[0]
+    k = c[1]
+    d = "D" + f + str(k)
+    if not (k in live[f]):
+        # only without eager setup: the delivery makes the actor
+        r = make(f, k, True, OVER_MAX)
+        require r != "wait"
+        if r == "fail":
+            m = mbox[f][k].pop(0)
+            lost.append([f + str(k)] + m)
+            owed[f + str(k)] = owed[f + str(k)] - 1
+            last = d + " setup fails: post lost"
+            return
+    m = mbox[f][k].pop(0)
+    key = m[0] + ">" + f + str(k)
+    if m[1] != (done_seq.get(key, 0) + 1) % SEQMOD:
+        fifo_bad = True
+    done_seq[key] = m[1]
+    owed[f + str(k)] = owed[f + str(k)] - 1
+    busy[f][k] = d
+    stacks[d] = [[f + "." + m[2], 0, [f, k], []]]
+    last = d + " delivers " + m[2] + " from " + m[0]
+
+atomic action Chaos:
+    require CHAOS
+    cands = []
+    for f in ORDER:
+        vs = victims(f)
+        for k in vs:
+            cands.append([f, k])
+    c = oneof cands
+    live[c[0]].pop(c[1])
+    last = "chaos evicts " + c[0] + str(c[1])
+
+# Families end inner first, once the outside programs are done; each drains first.
+atomic fair action Teardown:
+    require all([len(stacks["T" + str(i)]) == 0 for i in range(len(PROGS))])
+    open = [f for f in ORDER if not ended[f]]
+    require len(open) > 0
+    f = open[-1]
+    for k in range(KEYS):
+        require len(mbox[f][k]) == 0 and busy[f][k] == "" and len(stacks["D" + f + str(k)]) == 0
+    live[f] = {}
+    ended[f] = True
+    last = f + " ends"
+
+atomic action Finished:
+    require all([ended[f] for f in ORDER])
+    pass
+
+# ---- properties ------------------------------------------------------------------
+always assertion ProgramsLegal:
+    return legal
+
+always assertion FifoPerPosterKey:
+    return not fifo_bad
+
+always assertion NoLostPost:
+    return len(lost) == 0
+
+always assertion EveryAcceptedPostRan:
+    # checked at teardown: an ended family delivered everything it accepted
+    for f in ORDER:
+        if ended[f]:
+            for k in range(KEYS):
+                if owed.get(f + str(k), 0) != 0:
+                    return False
+    return True
+
+always assertion NoPostToEndedFamily:
+    return len(post_after_end) == 0
+
+always assertion MailPerKeyWithinCap:
+    for f in ORDER:
+        for k in range(KEYS):
+            if len(mbox[f][k]) > CAP:
+                return False
+    return True
+
+always assertion MailWithinLiveOrQueuedKeys:
+    for f in ORDER:
+        n = 0
+        ks = 0
+        for k in range(KEYS):
+            n = n + len(mbox[f][k])
+            if (k in live[f]) or len(mbox[f][k]) > 0:
+                ks = ks + 1
+        if n > ks * CAP:
+            return False
+    return True
+
+always assertion MailWithinMaxTimesCap:
+    # mail implies live, so a family's mail is at most max: x CAP, whatever the key space
+    if not CHECK_MAXCAP:
+        return True
+    for f in ORDER:
+        n = fam_mail(f)
+        c = cap(f)
+        if n > c * CAP:
+            return False
+    return True
+
+always assertion MaxRespected:
+    for f in ORDER:
+        c = cap(f)
+        if len(live[f]) > c:
+            return False
+    return True
+
+always assertion MailImpliesLive:
+    # setup errors can't strand mail: a queued post's actor exists
+    if not CHECK_LIVE:
+        return True
+    for f in ORDER:
+        for k in range(KEYS):
+            if len(mbox[f][k]) > 0 and not (k in live[f]):
+                return False
+    return True
+
+always assertion NoPanic:
+    # there is no panic state in the design; the model has none to reach
+    return True
+
+# A task blocked on a post to key k while k's mailbox has room (head-of-line).
+always assertion NoHeadOfLineBlocking:
+    for t in stacks:
+        if len(stacks[t]) == 0:
+            continue
+        fr = stacks[t][-1]
+        code = code_of(fr[0])
+        if fr[1] < len(code) and code[fr[1]][0] in ["post", "posts"]:
+            f = code[fr[1]][1]
+            k = resolve(code[fr[1]][2], fr)
+            if len(mbox[f][k]) < CAP:
+                r = room(f, k)
+                if not r:
+                    return False
+    return True
+
+# ---- coverage: the run reaches the interesting state (only when in COVER) ---------
+atomic func blocked_post(t):
+    if len(stacks[t]) == 0:
+        return False
+    fr = stacks[t][-1]
+    code = code_of(fr[0])
+    if fr[1] >= len(code) or not (code[fr[1]][0] in ["post", "posts"]):
+        return False
+    f = code[fr[1]][1]
+    k = resolve(code[fr[1]][2], fr)
+    return (k in live[f]) and len(mbox[f][k]) >= CAP
+
+atomic func blocked_slot(t):
+    if len(stacks[t]) == 0:
+        return False
+    fr = stacks[t][-1]
+    code = code_of(fr[0])
+    if fr[1] >= len(code) or not (code[fr[1]][0] in ["post", "posts", "at"]):
+        return False
+    f = code[fr[1]][1]
+    k = resolve(code[fr[1]][2], fr)
+    c = cap(f)
+    vs = victims(f)
+    return not (k in live[f]) and len(live[f]) >= c and len(vs) == 0
+
+exists assertion AllFamiliesEnd:
+    if not ("end" in COVER):
+        return True
+    return all([ended[f] for f in ORDER])
+
+exists assertion PinnerWaitsOnFullMailbox:
+    if not ("pinpost" in COVER):
+        return True
+    for t in stacks:
+        if t[0] == "T":
+            hs = held(t)
+            b = blocked_post(t)
+            if len(hs) > 0 and b:
+                return True
+    return False
+
+exists assertion OpWaitsOnFullMailbox:
+    if not ("oppost" in COVER):
+        return True
+    for t in stacks:
+        if len(stacks[t]) > 0 and stacks[t][-1][2] != None:
+            b = blocked_post(t)
+            if b:
+                return True
+    return False
+
+exists assertion WaitsForSlot:
+    if not ("slot" in COVER):
+        return True
+    for t in stacks:
+        b = blocked_slot(t)
+        if b:
+            return True
+    return False
+
+exists assertion SetupErrorReachesCaller:
+    if not ("fail" in COVER):
+        return True
+    return len([e for e in errs if e[2] == "fail"]) > 0
+
+exists assertion FullReturned:
+    if not ("full" in COVER):
+        return True
+    return len([e for e in errs if e[2] == "full"]) > 0
+
+exists assertion MailboxFull:
+    if not ("cap" in COVER):
+        return True
+    for f in ORDER:
+        for k in range(KEYS):
+            if len(mbox[f][k]) == CAP:
+                return True
+    return False
+
+eventually always assertion FamiliesEventuallyEnd:
+    return all([ended[f] for f in ORDER])

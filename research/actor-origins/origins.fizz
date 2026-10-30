@@ -1,0 +1,948 @@
+---
+# Decision 18's `post` under decision 10, for one actor family, with two
+# ways to bound the mail outside work causes:
+#
+# - ORIGINS=False: the adopted rules (research/actors-post/, the `FIX` knobs).
+#   Every outside call is metered against one global `mailbox:` bound, and a
+#   sibling post past `mailbox + HEADROOM` panics.
+# - ORIGINS=True: origins. An origin is one outside call: one outside `post`,
+#   or one operation called through `at` from outside that can post. The
+#   family has at most INFLIGHT open origins, and an outside call waits for a
+#   free one before it takes the actor or queues: the edge is the only place
+#   that waits. Mail sent inside the family carries the origin of the
+#   operation that sent it and never waits. An origin closes when all its
+#   descendant mail has been delivered (a refcount: +1 per post and per
+#   running operation, -1 when that operation returns). Each origin has
+#   pooled FUEL: the in-family posts it causes. The post past FUEL panics.
+#
+# On top of origins (MODEL.md, "Outbox and split fuel"):
+#
+# - OUTBOX=True: an operation's posts are buffered and leave together, in
+#   the order made, when the operation ends: on return, failure or
+#   cancellation. (FLUSH="suspend", the checked fix: also at each suspension.)
+# - FUEL_MODE="split": fuel travels with the mail. An outside origin's first
+#   delivery carries FUEL. An op that ends with fuel r and k outbox posts
+#   panics if k > r; otherwise each post is charged 1 and r-k is divided
+#   among the k posts, remainder to the earliest.
+# - CLOSE="credit": close detection by weight-throwing (Mattern/Huang)
+#   instead of the refcount, which is kept as a ghost to check it against.
+#
+# A family `Docs = Actors<K, D>` with keys 0..KEYS-1 and `max: MAX` live
+# actors. Outside tasks run small programs of `Docs.post(k).op()`,
+# `Docs.at(k) fn() => ...` blocks and the test-only `settled()`. Posts run on
+# delivery tasks the family's `with` owns, one per key (one operation at a
+# time per actor, mailbox order). An operation, run by a delivery or by an
+# `at` caller, may post to siblings; it takes the actor for one call
+# (decision 10), so `at` blocks and deliveries interleave between calls.
+#
+# Every step is one atomic action; waits are `require`s.
+options:
+  max_actions: 400
+  crash_on_yield: false
+deadlock_detection: true
+liveness: "false"         # run.sh turns it on (strict) for the liveness runs; the actions are fair
+---
+
+# ---- knobs (override with --preinit-hook) ---------------------------------
+KEYS = 2
+MAX = 1                  # max: live actors
+MAILBOX = 1              # mailbox: bound on queued posts in the family (old rules)
+CEIL = 4                 # old rules: Bounded fails if the family ever queues more than this
+
+ORIGINS = False          # True: origins replace the mailbox meter and the headroom panic
+INFLIGHT = 1             # origins: open origins the family allows
+FUEL = 2                 # origins: in-family posts one origin may cause
+SIB_ORIGIN = "carry"     # origins, a sibling post: carry its sender's origin (the design) |
+                         # new (it opens a fresh origin, waiting at the edge for a slot)
+COVER_SETTLED = False    # expect a run where settled() waits on queued mail and then returns
+COVER_NEST = False       # expect a state where a pinning task waits at the edge to post,
+                         # with the family full and every origin slot taken
+
+OUTBOX = False           # origins: an op's posts leave together when it ends (return, fail, cancel)
+FLUSH = "end"            # OUTBOX: end (the proposal) | suspend (also at every suspension point)
+FUEL_MODE = "pooled"     # origins: pooled (one count per origin) | split (fuel travels with mail; needs OUTBOX)
+SPLIT_PANIC = "end"      # split: panic when the op ends with k > r (end) | at its (r+1)th post (post)
+CLOSE = "refcount"       # origins: refcount | credit (weight-throwing; needs OUTBOX; refcount kept as a ghost)
+WEIGHT = 0               # credit: an origin's total weight; 0 means FUEL
+CANCEL = False           # an `at` caller may be cancelled while its op is suspended in I/O
+COVER_CANCEL = False     # expect a cancellation with a non-empty outbox
+COVER_FAILOP = False     # expect an op failing with a non-empty outbox
+PANIC_AT = None          # [root, depth, key, op]: every interleaving panics, and only at this op
+MUTANT = ""              # checking the checker: order | split | credit | cancel_drop
+CHECK_CONSERVATION = True  # credit: False switches CreditConserved off (to see a mutant's effect)
+COVER_BOUND = False      # expect a state with exactly INFLIGHT * FUEL in-family mail queued
+
+SIB = "never_wait"       # old rules, a sibling post: never_wait | wait | panic_over
+HEADROOM = 1             # panic_over: a sibling post panics at MAILBOX + HEADROOM queued
+AT_METER = False         # old rules: an outside `at` caller's op call waits at the edge while full
+DELIVERY_OVER_MAX = False  # an actor made for a post may go past max: when nothing is evictable
+EAGER = False            # a post makes its actor when it's posted (as `at` does), and fails
+                         # with setup's errors; a key with queued posts is waited for
+COVER_EVICT = True       # expect a run that evicts an actor with queued posts (coverage)
+COVER_FAIL = False       # expect a run where a sibling post's setup fails (coverage, EAGER)
+MBOX_HOME = "key"        # key: the mailbox is the family's, per key | actor: it dies with the actor
+EVICT_NONEMPTY = True    # may an actor with queued posts be evicted?
+CHAOS = False            # sim's evict: AnyIdle - evict any evictable actor at any point
+SETUP_FAIL_KEYS = []     # keys whose setup may fail (each attempt, nondeterministically)
+SETUP_POLICY = "drop"    # what a delivery does when setup fails: drop | drop_all | retry | panic
+SETUP_DOWN = False       # True: setup of SETUP_FAIL_KEYS always fails (the store is down for good)
+TEARDOWN = "drain"       # family end: drain (run queued posts, then finallys) | drop
+
+# What an operation does when it runs, in order: [target, op] posts, with
+# target "next" = (k+1) % KEYS, "self" = k, "all" = every sibling;
+# ["io", what], an I/O step (the op suspends; nothing is posted); ["fail"],
+# the op fails here (the rest is skipped); ["set"], the op records in an
+# outside store that it ran on k; ["wait", "next"], the op polls that store
+# until (k+1) % KEYS has recorded (only after an "io" step: polling suspends).
+OPS = {
+    "nop":    [],
+    "ping":   [["next", "pong"]],          # a ping-pong cycle, two hops
+    "pong":   [["next", "nop"]],
+    "fan":    [["all", "nop"]],            # fan-out to every sibling
+    "loop":   [["next", "loop"]],          # ping-pong forever, one message in flight
+    "double": [["next", "double"], ["next", "double"]],   # chain reaction
+    "notify": [["next", "nop"]],           # Doc.edit telling a sibling, run via `at`
+    "edit":   [["io", "Store.save"], ["next", "nop"]],    # save, then tell a sibling
+    # a relay: hN posts h(N-1) to the next key, h0 posts nothing (N in-family posts)
+    "h0": [], "h1": [["next", "h0"]], "h2": [["next", "h1"]], "h3": [["next", "h2"]],
+    "h4": [["next", "h3"]], "h5": [["next", "h4"]], "h6": [["next", "h5"]],
+    "split2": [["all", "h1"]],             # two branches, each a 1-hop relay
+    "two":    [["next", "nop"], ["next", "nop"]],         # two posts to one sibling
+    # post, suspend, post again (cancellation lands at the I/O)
+    "save2":  [["next", "nop"], ["io", "Store.save"], ["next", "nop"]],
+    # post, suspend, fail before the second post
+    "savefail": [["next", "nop"], ["io", "Store.save"], ["fail"], ["next", "nop"]],
+    # observability: tell a sibling to mark the store, then poll the store for it
+    "mark":   [["set"]],
+    "await":  [["next", "mark"], ["io", "Store.get"], ["wait", "next"]],
+}
+
+# Outside tasks. Steps: ["post", k, op] | ["at", k] | ["call", op] |
+# ["calls", op] (call it any number of times: a session's `for op in ...`) |
+# ["end"] (the `at` block returns) | ["settled"] (test-only: wait until every
+# origin this task opened has closed).
+PROGS = [
+    [["post", 0, "ping"], ["post", 1, "nop"]],
+    [["at", 0], ["call", "nop"], ["post", 1, "nop"], ["end"]],
+]
+
+TARGETS = ["next", "self", "all"]
+
+atomic func targets(k, tgt):
+    if tgt == "next":
+        return [(k + 1) % KEYS]
+    if tgt == "self":
+        return [k]
+    return [j for j in range(KEYS) if j != k]
+
+atomic func expand(k, op):
+    # the steps an operation takes, in order: [key, op] posts and the other steps
+    out = []
+    for p in OPS[op]:
+        if not (p[0] in TARGETS):
+            out.append(p)
+            continue
+        ts = targets(k, p[0])
+        for j in ts:
+            out.append([j, p[1]])
+    return out
+
+atomic func can_post(op):
+    return len([p for p in OPS[op] if p[0] in TARGETS]) > 0
+
+atomic func total():
+    n = 0
+    for k in range(KEYS):
+        n = n + len(mbox[k])
+    return n
+
+atomic func outboxed(j):
+    # OUTBOX: a running op holds a post to j that hasn't left yet
+    for i in range(len(PROGS)):
+        if texec[i] != None and len([p for p in texec[i][7] if p[0] == j]) > 0:
+            return True
+    for k in dexec:
+        if len([p for p in dexec[k][7] if p[0] == j]) > 0:
+            return True
+    return False
+
+atomic func victims(k):
+    vs = []
+    for j in live:
+        if j == k:
+            continue
+        a = live[j]
+        if a["pins"] == 0 and busy[j] == -1 and ((EVICT_NONEMPTY and not EAGER) or len(mbox[j]) == 0):
+            held = False
+            if EAGER and OUTBOX:
+                held = outboxed(j)
+            if not held:
+                vs.append(j)
+    return vs
+
+atomic func evict(j):
+    live.pop(j)
+    if len(mbox[j]) > 0:
+        evicted_with_mail = True
+    if MBOX_HOME == "actor" and len(mbox[j]) > 0:
+        for m in mbox[j]:
+            lost.append([j] + m)
+        mbox[j] = []
+
+atomic func next_seq(poster, k):
+    s = (seq.get(str(poster) + ">" + str(k), 0) + 1) % 4   # mod 4 keeps loops finite
+    seq[str(poster) + ">" + str(k)] = s
+    return s
+
+# A message: [poster, seq, op, "out"|"in", origin, root task, fuel, weight,
+# depth] (origin -1 and root -1 under the old rules; fuel, weight and depth 0
+# unless split fuel, credit or PANIC_AT is on). s: the seq the post was given
+# when it was made, or None for a new one.
+atomic func enqueue(poster, k, op, kind, o, root, s, f, w, d):
+    if s == None:
+        s = next_seq(poster, k)
+    mbox[k].append([poster, s, op, kind, o, root, f, w, d])
+
+atomic func track_depth():
+    return FUEL_MODE == "split" or PANIC_AT != None
+
+atomic func w0():
+    if WEIGHT > 0:
+        return WEIGHT
+    return FUEL
+
+# A running operation: [op, steps left, origin, root, fuel, weight, depth, outbox]
+# (outbox: [key, op, seq] posts made but not yet sent).
+atomic func op_exec(op, ps, o, root, d):
+    f = 0
+    w = 0
+    if o != -1 and FUEL_MODE == "split":
+        f = FUEL
+    if o != -1 and CLOSE == "credit":
+        w = w0()
+    return [op, ps, o, root, f, w, d, []]
+
+# ---- origins ------------------------------------------------------------------
+# An origin is a slot 0..INFLIGHT-1, reused once closed: {"owner", "rc", "used", "ret"}.
+atomic func open_origin(t):
+    for o in range(INFLIGHT):
+        if not (o in orig):
+            orig[o] = {"owner": t, "rc": 1, "used": 0, "ret": 0}
+            return o
+    return -1
+
+atomic func release(o):
+    # the operation holding one of o's references has returned
+    if o == -1:
+        return
+    orig[o]["rc"] = orig[o]["rc"] - 1
+    if orig[o]["rc"] == 0 and CLOSE == "refcount":
+        orig.pop(o)
+
+atomic func fuel_panic(ex, here):
+    panicked = True
+    why = "origin " + str(ex[2]) + " out of fuel"
+    td = track_depth()
+    if td:
+        panic_site = [ex[3], ex[6], here, ex[0]]
+
+# One post from an actor's operation, sent at once (OUTBOX=False). poster is
+# the task running it, here the actor, ex the running op. Returns True if it
+# went in, False if it has to wait.
+atomic func sib_post(poster, here, k, op, ex):
+    o = ex[2]
+    root = ex[3]
+    d = 0
+    td = track_depth()
+    if td:
+        d = ex[6] + 1
+    if ORIGINS and SIB_ORIGIN == "new":
+        if len(orig) >= INFLIGHT:
+            return False                    # waits for a free origin while holding its actor
+        if EAGER and not (k in live):
+            r = make(k, True)
+            if r == "fail":
+                sib_fails.append(k)
+                return True
+        o2 = open_origin(root)
+        enqueue(poster, k, op, "in", o2, root, None, 0, 0, d)
+        return True
+    if ORIGINS:
+        if orig[o]["used"] >= FUEL:
+            fuel_panic(ex, here)
+            return True
+    else:
+        n = total()
+        if SIB == "wait" and n >= MAILBOX:
+            return False
+        if SIB == "panic_over" and n >= MAILBOX + HEADROOM:
+            panicked = True
+            why = "sibling post over mailbox + headroom"
+            return True
+    if EAGER and not (k in live):
+        r = make(k, True)
+        if r == "fail":
+            sib_fails.append(k)             # the posting operation handles setup's error
+            return True
+    if ORIGINS:
+        orig[o]["used"] = orig[o]["used"] + 1
+        orig[o]["rc"] = orig[o]["rc"] + 1
+    enqueue(poster, k, op, "in", o, root, None, 0, 0, d)
+    return True
+
+# OUTBOX: one post from a running op goes into its outbox. Setup's error
+# (EAGER) still comes back to the op at the post. Returns the new outbox.
+atomic func buffer_post(poster, here, k, op, ex):
+    if EAGER and not (k in live):
+        r = make(k, True)
+        if r == "fail":
+            sib_fails.append(k)
+            return ex[7]
+    if FUEL_MODE == "split" and SPLIT_PANIC == "post" and len(ex[7]) + 1 > ex[4]:
+        fuel_panic(ex, here)
+        return ex[7]
+    s = next_seq(poster, k)
+    return ex[7] + [[k, op, s]]
+
+atomic func shares(x, n):
+    # x divided among n parties, evenly, the remainder to the earliest
+    return [x // n + (1 if i < x % n else 0) for i in range(n)]
+
+# OUTBOX: the outbox leaves. final: the op has ended (returned, failed or was
+# cancelled); otherwise it is suspending (FLUSH="suspend"), and its
+# continuation is one more party to the split. Returns the continuation's
+# [fuel, weight].
+atomic func flush(poster, here, ex, final):
+    o = ex[2]
+    ob = ex[7]
+    n = len(ob)
+    r = ex[4]
+    w = ex[5]
+    if o == -1 or (n == 0 and not final):
+        return [r, w]
+    parties = n
+    if not final:
+        parties = n + 1
+    fs = [0 for i in range(parties)]
+    ws = [0 for i in range(parties)]
+    if FUEL_MODE == "split":
+        if n > r:
+            fuel_panic(ex, here)
+            return [r, w]
+        rem = r - n
+        if MUTANT == "split":
+            rem = r                         # mutant: posts aren't charged
+        if parties > 0:
+            fs = shares(rem, parties)
+    elif orig[o]["used"] + n > FUEL:
+        fuel_panic(ex, here)                # pooled fuel, charged as the outbox leaves
+        return [r, w]
+    if CLOSE == "credit":
+        if parties == 0:
+            ctrl.append([o, w])             # a leaf returns its weight to the origin's home
+        else:
+            if w < parties:
+                underflow = True
+            ws = shares(w, parties)
+            if MUTANT == "credit":
+                ws = [w for i in range(parties)]   # mutant: weight copied, not split
+    d = 0
+    td = track_depth()
+    if td:
+        d = ex[6] + 1
+    idx = range(n)
+    if MUTANT == "order":
+        idx = range(n - 1, -1, -1)          # mutant: the outbox leaves backwards
+    for i in idx:
+        p = ob[i]
+        enqueue(poster, p[0], p[1], "in", o, ex[3], p[2], fs[i], ws[i], d)
+    orig[o]["used"] = orig[o]["used"] + n
+    orig[o]["rc"] = orig[o]["rc"] + n
+    if final:
+        return [0, 0]
+    return [fs[n], ws[n]]
+
+# An operation ends (returns, fails or is cancelled): its outbox leaves, then
+# it gives up its reference.
+atomic func finish_op(poster, here, ex):
+    if OUTBOX:
+        if MUTANT == "cancel_drop" and op_cancelled:
+            pass                            # mutant: a cancelled op's outbox is dropped
+        else:
+            flush(poster, here, ex, True)
+    release(ex[2])
+
+# One non-post step of a running op. Returns the op's new state, or None if
+# the step can't run yet (a poll that hasn't seen its mark).
+atomic func other_step(poster, here, ex):
+    p = ex[1][0]
+    rest = ex[1][1:]
+    if p[0] == "io":
+        if OUTBOX and FLUSH == "suspend":
+            cw = flush(poster, here, ex, False)
+            return [ex[0], rest, ex[2], ex[3], cw[0], cw[1], ex[6], []]
+        return [ex[0], rest] + ex[2:]
+    if p[0] == "set":
+        if not (here in marks):
+            marks.append(here)
+        return [ex[0], rest] + ex[2:]
+    if p[0] == "wait":
+        if not (((here + 1) % KEYS) in marks):
+            return None
+        return [ex[0], rest] + ex[2:]
+    return None
+
+atomic func deliver_check(k, m):
+    key = str(m[0]) + ">" + str(k)
+    # posts from one task to one actor run in order, none skipped
+    if len(lost) == 0 and m[1] != (done_seq.get(key, 0) + 1) % 4:
+        fifo_bad = True
+    done_seq[key] = m[1]
+
+atomic action Init:
+    mbox = {}
+    busy = {}
+    for k in range(KEYS):
+        mbox[k] = []
+        busy[k] = -1          # task running an operation on k's actor, or -1
+    live = {}                 # key -> {"pins"}
+    pc = [0 for p in PROGS]   # outside tasks' program counters
+    pinned = [-1 for p in PROGS]
+    texec = [None for p in PROGS]     # a running op (op_exec) while a task runs one through `at`
+    dexec = {}                        # key -> a running op while its delivery runs one
+    orig = {}                 # open origins
+    seq = {}
+    done_seq = {}
+    lost = []                 # posts dropped by eviction or setup failure
+    dropped_td = []           # posts dropped at teardown
+    fifo_bad = False
+    panicked = False
+    why = ""
+    panic_site = []           # [root, depth, key, op] of the op that ran out of fuel (track_depth)
+    phase = "run"             # run | teardown | done
+    evicted_with_mail = False
+    sib_fails = []
+    dead_mail = False
+    settled_ret = False       # some settled() returned
+    settled_bad = False       # a settled() returned while its caller's descendants were live
+    ctrl = []                 # credit: [origin, weight] returns in flight to the origin's home
+    underflow = False         # credit: an op had less weight than parties to split it among
+    credit_bad = False        # credit: a return for an origin that had already closed
+    marks = []                # the outside store the "set" and "wait" steps use
+    op_cancelled = False      # the op being finished was cancelled (for the cancel_drop mutant)
+    cancel_cov = False
+    failop_cov = False
+    last = ""
+
+# ---- making an actor --------------------------------------------------------
+# Returns "ok", "fail" (setup failed) or "wait" (no slot).
+atomic func make(k, for_post):
+    if k in live:
+        return "ok"
+    if len(live) >= MAX:
+        vs = victims(k)
+        if len(vs) > 0:
+            v = oneof vs                  # any evictable: covers LRU and LFU
+            evict(v)
+        elif not (for_post and DELIVERY_OVER_MAX):
+            return "wait"
+    if k in SETUP_FAIL_KEYS:
+        if SETUP_DOWN:
+            return "fail"
+        r = oneof ["ok", "fail"]
+        if r == "fail":
+            return "fail"
+    live[k] = {"pins": 0}
+    return "ok"
+
+# Ground truth for settled(): mail queued or operations running that root task t caused.
+atomic func caused_by(t):
+    n = len([m for k in range(KEYS) for m in mbox[k] if m[5] == t])
+    n = n + len([1 for i in range(len(PROGS)) if texec[i] != None and texec[i][3] == t])
+    n = n + len([1 for k in dexec if dexec[k][3] == t])
+    return n
+
+# ---- outside tasks -----------------------------------------------------------
+atomic fair action Outside:
+    require phase == "run" and not panicked
+    t = oneof [i for i in range(len(PROGS)) if pc[i] < len(PROGS[i])]
+    st = PROGS[t][pc[t]]
+    kind = st[0]
+    last = "T" + str(t) + " " + str(st)
+    if texec[t] != None:
+        # inside an op called through `at`: its steps, then return
+        ex = texec[t]
+        k = pinned[t]
+        if len(ex[1]) > 0 and ex[1][0][0] != "fail":
+            p = ex[1][0]
+            if type(p[0]) != "int":
+                ex2 = other_step(t, k, ex)
+                require ex2 != None
+                texec[t] = ex2
+                last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " does " + str(p[-1])
+                if p[0] == "io" and CANCEL and not panicked:
+                    c = oneof [False, True]
+                    if c:
+                        # the caller is cancelled while its op is suspended:
+                        # the op ends there, its state changes stand
+                        if len(ex2[7]) > 0:
+                            cancel_cov = True
+                        op_cancelled = True
+                        busy[k] = -1
+                        texec[t] = None
+                        finish_op(t, k, ex2)
+                        op_cancelled = False
+                        live[k]["pins"] = live[k]["pins"] - 1
+                        pinned[t] = -1
+                        pc[t] = len(PROGS[t])
+                        last = "T" + str(t) + " cancelled in " + ex[0] + " on " + str(k)
+                return
+            if OUTBOX:
+                ob = buffer_post(t, k, p[0], p[1], ex)
+                texec[t] = [ex[0], ex[1][1:]] + ex[2:7] + [ob]
+                last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " posts " + p[1] + " to " + str(p[0]) + " (outbox)"
+                return
+            ok = sib_post(t, k, p[0], p[1], ex)
+            require ok
+            texec[t] = [ex[0], ex[1][1:]] + ex[2:]
+            last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " posts " + p[1] + " to " + str(p[0])
+            return
+        busy[k] = -1
+        texec[t] = None
+        if len(ex[1]) > 0:
+            if len(ex[7]) > 0:
+                failop_cov = True
+            last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " fails"
+        else:
+            last = "T" + str(t) + " " + ex[0] + " on " + str(k) + " returns"
+        finish_op(t, k, ex)
+        if kind == "call":
+            pc[t] = pc[t] + 1
+        return
+    if kind == "post":
+        if ORIGINS:
+            require len(orig) < INFLIGHT    # outside: waits for a free origin
+        else:
+            n = total()
+            require n < MAILBOX             # outside: waits while the family is full
+        if EAGER:
+            r = make(st[1], True)
+            require r != "wait"
+            if r == "fail":
+                pc[t] = pc[t] + 1           # `try Docs.post(k)` fails: nothing queued
+                last = last + " fails with setup's error"
+                return
+        o = -1
+        root = -1
+        f = 0
+        w = 0
+        if ORIGINS:
+            o = open_origin(t)
+            root = t
+            if FUEL_MODE == "split":
+                f = FUEL                    # an outside origin's first delivery carries F
+            if CLOSE == "credit":
+                w = w0()
+        enqueue(t, st[1], st[2], "out", o, root, None, f, w, 0)
+        pc[t] = pc[t] + 1
+    elif kind == "at":
+        r = make(st[1], False)
+        require r != "wait"
+        if r == "fail":
+            # `try Docs.at(k)` fails with setup's error: skip the block
+            j = pc[t]
+            for i in range(pc[t], len(PROGS[t])):
+                if PROGS[t][i][0] == "end":
+                    j = i
+                    break
+            pc[t] = j + 1
+            last = last + " setup fails"
+            return
+        live[st[1]]["pins"] = live[st[1]]["pins"] + 1
+        pinned[t] = st[1]
+        pc[t] = pc[t] + 1
+    elif kind == "call" or kind == "calls":
+        k = pinned[t]
+        if kind == "calls":
+            more = oneof [True, False]
+            if not more:
+                pc[t] = pc[t] + 1
+                last = "T" + str(t) + " leaves the loop"
+                return
+        cp = can_post(st[1])
+        if ORIGINS:
+            if cp:
+                require len(orig) < INFLIGHT   # an op that can post is an origin: wait for one
+        elif AT_METER:
+            n = total()
+            require n < MAILBOX
+        require busy[k] == -1               # takes the actor for one call
+        busy[k] = t
+        o = -1
+        root = -1
+        if ORIGINS and cp:
+            o = open_origin(t)              # the running op holds the origin's first reference
+            root = t
+        ps = expand(k, st[1])
+        ex = op_exec(st[1], ps, o, root, 0)
+        texec[t] = ex
+        last = "T" + str(t) + " calls " + st[1] + " on " + str(k)
+    elif kind == "end":
+        k = pinned[t]
+        live[k]["pins"] = live[k]["pins"] - 1
+        pinned[t] = -1
+        pc[t] = pc[t] + 1
+    elif kind == "settled":
+        # implemented on the refcount: wait until none of t's origins is open
+        require len([o for o in orig if orig[o]["owner"] == t]) == 0
+        n = caused_by(t)
+        if n > 0:
+            settled_bad = True
+        settled_ret = True
+        pc[t] = pc[t] + 1
+        last = "T" + str(t) + " settled() returns"
+
+# ---- delivery tasks, one per key, owned by the family's `with` -------------
+atomic fair action Deliver:
+    require not panicked and phase != "done"
+    k = oneof [j for j in range(KEYS) if (len(mbox[j]) > 0 and busy[j] == -1) or j in dexec]
+    if k in dexec:
+        ex = dexec[k]
+        if len(ex[1]) > 0 and ex[1][0][0] != "fail":
+            p = ex[1][0]
+            if type(p[0]) != "int":
+                ex2 = other_step(100 + k, k, ex)
+                require ex2 != None
+                dexec[k] = ex2
+                last = "D" + str(k) + " " + ex[0] + " does " + str(p[-1])
+                return
+            if OUTBOX:
+                ob = buffer_post(100 + k, k, p[0], p[1], ex)
+                dexec[k] = [ex[0], ex[1][1:]] + ex[2:7] + [ob]
+                last = "D" + str(k) + " " + ex[0] + " posts " + p[1] + " to " + str(p[0]) + " (outbox)"
+                return
+            ok = sib_post(100 + k, k, p[0], p[1], ex)
+            require ok
+            dexec[k] = [ex[0], ex[1][1:]] + ex[2:]
+            last = "D" + str(k) + " " + ex[0] + " posts " + p[1] + " to " + str(p[0])
+        else:
+            busy[k] = -1
+            dexec.pop(k)
+            if len(ex[1]) > 0:
+                if len(ex[7]) > 0:
+                    failop_cov = True
+                last = "D" + str(k) + " " + ex[0] + " fails"
+            else:
+                last = "D" + str(k) + " " + ex[0] + " returns"
+            finish_op(100 + k, k, ex)
+        return
+    if not (k in live):
+        if EAGER:
+            dead_mail = True                # EAGER: queued posts keep their actor live
+    r = make(k, True)
+    require r != "wait"
+    if r == "fail":
+        # a post can't fail: the policy decides what happens to the mailbox
+        last = "D" + str(k) + " setup fails"
+        if SETUP_POLICY == "drop":
+            m = mbox[k][0]
+            lost.append([k] + m)
+            mbox[k] = mbox[k][1:]
+        elif SETUP_POLICY == "drop_all":
+            for m in mbox[k]:
+                lost.append([k] + m)
+            mbox[k] = []
+        elif SETUP_POLICY == "panic":
+            panicked = True
+            why = "setup failed under a post"
+        else:
+            pass                            # retry: the post stays queued, try again later
+        return
+    m = mbox[k][0]
+    mbox[k] = mbox[k][1:]
+    deliver_check(k, m)
+    busy[k] = 100 + k
+    ps = expand(k, m[2])
+    dexec[k] = [m[2], ps, m[4], m[5], m[6], m[7], m[8], []]   # the message's reference (and fuel, weight) pass to the op
+    who = "T" + str(m[0])
+    if m[0] >= 100:
+        who = "D" + str(m[0] - 100)
+    last = "D" + str(k) + " runs " + m[2] + " from " + who + "#" + str(m[1])
+
+# credit: a weight return reaches the origin's home; the origin closes when
+# all its weight is back
+atomic fair action Ctrl:
+    require CLOSE == "credit" and not panicked and phase != "done"
+    i = oneof range(len(ctrl))
+    c = ctrl[i]
+    ctrl = ctrl[:i] + ctrl[i + 1:]
+    o = c[0]
+    if not (o in orig):
+        credit_bad = True
+        return
+    orig[o]["ret"] = orig[o]["ret"] + c[1]
+    last = "home of origin " + str(o) + " gets weight " + str(c[1])
+    wt = w0()
+    if orig[o]["ret"] == wt:
+        orig.pop(o)
+        last = last + ": origin " + str(o) + " closes"
+
+# sim's evict: AnyIdle, and the program's own Docs.evict(k)
+atomic action Chaos:
+    require CHAOS and phase == "run" and not panicked
+    vs = victims(-1)
+    v = oneof vs
+    evict(v)
+    last = "evict " + str(v)
+
+# ---- the family's end ---------------------------------------------------------
+atomic fair action Teardown:
+    require phase == "run" and not panicked
+    require all([pc[i] == len(PROGS[i]) for i in range(len(PROGS))])
+    phase = "teardown"
+    last = "body returns: family ends"
+    if TEARDOWN == "drop":
+        for k in range(KEYS):
+            for m in mbox[k]:
+                dropped_td.append([k] + m)
+            mbox[k] = []
+
+atomic fair action Finallys:
+    require phase == "teardown" and not panicked
+    require len(dexec) == 0
+    if ORIGINS:
+        require len(orig) == 0              # teardown waits for every open origin
+    if TEARDOWN == "drop":
+        for k in range(KEYS):
+            for m in mbox[k]:
+                dropped_td.append([k] + m)
+            mbox[k] = []
+    n = total()
+    require n == 0
+    live = {}
+    phase = "done"
+    last = "finallys run"
+
+atomic action Finished:
+    require phase == "done" or panicked
+    pass
+
+# ---- properties ------------------------------------------------------------------
+always assertion ConfigOK:
+    if (OUTBOX or FUEL_MODE == "split" or CLOSE == "credit") and not ORIGINS:
+        return False
+    return (FUEL_MODE != "split" and CLOSE != "credit") or OUTBOX
+
+always assertion FifoPerPosterActor:
+    return not fifo_bad
+
+always assertion NoLostPost:
+    return len(lost) == 0
+
+always assertion EveryAcceptedPostRan:
+    if phase == "done":
+        # drain ran every post (mailboxes are empty); nothing was dropped or lost
+        return len(dropped_td) == 0 and len(lost) == 0
+    return True
+
+always assertion AllMadePostsDelivered:
+    # OUTBOX: when the family ends, every post an op made (each got its seq
+    # when made, before it left) was delivered, once, in order
+    if not OUTBOX or phase != "done":
+        return True
+    for key in seq:
+        if done_seq.get(key, 0) != seq[key]:
+            return False
+    return True
+
+always assertion OutsidePostsWithinBound:
+    n = len([m for k in range(KEYS) for m in mbox[k] if m[3] == "out"])
+    if ORIGINS:
+        return n <= INFLIGHT
+    return n <= MAILBOX
+
+always assertion Bounded:
+    n = len([m for k in range(KEYS) for m in mbox[k]])
+    if ORIGINS:
+        # INFLIGHT * FUEL, plus the most posts one op makes per live actor
+        most = 0
+        for op in OPS:
+            c = 0
+            for p in OPS[op]:
+                if p[0] == "all":
+                    c = c + KEYS - 1
+                elif p[0] in TARGETS:
+                    c = c + 1
+            if c > most:
+                most = c
+        return n <= INFLIGHT * FUEL + len(live) * most
+    return n <= CEIL
+
+always assertion InFamilyMailWithinBound:
+    # the bound asked for: in-family mail <= INFLIGHT * F
+    if not ORIGINS:
+        return True
+    return len([m for k in range(KEYS) for m in mbox[k] if m[3] == "in"]) <= INFLIGHT * FUEL
+
+always assertion OriginMailWithinFuel:
+    # the tighter bound: an origin's queued mail is at most max(1, FUEL)
+    if not ORIGINS:
+        return True
+    cap = FUEL
+    if cap < 1:
+        cap = 1
+    for o in range(INFLIGHT):
+        c = len([m for k in range(KEYS) for m in mbox[k] if m[4] == o])
+        if c > cap:
+            return False
+    return True
+
+always assertion FuelConserved:
+    # split: an origin's posts so far plus the fuel its mail and running ops
+    # carry never exceed F (an op's outbox is paid from its own fuel)
+    if FUEL_MODE != "split" or panicked:
+        return True
+    for o in orig:
+        f = orig[o]["used"]
+        for x in [m[6] for k in range(KEYS) for m in mbox[k] if m[4] == o]:
+            f = f + x
+        for x in [texec[i][4] for i in range(len(PROGS)) if texec[i] != None and texec[i][2] == o]:
+            f = f + x
+        for x in [dexec[k][4] for k in dexec if dexec[k][2] == o]:
+            f = f + x
+        if f > FUEL:
+            return False
+    return True
+
+always assertion OriginRefcountExact:
+    # an origin's count is its undelivered descendant mail plus its running
+    # operations; no mail or operation carries a closed origin
+    if not ORIGINS:
+        return True
+    for o in range(INFLIGHT):
+        c = len([m for k in range(KEYS) for m in mbox[k] if m[4] == o])
+        c = c + len([1 for i in range(len(PROGS)) if texec[i] != None and texec[i][2] == o])
+        c = c + len([1 for k in dexec if dexec[k][2] == o])
+        if o in orig:
+            if orig[o]["rc"] != c:
+                return False
+        elif c != 0:
+            return False
+    return True
+
+always assertion CreditConserved:
+    # credit: an open origin's weight is all accounted for: returned, in flight
+    # back, or carried by its mail and running ops
+    if CLOSE != "credit" or panicked or not CHECK_CONSERVATION:
+        return True
+    if credit_bad:
+        return False
+    total_w = WEIGHT
+    if total_w <= 0:
+        total_w = FUEL
+    for o in orig:
+        w = orig[o]["ret"]
+        for x in [c[1] for c in ctrl if c[0] == o]:
+            w = w + x
+        for x in [m[7] for k in range(KEYS) for m in mbox[k] if m[4] == o]:
+            w = w + x
+        for x in [texec[i][5] for i in range(len(PROGS)) if texec[i] != None and texec[i][2] == o]:
+            w = w + x
+        for x in [dexec[k][5] for k in dexec if dexec[k][2] == o]:
+            w = w + x
+        if w != total_w:
+            return False
+    return True
+
+always assertion CreditClosesWithRefcount:
+    # credit closes exactly when the refcount would, up to delivering returns
+    # already sent: never while rc > 0 (OriginRefcountExact catches any
+    # early close), and an open origin with rc = 0 has a return in flight
+    if CLOSE != "credit" or panicked:
+        return True
+    for o in orig:
+        if orig[o]["rc"] == 0 and len([c for c in ctrl if c[0] == o]) == 0:
+            return False
+    return True
+
+always assertion WeightNeverUnderflows:
+    return not underflow
+
+always assertion SettledSound:
+    return not settled_bad
+
+always assertion MaxRespected:
+    if DELIVERY_OVER_MAX:
+        return len(live) <= MAX + KEYS    # past max: by at most one per delivery
+    return len(live) <= MAX
+
+always assertion NoPanic:
+    if PANIC_AT != None:
+        # determinism: every panic is at the one op named, whatever the schedule
+        return not panicked or panic_site == PANIC_AT
+    return not panicked
+
+always assertion PanicIsInevitable:
+    # PANIC_AT: no schedule finishes the family without the panic
+    return PANIC_AT == None or phase != "done"
+
+# ---- coverage: the runs really reach the interesting states --------------------
+exists assertion FamilyEnds:
+    return phase == "done" or PANIC_AT != None
+
+exists assertion BoundReached:
+    if not COVER_BOUND:
+        return True
+    return len([m for k in range(KEYS) for m in mbox[k] if m[3] == "in"]) == INFLIGHT * FUEL
+
+exists assertion PanicReached:
+    return PANIC_AT == None or panicked
+
+exists assertion CancelledWithOutbox:
+    return cancel_cov or not COVER_CANCEL
+
+exists assertion FailedWithOutbox:
+    return failop_cov or not COVER_FAILOP
+
+exists assertion EvictedWithQueuedPosts:
+    return evicted_with_mail or not COVER_EVICT
+
+always assertion EagerKeepsMailedActorsLive:
+    return not dead_mail
+
+exists assertion SiblingPostSetupFails:
+    return len(sib_fails) > 0 or not COVER_FAIL
+
+exists assertion SettledWaitsOnQueuedMail:
+    # a task is at settled(), blocked, while its origin's descendant mail is queued
+    if not COVER_SETTLED:
+        return True
+    for t in range(len(PROGS)):
+        if pc[t] < len(PROGS[t]) and PROGS[t][pc[t]][0] == "settled":
+            if len([m for k in range(KEYS) for m in mbox[k] if m[5] == t and m[3] == "in"]) > 0:
+                return True
+    return False
+
+exists assertion SettledReturns:
+    return settled_ret or not COVER_SETTLED
+
+exists assertion PinnedPosterWaitsFullFamily:
+    if not COVER_NEST:
+        return True
+    for t in range(len(PROGS)):
+        if pinned[t] != -1 and texec[t] == None and pc[t] < len(PROGS[t]) and PROGS[t][pc[t]][0] == "post":
+            if len(orig) == INFLIGHT and len(live) >= MAX:
+                return True
+    return False
+
+# ---- liveness (run.sh's liveness runs set `liveness: strict`) -------------------
+# For a terminating program, every fair run ends the family (or panics on fuel).
+eventually always assertion FamilyEventuallyEnds:
+    return phase == "done" or panicked
+
+# Every settled() a task reaches eventually returns.
+eventually always assertion SettledEventuallyReturns:
+    for t in range(len(PROGS)):
+        if pc[t] < len(PROGS[t]) and PROGS[t][pc[t]][0] == "settled":
+            return panicked
+    return True
