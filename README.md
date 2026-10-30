@@ -23,6 +23,8 @@ Because the compiler knows every boundary a program crosses, Ren can **test, tra
 
 ---
 
+Development setup and checks: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Contents
 
 - [Why Ren](#why-ren)

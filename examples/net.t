@@ -130,7 +130,26 @@ those waits; replaying it prints what the run printed, with no network:
   hello
   $ kill -TERM $server; wait $server; echo "exit $?"
   exit 0
-  $ sed "s/$port/PORT/" net.journal
+
+The read may complete immediately or wait for the client's bytes, depending
+on OS scheduling. Normalize only that difference for this snapshot; replay
+below still consumes the original journal, including every poll.
+
+  $ python3 - "$port" <<'PYTHON'
+  > import pathlib, sys
+  > rows = pathlib.Path("net.journal").read_text().replace(sys.argv[1], "PORT").splitlines()
+  > for n, row in enumerate(rows[1:], 1):
+  >     assert row.startswith(f"{n} "), row
+  > for i, row in enumerate(rows):
+  >     if row.endswith(" main/main:0 Net.read(2, 100) …"):
+  >         assert rows[i + 1].endswith(" poll main/main:0"), rows[i + 1]
+  >         assert rows[i + 2].endswith(' main/main:0 → Ok("hello")'), rows[i + 2]
+  >         rows[i:i + 3] = ['0 main/main:0 Net.read(2, 100) → Ok("hello")']
+  >         break
+  > print(rows[0])
+  > for n, row in enumerate(rows[1:], 1):
+  >     print(n, row.split(" ", 1)[1])
+  > PYTHON
   # ren journal 3 · echo.ren · deps: Clock Console Net Os
   1 main Os.args() → ["PORT"]
   2 main Net.listen(Addr { host: "127.0.0.1", port: PORT }) → Ok(1)

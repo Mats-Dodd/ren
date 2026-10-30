@@ -159,8 +159,11 @@ let debug ~(c : compiler) ~jobs ~stats ~dir ~out (u : Emit_c.units) =
   timed "link" (fun () ->
       run_all ~jobs:1
         [ (c.cc, flags @ [ "-o"; out ] @ objects @ [ "-lm"; "-lpthread" ]) ]);
-  if (not c.tcc) && Sys.file_exists "/usr/bin/dsymutil" && mach_o out then
-    timed "dsymutil" (fun () -> run_all ~jobs:1 [ ("/usr/bin/dsymutil", [ out ]) ]);
+  (if (not c.tcc) && mach_o out then
+     Option.iter
+       (fun dsymutil ->
+         timed "dsymutil" (fun () -> run_all ~jobs:1 [ (dsymutil, [ out ]) ]))
+       (on_path "dsymutil"));
   List.iter Sys.remove (sources @ objects);
   Sys.remove (Filename.concat dir "ren_rt.h")
 

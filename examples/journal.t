@@ -331,7 +331,7 @@ names the task that made it, a call that its task waited in is two
 lines, its start, which ends `…`, and what it gave, after the poll that
 woke it, and each poll that woke tasks is a line. Here a level of
 recipes runs at once, as the `just`'s do, each sleeping a while first, a
-tenth of a second apart, so the order they end in is the same each run;
+tenth of a second apart. The OS may batch timer and process wakeups;
 `Proc.run` waits for its program as `Clock.sleep` waits:
 
   $ cat > recipes.ren <<'END'
@@ -355,39 +355,9 @@ tenth of a second apart, so the order they end in is the same each run;
   >   print("all ran")
   > END
   $ ren run --record level.journal recipes.ren > run.out 2>&1
-  $ cat level.journal
-  # ren journal 3 · recipes.ren · deps: Clock Console Os Proc
-  1 main Os.args() → []
-  2 main/main:0 Console.error("true")
-  3 main/main:0 Clock.sleep(300) …
-  4 main/main:1 Console.error("exit 0")
-  5 main/main:1 Clock.sleep(100) …
-  6 main/main:2 Console.error("test 1 = 1")
-  7 main/main:2 Clock.sleep(200) …
-  8 poll main/main:1
-  9 main/main:1 →
-  10 main/main:1 Proc.run("sh", ["-c", "exit 0"], Tree) …
-  11 poll main/main:1
-  12 main/main:1 → Ok(0)
-  13 main/main:1 Console.write("ran exit 0")
-  14 poll main/main:2
-  15 main/main:2 →
-  16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"], Tree) …
-  17 poll main/main:2
-  18 main/main:2 → Ok(0)
-  19 main/main:2 Console.write("ran test 1 = 1")
-  20 poll main/main:0
-  21 main/main:0 →
-  22 main/main:0 Proc.run("sh", ["-c", "true"], Tree) …
-  23 poll main/main:0
-  24 main/main:0 → Ok(0)
-  25 main/main:0 Console.write("ran true")
-  26 main Console.write("all ran")
-  27 main exit 0
 
-`ren replay` follows the polls, so its tasks run in the recorded order,
-and it prints what the run printed, byte for byte, but its own last
-line:
+`ren replay` follows the actual polls, including batched wakeups. It prints
+what the live run printed, byte for byte, apart from the summary:
 
   $ ren replay level.journal > replay.out 2>&1
   $ diff run.out replay.out
@@ -398,29 +368,102 @@ line:
   > replayed 14 calls: nothing touched the disk, and nothing ran
   [1]
 
+Use a fixed valid schedule to check the journal format and the deliberately
+reordered polls below, independently of the host's timing:
+
+  $ cat > level.journal <<'END'
+  > # ren journal 3 · recipes.ren · deps: Clock Console Os Proc
+  > 1 main Os.args() → []
+  > 2 main/main:0 Console.error("true")
+  > 3 main/main:0 Clock.sleep(300) …
+  > 4 main/main:1 Console.error("exit 0")
+  > 5 main/main:1 Clock.sleep(100) …
+  > 6 main/main:2 Console.error("test 1 = 1")
+  > 7 main/main:2 Clock.sleep(200) …
+  > 8 poll main/main:1
+  > 9 main/main:1 →
+  > 10 main/main:1 Proc.run("sh", ["-c", "exit 0"], Tree) …
+  > 11 poll main/main:1
+  > 12 main/main:1 → Ok(0)
+  > 13 main/main:1 Console.write("ran exit 0")
+  > 14 poll main/main:2
+  > 15 main/main:2 →
+  > 16 main/main:2 Proc.run("sh", ["-c", "test 1 = 1"], Tree) …
+  > 17 poll main/main:2
+  > 18 main/main:2 → Ok(0)
+  > 19 main/main:2 Console.write("ran test 1 = 1")
+  > 20 poll main/main:0
+  > 21 main/main:0 →
+  > 22 main/main:0 Proc.run("sh", ["-c", "true"], Tree) …
+  > 23 poll main/main:0
+  > 24 main/main:0 → Ok(0)
+  > 25 main/main:0 Console.write("ran true")
+  > 26 main Console.write("all ran")
+  > 27 main exit 0
+  > END
+  $ ren replay level.journal
+  true
+  exit 0
+  test 1 = 1
+  ran exit 0
+  ran test 1 = 1
+  ran true
+  all ran
+  replayed 14 calls: nothing touched the disk, and nothing ran
+
 When a recipe fails, the others are cancelled where they wait, and each
 cancel a task saw is a line too; the replay sees them where the
 recording did:
 
   $ ren run --record failed.journal recipes.ren -- slow > run.out 2>&1
   [1]
-  $ sed -n '9,16p' failed.journal
-  8 poll main/main:1
-  9 main/main:1 →
-  10 main/main:1 Proc.run("sh", ["-c", "false"], Tree) …
-  11 poll main/main:1
-  12 main/main:1 → Ok(1)
-  13 main/main:0 cancelled
-  14 main/main:2 cancelled
-  15 main error Failed("false")
   $ ren replay failed.journal > replay.out 2>&1
   [1]
-  $ diff run.out replay.out
-  4,5c4
-  < recorded 8 calls to failed.journal (Clock 3, Console 3, Os 1, Proc 1)
-  < warning: failed.journal holds everything the program read, files and arguments included: read it before you share it
-  ---
-  > replayed 8 calls, to the error it ended in: nothing touched the disk, and nothing ran
+
+The number of calls before failure depends on which other tasks have woken.
+Compare the live output and call count with replay without fixing that schedule:
+
+  $ python3 - <<'PYTHON'
+  > import pathlib, re
+  > recorded = pathlib.Path("run.out").read_text().splitlines()
+  > replayed = pathlib.Path("replay.out").read_text().splitlines()
+  > record_index = next(i for i, line in enumerate(recorded) if line.startswith("recorded "))
+  > replay_index = next(i for i, line in enumerate(replayed) if line.startswith("replayed "))
+  > record_summary = re.fullmatch(r"recorded (\d+) calls to failed\.journal \(.+\)", recorded[record_index])
+  > replay_summary = re.fullmatch(r"replayed (\d+) calls, to the error it ended in: nothing touched the disk, and nothing ran", replayed[replay_index])
+  > assert record_summary and replay_summary
+  > assert record_summary[1] == replay_summary[1]
+  > assert recorded[:record_index] + recorded[record_index + 2:] == replayed[:replay_index] + replayed[replay_index + 1:]
+  > assert recorded[record_index + 1] == "warning: failed.journal holds everything the program read, files and arguments included: read it before you share it"
+  > PYTHON
+
+A fixed failure schedule checks cancellation of both waiting tasks explicitly:
+
+  $ cat > failed.journal <<'END'
+  > # ren journal 3 · recipes.ren · deps: Clock Console Os Proc
+  > 1 main Os.args() → ["slow"]
+  > 2 main/main:0 Console.error("true")
+  > 3 main/main:0 Clock.sleep(300) …
+  > 4 main/main:1 Console.error("false")
+  > 5 main/main:1 Clock.sleep(100) …
+  > 6 main/main:2 Console.error("test 1 = 1")
+  > 7 main/main:2 Clock.sleep(200) …
+  > 8 poll main/main:1
+  > 9 main/main:1 →
+  > 10 main/main:1 Proc.run("sh", ["-c", "false"], Tree) …
+  > 11 poll main/main:1
+  > 12 main/main:1 → Ok(1)
+  > 13 main/main:0 cancelled
+  > 14 main/main:2 cancelled
+  > 15 main error Failed("false")
+  > END
+  $ ren replay failed.journal
+  true
+  false
+  test 1 = 1
+  replayed 8 calls, to the error it ended in: nothing touched the disk, and nothing ran
+  error: Failed("false")
+    = from the task main/main:1
   [1]
 
 A replay is strict about the order too: with the first two polls the

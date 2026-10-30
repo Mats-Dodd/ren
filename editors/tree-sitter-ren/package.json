@@ -5,12 +5,17 @@
   "repository": "https://github.com/Mats-Dodd/ren",
   "license": "MIT",
   "private": true,
-  "files": ["grammar.js", "src", "queries", "tree-sitter.json"],
+  "files": [
+    "grammar.js",
+    "src",
+    "queries",
+    "tree-sitter.json"
+  ],
   "devDependencies": {
-    "tree-sitter-cli": "0.24.7"
+    "tree-sitter-cli": "0.27.1"
   },
   "scripts": {
-    "generate": "tree-sitter generate",
+    "generate": "tree-sitter generate --abi 14",
     "test": "tree-sitter test"
   }
 }
