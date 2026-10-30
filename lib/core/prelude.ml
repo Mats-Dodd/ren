@@ -898,11 +898,13 @@ pub dep Async =
     match try task_isolate(body)
       Finished(v) => v
       PanickedWith(msg) => fail Panicked(msg)
-  // `f` of each element, `max` at once, the results in order
-  pub fn map<T, U>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T) -> U) -> Array<U> uses Async =
+  // `f` of each item of `xs`, `max` at once, the results in its order.
+  // `xs` takes what `for` takes: a collection, a cursor, `&r` or a block,
+  // pulled on this task only when there's room for one more
+  pub fn map<T, U>(xs: fn() -> Option<T>, max: Int = 64, f: concurrent fn(x: T) -> U) -> Array<U> uses Async =
     try task_map(xs, max, f)
-  // `f` of each element, `max` at once
-  pub fn each<T>(xs: Array<T>, max: Int = 64, f: concurrent fn(x: T)) uses Async =
+  // `f` of each item of `xs`, `max` at once, pulled as `map`'s are
+  pub fn each<T>(xs: fn() -> Option<T>, max: Int = 64, f: concurrent fn(x: T)) uses Async =
     try task_each(xs, max, f)
   // runs `task` beside `body`: once `body` ends, by returning, failing
   // or being cancelled, `task` is cancelled and waited for. `task` may
@@ -917,6 +919,19 @@ pub dep Async =
   // `a` and `b` at once
   pub fn both<A, B>(a: concurrent fn() -> A, b: concurrent fn() -> B) -> (A, B) uses Async =
     try task_both(a, b)
+  // runs `f` on a task beside `body`, sending what it makes through
+  // `Send<T>`, which the call installs for it, at most `cap` ahead of what
+  // `body` has taken: `items` gives each in turn, then `None` once `f` has
+  // returned, or fails with what `f` failed with. Once `body` ends, by
+  // finishing, `break` or a failure, `f` is cancelled and waited for
+  pub fn produce<T, R>(cap: Int = 16, f: concurrent fn() uses Send<T>, body: fn(items: fn() -> Option<T>) -> R) -> R uses Async =
+    try task_produce(cap, fn(out) => with sends(out) in try f(), fn(i) => try body(fn() => try inbox_take(i)))
+  // `f` of each item of `src`, `max` at once, as `map`'s, but given to
+  // `body` as they're made, in `src`'s order: `results` gives each, and
+  // `src` is pulled, on this task, only when there's room for one more.
+  // The tasks live exactly as long as `body`
+  pub fn map_pull<T, U, R>(src: fn() -> Option<T>, max: Int = 64, f: concurrent fn(x: T) -> U, body: fn(results: fn() -> Option<U>) -> R) -> R uses Async =
+    try task_map_pull(src, max, f, fn(i) => try body(fn() => try inbox_take(i)))
   // the runtime on one thread, in real time, with real I/O
   pub fn single() -> Async = single_runtime()
   let real: Async = single_runtime()
@@ -952,6 +967,22 @@ pub type Scope = builtin
 // never kept, as `Scope` is. Its `spawn`, `bg.spawn(body)`, is built in:
 // `body` runs as a task until the background's body ends
 pub type Background<E> = builtin
+
+// what `Async.produce`'s producer sends through, which the call installs
+// for it: `send` waits while the consumer has `cap` items still to take
+// (streams.md, "Concurrency and time")
+pub dep Send<T> =
+  send: fn(x: T)
+
+// the end of `Async.produce`'s buffer its producer sends to, and the end
+// `produce` and `map_pull` give their body's items from, failing with
+// what `E` says (eval.ml)
+type Outbox<T> = builtin
+type Inbox<T, E> = builtin
+
+// `Send<T>` for `Async.produce`'s producer, into its buffer
+handler sends<T>(out: Outbox<T>) for Send<T> uses Async =
+  send(x) => outbox_send(out, x)
 
 // a task's handle (rule D, as `Scope`)
 pub type Task<T> = builtin
@@ -1491,16 +1522,25 @@ let scheme (x : Intrinsic.t) =
       fn
         [ read (Fun ([], Var 0, open_row 0, open_row 1)) ]
         (Con (Path.prelude "Isolated", [ Var 0 ]))
-  (* fn<T, U>(xs: Array<T>, max: Int, f: fn(T) -> U) -> Array<U>: [f] of
-     each element as a task, [max] at once, the results in order; and
-     the same, giving nothing. The first failure is the call's *)
+  (* fn<T, U>(xs: fn() -> Option<T>, max: Int, f: fn(T) -> U) -> Array<U>:
+     [f] of each item [xs] gives as a task, [max] at once, each pulled
+     only when there's room for it, the results in order; and the same,
+     giving nothing. The first failure, of [xs] or a task, is the call's *)
   | Task_map ->
       fn
-        [ read (array (Var 0)); read int; read (Fun ([ read (Var 0) ], Var 1, open_row 0, open_row 1)) ]
+        [
+          read (Fun ([], option (Var 0), open_row 0, open_row 1));
+          read int;
+          read (Fun ([ read (Var 0) ], Var 1, open_row 0, open_row 1));
+        ]
         (array (Var 1))
   | Task_each ->
       fn
-        [ read (array (Var 0)); read int; read (Fun ([ read (Var 0) ], unit, open_row 0, open_row 1)) ]
+        [
+          read (Fun ([], option (Var 0), open_row 0, open_row 1));
+          read int;
+          read (Fun ([ read (Var 0) ], unit, open_row 0, open_row 1));
+        ]
         unit
   (* fn<A, B>(a: fn() -> A, b: fn() -> B) -> (A, B): both as tasks *)
   | Task_both ->
@@ -1545,6 +1585,49 @@ let scheme (x : Intrinsic.t) =
         (fn [ read bg; read (Fun ([], unit, open_row 2, open_row 3)) ] unit) with
         modes = [ (1, Spawned) ];
       }
+  (* fn<T, R>(cap: Int, f: fn(out: Outbox<T>) ! E, body: fn(i: Inbox<T, !
+     E>) -> R) -> R: [body], with [f] a task of a scope of its own beside
+     it, sending into a buffer of [cap] that [body] takes from, which
+     fails with what [f] fails with once it's empty; [f] is cancelled and
+     waited for once [body] ends. What [body] fails with and uses, the call
+     does (compiler.md, "Services stage", step 5) *)
+  | Task_produce ->
+      let outbox = Con (Path.prelude "Outbox", [ Var 0 ]) in
+      let inbox = Con (Path.prelude "Inbox", [ Var 0; Errors (open_row 2) ]) in
+      fn
+        [
+          read int;
+          read (Fun ([ read outbox ], unit, open_row 2, open_row 3));
+          read (Fun ([ read inbox ], Var 1, open_row 0, open_row 1));
+        ]
+        (Var 1)
+  (* fn<T, U, R>(src: fn() -> Option<T> ! E, max: Int, f: fn(T) -> U ! E,
+     body: fn(i: Inbox<U, ! E>) -> R) -> R: [body], given [f] of each item
+     of [src] as it's taken, in [src]'s order, [max] tasks at once, [src]
+     pulled as one's taken; the inbox fails with what either fails with *)
+  | Task_map_pull ->
+      let inbox = Con (Path.prelude "Inbox", [ Var 1; Errors (open_row 2) ]) in
+      fn
+        [
+          read (Fun ([], option (Var 0), open_row 2, open_row 3));
+          read int;
+          read (Fun ([ read (Var 0) ], Var 1, open_row 2, open_row 3));
+          read (Fun ([ read inbox ], Var 2, open_row 0, open_row 1));
+        ]
+        (Var 2)
+  (* fn<T>(out: Outbox<T>, x: T): [x] into the buffer, waiting while it's
+     full *)
+  | Outbox_send -> fn [ read (Con (Path.prelude "Outbox", [ Var 0 ])); read (Var 0) ] unit
+  (* fn<T>(i: Inbox<T, ! E>) -> Option<T> ! E: the next item, waiting
+     while there's none yet; [None] once there are no more, or what the
+     producer, or the source or a task of `map_pull`, failed with *)
+  | Inbox_take ->
+      scheme_of
+        (Fun
+           ( [ read (Con (Path.prelude "Inbox", [ Var 0; Errors (open_row 0) ])) ],
+             option (Var 0),
+             open_row 0,
+             open_row 1 ))
   (* fn(): `single`'s `yield` and `tick` (sched.ml) *)
   | Async_yield | Async_tick -> fn [] unit
   (* The runtime's policy, which its handler sets for its `with`'s body
@@ -1613,7 +1696,8 @@ let reaches (x : Intrinsic.t) =
   | Array_reserve | Map_into | Unsafe_cast | Float_lanes | Float_sum | Lib_panic
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join | Task_cancel
   | Task_until | Arm_release | Arm_retake | Task_timeout | Task_isolate | Task_map
-  | Task_each | Task_both | Task_race | Task_beside | Task_background | Background_spawn | Async_yield
+  | Task_each | Task_both | Task_race | Task_beside | Task_background | Background_spawn
+  | Task_produce | Task_map_pull | Outbox_send | Inbox_take | Async_yield
   | Async_tick | Runtime_single | Runtime_sim
   | Runtime_leave | Sim_time | Sim_sleep | Sim_advance | Sim_alarm | Sync_keyed | Task_random
   | Task_drain | Map_get | Map_set | Map_remove | Map_includes | Map_keys | Map_values
@@ -1655,6 +1739,7 @@ let caller (x : Intrinsic.t) =
       | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
       | Task_isolate | Task_map
       | Task_each | Task_both | Task_race | Task_beside | Task_background
+      | Task_produce | Task_map_pull | Outbox_send | Inbox_take
       | Async_yield | Async_tick
       | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
       | Sim_advance | Sim_alarm | Sync_keyed | Task_drain | Hash ) ) ->
@@ -1717,6 +1802,10 @@ let fns : Intrinsic.t list =
     Task_race;
     Task_beside;
     Task_background;
+    Task_produce;
+    Task_map_pull;
+    Outbox_send;
+    Inbox_take;
     Async_yield;
     Async_tick;
     Runtime_single;
@@ -1831,6 +1920,10 @@ let types =
        fail, with what its type argument, an error set, says (compiler.md,
        "Services stage", "Background work") *)
     t "Background" ~arity:1 ~methods:[ Background_spawn ];
+    (* the two ends of `Async.produce`'s buffer, and `map_pull`'s results
+       (compiler.md, "Services stage", step 5) *)
+    t "Outbox" ~arity:1;
+    t "Inbox" ~arity:2;
     t "Map" ~arity:2
       ~methods:
         [

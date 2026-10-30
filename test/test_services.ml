@@ -1836,37 +1836,23 @@ type Count = { at: Int, to: Int }
 |}
 
 let%expect_test "[s5 accept] `Async.map` over a temporary cursor keeps order" =
-  until "s5"
-    ~want:{|
-[2, 4, 6]
-()
-|}
-    (fun () ->
-      run
-        (cursor_type
-       ^ {|
+  run
+    (cursor_type
+   ^ {|
 fn main() uses Console, Async =
   print(Async.map(Count { at: 0, to: 3 }) fn(x) => x * 2)
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: expected `Array<_>`, found `Count`
-      ┌─ test.ren:9:19
-    9 │   print(Async.map(Count { at: 0, to: 3 }) fn(x) => x * 2)
-      │                   ^^^^^^^^^^^^^^^^^^^^^^
+    [2, 4, 6]
+    ()
     |}]
 
 let%expect_test "[s5 accept] `Async.each` over a named cursor, `&r`, which goes on after" =
-  until "s5"
-    ~want:{|
-6
-Some(4)
-()
-|}
-    (fun () ->
-      run
-        (cursor_type
-       ^ {|
+  (* `&r` is pulled in its place, so `r` is where the call left it: at its
+     end *)
+  run
+    (cursor_type
+   ^ {|
 dep Sum =
   add: fn(x: Int)
   total: fn() -> Int
@@ -1882,34 +1868,22 @@ fn main() uses Console, Async =
     Async.each(&r, max: 2) fn(x) =>
       Sum.add(x)
     print(Sum.total())
-  print(r.next())
-|}));
+  print(&r.next())
+  var s = Count { at: 0, to: 4 }
+  print(&s.next())
+  print(Async.map(&s) fn(x) => x)
+|});
   [%expect {|
-    (until s5)
-    error: `Async.each` doesn't change this argument
-       ┌─ test.ren:20:16
-    20 │     Async.each(&r, max: 2) fn(x) =>
-       │                ^^
-       = `&` marks an argument the call changes: an `inout` parameter
-       help: remove the `&`
-
-    error: `next` changes `r`, so the call needs `&`
-       ┌─ test.ren:23:9
-    23 │   print(r.next())
-       │         ^^^^^^^^
-       = `&` shows at the call that `r` is changed
-       help: write `&r.next()`
+    10
+    None
+    Some(1)
+    [2, 3, 4]
+    ()
     |}]
 
 let%expect_test "[s5 accept] `Async.each` over a hand-written block" =
-  until "s5"
-    ~want:{|
-3
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Sum =
   add: fn(x: Int)
   total: fn() -> Int
@@ -1932,55 +1906,102 @@ fn main() uses Console, Async =
   with src(), sum() in
     Async.each(fn() => Src.pull()) fn(x) => Sum.add(x)
     print(Sum.total())
+|};
+  [%expect {|
+    3
+    ()
+    |}]
+
+let%expect_test "[s5 accept] a collection is pulled by a snapshot of it" =
+  run
+    {|
+fn main() uses Console, Async =
+  var xs = [1, 2, 3]
+  print(Async.map(xs) fn(x) => x * 10)
+  print(Async.map(Map.of([("a", 1), ("b", 2)])) fn(e) => e)
+  print(Async.map(Set.of([5, 6])) fn(x) => x + 1)
+|};
+  [%expect {|
+    [10, 20, 30]
+    [("a", 1), ("b", 2)]
+    [6, 7]
+    ()
+    |}]
+
+let%expect_test "[s5 accept] a function's own pull parameter takes what `for` takes" =
+  (* streams.md, rule 3: a block parameter `fn() -> Option<T>` is a pull
+     parameter, a user's as `Async.map`'s *)
+  run
+    (cursor_type
+   ^ {|
+fn total(xs: fn() -> Option<Int>) -> Int =
+  var t = 0
+  for x in try xs
+    t += x
+  t
+
+fn bad() -> Option<Int> ! Broken = fail Broken
+
+fn main() uses Console =
+  print(total([1, 2, 3]))
+  print(total(Count { at: 0, to: 3 }))
+  var r = Count { at: 0, to: 2 }
+  print(total(&r))
+  print(&r.next())
+  print(attempt total(fn() => try bad()))
 |});
   [%expect {|
-    (until s5)
-    error: expected `Array<_>`, found `fn() -> Option<Int>`
-       ┌─ test.ren:21:16
-    21 │     Async.each(fn() => Src.pull()) fn(x) => Sum.add(x)
-       │                ^^^^^^^^^^^^^^^^^^
-       help: use `Async.map` to keep the results, or end the block with `()`
+    6
+    6
+    3
+    None
+    Err(Broken)
+    ()
     |}]
 
 let%expect_test "[s5 reject] a named cursor passed to `Async.each` while the block touches it" =
   (* decision 2's new row: `&r` as a pull argument is a write, held for
      the call *)
-  until "s5"
-    ~says:[ "error: `r` is changed for the whole call" ]
-    (fun () ->
-      check_error
-        (cursor_type
-       ^ {|
+  check_error
+    (cursor_type
+   ^ {|
 fn main() uses Async =
   var r = Count { at: 0, to: 4 }
   Async.each(&r) fn(x) =>
     let _ = r.at
     ()
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: `Async.each` doesn't change this argument
-       ┌─ test.ren:10:14
+    error: `r` is read by this block while the call changes it
+       ┌─ test.ren:11:13
     10 │   Async.each(&r) fn(x) =>
-       │              ^^
-       = `&` marks an argument the call changes: an `inout` parameter
-       help: remove the `&`
+       │              -- changed for the whole call
+    11 │     let _ = r.at
+       │             ^^^^ read here
+       = a block runs during the call it's passed to
+       help: read it first: `let at = r.at`, and use `at` in the block
+    |}]
+
+let%expect_test "[s5 reject] `&` on a collection given to a pull parameter" =
+  check_error
+    {|
+fn main() uses Async =
+  var xs = [1, 2]
+  Async.each(&xs) fn(x) => ()
+|};
+  [%expect {|
+    error: `Async.each` doesn't change this argument
+      ┌─ test.ren:3:14
+    3 │   Async.each(&xs) fn(x) => ()
+      │              ^^^
+      = `&` marks an argument the call changes: an `inout` parameter
+      help: remove the `&`
     |}]
 
 let%expect_test "[s5 accept] pulled on the caller's task only when a slot frees" =
   (* `max: 1`: each item is pulled after the one before has ended *)
-  until "s5"
-    ~want:{|
-pulled 1
-ran 1
-pulled 2
-ran 2
-pulled 3
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Src =
   pull: fn() -> Option<Int>
 
@@ -1994,27 +2015,40 @@ handler src() for Src uses Console =
 fn main() uses Console, Async =
   with src() in
     Async.each(fn() => Src.pull(), max: 1) fn(x) => print("ran " + show(x))
-|});
+|};
   [%expect {|
-    (until s5)
-    error: expected `Array<_>`, found `fn() -> Option<Int>`
-       ┌─ test.ren:13:16
-    13 │     Async.each(fn() => Src.pull(), max: 1) fn(x) => print("ran " + show(x))
-       │                ^^^^^^^^^^^^^^^^^^
-       help: use `Async.map` to keep the results, or end the block with `()`
+    pulled 1
+    ran 1
+    pulled 2
+    ran 2
+    pulled 3
+    ()
+    |}]
+
+let%expect_test "[s5 accept] a pull argument that fails is the call's failure" =
+  run
+    {|
+dep Src =
+  pull: fn() -> Option<Int> ! Dry
+
+handler src() for Src =
+  var n = 0
+  pull() =>
+    n += 1
+    if n > 2 then fail Dry else Some(n)
+
+fn main() uses Console, Async =
+  with src() in
+    print(attempt Async.map(fn() => try Src.pull(), max: 1) fn(x) => x)
+|};
+  [%expect {|
+    Err(Dry)
+    ()
     |}]
 
 let%expect_test "[s5 accept] a channel is a dependency, and `items()` pulls `recv()`" =
-  until "s5"
-    ~want:{|
-1
-2
-3
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sync.{Chan}
 
 dep Events = Chan<Int>
@@ -2029,25 +2063,17 @@ fn main() uses Console, Async =
         Events.close()
       for e in Events.items()
         print(e)
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `Events` has no operation or member named `items`
-       ┌─ test.ren:13:23
-    13 │       for e in Events.items()
-       │                       ^^^^^
-       help: its operations: `send`, `recv`, `close`
+    1
+    2
+    3
+    ()
     |}]
 
 let%expect_test "[s5 accept] a channel's `items()` as a pull argument" =
-  until "s5"
-    ~want:{|
-[10, 20]
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 import sync.{Chan}
 
 dep Events = Chan<Int>
@@ -2058,93 +2084,100 @@ fn main() uses Console, Async =
     Events.send(2)
     Events.close()
     print(Async.map(Events.items()) fn(e) => e * 10)
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `Events` has no operation or member named `items`
-       ┌─ test.ren:10:28
-    10 │     print(Async.map(Events.items()) fn(e) => e * 10)
-       │                            ^^^^^
-       help: its operations: `send`, `recv`, `close`
+    [10, 20]
+    ()
+    |}]
+
+let%expect_test "[s5 accept] two channels of one element type don't mix where each is named" =
+  run
+    {|
+import sync.{Chan}
+
+dep Events = Chan<Int>
+dep Done = Chan<Int>
+
+fn main() uses Console, Async =
+  with sync.channel(4) as Events, sync.channel(4) as Done, sync.channel(4) in
+    Events.send(1)
+    Events.close()
+    Done.send(2)
+    Done.close()
+    Chan.send(3)
+    Chan.close()
+    for e in Events.items()
+      print(("events", e))
+    for d in Done.items()
+      print(("done", d))
+    for c in Chan.items()
+      let x: Int = c
+      print(("chan", x))
+|};
+  [%expect {|
+    ("events", 1)
+    ("done", 2)
+    ("chan", 3)
+    ()
     |}]
 
 let%expect_test "[s5 reject] `items()` where it isn't pulled" =
-  until "s5"
-    ~says:
-      [
-        "error: `Events.items()` is pulled where it's written: in a `for`, or as a pull argument";
-        "help: loop over it: `for e in Events.items()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 import sync.{Chan}
 dep Events = Chan<Int>
 fn main() uses Events =
   let xs = Events.items()
   ()
-|});
+|};
   [%expect {|
-    (until s5)
-    error: `Events` has no operation or member named `items`
-      ┌─ test.ren:4:19
+    error: nothing installs `Events` before `main`
+      ┌─ test.ren:3:16
+    3 │ fn main() uses Events =
+      │                ^^^^^^ the runtime installs only `Clock`, `Random`, `Console`, `Fs`, `Os`, `Proc`, `Net` and `Async`
     4 │   let xs = Events.items()
-      │                   ^^^^^
-      help: its operations: `send`, `recv`, `close`
+      │            -------------- this call uses `Events`
+      help: install one inside `main`, with `with`: `with h() in ...`, for a handler `h` for `Events`
+
+    error: `Events.items()` is pulled where it's written: in a `for`, or as a pull argument
+      ┌─ test.ren:4:12
+    4 │   let xs = Events.items()
+      │            ^^^^^^^^^^^^^^
+      = its `next` runs with what the alias names only where it's written, on the task that pulls it
+      help: loop over it: `for e in Events.items()`
     |}]
 
 let%expect_test "[s5 accept] `Async.produce`: the producer sends through `Send<T>`, the body pulls" =
-  until "s5"
-    ~want:{|
-1
-2
-3
-()
-|}
-    (fun () ->
-      run
-        {|
+  (* `count_to` can't fail, so neither can `items`, and `for` takes it with
+     no `try` *)
+  run
+    {|
 fn count_to(n: Int) uses Send<Int> =
   for i in 1..n + 1
     Send.send(i)
 
 fn main() uses Console, Async =
   Async.produce(cap: 2, fn() => count_to(3)) fn(items) =>
-    for x in try items
+    for x in items
       print(x)
-|});
+|};
   [%expect {|
-    (until s5)
-    error: there's no dependency named `Send`
-      ┌─ test.ren:1:26
-    1 │ fn count_to(n: Int) uses Send<Int> =
-      │                          ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Async` has no operation or member named `produce`
-      ┌─ test.ren:6:9
-    6 │   Async.produce(cap: 2, fn() => count_to(3)) fn(items) =>
-      │         ^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
+    1
+    2
+    3
+    ()
     |}]
 
 let%expect_test "[s5 accept] a `break` in `produce`'s body cancels and waits for the producer" =
-  until "s5"
-    ~want:{|
-1
-producer stopped
-after
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Stopped =
   noted: fn()
 
 handler stopped() for Stopped uses Console =
-  finally(_) => print("producer stopped")
+  finally(r) =>
+    print("producer stopped")
+    try r
   noted() => ()
 
 fn forever() uses Send<Int>, Console =
@@ -2156,34 +2189,22 @@ fn forever() uses Send<Int>, Console =
 
 fn main() uses Console, Async =
   Async.produce(fn() => forever()) fn(items) =>
-    for x in try items
+    for x in items
       print(x)
       break
   print("after")
-|});
+|};
   [%expect {|
-    (until s5)
-    error: there's no dependency named `Send`
-      ┌─ test.ren:8:19
-    8 │ fn forever() uses Send<Int>, Console =
-      │                   ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Stopped`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
-
-    error: `Async` has no operation or member named `produce`
-       ┌─ test.ren:16:9
-    16 │   Async.produce(fn() => forever()) fn(items) =>
-       │         ^^^^^^^
-       help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
+    1
+    producer stopped
+    after
+    ()
     |}]
 
 let%expect_test "[s5 accept] a producer blocked at `cap` makes progress as the consumer takes" =
-  until "s5"
-    ~says:[ "✓ a slow consumer still gets everything, in order" ]
-    (fun () ->
-      test ~seeds:200
-        (pub_all
-         {|
+  test ~seeds:1000
+    (pub_all
+       {|
 fn many() uses Send<Int> =
   for i in 0..20
     Send.send(i)
@@ -2191,87 +2212,164 @@ fn many() uses Send<Int> =
 test "a slow consumer still gets everything, in order" =
   var got: Array<Int> = []
   Async.produce(cap: 1, fn() => many()) fn(items) =>
-    for x in try items
+    for x in items
       Async.yield()
       &got.push(x)
   assert got == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-|}));
+|});
   [%expect {|
-    (until s5)
-    error: there's no dependency named `Send`
-      ┌─ test.ren:1:20
-    1 │ pub fn many() uses Send<Int> =
-      │                    ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
+    test.ren
+      ✓ a slow consumer still gets everything, in order
 
-    error: `Async` has no operation or member named `produce`
-      ┌─ test.ren:7:9
-    7 │   Async.produce(cap: 1, fn() => many()) fn(items) =>
-      │         ^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
+    1 passed, each under 1000 seeds
+    [exit 0]
     |}]
 
 let%expect_test "[s5 accept] a failure in the producer ends the stream with it" =
-  until "s5"
-    ~want:{|
-1
-Err(Broken)
-()
-|}
-    (fun () ->
-      run
-        {|
+  (* what was sent before it is taken first; the call fails with it, so
+     it's marked `try` *)
+  run
+    {|
 fn one_then_fail() ! Broken uses Send<Int> =
   Send.send(1)
   fail Broken
 
 fn consume() ! Broken uses Console, Async =
-  Async.produce(fn() => try one_then_fail()) fn(items) =>
+  try Async.produce(fn() => try one_then_fail()) fn(items) =>
     for x in try items
       print(x)
 
 fn main() uses Console, Async = print(attempt consume())
-|});
+|};
   [%expect {|
-    (until s5)
-    error: there's no dependency named `Send`
-      ┌─ test.ren:1:34
-    1 │ fn one_then_fail() ! Broken uses Send<Int> =
-      │                                  ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
-      help: use one of those, or declare it with `dep`
+    1
+    Err(Broken)
+    ()
+    |}]
 
-    error: `Async` has no operation or member named `produce`
-      ┌─ test.ren:6:9
-    6 │   Async.produce(fn() => try one_then_fail()) fn(items) =>
-      │         ^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
+let%expect_test "[s5 reject] `produce`'s `cap` is 0" =
+  run_error
+    {|
+fn none() uses Send<Int> = ()
+
+fn main() uses Console, Async =
+  Async.produce(cap: 0, fn() => none()) fn(items) =>
+    for x in items
+      print(x)
+|};
+  [%expect {|
+    error: panic: `Async.produce`'s `cap` is 0, so nothing could be sent
+      ┌─ test.ren:4:3
+    4 │   Async.produce(cap: 0, fn() => none()) fn(items) =>
+      │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      help: `cap:` is at least 1
     |}]
 
 let%expect_test "[s5 accept] `Async.map_pull`: results as a stream, in order" =
-  until "s5"
-    ~want:{|
-[1, 4, 9]
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 fn main() uses Console, Async =
   var out: Array<Int> = []
   Async.map_pull([1, 2, 3], max: 2, fn(x) => x * x) fn(results) =>
-    for r in try results
+    for r in results
       &out.push(r)
   print(out)
+|};
+  [%expect {|
+    [1, 4, 9]
+    ()
+    |}]
+
+let%expect_test "[s5 accept] pull arguments, channels and producers under seeds" =
+  (* each of step 5's, where the order its tasks run in varies with the
+     seed: what's asserted holds under every one *)
+  test ~seeds:1000
+    (pub_all
+       {|
+import sync.{Chan}
+
+type Count = opaque { at: Int, to: Int }
+  pub fn next(inout self) -> Option<Int> =
+    if self.at >= self.to then None
+    else
+      self.at += 1
+      Some(self.at)
+
+fn upto(n: Int) -> Count = Count { at: 0, to: n }
+
+dep Events = Chan<Int>
+
+fn many(n: Int) uses Send<Int> =
+  for i in 0..n
+    Send.send(i)
+
+fn fails_at(n: Int) ! Broken uses Send<Int> =
+  for i in 0..n
+    Send.send(i)
+  fail Broken
+
+fn drained(n: Int) -> Array<Int> ! Broken uses Async =
+  var got: Array<Int> = []
+  try Async.produce(cap: 2, fn() => try fails_at(n)) fn(items) =>
+    for x in try items
+      &got.push(x)
+  got
+
+test "`map` over a cursor keeps its order" =
+  let got = Async.map(upto(6), max: 3) fn(x) =>
+    Async.yield()
+    x * 2
+  assert got == [2, 4, 6, 8, 10, 12]
+
+test "`each` over `&r` leaves it at its end" =
+  var r = upto(5)
+  Async.each(&r, max: 2) fn(x) => Async.yield()
+  assert &r.next() == None
+
+test "a channel's items, sent from a task" =
+  with sync.channel(1) as Events in
+    var got: Array<Int> = []
+    Async.scope fn(s) =>
+      s.spawn fn() =>
+        for i in 0..5
+          Events.send(i)
+        Events.close()
+      for e in Events.items()
+        &got.push(e)
+    assert got == [0, 1, 2, 3, 4]
+
+test "a producer at `cap`, a body that breaks" =
+  var got: Array<Int> = []
+  Async.produce(cap: 1, fn() => many(100)) fn(items) =>
+    for x in items
+      &got.push(x)
+      if x == 3 then break
+  assert got == [0, 1, 2, 3]
+
+test "a producer's failure, after what it sent" =
+  assert attempt drained(3) == Err(Broken)
+
+test "`map_pull` keeps its source's order" =
+  var out: Array<Int> = []
+  Async.map_pull([5, 1, 4, 2, 3], max: 2, fn(x) =>
+    for _ in 0..x
+      Async.yield()
+    x * 10) fn(results) =>
+    for r in results
+      &out.push(r)
+  assert out == [50, 10, 40, 20, 30]
 |});
   [%expect {|
-    (until s5)
-    error: `Async` has no operation or member named `map_pull`
-      ┌─ test.ren:3:9
-    3 │   Async.map_pull([1, 2, 3], max: 2, fn(x) => x * x) fn(results) =>
-      │         ^^^^^^^^
-      help: its operations: `yield`, `tick`; its members: `scope`, `until`, `timeout`, `race`, `isolate`, `map`, `each`, `beside`, `background`, `both`, `single`
+    test.ren
+      ✓ `map` over a cursor keeps its order
+      ✓ `each` over `&r` leaves it at its end
+      ✓ a channel's items, sent from a task
+      ✓ a producer at `cap`, a body that breaks
+      ✓ a producer's failure, after what it sent
+      ✓ `map_pull` keeps its source's order
+
+    6 passed, each under 1000 seeds
+    [exit 0]
     |}]
 
 (* ---- s6: `striped`, plain Ren over the keyed instance family (decisions 18 and 20, language.md §11) ---- *)
@@ -2954,7 +3052,7 @@ test "two appends by one operation both land" =
        ┌─ test.ren:14:16
     14 │ pub dep Docs = Actors<DocId, Doc>
        │                ^^^^^^
-       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
        help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`
@@ -3052,7 +3150,7 @@ test "the text kept only in memory survives" =
        ┌─ test.ren:12:16
     12 │ pub dep Docs = Actors<DocId, Doc>
        │                ^^^^^^
-       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+       = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
        help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`
@@ -3127,7 +3225,7 @@ fn main() uses Console, Random =
       ┌─ test.ren:4:12
     4 │ dep Docs = Actors<DocId, Doc>
       │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
 
     error: `Docs` is a type, not a dependency
@@ -3183,7 +3281,7 @@ fn main() =
       ┌─ test.ren:4:12
     4 │ dep Docs = Actors<DocId, Doc>
       │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`
@@ -3230,7 +3328,7 @@ fn main() =
       ┌─ test.ren:4:12
     4 │ dep Docs = Actors<DocId, Doc>
       │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`
@@ -3321,14 +3419,14 @@ fn main() uses Console, Async, Random =
       ┌─ test.ren:6:14
     6 │ dep Inners = Actors<Key, Inner>
       │              ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Inner`, `Net`, `Os`, `Outer`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Inner`, `Net`, `Os`, `Outer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
 
     error: there's no dependency named `Actors`
       ┌─ test.ren:7:14
     7 │ dep Outers = Actors<Key, Outer>
       │              ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Inner`, `Net`, `Os`, `Outer`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Inner`, `Net`, `Os`, `Outer`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`
@@ -3544,7 +3642,7 @@ fn main() uses Console, Random =
       ┌─ main.ren:4:12
     4 │ dep Docs = Actors<DocId, Doc>
       │            ^^^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Doc`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
 
     error: there's no function named `actors`

@@ -1175,6 +1175,14 @@ let inner sc ~(reaching : unit -> Value.installed list) =
         (fun f -> List.find_opt (fun i -> List.memq i reached) f.installed)
         inside
 
+(* Wait, as the task running, until [sc] has room for one more task, or
+   has ended. *)
+let room ?at sc =
+  while List.length sc.running >= sc.max && not sc.ended do
+    wait ?at "waits for room in its scope" (fun wake ->
+        sc.room <- sc.room @ [ wake ])
+  done
+
 (* Start [thunk] as a task of [sc], labelled [label], once [sc] has room
    for it, under [key] if it's given. The task goes on the queue's end, and
    the task running goes on. A scope that has ended starts nothing: it's
@@ -1185,10 +1193,7 @@ let inner sc ~(reaching : unit -> Value.installed list) =
 let rec spawn ?key ?at sc ~label ~ended thunk =
   let s = sched () in
   let parent = s.current in
-  while List.length sc.running >= sc.max && not sc.ended do
-    wait ?at "waits for room in its scope" (fun wake ->
-        sc.room <- sc.room @ [ wake ])
-  done;
+  room ?at sc;
   if sc.ended then raise (ended ());
   (* `s.replace(key)`: the task under the key is cancelled, and waited
      for, and then it's all asked again, since another task may have
@@ -1301,6 +1306,121 @@ let cut_off b =
     || match t.drained with Some by -> now () >= by | None -> false
   in
   (not asked) && Option.is_some b.failure
+
+(* ---- streams ----
+
+   `Async.produce` and `Async.map_pull` (compiler.md, "Services stage",
+   step 5): what's made on other tasks, given to a body that takes it in
+   order, on its own task. *)
+
+(* `Async.produce`'s buffer: what the producer has sent and the body
+   hasn't taken, in order, at most [cap] of it; whether the producer has
+   ended, and what it failed with if it did; and the tasks waiting to put
+   one in, and to take one, each a waker. *)
+type stream = {
+  cap : int;
+  items : Value.t Queue.t;
+  mutable over : bool;
+  mutable failed : Value.t option;
+  mutable putters : (unit -> bool) list;
+  mutable takers : (unit -> bool) list;
+}
+
+(* `Async.map_pull`'s results: each finished task's, by its item's place
+   in the source, until it's taken; how many have started and been
+   taken, which never differ by more than [room], `max:`; whether the
+   source is over, or failed with what [source_failed] says; the task
+   waiting for the next result; and how to pull the source, on the task
+   that takes, and start the task for the item at a place. *)
+type mapped = {
+  room : int;
+  results : (int, (Value.t, Value.t) result) Hashtbl.t;
+  mutable started : int;
+  mutable taken : int;
+  mutable source_over : bool;
+  mutable source_failed : Value.t option;
+  mutable waiting : (unit -> bool) list;
+  pull : unit -> (Value.t option, Value.t) result;
+  mutable start : int -> Value.t -> unit;
+}
+
+(* What a body takes from: a producer's buffer, or `map_pull`'s results. *)
+type inbox = Produced of stream | Mapped of mapped
+
+(* The two ends, as values the prelude's source holds (value.ml,
+   [sched]). *)
+type Value.sched += Outbox of stream | Inbox of inbox
+
+let stream cap =
+  { cap; items = Queue.create (); over = false; failed = None; putters = []; takers = [] }
+
+(* [x] into [st], waiting while it's full. *)
+let put ?at st x =
+  while Queue.length st.items >= st.cap do
+    wait ?at "waits for room in `Async.produce`'s buffer" (fun wake ->
+        st.putters <- st.putters @ [ wake ])
+  done;
+  Queue.push x st.items;
+  st.takers <- wake_first st.takers
+
+(* The producer of [st] has ended, failing with [failed] if it did: what's
+   in it is still taken, and then that. *)
+let end_stream st failed =
+  st.over <- true;
+  st.failed <- failed;
+  List.iter (fun w -> ignore (w ())) st.takers;
+  st.takers <- []
+
+(* The next of [st], waiting while there's none and its producer runs:
+   [None] once it's ended and nothing's left, or what it failed with. *)
+let take ?at st =
+  while Queue.is_empty st.items && not st.over do
+    wait ?at "waits for `Async.produce`'s producer" (fun wake ->
+        st.takers <- st.takers @ [ wake ])
+  done;
+  match Queue.take_opt st.items with
+  | Some x ->
+      st.putters <- wake_first st.putters;
+      Ok (Some x)
+  | None -> ( match st.failed with Some err -> Error err | None -> Ok None)
+
+(* Start a task for each item of [m]'s source there's room for, pulling
+   it on the task running: one more each time one is taken. *)
+let fill m =
+  while (not m.source_over) && m.source_failed = None && m.started - m.taken < m.room do
+    match m.pull () with
+    | Ok (Some v) ->
+        let i = m.started in
+        m.started <- i + 1;
+        m.start i v
+    | Ok None -> m.source_over <- true
+    | Error err -> m.source_failed <- Some err
+  done
+
+(* The task for the item at [i] of [m] has ended, with [r]. *)
+let finished m i r =
+  Hashtbl.replace m.results i r;
+  List.iter (fun w -> ignore (w ())) m.waiting;
+  m.waiting <- []
+
+(* The next result of [m], in the source's order, waiting for it while its
+   task runs, and starting the next task; [None] once the source is over
+   and every result's taken; or what the source or the task failed with,
+   in its place. *)
+let take_mapped ?at m =
+  if m.taken = m.started then
+    match m.source_failed with Some err -> Error err | None -> Ok None
+  else begin
+    while not (Hashtbl.mem m.results m.taken) do
+      wait ?at "waits for `Async.map_pull`'s next result" (fun wake ->
+          m.waiting <- wake :: m.waiting)
+    done;
+    let r = Hashtbl.find m.results m.taken in
+    Hashtbl.remove m.results m.taken;
+    m.taken <- m.taken + 1;
+    fill m;
+    match r with Ok v -> Ok (Some v) | Error err -> Error err
+  end
 
 (* ---- time ---- *)
 

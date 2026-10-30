@@ -131,6 +131,21 @@ and convert_param env ~tvars ~named ~row = function
 
 and closed () = REmpty
 
+(* As Iface.streams_given: a stream given to a block parameter, `fn() ->
+   Option<T>` written without what it fails with, fails with what the
+   function does, [errs]. *)
+let streams_given (written : _ Ast.ty list) (ps : param list) errs =
+  if List.length written <> List.length ps then ps
+  else
+    List.map2
+      (fun (w : _ Ast.ty) (p : param) ->
+        match (w, p.ty) with
+        | TyFn ([], Some _, None, _, _), TFun ([], (TCon (o, [ _ ]) as r), _, u)
+          when o = Path.prelude "Option" ->
+            { p with ty = TFun ([], r, errs, u) }
+        | _ -> p)
+      written ps
+
 (* A parameter's type: as written, or a fresh variable. [own] are the
    rows a transparent parameter of a top-level function gets: a parameter
    written `fn(...)` is a block, which fails with what its function does,
@@ -158,10 +173,11 @@ let param_type env ~tparams ?(named = []) ?own ?(closed_block = false)
   let cant_fail = closed_block || p.pblock = Spawned in
   let t =
     match (p.pty, own) with
-    | Some (TyFn (_, _, written_e, _, _) as t), Some (errs, _) -> (
+    | Some (TyFn (written, _, written_e, _, _) as t), Some (errs, _) -> (
         match convert env ~tvars:tparams ~named ~row:closed t with
-        | TFun (ps, ret, e, u) ->
-            TFun (ps, ret, (if written_e = None && not cant_fail then errs else e), u)
+        | TFun (ps, ret, _, u) when written_e = None && not cant_fail ->
+            TFun (streams_given written ps errs, ret, errs, u)
+        | TFun _ as t -> t
         | _ -> assert false)
     | ( Some
           (TyImpl

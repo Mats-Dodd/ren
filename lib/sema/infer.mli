@@ -92,6 +92,23 @@ type 'l found_ =
           it out: its arguments in its parameters' order, each one left out
           its default, a literal at a node of its own, whose type is in the
           nodes too (compiler.md, "Stage 11a", "The surface") *)
+  | Pulls_block
+      (** at a `for` over a block, `for x in try items`: the block, a `fn() ->
+          Option<T>`, called each time round until it gives `None` *)
+  | Pulled of { what : pulled; name : string }
+      (** at a pull argument's own node ([pulled_node]): what's passed to a
+          block parameter `fn() -> Option<T>` as `for` takes it, and the name
+          of the block Lower makes that pulls it (streams.md, rule 3) *)
+
+(* A collection, pulled by a snapshot of its elements; or a cursor, by
+   calling [next], its method (Infer_env.pulled). *)
+and pulled = Snapshot | Cursor of Path.t
+
+(* The node of what the pull argument at a node is pulled by, and of the
+   type of the method `next` that a cursor gone over or pulled at a node
+   is called through. *)
+val pulled_node : int -> int
+val next_node : int -> int
 
 (* What lowering reads: the labels are dependencies with their type
    arguments, in canonical form, numbered as the function's scheme. *)

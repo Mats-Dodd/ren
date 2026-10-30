@@ -105,7 +105,7 @@ for chunk in &chunks
 
 When the body's turn ends, the chunk's reference count reaches zero, its buffer goes back to the pool, and the next read is submitted ([runtime-io.md](runtime-io.md#buffers-lent-or-leased)). Backpressure comes for free: nothing is read ahead of a body that hasn't finished.
 
-Today a cursor's `next` can't fail or use a dependency, so `Fs.line_reader` and `Net.chunks` wait for generators (stage 11c). [streams.md](streams.md) decides the rest:
+Since the services stage, a cursor's `next` can use a dependency, as a channel's `items()` does, and a temporary's can fail, `for x in try c`; `Async.map` and `Async.each`, and any parameter `fn() -> Option<T>`, take what `for` takes ([async.md](async.md#the-whole-surface)). `Fs.line_reader` and `Net.chunks`, readers that hold an id and an offset, wait for stage 11c, as `for x in try &r` over a named one that can fail does. [streams.md](streams.md) decides the rest:
 
 - **A chain over a cursor is a lazy pipeline,** `&r.map(f).select(p).take(n)`, a block composed where it's written, so it allocates nothing; on an `Array` the same names run now. The default stages are `map`, `select`, `reject`, `take_while`, `drop_while`, `flat_map`, `with_index`, `scan`, `dedup_by`, `take`, `drop`, `batch(n)`, `batch_while`, `windows(n)`, `zip` and `merge_by`, with the sinks `sum`, `reduce`, `count`, `any`, `all`, `find`, `first`, `min`, `max` and `to_array()`. `skip` is `drop`, and `chunks(n)` is `batch(n)`, keeping "chunk" for bytes.
 - **A `gen fn` is the way to write a producer with control flow,** and a user's stage is a `gen fn` that takes a block, joined with `|>`.

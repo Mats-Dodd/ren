@@ -89,6 +89,10 @@ type t =
   | Task_beside
   | Task_background
   | Background_spawn
+  | Task_produce
+  | Task_map_pull
+  | Outbox_send
+  | Inbox_take
   | Async_yield
   | Async_tick
   | Runtime_single
@@ -231,6 +235,10 @@ let path x =
   | Task_beside -> fn "task_beside"
   | Task_background -> fn "task_background"
   | Background_spawn -> member "Background" "spawn"
+  | Task_produce -> fn "task_produce"
+  | Task_map_pull -> fn "task_map_pull"
+  | Outbox_send -> fn "outbox_send"
+  | Inbox_take -> fn "inbox_take"
   | Async_yield -> fn "async_yield"
   | Async_tick -> fn "async_tick"
   | Runtime_single -> fn "runtime_single"
@@ -332,6 +340,7 @@ let waits = function
   | Scope_run | Task_spawn | Task_start | Task_replace | Task_join
   | Task_cancel | Task_until | Task_timeout | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
+  | Task_produce | Task_map_pull | Outbox_send | Inbox_take
   | Async_yield | Async_tick | Sim_sleep ->
       true
   | _ -> false

@@ -1463,7 +1463,8 @@ and builtin ?loc cx f args =
          | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
          | Task_isolate | Task_map
          | Task_each | Task_both | Task_race | Task_beside | Task_background
-         | Background_spawn | Async_yield | Async_tick
+         | Background_spawn | Task_produce | Task_map_pull | Outbox_send
+         | Inbox_take | Async_yield | Async_tick
          | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
          | Sim_advance | Sim_alarm | Task_random | Task_drain ) as x),
         tys,
@@ -1527,6 +1528,15 @@ and net cx (x : Intrinsic.t) args =
   | Net_write, [ VInt c; VBytes b ] -> Net.write ?at c b
   | Net_close, [ VInt c ] -> Net.close c
   | _ -> bug ("a call of `" ^ Intrinsic.name x ^ "` with the wrong values")
+
+(* What the block [src], a pull argument's (`fn() -> Option<T>`), gives
+   next, called on the task running: the item, [None] once there are no
+   more, or what it failed with. *)
+and pulled cx loc src =
+  match fst (call_at cx loc src [] (VEvidence [])) with
+  | Ok (VCon { name = "Some"; args = [ v ]; _ }) -> Ok (Some v)
+  | Ok _ -> Ok None
+  | Error err -> Error err
 
 (* ---- tasks (sched.ml) ----
 
@@ -1602,20 +1612,23 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
     if Sched.fail b err then Sched.came_from err path
     else failed_too cx path err
   in
-  (* [calls] made by tasks of a scope of their own, which lets [max] of
-     them run at once: started in order, and one more each time one ends,
-     labelled by the code this is called from, as a spawn is
-     (compiler.md, "`single`'s order"). What each gave, in order, once
-     they've all ended; or the first error one failed with, after the rest
-     are cancelled and have ended, which an error `main` fails with says it
+  (* The calls [next] gives, made by tasks of a scope of their own, which
+     lets [max] of them run at once: started in order, and one more each
+     time one ends, labelled by the code this is called from, as a spawn is
+     (compiler.md, "`single`'s order"). [next] is asked for each only once
+     there's room for it, on this task, so what it pulls is pulled only
+     when a slot frees (streams.md, "Concurrency and time"); [None] once
+     there are no more. What each gave, in order, once they've all ended;
+     or the first error one failed with, or [next] did, after the rest are
+     cancelled and have ended, which an error `main` fails with says it
      came from (async.md, "A failure cancels the tasks beside it"). One of
      the rest failing too is written to stderr, never dropped. [what] is
      what the deadlock panic says the caller waits for *)
   (* the scopes of `map`, `each`, `both` and `race` are this call's own,
      so they end only after their tasks have all started *)
   let mine () = bug "a task started in a scope of `Async`'s own that has ended" in
-  let all_of ~what ~max calls =
-    let results = Array.make (List.length calls) VUnit in
+  let all_of ~what ~max next =
+    let results = Hashtbl.create 16 and count = ref 0 in
     let first = ref None in
     let sc = Sched.scope ~max in
     let failed err =
@@ -1630,22 +1643,27 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
             sc.running
       | Some _ -> failed_too cx path err
     in
-    let run () =
-      List.iteri
-        (fun i call ->
-          if Option.is_none !first then begin
-            let t =
-              Sched.spawn ?at sc ~label:cx.site ~ended:mine (fun () ->
-                  (match call () with
-                  | Ok v -> results.(i) <- v
-                  | Error err -> failed err);
-                  VUnit)
-            in
-            (* one that failed while this waited for room *)
-            if Option.is_some !first then Sched.cancel t
-          end)
-        calls;
-      Sched.wait_empty ?at ~what sc
+    let rec run () =
+      if Option.is_none !first then Sched.room ?at sc;
+      (* one may have failed while this waited for room *)
+      match if Option.is_none !first then next () else Ok None with
+      | Error err ->
+          failed err;
+          Sched.wait_empty ?at ~what sc
+      | Ok None -> Sched.wait_empty ?at ~what sc
+      | Ok (Some _) when Option.is_some !first ->
+          (* one failed while this pulled: nothing more starts *)
+          Sched.wait_empty ?at ~what sc
+      | Ok (Some call) ->
+          let i = !count in
+          incr count;
+          ignore
+            (Sched.spawn ?at sc ~label:cx.site ~ended:mine (fun () ->
+                 (match call () with
+                 | Ok v -> Hashtbl.replace results i v
+                 | Error err -> failed err);
+                 VUnit));
+          run ()
     in
     (* the scope's body is over once its tasks are, however it ends *)
     Fun.protect ~finally:(fun () -> Sched.closed sc) (fun () ->
@@ -1659,7 +1677,21 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
             raise p);
     match !first with
     | Some err -> Error err
-    | None -> Ok (Array.to_list results)
+    | None ->
+        (* one cut off by a cleanup deadline gave nothing, as before *)
+        Ok
+          (List.init !count (fun i ->
+               Option.value (Hashtbl.find_opt results i) ~default:VUnit))
+  in
+  (* the calls of [calls], in order, as [all_of] asks for them *)
+  let listed calls =
+    let rest = ref calls in
+    fun () ->
+      match !rest with
+      | c :: more ->
+          rest := more;
+          Ok (Some c)
+      | [] -> Ok None
   in
   (* [calls], the branches of `Async.race`, each made by a task of a scope
      of their own: what the first to return gave, once the others, which
@@ -1862,16 +1894,22 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
             | Error err -> Error err)
       in
       (r, args)
-  | (Task_map | Task_each), [ xs; VInt max; f ] ->
+  | (Task_map | Task_each), [ src; VInt max; f ] ->
       let name = if x = Task_map then "map" else "each" in
       if max < 1L then
         panic ~help:"`max:` is at least 1" loc
           (sprintf "`Async.%s`'s `max` is %Ld, so it couldn't start a task" name max);
-      let items = match xs with VArray v -> Array.to_list (Value.items v) | _ -> bug "a map over what isn't an array" in
       share_reach f;
-      let calls = List.map (fun v () -> fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence []))) items in
+      (* the next item, pulled on this task, and the call of [f] of it *)
+      let next () =
+        match pulled cx loc src with
+        | Ok (Some v) ->
+            Ok (Some (fun () -> fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence []))))
+        | Ok None -> Ok None
+        | Error err -> Error err
+      in
       let r =
-        all_of ~what:(sprintf "waits for `Async.%s`'s tasks" name) ~max:(Int64.to_int max) calls
+        all_of ~what:(sprintf "waits for `Async.%s`'s tasks" name) ~max:(Int64.to_int max) next
       in
       let r =
         match r with
@@ -1885,7 +1923,7 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
       share_reach b;
       let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
       let r =
-        match all_of ~what:"waits for `Async.both`'s tasks" ~max:2 [ call a; call b ] with
+        match all_of ~what:"waits for `Async.both`'s tasks" ~max:2 (listed [ call a; call b ]) with
         | Ok vs -> Ok (VTuple vs)
         | Error err -> Error err
       in
@@ -1916,6 +1954,100 @@ and tasks ?loc cx (x : Intrinsic.t) tys dicts args =
   | Background_spawn, [ VSched (Sched.Background b); body ] ->
       ignore (spawn ~failed:(failed_beside b) b.tasks body);
       (Ok VUnit, args)
+  (* `Async.produce`: [f], given the buffer's end, runs as a task beside
+     [body], which takes from the other. A failure of [f] isn't the
+     background's, which would cancel [body]: it ends the stream with it,
+     so [body] meets it where it takes, after what was sent before *)
+  | Task_produce, [ VInt cap; f; body ] ->
+      if cap < 1L then
+        panic ~help:"`cap:` is at least 1" loc
+          (sprintf "`Async.produce`'s `cap` is %Ld, so nothing could be sent" cap);
+      share_reach f;
+      let f = copied f in
+      let st = Sched.stream (Int64.to_int cap) in
+      let b = Sched.background () in
+      ignore
+        (Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
+             let failed =
+               match
+                 fst
+                   (call_at { cx with depth = ref 0 } loc f
+                      [ VSched (Sched.Outbox st) ]
+                      (VEvidence []))
+               with
+               | Ok _ -> None
+               | Error err ->
+                   Sched.came_from err (Sched.current_path ());
+                   Some err
+               | exception e ->
+                   (* cancelled, or a panic: nothing more is sent *)
+                   Sched.end_stream st None;
+                   raise e
+             in
+             Sched.end_stream st failed;
+             VUnit));
+      ( beside_body b (fun () ->
+            fst
+              (call_at cx loc body
+                 [ VSched (Sched.Inbox (Produced st)) ]
+                 (VEvidence []))),
+        args )
+  (* `Async.map_pull`: a task of [f] for each item of [src], pulled on this
+     task as there's room, `max` of them, beside [body], which takes their
+     results in order. A failure of one is its result's *)
+  | Task_map_pull, [ src; VInt max; f; body ] ->
+      if max < 1L then
+        panic ~help:"`max:` is at least 1" loc
+          (sprintf "`Async.map_pull`'s `max` is %Ld, so it couldn't start a task" max);
+      share_reach f;
+      let b = Sched.background () in
+      let m : Sched.mapped =
+        {
+          room = Int64.to_int max;
+          results = Hashtbl.create 16;
+          started = 0;
+          taken = 0;
+          source_over = false;
+          source_failed = None;
+          waiting = [];
+          pull = (fun () -> pulled cx loc src);
+          start = (fun _ _ -> ());
+        }
+      in
+      m.start <-
+        (fun i v ->
+          ignore
+            (Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
+                 let r =
+                   match fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence [])) with
+                   | Ok v -> Ok v
+                   | Error err ->
+                       Sched.came_from err (Sched.current_path ());
+                       Error err
+                 in
+                 Sched.finished m i r;
+                 VUnit)));
+      ( beside_body b (fun () ->
+            Sched.fill m;
+            fst
+              (call_at cx loc body
+                 [ VSched (Sched.Inbox (Mapped m)) ]
+                 (VEvidence []))),
+        args )
+  | Outbox_send, [ VSched (Sched.Outbox st); v ] ->
+      Sched.put ?at st v;
+      (Ok VUnit, args)
+  | Inbox_take, [ VSched (Sched.Inbox i) ] ->
+      let r =
+        match i with
+        | Produced st -> Sched.take ?at st
+        | Mapped m -> Sched.take_mapped ?at m
+      in
+      ( (match r with
+        | Ok (Some v) -> Ok (some v)
+        | Ok None -> Ok none
+        | Error err -> Error err),
+        args )
   | _ -> bug ("`" ^ Intrinsic.name x ^ "` with the wrong values")
 
 (* ---- the journal (journal.ml) ----

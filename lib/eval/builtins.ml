@@ -553,7 +553,8 @@ let run (x : Intrinsic.t) ~(dicts : Value.dict list) ~(tys : Ty.ty list)
   | Task_cancel | Task_until | Arm_release | Arm_retake | Task_timeout
   | Task_isolate | Task_map
   | Task_each | Task_both | Task_race | Task_beside | Task_background
-  | Background_spawn | Async_yield | Async_tick
+  | Background_spawn | Task_produce | Task_map_pull | Outbox_send | Inbox_take
+  | Async_yield | Async_tick
   | Runtime_single | Runtime_sim | Runtime_leave | Sim_time | Sim_sleep
   | Sim_advance | Sim_alarm | Task_random | Task_drain
   (* and the real `Net`'s and `Proc.run`, which wait too (net.ml,

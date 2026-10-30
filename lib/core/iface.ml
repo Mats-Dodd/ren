@@ -463,6 +463,24 @@ let defaults_of (ps : Ast.Resolved.param list) =
 let closed_blocks p =
   List.mem p (List.map (Path.member (Path.prelude "Async")) [ "race"; "until" ])
 
+(* The parameters [ps] of a block parameter, written [written], each a
+   stream given to the block, `fn() -> Option<T>` written without what it
+   fails with, failing with what the function does, [errs]: a failure of
+   what the function makes it from reaches the block where it pulls it,
+   `for p in try items` (compiler.md, "Services stage", step 5). Any other
+   function type there fails with nothing. *)
+let streams_given (written : _ Ast.ty list) (ps : Ty.param list) errs =
+  if List.length written <> List.length ps then ps
+  else
+    List.map2
+      (fun (w : _ Ast.ty) (p : Ty.param) ->
+        match (w, p.ty) with
+        | TyFn ([], Some _, None, _, _), Fun ([], (Con (o, [ _ ]) as r), _, u)
+          when o = Path.prelude "Option" ->
+            { p with ty = Fun ([], r, errs, u) }
+        | _ -> p)
+      written ps
+
 (* A public function's type scheme, from its signature alone. Its type
    parameters, parameters and result are all written; a public function
    without `->` returns Unit, and a parameter left without a type (an
@@ -534,10 +552,11 @@ let signature ?(closed = false) ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
   let param (p : Ast.Resolved.param) : Ty.param =
     let ty : Ty.ty =
       match p.pty with
-      | Some (TyFn (_, _, written_e, _, _) as t) -> (
+      | Some (TyFn (written, _, written_e, _, _) as t) -> (
           match of_written ~rows ~sets t with
-          | Fun (ps, r, e, u) ->
-              Fun (ps, r, (if written_e = None && not (cant_fail p) then errs else e), u)
+          | Fun (ps, r, _, u) when written_e = None && not (cant_fail p) ->
+              Fun (streams_given written ps errs, r, errs, u)
+          | Fun _ as t -> t
           | _ -> assert false)
       | Some (TyImpl { impl_deps; impl_over; impl_errors; impl_uses = None; _ })
         ->

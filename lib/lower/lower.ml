@@ -187,6 +187,9 @@ type cx = {
           are found in *)
   opaque : Path.t list;
       (** the opaque types the module sees, but the prelude's (Infer.t) *)
+  through : (int, Path.t) Hashtbl.t;
+      (** the member functions of dependencies called through an alias, by
+          node, with the alias (Resolve.through) *)
   vars : (int, C.var) Hashtbl.t;  (** each local, by binder id *)
   mutable next : int;  (** the id of the next temporary *)
   mutable ev : C.var;
@@ -419,7 +422,9 @@ type step =
 type place = { root : C.var; steps : step list }
 
 (* A call's argument, lowered: a value, or a place passed with `&`, with
-   the temporaries holding its indices. *)
+   the temporaries holding its indices, or a pull argument's block, with
+   what's made first for it to pull, a snapshot or a cursor (Lower's
+   [pull_block]). *)
 type arg =
   | Read of C.expr
   | Inout of {
@@ -428,6 +433,7 @@ type arg =
       ty : Ty.ty;
       loc : Loc.t;
     }
+  | Pull of (C.var * C.expr) list * C.expr
 
 (* The value at the end of the steps, starting from [base]. *)
 let rec read_from (base : C.expr) steps =
@@ -1902,6 +1908,8 @@ and call cx ?(changed = false) (e : expr) f args =
              args = List.map (fun v -> local v e.loc) c.cargs;
            })
         (ty_of cx e.node) e.loc
+  | Var (Global _) when Hashtbl.mem cx.through f.node ->
+      plain_call cx ~changed ~through:(Hashtbl.find cx.through f.node) e f args
   | Var (Global p) when List.exists is_named args ->
       tags_call cx ~changed e f p args
   | Field (r, _) -> (
@@ -2052,7 +2060,7 @@ and split_at cx (e : expr) (r : expr) n body =
        let result = temp cx "result" ty in
        lets [ (result, call) ] (seq back (local result loc)))
 
-and plain_call cx ~changed ?callee (e : expr) f args =
+and plain_call cx ~changed ?callee ?through (e : expr) f args =
   let inout (p : expr) ty =
     let binds, pl = place cx p in
     Inout { binds; place = pl; ty; loc = p.loc }
@@ -2079,17 +2087,20 @@ and plain_call cx ~changed ?callee (e : expr) f args =
     @ List.map
         (fun (a : expr) ->
           match a.kind with
+          | _ when is_pulled cx a ->
+              let binds, block = pull_block cx a in
+              Pull (binds, block)
           | Ref p when changed_receiver a = None -> inout p (ty_of cx a.node)
           | _ -> Read (expr cx a))
         args
   in
   let ty = ty_of cx e.node in
   let direct = function
-    | Read a -> Some (C.Value a)
+    | Read a | Pull ([], a) -> Some (C.Value a)
     | Inout { binds = []; place = { root; steps = [] }; _ } -> Some (C.Ref root)
-    | Inout _ -> None
+    | Inout _ | Pull _ -> None
   in
-  if List.for_all (fun a -> direct a <> None) lowered then
+  if through = None && List.for_all (fun a -> direct a <> None) lowered then
     mk (Call (f, List.filter_map direct lowered, cx.ev)) ty e.loc
   else
     let hold_f, f = hold cx "f" f in
@@ -2100,6 +2111,7 @@ and plain_call cx ~changed ?callee (e : expr) f args =
           | Read v ->
               let b, v = hold cx "arg" v in
               (binds @ b, args @ [ C.Value v ], writes)
+          | Pull (b, block) -> (binds @ b, args @ [ C.Value block ], writes)
           | Inout r ->
               let t = temp cx "ref" r.ty in
               ( binds @ r.binds @ [ (t, read r.place r.loc) ],
@@ -2107,7 +2119,13 @@ and plain_call cx ~changed ?callee (e : expr) f args =
                 writes @ [ write r.place (local t r.loc) r.loc ] ))
         (hold_f, [], []) lowered
     in
-    let call = mk (Call (f, args, cx.ev)) ty e.loc in
+    (* through an alias, only the call itself runs with the alias's
+       implementation: the callee and its arguments are held first *)
+    let call =
+      match through with
+      | Some alias -> rebound cx ~alias e.loc (fun () -> mk (Call (f, args, cx.ev)) ty e.loc)
+      | None -> mk (Call (f, args, cx.ev)) ty e.loc
+    in
     if C.fails f.ty then
       (* the places are written back even if it fails *)
       lets binds (mk (Finally (call, seq_all e.loc writes)) ty e.loc)
@@ -2204,6 +2222,7 @@ and range_loop cx (e : expr) (pat : pattern) lo hi body =
    ([cursor_loop]). *)
 and for_loop cx (e : expr) index (pat : pattern) (iter : expr) body =
   match (node cx e.node).found with
+  | Some Pulls_block -> block_loop cx e pat iter body
   | Some (Method_of next) -> (
       match zipped cx iter with
       | Some arrays -> zip_loop cx e pat arrays body
@@ -2388,17 +2407,8 @@ and cursor_loop cx (e : expr) (pat : pattern) (iter : expr) next body =
   let cursor = ty_of cx iter.node in
   let elem = ty_of cx pat.pnode in
   let opt : Ty.ty = Con (option_path, [ elem ]) in
-  let fty : Ty.ty =
-    Fun ([ { mode = Inout; ty = cursor } ], opt, Ty.closed, Ty.closed)
-  in
-  let a = targs_of cx e.node in
-  let callee : C.kind =
-    match Prelude.find next with
-    | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx e.node)
-    | None -> Global (next, a, descs cx a, dicts_of cx e.node)
-  in
-  let call (v : C.var) =
-    mk (Call (mk callee fty iter.loc, [ Ref v ], cx.ev)) opt iter.loc
+  let call =
+    next_call cx ?through:(made_through cx iter) ~at:e.node ~meth_at:e.node next opt iter.loc
   in
   (* the place it advances, and how to advance it once: a local is passed
      as it is, and anything else through a temporary, written back *)
@@ -2418,6 +2428,211 @@ and cursor_loop cx (e : expr) (pat : pattern) (iter : expr) next body =
         let copy = temp cx "cursor" cursor in
         ([ (copy, expr cx iter) ], call copy)
   in
+  option_loop cx e pat binds advance body
+
+(* [body ()], with the implementation of the alias [alias], `Events` for
+   `dep Events = Chan<Event>`, installed as the dependency it names, for a
+   member function of that one called through it, `Events.items()`, and a
+   cursor's `next` that call makes: a stateless handler whose operations
+   call the alias's, installed around [body] alone, so nothing else there
+   sees it (compiler.md, "Services stage", step 5). *)
+and rebound cx ~(alias : Path.t) loc (body : unit -> C.expr) =
+  let target =
+    match cx.types alias with
+    | Some { body = Dep_alias d; _ } -> d
+    | _ -> bug "a call through an alias that isn't one"
+  in
+  let ops =
+    match Iface.dep_fields cx.types (Ty.plain alias) with
+    | Some ops -> ops
+    | None -> bug "an alias of a dependency without operations"
+  in
+  let needs : Ty.row = { labels = [ Ty.dep_of (Ty.plain alias) ]; tail = None } in
+  let impl_ty = Ty.impl [ target ] needs in
+  (* the handler, whose operations run where it's installed *)
+  let hev = evidence cx and outer = cx.ev in
+  cx.ev <- hev;
+  let forwarded =
+    List.map
+      (fun (o : Iface.field) ->
+        match o.fty with
+        | Fun (ps, ret, errs, _) ->
+            let fty = Ty.Fun (ps, ret, errs, needs) in
+            let params =
+              List.map
+                (fun (q : Ty.param) : C.param -> { mode = Read; var = temp cx "x" q.ty })
+                ps
+            in
+            ( o.fname,
+              block_value cx
+                ~name:(Path.full (Path.member alias o.fname))
+                ~given:[] params fty loc
+                (fun () ->
+                  let args = List.map (fun (q : C.param) -> local q.var loc) params in
+                  mk
+                    (Dep_call
+                       {
+                         dep = alias;
+                         dargs = [];
+                         op = o.fname;
+                         fty;
+                         ev = cx.ev;
+                         next = false;
+                         args = nan_checked alias o.fname args;
+                       })
+                    ret loc) )
+        | _ -> bug "an operation whose type isn't a function's")
+      ops
+  in
+  cx.ev <- outer;
+  let instance =
+    mk
+      (Instance
+         {
+           impls = [ (target.dpath, mk (Record (target.dpath, forwarded)) impl_ty loc) ];
+           finally = None;
+           exclusive = false;
+         })
+      impl_ty loc
+  in
+  let captures = List.filter (fun (v : C.var) -> v.id <> hev.id) (free instance) in
+  let handler = mk (Handler { ev = hev; captures; body = instance }) impl_ty loc in
+  let ev = evidence cx in
+  cx.ev <- ev;
+  let b = body () in
+  cx.ev <- outer;
+  mk
+    (With
+       {
+         ev;
+         outer;
+         dep = target.dpath;
+         dargs = List.map (C.describe cx.tys) target.dargs;
+         from = target.dpath;
+         impl = handler;
+         desc = C.describe cx.tys b.ty;
+         body = b;
+       })
+    b.ty loc
+
+(* The alias a cursor [iter] is made through, if it's a call of a
+   dependency's member function through one, `Events.items()`: its
+   `next` is called with the alias's implementation too ([rebound]). *)
+and made_through cx (iter : expr) =
+  match iter.kind with
+  | Call ({ kind = Var (Global _); node; _ }, _) -> Hashtbl.find_opt cx.through node
+  | _ -> None
+
+(* Whether [a] is a pull argument, what `for` takes passed to a block
+   parameter `fn() -> Option<T>` (Infer_expr.pull_arg). *)
+and is_pulled cx (a : expr) =
+  match Infer.Nodes.find_opt (Infer.pulled_node a.node) cx.nodes with
+  | Some { found = Some (Pulled _); _ } -> true
+  | _ -> false
+
+(* The block a pull argument [a] is passed as, of the parameter's type,
+   `fn() -> Option<T>`, which gives its next item each time it's called,
+   on the caller's task (streams.md, rule 3), with what it pulls from,
+   bound first, where the argument is evaluated: a collection's from a
+   snapshot of it, counting along it; a temporary cursor's, held, from its
+   `next`; and a named one's, `&r`, from its `next` on the place, which
+   the block changes where it is, so it goes on from there after the call
+   (excl.ml holds it changed for the whole call). *)
+and pull_block cx (a : expr) =
+  let at = Infer.pulled_node a.node in
+  let n = node cx at in
+  let what, name =
+    match n.found with
+    | Some (Pulled { what; name }) -> (what, name ^ cx.suffix)
+    | _ -> bug "a pull argument inference didn't say how to pull"
+  in
+  let bty = n.ty in
+  let opt = match bty with Fun (_, r, _, _) -> r | _ -> bug "a pull block that isn't one" in
+  let elem =
+    match opt with Con (_, [ x ]) -> x | _ -> bug "a pull of what isn't an `Option`"
+  in
+  let loc = a.loc in
+  let pulling body = block_value cx ~name ~given:[] [] bty loc body in
+  match (what, a.kind) with
+  | Snapshot, _ ->
+      let v = expr cx a in
+      let array_ty = Ty.array elem in
+      let snapshot =
+        match v.ty with
+        | Con (p, [ _; _ ]) when p = Path.prelude "Map" ->
+            mk (Prim (Entries, [ v ])) array_ty loc
+        | Con (p, [ _ ]) when p = Path.prelude "Set" ->
+            mk (Prim (Members, [ v ])) array_ty loc
+        | _ -> v
+      in
+      let xs = temp cx "xs" array_ty and i = temp cx "i" Ty.int in
+      let index = local i loc in
+      let binop op a b ty = mk (Prim (Binop op, [ a; b ])) ty loc in
+      ( [ (xs, snapshot); (i, int_lit 0L loc) ],
+        pulling (fun () ->
+             let x = temp cx "x" elem in
+             let more =
+               binop Lt index (mk (Prim (Length, [ local xs loc ])) Ty.int loc) Ty.bool
+             in
+             let next =
+               lets
+                 [ (x, mk (Prim (Get_index Checked, [ local xs loc; index ])) elem loc) ]
+                 (seq
+                    (mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc)
+                    (mk (Con (option_path, "Some", [ local x loc ])) opt loc))
+             in
+             mk (If (more, next, mk (Con (option_path, "None", [])) opt loc)) opt loc) )
+  | Cursor next, Ref p -> (
+      let binds, pl = place cx p in
+      let cursor = ty_of cx a.node in
+      let call = next_call cx ~at ~meth_at:a.node next opt loc in
+      match pl with
+      | { root; steps = [] } -> (binds, pulling (fun () -> call root))
+      | _ ->
+          ( binds,
+            pulling (fun () ->
+                let t = temp cx "ref" cursor and got = temp cx "next" opt in
+                lets
+                  [ (t, read pl loc); (got, call t) ]
+                  (seq (write pl (local t loc) loc) (local got loc))) ))
+  | Cursor next, _ ->
+      let c = temp cx "cursor" (ty_of cx a.node) in
+      let call = next_call cx ?through:(made_through cx a) ~at ~meth_at:a.node next opt loc in
+      ([ (c, expr cx a) ], pulling (fun () -> call c))
+
+(* A call of [next], a cursor's method, found at the node [at], at the
+   type recorded at [meth_at]'s [Infer.next_node], on the cursor in [v],
+   giving [opt]: what uses it has, a channel's `items()`'s, are in the
+   evidence where it's called. *)
+and next_call cx ?through ~at ~meth_at next opt loc (v : C.var) =
+  let fty = ty_of cx (Infer.next_node meth_at) in
+  let a = targs_of cx at in
+  let callee : C.kind =
+    match Prelude.find next with
+    | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx at)
+    | None -> Global (next, a, descs cx a, dicts_of cx at)
+  in
+  let call () = mk (Call (mk callee fty loc, [ Ref v ], cx.ev)) opt loc in
+  match through with
+  | Some alias -> rebound cx ~alias loc call
+  | None -> call ()
+
+(* `for x in f`, or `for x in try f`, [f] a block `fn() -> Option<T>`
+   (Infer_expr.block_subject): [f] is called each time round, until it
+   gives `None`. A call that fails ends the loop with its error, as any
+   call does. *)
+and block_loop cx (e : expr) (pat : pattern) (iter : expr) body =
+  let f = match iter.kind with Try f -> f | _ -> iter in
+  let fv = expr cx f in
+  let ret = match fv.ty with Fun (_, r, _, _) -> r | _ -> bug "a block pulled that isn't one" in
+  option_loop cx e pat [] (mk (Call (fv, [], cx.ev)) ret iter.loc) body
+
+(* The loop of a cursor or a block: [advance] each time round, after
+   [binds], until it gives `None`, the body run with [pat] bound to what's
+   in each `Some`, as a [While] that [Break]s at `None`. *)
+and option_loop cx (e : expr) (pat : pattern) binds (advance : C.expr) body =
+  let loc = e.loc in
+  let opt = advance.ty in
   (* the pattern binds what the body uses, so it's lowered first *)
   let elem_pat = pattern cx pat in
   let body =
@@ -2827,7 +3042,7 @@ let max_binder (f : fn_def) =
 (* [f], lowered; or made for [made], what a use of it asked for. What
    it uses that's made for a request, it adds to [requests], and each
    method call on a description it has, to [calls]. *)
-let fn_def ~home ~types ~requests ~calls ?made (inferred : Infer.t) (f : fn_def) :
+let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f : fn_def) :
     C.fn_def =
   let path = Ast.fn_path home f in
   let scheme = Path.Map.find path inferred.schemes in
@@ -2899,6 +3114,7 @@ let fn_def ~home ~types ~requests ~calls ?made (inferred : Infer.t) (f : fn_def)
       calls;
       types;
       opaque = inferred.opaque;
+      through;
       vars = Hashtbl.create 16;
       next = next + 1;
       ev = C.evidence next;
@@ -3010,7 +3226,7 @@ let program ~types (r : Resolve.t) (inferred : Infer.t) =
     List.filter_map
       (fun f ->
         if made_for_requests inferred (Ast.fn_path r.home f) f then None
-        else Some (fn_def ~home:r.home ~types ~requests ~calls inferred f))
+        else Some (fn_def ~home:r.home ~types ~through:r.through ~requests ~calls inferred f))
       (Ast.functions r.prog)
   in
   (* the indices its loops keep in bounds, marked so (bounds.ml) *)
@@ -3040,7 +3256,7 @@ let made ~types (r : Resolve.t) (inferred : Infer.t) req =
   with
   | Some f ->
       let requests = ref [] and calls = ref [] in
-      let fn = fn_def ~home:r.home ~types ~requests ~calls ~made:req inferred f in
+      let fn = fn_def ~home:r.home ~types ~through:r.through ~requests ~calls ~made:req inferred f in
       (Bounds.mark fn, List.rev !requests, !calls)
   | None -> bug ("a request of `" ^ Path.local p ^ "`, which isn't there")
 

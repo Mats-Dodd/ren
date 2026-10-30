@@ -28,18 +28,19 @@ fn handle(conn: Conn) ! NetError =
     else if req == "stuck".bytes() then Clock.sleep(Duration.minutes(1))
     try Line.write("done".bytes())
 
+// the connections a listener accepts, until SIGTERM comes: a cursor
+// whose `next` waits for the next one, `None` once the signal has come
+type Connections = opaque { listener: Listener }
+  fn next(inout self) -> Option<Conn> = try Net.accept_until(self.listener, Signal.term)
+
+// each connection is served as it's accepted, 10_000 at once at most:
+// `Async.each` pulls the next only when there's room for it
 pub fn serve(addr: Addr) ! NetError uses Net, Clock, Console, Async =
   let listener = try Net.listen(addr)
-  try Async.scope(max: 10_000) fn(s) =>
-    var open = true
-    while open
-      match try Net.accept_until(listener, Signal.term)
-        Some(conn) =>
-          s.spawn fn() =>
-            match attempt handle(conn)
-              Ok(_) => ()
-              Err(_) => Console.error("request failed")
-        None => open = false
+  try Async.each(Connections { listener: listener }, max: 10_000) fn(conn) =>
+    match attempt handle(conn)
+      Ok(_) => ()
+      Err(_) => Console.error("request failed")
 
 pub fn main() ! NetError uses Net, Clock, Console, Async =
   try serve(Addr { host: "127.0.0.1", port: 8080 })

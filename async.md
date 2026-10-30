@@ -42,6 +42,7 @@ Async.scope(max: n) fn(s) => ...                  // spawn waits while n run
 Async.map(xs) fn(x) => ...                         // results, in order
 Async.each(xs) fn(x) => ...                        // no results
 Async.produce(cap: n, fn() => ...) fn(items) => ... // a producer task; its sends are a stream
+Async.map_pull(xs, fn(x) => ...) fn(results) => ... // map's results as a stream, in order
 Async.beside(fn() => task) fn() => ...             // a task beside the body, stopped when it ends
 Async.background fn(bg) => bg.spawn fn() => ...    // the same, for tasks spawned as the body goes
 Async.both(fn() => a, fn() => b)                   // a pair
@@ -59,6 +60,8 @@ with sync.semaphore(n), sync.limit() over Dep in   // at most n calls to Dep at 
 | `Async.scope` | its body's | its tasks can't fail; the body's cancels them |
 | `Async.map` | a list, in order | cancels the rest |
 | `Async.each` | none | cancels the rest |
+| `Async.produce` | the body's | the producer's ends the stream with it, after what it sent; the body's cancels the producer |
+| `Async.map_pull` | the body's | a task's, or the source's, ends the stream with it, in its place |
 | `Async.both` | a pair | cancels the other |
 | `Async.race` | the first to finish | its branches can't fail |
 | `Async.timeout` | the body's | `! Timeout`, and the body is cancelled |
@@ -84,11 +87,17 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
   tasks run, which is a server's backpressure, and `map` and `each` run
   `max` at once. The default is std's, 64 in their signatures, so a
   server writes `max: 10_000`.
-- **`map` and `each` take any pull argument,** as `for` does: an
-  array, a named cursor as `&r`, a pipeline or a generator. They pull
-  the next item on the caller's task, only when a slot frees, so memory
-  is bounded by `max`, and `map` keeps order: a finished result behind
-  a slow head keeps its slot ([streams.md](streams.md#concurrency-and-time)).
+- **`map` and `each` take any pull argument,** as `for` does: a
+  collection, by a snapshot of it; a temporary cursor as itself; a named
+  cursor as `&r`, which the call changes in its place, so it goes on from
+  where the call left it; a block `fn() -> Option<T>`; or a channel's
+  `items()`. Pipelines and generators join them with stage 11c. They
+  pull the next item on the caller's task, only when a slot frees, so
+  memory is bounded by `max`, and `map` keeps order: a finished result
+  behind a slow head keeps its slot
+  ([streams.md](streams.md#concurrency-and-time)). A parameter of type
+  `fn() -> Option<T>` is a pull parameter in any function: it takes what
+  `for` takes too.
 - **`each`'s block returns `()`.** If it returns a value, that's an
   error whose help says `map`, so no result is thrown away without
   being written.
@@ -101,7 +110,10 @@ where they're written ([foundations.md](foundations.md#5-dependencies-are-found-
   sends through a `Send<T>` dependency the call installs, not a channel
   value it holds (decision 5). `cap` is the backpressure. When the body
   ends, by finishing, `break` or a failure, the producer is cancelled
-  and waited for. `Async.map_pull(src, max:, f) fn(results) => ...` has
+  and waited for. A failure of the producer ends the stream with it:
+  `items` gives what was sent first, then fails, so it's looped with
+  `for p in try items` where the producer can fail, and the call is
+  marked `try`. `Async.map_pull(src, max:, f) fn(results) => ...` has
   the same shape ([streams.md](streams.md#concurrency-and-time)).
 
 ## The rules
@@ -496,26 +508,28 @@ runs a server on the real `Net` and sends it SIGTERM.
 ### A server that shuts down gracefully
 
 ```ren
-pub fn serve(addr: Addr) ! NetError uses Net, Console, Async =
+// the connections a listener accepts, until SIGTERM comes
+type Connections = opaque { listener: Listener }
+  fn next(inout self) -> Option<Conn> = try Net.accept_until(self.listener, Signal.term)
+
+pub fn serve(addr: Addr) ! NetError uses Net, Clock, Console, Async =
   let listener = try Net.listen(addr)
-  try Async.scope(max: 10_000) fn(s) =>
-    var open = true
-    while open
-      match try Net.accept_until(listener, Signal.term)
-        Some(conn) =>
-          s.spawn fn() =>
-            match attempt handle(conn)
-              Ok(_) => ()
-              Err(_) => Console.error("request failed")
-        None => open = false
+  try Async.each(Connections { listener: listener }, max: 10_000) fn(conn) =>
+    match attempt handle(conn)
+      Ok(_) => ()
+      Err(_) => Console.error("request failed")
 ```
 
-- **Shutting down is the loop's end.** `accept_until` gives `None` once
-  `SIGTERM` comes, the loop ends, and the scope waits for the
-  connections in flight. They have the cleanup deadline to finish, and
-  are cancelled after it.
-- **One connection's failure is its own.** A spawned task can't fail,
-  so `handle`'s errors are handled in the task.
+- **The connections are a cursor.** `Async.each` pulls the next one
+  only when there's room for it, so the server takes no more than
+  10_000 at once. When `streams.md`'s `Net.connections(listener)`
+  lands, it replaces `Connections`.
+- **Shutting down is the cursor's end.** `accept_until` gives `None`
+  once `SIGTERM` comes, and `each` waits for the connections in flight.
+  They have the cleanup deadline to finish, and are cancelled after it.
+- **One connection's failure is its own.** `handle`'s errors are
+  handled in its task, so one connection failing doesn't cancel the
+  others.
 
 ```ren
 // `here()` is the address the test's server listens on, and
@@ -535,26 +549,29 @@ test "shutdown lets a request in flight finish" =
 ### A crawler
 
 ```ren
-fn crawl(url: Str, depth: Int) -> Array<Page> uses Web, Seen, Async =
-  if depth == 0 || not Seen.claim(url) then []
-  else
+fn crawl(url: Str, depth: Int) =
+  if depth > 0 && Seen.claim(url) then
     match attempt Web.get(url)
-      Err(_) => []
+      Err(_) => ()
       Ok(page) =>
-        let below = Async.map(page.links) fn(link) => crawl(link, depth - 1)
-        var pages = [page]
-        for p in below.flat_map(fn(ps) => ps)
-          &pages.push(p)
-        pages
+        Send.send(page)
+        Async.each(page.links) fn(link) => crawl(link, depth - 1)
 
-fn crawl_site(root: Str) -> Int uses Web, Async =
+pub fn crawl_site(root: Str) -> Array<Str> uses Web, Async =
   with seen_set(), sync.semaphore(16), sync.limit() over Web in
-    crawl(root, 3).len()
+    var urls: Array<Str> = []
+    Async.produce(fn() => crawl(root, 3)) fn(pages) =>
+      for p in pages
+        &urls.push(p.url)
+    urls.sort()
 ```
 
+- Each page is sent as it's found, through the `Send<Page>`
+  `Async.produce` installs, to the body that collects them: nothing is
+  gathered level by level.
 - `Seen.claim` is atomic without a lock (rule 3).
 - Skipping pages that fail is `attempt`, not a separate error policy.
-- The map inside a map is bounded where it matters: 16 requests at once,
+- The `each` inside an `each` is bounded where it matters: 16 requests at once,
   however deep the crawl goes. `limit` is an `over any` handler with no
   state, so it takes no lock, over a semaphore whose `acquire` waits in
   `Async.until`.
@@ -786,9 +803,9 @@ This document was first written before foundations.md, which changed it
 
 ## Later
 
-- **Streams for `each` and `map`,** decided in streams.md, wait for
-  generators (stage 11c): `Async.each(Net.connections(listener), max:
-  10_000)` pulls the next item only when a slot frees.
+- **Pipelines and generators as pull arguments** wait for stage 11c,
+  and `Net.connections(listener)` with them; collections, cursors, `&r`,
+  blocks and a channel's `items()` are pulled today.
 - **Restart policies,** like Erlang's supervisors. Until then, it's
   `attempt` or `retry` inside a task.
 - **Many cores** (stage 11b): `work_stealing`, `per_core` and `pinned`,

@@ -725,6 +725,23 @@ let release_not_op loc ~written =
         dependency's operation, and `%s` isn't one"
        written)
 
+(* `let xs = Events.items()`: a cursor made by a dependency's member
+   function called through an alias of it, [written], whose `next` runs
+   with the alias's implementation only where the call is written
+   (compiler.md, "Services stage", step 5). [elem] names an item in the
+   help. *)
+let pulled_where_written loc ~written ~elem =
+  Diag.make loc
+    ~notes:
+      [
+        "its `next` runs with what the alias names only where it's written, \
+         on the task that pulls it";
+      ]
+    ~help:(sprintf "loop over it: `for %s in %s`" elem written)
+    (sprintf
+       "`%s` is pulled where it's written: in a `for`, or as a pull argument"
+       written)
+
 (* `c.get(1)`, where `c` goes over another implementation of [dep],
    which only a `with` can put under it. *)
 let method_over loc ~recv ~dep ~call =

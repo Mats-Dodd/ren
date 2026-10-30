@@ -920,7 +920,20 @@ let solve env ~is_value ~withheld =
       | Value_tag t when not (List.memq t added) -> tag_pattern env t
       | _ -> ())
     cs;
-  List.iter (function Unmarked (c, r) -> unmarked env c r | _ -> ()) cs;
+  (* the calls of a block whose errors are its caller's own last: a
+     stream a lambda is given, `items`, fails with what the call it's
+     passed to does, which the other calls close first when that can't
+     fail, and then it can't either (compiler.md, "Services stage", step
+     5) *)
+  let param_own (c, r) =
+    match row_tail r with
+    | Some t ->
+        List.exists (fun e -> row_tail e = Some t) c.eselves && in_params c.eparams t
+    | None -> false
+  in
+  let unmarked_calls = List.filter_map (function Unmarked (c, r) -> Some (c, r) | _ -> None) cs in
+  let last, first = List.partition param_own unmarked_calls in
+  List.iter (fun (c, r) -> unmarked env c r) (first @ last);
   List.iter (function Marker m -> marker env m | _ -> ()) cs;
   List.iter (function Impl_op o -> impl_op env o | _ -> ()) cs;
   (* the arm of a handler `over any` fails with what it fails with now:

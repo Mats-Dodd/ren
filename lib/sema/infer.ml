@@ -87,6 +87,13 @@ type 'l found_ = 'l Infer_env.found_ =
   | Generic_op of string
   | Tags_given of string list
   | Args of Ast.Resolved.expr list
+  | Pulls_block
+  | Pulled of { what : pulled; name : string }
+
+and pulled = Infer_env.pulled = Snapshot | Cursor of Path.t
+
+let pulled_node = Infer_env.pulled_node
+let next_node = Infer_env.next_node
 
 type found = Ty.label found_
 

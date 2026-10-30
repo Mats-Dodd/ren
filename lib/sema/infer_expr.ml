@@ -273,6 +273,10 @@ let chain_heads : (int, string * (unit -> string)) Hashtbl.t = Hashtbl.create 8
    does ([infer_pipe]). *)
 let chain_markers : (int, marker list) Hashtbl.t = Hashtbl.create 8
 
+(* The marker of each `try` checked, by its node, which a `for` over
+   `try c` passes what its cursor's `next` fails with on to ([cursor]). *)
+let try_markers : (int, marker) Hashtbl.t = Hashtbl.create 8
+
 (* The subject of each chain's step being checked, by the node of the
    [Piped] that stands for it, for a message about its first argument. *)
 let piped_subjects : (int, expr) Hashtbl.t = Hashtbl.create 8
@@ -884,41 +888,54 @@ and synth env cx (e : expr) : ty =
             want_int env Ranging hi (infer env cx hi);
             int
         | Each iter -> (
-            let array_of = match iter.kind with Ref a -> a | _ -> iter in
-            let ta = infer env cx array_of in
-            Hashtbl.replace cx.nodes iter.node ta;
-            (* a `Map` gives its entries, each a `(k, v)`, and a `Set` its
-               members; anything else is an array *)
-            let map_path = Path.prelude "Map"
-            and set_path = Path.prelude "Set" in
-            match (reveal env.st ta, iter.kind) with
-            | TCon (p, [ _; _ ]), Ref _ when p = map_path ->
-                report env (changes_entries iter.loc ~what:"map");
-                TError
-            | TCon (p, [ _ ]), Ref _ when p = set_path ->
-                report env (changes_entries iter.loc ~what:"set");
-                TError
-            | TCon (p, [ k; v ]), _ when p = map_path ->
-                TCon (Ty.tuple_path 2, [ k; v ])
-            | TCon (p, [ x ]), _ when p = set_path -> x
-            | TCon (p, _), _
-              when p <> Path.prelude "Array" && op_of env ta "next" <> None ->
-                cursor env cx ~at:e.node iter ta
-            | _ -> (
-                let elem = fresh_var env.st in
-                let ok =
-                  unifies env
-                    (explain ~msg:not_iterable ())
-                    (result_loc array_of) ~found:ta ~expected:(array elem)
-                in
-                match (pat.pkind, iter.kind) with
-                | (PTuple _ | PRecord _), Ref _ when ok ->
-                    (* here, not in the parser, so that a map's own
-                       message comes first, above *)
-                    report env
-                      (changed_taken_apart pat.ploc ~over:(env.source array_of));
+            match block_subject env cx ~at:e.node iter with
+            | Some elem -> elem
+            | None ->
+                let array_of = match iter.kind with Ref a -> a | _ -> iter in
+                let ta = pulled_here env array_of (fun () -> infer env cx array_of) in
+                Hashtbl.replace cx.nodes iter.node ta;
+                (* a `Map` gives its entries, each a `(k, v)`, and a `Set` its
+                   members; anything else is an array *)
+                let map_path = Path.prelude "Map"
+                and set_path = Path.prelude "Set" in
+                match (reveal env.st ta, iter.kind) with
+                | TCon (p, [ _; _ ]), Ref _ when p = map_path ->
+                    report env (changes_entries iter.loc ~what:"map");
                     TError
-                | _ -> if ok then elem else TError))
+                | TCon (p, [ _ ]), Ref _ when p = set_path ->
+                    report env (changes_entries iter.loc ~what:"set");
+                    TError
+                | TCon (p, [ k; v ]), _ when p = map_path ->
+                    TCon (Ty.tuple_path 2, [ k; v ])
+                | TCon (p, [ x ]), _ when p = set_path -> x
+                | TCon (p, _), _
+                  when p <> Path.prelude "Array" && op_of env ta "next" <> None ->
+                    (* `for x in try c`: the `try` passes on what `next` fails
+                       with too, each time round *)
+                    let fails =
+                      match iter.kind with
+                      | Try _ ->
+                          Option.map
+                            (fun m -> { cx with markers = m :: cx.markers })
+                            (Hashtbl.find_opt try_markers iter.node)
+                      | _ -> None
+                    in
+                    cursor ?fails env cx ~at:e.node iter ta
+                | _ -> (
+                    let elem = fresh_var env.st in
+                    let ok =
+                      unifies env
+                        (explain ~msg:not_iterable ())
+                        (result_loc array_of) ~found:ta ~expected:(array elem)
+                    in
+                    match (pat.pkind, iter.kind) with
+                    | (PTuple _ | PRecord _), Ref _ when ok ->
+                        (* here, not in the parser, so that a map's own
+                           message comes first, above *)
+                        report env
+                          (changed_taken_apart pat.ploc ~over:(env.source array_of));
+                        TError
+                    | _ -> if ok then elem else TError))
       in
       bind_pattern ~binding:true env cx elem pat;
       (* the index is an `Int`, where the element is; a cursor has none *)
@@ -993,6 +1010,7 @@ and synth env cx (e : expr) : ty =
       t
   | Try a -> (
       let m = marker env Mtry (keyword e.loc 3) in
+      Hashtbl.replace try_markers e.node m;
       m.chain_head <- Hashtbl.find_opt chain_heads e.node;
       (* the `try` around a group's test in a run of it, which needn't
          cover anything: the test may fail with nothing *)
@@ -1107,22 +1125,42 @@ and synth env cx (e : expr) : ty =
    lowering can call it each time round (lower.ml, [for_loop]): not at
    [iter], whose node has what was found of it already, a field's
    [Field_of] in `for x in job.rest`. *)
-and cursor env cx ~at (iter : expr) tc =
+and cursor ?(found = fun p -> Method_of p) ?meth_at ?fails env cx ~at (iter : expr) tc =
+  let meth_at = Option.value meth_at ~default:at in
   let td, o = Option.get (op_of env tc "next") in
   let path = op_path td o in
   if path.home = env.home && not (Hashtbl.mem env.globals path) then
     raise (Unchecked { caller = cx.self; callee = path });
   let tm = lookup env cx ~node:at iter.loc (Global path) in
-  Hashtbl.replace cx.found at (Method_of path);
+  Hashtbl.replace cx.found at (found path);
   let elem = fresh_var env.st in
+  (* what `next` uses: a channel's `items()`'s uses the channel, which the
+     loop does, since it's pulled where it's written, on the caller's task
+     (streams.md, "There's no asynchronous iterator") *)
+  let uses =
+    match repr tm with TFun (_, _, _, uses) -> uses | _ -> REmpty
+  in
+  (* one an alias's member function made, `Events.items()`, is pulled with
+     the alias's implementation (Lower), so its `next` uses the alias *)
+  let uses_here =
+    match iter.kind with
+    | Call ({ kind = Var (Global _); node; loc; _ }, _)
+      when Hashtbl.mem env.through node -> (
+        match through_alias env (Hashtbl.find env.through node) loc tm with
+        | TFun (_, _, _, u) -> u
+        | _ -> uses)
+    | _ -> uses
+  in
+  (* what it fails with, which [fails] passes on, the `try` of `for x in
+     try c` or what a pull argument is passed to; and otherwise nothing
+     does, which is said as for any call *)
+  let errs = match repr tm with TFun (_, _, errs, _) -> errs | _ -> REmpty in
   let shaped =
     o.okind = Method
     &&
     match repr tm with
-    | TFun ([ self ], ret, errs, uses) -> (
+    | TFun ([ self ], ret, _, _) -> (
         self.mode = Inout
-        && row_names errs = []
-        && row_names uses = []
         &&
         match repr ret with
         | TCon (p, [ _ ]) -> p = Path.prelude "Option"
@@ -1136,14 +1174,138 @@ and cursor env cx ~at (iter : expr) tc =
            (TFun
               ( [ { mode = Inout; ty = tc } ],
                 TCon (Path.prelude "Option", [ elem ]),
-                REmpty,
-                REmpty ))
-  then elem
+                errs,
+                uses ))
+  then (
+    Hashtbl.replace cx.nodes (next_node meth_at) tm;
+    absorb env (Option.value fails ~default:cx) ~call:iter
+      ~ename:(type_name env td.path ^ ".next")
+      ~fn:iter errs uses_here;
+    elem)
   else (
     if not shaped then
       report env
         (not_a_cursor (result_loc iter) ~item:(type_name env td.path ^ ".next"));
     TError)
+
+(* `for x in f`, or `for x in try f`, [f] a block that gives an
+   `Option`, `fn() -> Option<T>`, as `Async.produce` gives its body
+   (streams.md, rule 1: a stream that's code is a block): called each
+   time round until it gives `None`, as a cursor's `next` is, its `T`s
+   the elements. Each call is a call of [f], so its errors are passed on
+   by the `try`, and its dependencies are the caller's, as any call's are.
+   Recorded at the `for`'s node, [at], for lowering. [None] if [f] isn't
+   a local of a block's type, and the loop is over something else. *)
+and block_subject env cx ~at (iter : expr) =
+  let f, tried = match iter.kind with Try f -> (f, Some iter) | _ -> (iter, None) in
+  match f.kind with
+  | Var (Local b) -> (
+      match reveal env.st (Hashtbl.find cx.locals b.id) with
+      | TFun ([], ret, errs, uses) as tf ->
+          let elem = fresh_var env.st in
+          let ok =
+            unifies env
+              (explain ~msg:not_iterable ())
+              f.loc ~found:ret
+              ~expected:(TCon (Path.prelude "Option", [ elem ]))
+          in
+          ignore (infer env cx f);
+          Hashtbl.replace cx.nodes iter.node tf;
+          Hashtbl.replace cx.found at Pulls_block;
+          (* a `try` marks the call, as it would `f()` *)
+          let cx =
+            match tried with
+            | Some t ->
+                let m = marker env Mtry (keyword t.loc 3) in
+                { cx with markers = m :: cx.markers }
+            | None -> cx
+          in
+          absorb env cx ~call:iter ~ename:b.ident.name ~fn:f errs uses;
+          Some (if ok then elem else TError)
+      | _ -> None)
+  | _ -> None
+
+(* Whether [t], a parameter's type, is a pull parameter's: a block that
+   takes nothing and gives an `Option`, `fn() -> Option<T>`, which takes
+   what `for` takes (streams.md, rule 3). *)
+and pull_param env t =
+  match reveal env.st t with
+  | TFun ([], ret, _, _) -> (
+      match reveal env.st ret with
+      | TCon (p, [ _ ]) -> p = Path.prelude "Option"
+      | _ -> false)
+  | _ -> false
+
+(* Whether [a], given to a pull parameter, is what `for` takes rather than
+   a block: a block is a lambda, a function or operation named as a
+   value, or a local of a block's type. A call never gives a block (rule
+   4), nor does a field, an array or a constructor. *)
+and pulls env cx (a : expr) =
+  match a.kind with
+  | Lambda _ | Var (Global _ | Intrinsic _ | Dep_op _ | Next_op _ | Call_op _)
+  | Piped | Named _ ->
+      false
+  | Var (Local b) -> (
+      match reveal env.st (Hashtbl.find cx.locals b.id) with
+      | TFun _ | TVar _ -> false
+      | _ -> true)
+  | _ -> true
+
+(* [a], given to the pull parameter [name] of type [expected], `fn() ->
+   Option<T>`, as `for` takes it (streams.md, rule 3): a collection by a
+   snapshot of it, an `Array`'s elements, a `Map`'s entries, a `Set`'s
+   members; a temporary cursor as itself; or a named cursor, `&r`, which
+   the call changes, pulling it in its place, so it goes on from there
+   after. What's pulled is recorded at [pulled_node] for lowering, which
+   makes the block that pulls it, called on the caller's task (compiler.md,
+   "Services stage", step 5). *)
+and pull_arg env cx ~name (a : expr) expected =
+  let elem = fresh_var env.st in
+  let at = pulled_node a.node in
+  (* what the cursor's `next` fails with, the block that pulls it does, as
+     `fn() => try c.next()` would: the parameter's errors *)
+  let ret, errs =
+    match reveal env.st expected with
+    | TFun (_, ret, errs, _) -> (ret, errs)
+    | _ -> (TError, REmpty)
+  in
+  let fails =
+    let step = marker env Mtry a.loc in
+    step.failed <- true;
+    { cx with handler = errs; markers = [ step ]; sources = None }
+  in
+  incr cx.lambdas;
+  let pulled what = Pulled { what; name = Ty.lambda_id cx.self !(cx.lambdas) } in
+  let why = explain ~msg:not_iterable () in
+  (* what's pulled is the parameter's `T` *)
+  let given t =
+    Hashtbl.replace cx.nodes at expected;
+    ignore (unifies env plain a.loc ~found:ret ~expected:(TCon (Path.prelude "Option", [ elem ])));
+    ignore (unifies env why a.loc ~found:t ~expected:elem)
+  in
+  match a.kind with
+  | Ref place ->
+      let t = infer_raw env cx place in
+      Hashtbl.replace cx.nodes a.node t;
+      if cursor_of env t then
+        given (cursor ~found:(fun p -> pulled (Cursor p)) ~meth_at:a.node ~fails env cx ~at place t)
+      else if reveal env.st t <> TError then report env (arg_not_changed a.loc name)
+  | _ -> (
+      let t = pulled_here env a (fun () -> infer env cx a) in
+      let map_path = Path.prelude "Map" and set_path = Path.prelude "Set" in
+      match reveal env.st t with
+      | TCon (p, [ k; v ]) when p = map_path ->
+          Hashtbl.replace cx.found at (pulled Snapshot);
+          given (TCon (Ty.tuple_path 2, [ k; v ]))
+      | TCon (p, [ x ]) when p = set_path || p = Path.prelude "Array" ->
+          Hashtbl.replace cx.found at (pulled Snapshot);
+          given x
+      | _ when cursor_of env t ->
+          given (cursor ~found:(fun p -> pulled (Cursor p)) ~meth_at:a.node ~fails env cx ~at a t)
+      | _ ->
+          ignore
+            (unifies env why (result_loc a) ~found:t
+               ~expected:(array elem)))
 
 (* The binders of the pattern [p]. *)
 and pattern_binders (p : pattern) =
@@ -2109,7 +2271,62 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                    ?what m elsewhere);
               nothing ())
       | None, _ -> field_call ())
+  | Var (Global _) when Hashtbl.mem env.through f.node ->
+      (* a dependency's member function called through an alias of it,
+         `Events.items()`: what it uses of the dependency it uses of the
+         alias, whose implementation it runs with (Lower) *)
+      let alias = Hashtbl.find env.through f.node in
+      let tf = through_alias env alias f.loc (infer env cx f) in
+      let t = call_with env cx e f tf args in
+      (* a cursor it makes runs its `next` with the alias's too, which
+         only a `for` or a pull argument where it's written can see *)
+      if (not (Hashtbl.mem env.pulled_calls e.node)) && cursor_of env t then begin
+        (* as it's written, through the alias *)
+        let written =
+          sprintf "%s.%s(%s)" alias.name
+            (match f.kind with
+            | Var (Global { member = Some m; _ }) -> m.mname
+            | _ -> "items")
+            (String.concat ", "
+               (List.map (fun a -> Option.value (env.source a) ~default:"...") args))
+        in
+        let elem = String.lowercase_ascii (String.sub alias.name 0 1) in
+        report env (Infer_msg.pulled_where_written e.loc ~written ~elem)
+      end;
+      t
   | _ -> call_with env cx e f (infer env cx f) args
+
+(* [tf], the type of a member function of a dependency called through
+   [alias], an alias of it (Resolve.through), with what it uses of the
+   dependency the alias names, `Chan<Event>`, used of the alias instead,
+   `Events`, at the alias's type arguments. *)
+and through_alias env (alias : Path.t) loc tf =
+  let target = Unify.aliased env.st { dpath = alias; dargs = [] } in
+  let name = Ty.dep_label target.dpath in
+  let rec swap r =
+    match repr_row r with
+    | RExtend (l, rest) when l.name = name ->
+        List.iter2
+          (fun found expected -> unify_at env loc ~found ~expected)
+          l.payload target.dargs;
+        RExtend (dep_of { dpath = alias; dargs = [] }, swap rest)
+    | RExtend (l, rest) -> RExtend (l, swap rest)
+    | r -> r
+  in
+  match reveal env.st tf with
+  | TFun (ps, ret, errs, uses) -> TFun (ps, ret, errs, swap uses)
+  | t -> t
+
+(* Whether [t] is a cursor's type: a value with a method `next`. *)
+and cursor_of env t =
+  match reveal env.st t with
+  | TCon (p, _) -> p <> Path.prelude "Array" && op_of env t "next" <> None
+  | _ -> false
+
+(* [f ()], with [e] counted as pulled where it's written while it is. *)
+and pulled_here env (e : expr) f =
+  Hashtbl.replace env.pulled_calls e.node ();
+  Fun.protect ~finally:(fun () -> Hashtbl.remove env.pulled_calls e.node) f
 
 (* `r.hash()`, [f] the method, [r] of type [tr], which has no `hash` of
    its own: the built-in `hash_of(r)` (compiler.md, "Bytes stage"), the
@@ -2775,6 +2992,8 @@ and check_args env cx ~name ?callee ~written ps args =
                receiver's *)
       let passed = changed_receiver a = None in
       match (p.mode, a.kind) with
+      | Read, _ when pull_param env p.ty && pulls env cx a ->
+          pull_arg env cx ~name a p.ty
       | Inout, Ref place when passed ->
           Hashtbl.replace cx.nodes a.node p.ty;
           check env cx ~exact:true place p.ty

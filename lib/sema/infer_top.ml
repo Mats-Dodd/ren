@@ -741,6 +741,8 @@ let new_env sink ~reachable (r : Resolve.t) =
     params_of = Hashtbl.create 16;
     defaults_of = Hashtbl.create 16;
     wired_from = Hashtbl.create 4;
+    through = r.through;
+    pulled_calls = Hashtbl.create 4;
     test_reported = Hashtbl.create 4;
   }
 
@@ -1607,7 +1609,9 @@ let canonical env so_far (f : fn_def) =
         | Builtin_op -> Builtin_op
         | Generic_op o -> Generic_op o
         | Tags_given ts -> Tags_given ts
-        | Args xs -> Args xs)
+        | Args xs -> Args xs
+        | Pulls_block -> Pulls_block
+        | Pulled p -> Pulled p)
       (Hashtbl.find_opt cx.found id)
   in
   let nodes =
@@ -2009,6 +2013,11 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~shown ~value
         else all In_record (List.map snd fields)
     | Update { base; fields; _ } -> all In_record (base :: List.map snd fields)
     | Fail (_, args) -> all In_error (List.map snd args)
+    | For { over = Each iter; body; _ } ->
+        (* a block gone over is called each time round, as a callee is
+           (Infer_expr.block_subject) *)
+        walk Callee iter;
+        walk (Kept Elsewhere) body
     | For _ | While _ -> all Elsewhere (Ast.children e)
     | Inline_handler l ->
         (* its arm is a block the handler is made of *)

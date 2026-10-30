@@ -11078,6 +11078,13 @@ argument, `f` concurrent, `results` the pull block of `f`'s results in
 None of it is native: to_mem refuses `produce` and `map_pull` with
 `tasks_not_native`, and `each` and `map` as today.
 
+**As built (step 5).** A pull parameter is a block parameter `fn() ->
+Option<T>`, not a mode of its own; `for` loops over such a block; a
+cursor's `next` may use a dependency and fail; `Events.items()` runs
+with `Events`'s implementation as `Chan<T>`'s; a stream given to a block
+parameter fails with its function's errors; and the buffer is the
+scheduler's. Each is in "Where this stage may differ", below, with why.
+
 ### The keyed instance family (step 6)
 
 What's decided 5; foundations.md decision 18, "The keyed instance
@@ -11773,7 +11780,8 @@ error: a parameter's default is a literal, or a variant written bare   (parser, 
 Pull arguments, channels and producers (step 5):
 
 ```
-error: `r` is changed for the whole call                             (Excl, the `&r` row)
+error: `r` is read by this block while the call changes it            (Excl, the `&r` row: a `&` argument's)
+  help: read it first: `let at = r.at`, and use `at` in the block
 
 error: `Events.items()` is pulled where it's written: in a `for`, or as a pull argument   (Infer)
   help: loop over it: `for e in Events.items()`
@@ -12228,6 +12236,78 @@ Chosen in step 4, as built:
 - **The circuit breaker is examples/breaker,** in bench/tasks.t and THE
   CHECKS; bench/services/breaker_held is it without `release`, whose
   "a slow answer doesn't hold up a fast one" a seed fails.
+- **A pull parameter is a block parameter `fn() -> Option<T>`,** not a
+  new mode `pull T` (step 5 as specified): streams.md's rule 3 says a
+  pull parameter "takes what `for` takes", a block as itself, and its
+  `dedup_by(src: fn() -> Option<T>, ...)` is a block parameter that's
+  given `&r` and a cursor. So any parameter of that type, a user's as
+  `Async.map`'s, takes a collection by snapshot, a temporary cursor, a
+  named one as `&r`, or a block (Infer_expr's `pull_param`, `pulls`,
+  `pull_arg`); Lower makes the block that pulls it (`pull_block`), and
+  no parser, Ty or tree-sitter change was needed. What's passed is
+  recorded at a node of its own, `Infer.pulled_node`, since the
+  argument's node has what was found of it already.
+- **`for x in f` and `for x in try f` over a block `fn() -> Option<T>`**
+  call it each time round (Infer_expr's `block_subject`, Lower's
+  `block_loop`), as `produce`'s body loops over `items`.
+- **A cursor's `next` may use a dependency and fail** (Infer_expr's
+  `cursor`): what it uses the loop or the pull uses, and what it fails
+  with a `for x in try c` passes on, or the call it's pulled by. `for x
+  in try &r` over a named cursor that can fail still isn't parsed as one
+  (Excl and Mut see `&r` under the `try` as no loop's): stage 11c's
+  readers bring it.
+- **A stream given to a block parameter fails with what its function
+  does** (`Iface.streams_given`, `Infer_written.streams_given`):
+  `body: fn(items: fn() -> Option<T>) -> R`'s `items`, written without
+  `!`, has the function's own errors row, as a transparent parameter
+  does, so `produce`'s producer's failure reaches the body where it
+  pulls, `for p in try items`. Any other function type nested in a
+  parameter's still fails with nothing. A call of such a block whose
+  errors are its lambda's own is checked last among the unmarked calls
+  (solve.ml), so a producer that can't fail gives an `items` that
+  can't, and `for x in items` needs no `try`; step 0's s5 tests wrote
+  `try items` over producers that can't fail, and `Async.produce(...)`
+  unmarked over one that can, which Ren refuses ("nothing here can
+  fail", and the call's own `try`), so they were mended.
+- **A parameter with a default comes before the blocks given last,** not
+  only before one (resolve.ml): `produce(cap: Int = 16, f, body)` and
+  `map_pull(src, max: Int = 64, f, body)` are written as the brief
+  decided, and their calls' positional arguments still read in order.
+- **`Events.items()`, a member function of `Chan<T>` called through an
+  alias, runs with the alias's implementation installed as the
+  dependency it names** (Resolve's `through`, Infer's `through_alias`,
+  Lower's `rebound`): around the call alone, and around each `next` of
+  the cursor it makes, a stateless handler whose operations call
+  `Events`'s, so nothing else there sees it. Infer counts what it uses
+  of `Chan<Int>` as `Events`. Since only a `for` or a pull argument
+  where the call is written can do that for `next`, such a cursor is
+  pulled where it's written, "`Events.items()` is pulled where it's
+  written". `Chan.items()` through the dependency's own name is an
+  ordinary cursor, kept like any.
+- **`Async.produce`'s buffer and `map_pull`'s results are the
+  scheduler's** (sched.ml's `stream` and `mapped`, behind the prelude's
+  private `Outbox<T>` and `Inbox<T, E>`, whose `E` is what taking can
+  fail with, as `Background<E>`'s is), and `Send<T>` is the prelude's
+  `sends(out)` handler over `outbox_send`. A producer's failure isn't
+  its background's, which would cancel the body: it ends the stream.
+  `map_pull` starts its tasks as there's room, pulling `src` on the
+  body's task, a finished result keeping its slot until it's taken.
+- **`&r` given to a pull parameter is refused, where the block touches
+  `r`, by the error any `&` argument a block reads gets** ("`r` is read
+  by this block while the call changes it", its label "changed for the
+  whole call"), not a headline of its own: decision 2's row is a `&`
+  argument's, held for the call. `&` on a collection given to one is
+  "doesn't change this argument", as on any parameter that reads.
+- **`Async.map` gives `()` for a task a cleanup deadline cut off,** as it
+  did before step 5 (examples/server's cut-off connection).
+- **`Send` is in every program's scope,** as the prelude's dependencies
+  are, so the list of dependencies in scope that an unknown one's error
+  gives has it (four tests' expectations gained it).
+- **examples/server pulls its connections with `Async.each` over a
+  cursor it declares, `Connections`,** whose `next` is `accept_until`,
+  since a cursor's `next` may now use `Net` and fail; streams.md's
+  `Net.connections(listener)` replaces it with stage 11c. examples/crawler
+  sends its pages through `Async.produce`, as async.md now shows both.
 
 ### Progress log
 
@@ -12238,10 +12318,11 @@ Chosen in step 4, as built:
 | 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
 | 2 | 7b18441 | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
 | 3 | d5f31e2 | background work: decision 7's compile error in excl.ml (`inner_spawn`, `reach`, the `with`s and scopes walked), the run time's check at the spawn (`Sched.inner`, eval.ml's `reaching`, a panic), `Async.beside` and `Async.background` with `Background<! E>` and `bg.spawn` (prelude.ml, intrinsic.ml; sched.ml's `background`, `fail`, `stop_background`, `cut_off`; eval.ml's `Task_beside`, `Task_background`, `Background_spawn`), refused natively (to_mem.ml, bench/build.t); 11a's rule removed (`frame.bg`, `leave_with`'s cancelling); test_services.ml's s3 all on; test_tasks.ml's tests of the old rule moved; examples/refresh and async.md's flusher, batcher and refresher on `Async.beside`; async.md's background section, its surface and its Effect row; language.md's table, the README | steps 4 to 9; the review's adversarial background programs (step 9) |
-| 4 | this commit | `release` through the whole pipeline: the word in `parse_unary`, `Release` (ast.ml), Infer's check and Excl's (outside an operation), Lower's write-back, `arm_release`, the call in a `Finally` with `arm_retake` and the reads again (`Lower.released`), `Sched.let_go`, `retake`, `take_back`, natively nothing (bench/services/release in the loops); decision 2's row narrowed in excl.ml (`Lets_go`: `release` and `Async.until`, and block parameters' calls); the deadlock and cycle panics naming what each task holds (`waits_of`); `sim`'s fair choice in `released`; defaults that are variants written bare, a one-field variant's field default, an operation's parameters' defaults; `Kill`, `Proc.run(kill:)`, lib/eval/ren_spawn.c, the group killed, `SimProc.kills()`; examples/breaker and bench/services/breaker_held (bench/tasks.t); the journals' `Proc.run` lines; tree-sitter's `release_expression`, defaults, corpus (release.txt), highlights; test_services.ml's s4 all on; language.md's table, deps.md, testing.md | steps 5 to 9; the review's `release` programs (state read across it, `release` inside `until`'s condition) |
+| 4 | bb005eb | `release` through the whole pipeline: the word in `parse_unary`, `Release` (ast.ml), Infer's check and Excl's (outside an operation), Lower's write-back, `arm_release`, the call in a `Finally` with `arm_retake` and the reads again (`Lower.released`), `Sched.let_go`, `retake`, `take_back`, natively nothing (bench/services/release in the loops); decision 2's row narrowed in excl.ml (`Lets_go`: `release` and `Async.until`, and block parameters' calls); the deadlock and cycle panics naming what each task holds (`waits_of`); `sim`'s fair choice in `released`; defaults that are variants written bare, a one-field variant's field default, an operation's parameters' defaults; `Kill`, `Proc.run(kill:)`, lib/eval/ren_spawn.c, the group killed, `SimProc.kills()`; examples/breaker and bench/services/breaker_held (bench/tasks.t); the journals' `Proc.run` lines; tree-sitter's `release_expression`, defaults, corpus (release.txt), highlights; test_services.ml's s4 all on; language.md's table, deps.md, testing.md | steps 5 to 9; the review's `release` programs (state read across it, `release` inside `until`'s condition) |
 | 2b | 827ff7e | `service`, a dependency and its one implementation written once (language.md §4), through the whole pipeline: `parse_service` (`service` a word before a capitalized name) and `kv.Kv(...)` in the parser, `Service` (ast.ml); Resolve's `service_items`, exactly a `dep`, a handler named as the service is and a private function per member, `Kv.get`, taking the service's parameters first, its `uses` the service's; a member's calls of another, the shared parameters passed on, recursion and chains included (infer_expr.ml's `Piped` after them); `installed`, `service_named` and the three errors of the brief with help, and a member passed as a value, a member's `Kv.get(...)`, an operation's untyped parameter, no `pub fn`, state among members; a member's need past the service's `uses` reported once, at the member (infer_declared.ml, infer_msg.ml's `service_undeclared`); test/test_service.ml's s2b (a test installs a service and replaces it with a test handler; a service in a wiring; another module's; the `uses` bound pinned); natively, bench/services/service in the `same`, `release` and `tcc_same` loops; tree-sitter's `service_definition` and the module's constructor, the corpus (service.txt), the highlights and Zed's outline; examples/checkout and examples/server without a private function's `uses` (no example moved to `service`: checkout's `Orders` and `Discounts` are ports, the ledger's `Sql` keeps state and has `transaction()` over it, the server's `Line` keeps a `finally`); language.md's table, the README, deps.md. Built in parallel with step 3, from 84ac5d3 | a service's state (`var`s among the members: "Where this stage may differ"); steps 3 to 9 |
 
-| 2b (state) | this commit | a service's state (language.md §4, rule 4): `let`, `var` and `finally` lines first (`parse_service`, `sstate`), the handler's state as written, failing with the service's `! E`; each member given the state after the parameters, a `var` `inout` and a `let` by value (`service_items`, `passes`), an arm passing `&n`, a member passing its own on; the state's type written or a literal's; a state that calls a member, a state taken apart and a state after a function refused with help; test_service.ml's state tests (a `var` counter and a list changed by members calling each other recursively, setup failing under `try with`, a test handler in its place, a block calling a member); natively bench/services/service's `Kv` with state and a `finally`; tree-sitter's `state` and `finally` in a service (service.txt); language.md's table, deps.md | steps 5 to 9 |
+| 2b (state) | 81a56a1 | a service's state (language.md §4, rule 4): `let`, `var` and `finally` lines first (`parse_service`, `sstate`), the handler's state as written, failing with the service's `! E`; each member given the state after the parameters, a `var` `inout` and a `let` by value (`service_items`, `passes`), an arm passing `&n`, a member passing its own on; the state's type written or a literal's; a state that calls a member, a state taken apart and a state after a function refused with help; test_service.ml's state tests (a `var` counter and a list changed by members calling each other recursively, setup failing under `try with`, a test handler in its place, a block calling a member); natively bench/services/service's `Kv` with state and a `finally`; tree-sitter's `state` and `finally` in a service (service.txt); language.md's table, deps.md | steps 5 to 9 |
+| 5 | this commit | pull arguments: a parameter `fn() -> Option<T>` takes what `for` takes (Infer_expr's `pull_param`, `pulls`, `pull_arg`; Lower's `pull_block`, at `Infer.pulled_node`), `Async.map` and `Async.each` over one, pulled on the caller's task only when a slot frees (eval.ml's `all_of` asks for each call as there's room, `Sched.room`), `&r` a write held for the call (excl.ml, as any `&`); `for x in [try] f` over a block (`block_subject`, `block_loop`); a cursor's `next` that uses a dependency or fails (`cursor`, `next_call` at `Infer.next_node`); `Chan<T>`'s `items()` and `Items<T>` in std_lib.ml's `sync`, a member function through an alias resolved (Resolve's `alias_of`, `through`) and run with the alias's implementation (Infer's `through_alias`, Lower's `rebound`), "is pulled where it's written"; `Send<T>`, `Async.produce` and `Async.map_pull` in the prelude over `task_produce`, `task_map_pull`, `outbox_send` and `inbox_take` (sched.ml's streams, eval.ml), a stream given to a block failing with its function's errors (`streams_given`), unmarked calls of those last (solve.ml), defaults before the blocks given last; refused natively (to_mem.ml, bench/build.t); test_services.ml's s5 all on, with a test of each under `--seeds 1000`; examples/crawler on `Async.produce`, examples/server on `Async.each` over its connections; async.md (surface, table, server, crawler, "Later"), stdlib.md, language.md's table, the README | steps 6 to 9; the review's `produce` programs (a producer failing while the body is blocked, a body that breaks at `cap`); `for x in try &r` over a named cursor that can fail |
 
 ## The runtime model
 

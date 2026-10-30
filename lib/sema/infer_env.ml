@@ -88,10 +88,32 @@ type 'l found_ =
           it out: its arguments in its parameters' order, each left out its
           default, a literal at a node of its own ([default_node]), so Lower
           never sees a default (compiler.md, "Stage 11a", "The surface") *)
+  | Pulls_block
+      (** at a `for` over a block, `for x in try items`: the block, a `fn() ->
+          Option<T>`, is called each time round until it gives `None`
+          (compiler.md, "Services stage", step 5) *)
+  | Pulled of { what : pulled; name : string }
+      (** at a pull argument's own node ([pulled_node]): what's passed to a
+          block parameter `fn() -> Option<T>` as `for` takes it, which
+          Lower makes the block that pulls it, named [name] as a lambda is
+          (streams.md, rule 3) *)
+
+(* What a pull argument is: a collection, pulled by a snapshot of it, its
+   elements, a `Map`'s entries or a `Set`'s members, in order; or a
+   cursor, [next] its method, pulled by calling it: a temporary, as
+   itself, or a named one passed `&r`, in its place. *)
+and pulled = Snapshot | Cursor of Path.t
 
 (* The node of the default a call [node] leaves out, its parameter [i]'s:
    one no expression has, since the parser numbers them from 1. *)
 let default_node node i = -((node * 256) + i + 1)
+
+(* The node of what the pull argument at [node] is pulled by, and of the
+   type of the method `next` a cursor at [node] is pulled by, at the
+   type it's used at, `for` or a pull argument: nodes no expression has,
+   far below every default's ([default_node]). *)
+let pulled_node node = min_int + (node * 4)
+let next_node node = min_int + (node * 4) + 1
 
 (* A default, [lit], as the expression a call that leaves it out is
    given, at [loc]: a literal, or a variant written bare, a constructor of
@@ -251,6 +273,14 @@ type env = {
           method), its name and its literal *)
       (** each top-level function's parameters' names, by its path, which a
           message about an argument passed by name names *)
+  through : (int, Path.t) Hashtbl.t;
+      (** each member function of a dependency called through an alias of it,
+          `Events.items()`, by the node of the member as written, with the
+          alias (Resolve.through) *)
+  pulled_calls : (int, unit) Hashtbl.t;
+      (** the calls being checked that are pulled where they're written: a
+          `for`'s subject, or a pull argument. Each is added while it's
+          inferred, and taken out after *)
   wired_from : (Path.t, Ast.via list * string) Hashtbl.t;
       (** each function a wiring's link was made into (resolve.ml, "Wirings")
           that a `with` of the module calls, with the wirings its item came

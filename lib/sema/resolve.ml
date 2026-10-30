@@ -101,6 +101,12 @@ type t = {
       (** what of each import the module uses, by name (see [unused_imports]) *)
   wirings : Iface.wiring list;
       (** the module's wirings, flattened, in the order they're declared *)
+  through : (int, Path.t) Hashtbl.t;
+      (** each member function of a dependency called through an alias of it,
+          `Events.items()` for `dep Events = Chan<Event>`, by the node of the
+          member as written, `Events.items`, with the alias: it runs with the
+          alias's implementation as its dependency's (compiler.md, "Services
+          stage", step 5) *)
 }
 
 (* How module [r] writes the type [p]: the shortest way it can. Bare if
@@ -197,6 +203,10 @@ type env = {
       (** where a `with` or a wiring installs a service, `Kv(cfg)`, by where
           that's written: the only place a service's name is called
           ([installed]) *)
+  through : (int, Path.t) Hashtbl.t;
+      (** each member function of a dependency written through an alias of
+          it, `Events.items` for `dep Events = Chan<Event>`, by its node, with
+          the alias ([t.through]) *)
 }
 
 (* A service of the module (language.md §4), as its members see it: its
@@ -1196,7 +1206,45 @@ let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
    the item in its declaration. Another module's type lists only its public
    items, so a private one can't be told apart from one that doesn't
    exist. An associated value is a [Global_value]; the rest are functions. *)
-let item env sc (t : tyname) (f : ident) =
+(* The dependency [p] is an alias of, `Chan<Event>` for `dep Events =
+   Chan<Event>`, through aliases of aliases, if it's one. *)
+let rec alias_of ?(depth = 0) env (p : Path.t) =
+  if depth > 16 then None
+  else
+    let target =
+      if p.home = env.home then
+        Option.bind (Hashtbl.find_opt env.own_aliases p.name) (alias_target env)
+      else
+        match List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces with
+        | Some iface -> (
+            match Iface.find_type iface p.name with
+            | Some { body = Dep_alias d; _ } -> Some d.dpath
+            | _ -> None)
+        | None -> None
+    in
+    match target with
+    | Some q -> (
+        match alias_of ~depth:(depth + 1) env q with
+        | Some r -> Some r
+        | None -> Some q)
+    | None -> None
+
+(* The member functions [p] has, if it's a type: its own, or another
+   module's public ones. *)
+let members_of env (p : Path.t) =
+  if p.home = env.home then
+    match Hashtbl.find_opt env.own_ops p.name with
+    | Some (items, _) -> List.map fst items
+    | None -> []
+  else
+    match List.find_opt (fun (i : Iface.t) -> i.home = p.home) env.ifaces with
+    | Some iface -> (
+        match Iface.find_type iface p.name with
+        | Some decl -> List.map (fun (o : Iface.op) -> o.oname) (Iface.public_members decl)
+        | None -> [])
+    | None -> []
+
+let item env sc ?node (t : tyname) (f : ident) =
   let assoc = f.name = "zero" || f.name = "one" in
   match (t.tmod, index_of t.tid.name 0 sc.tparams) with
   | None, Some i when assoc ->
@@ -1213,6 +1261,20 @@ let item env sc (t : tyname) (f : ident) =
       | Some { tref = Param _; _ } ->
           (* [declared_type] gives only a declared type *)
           assert false
+      | Some { tref = Named p; _ }
+        when (not (List.mem f.name (Option.value (dep_ops env p) ~default:[])))
+             &&
+             match alias_of env p with
+             | Some q -> List.mem f.name (members_of env q)
+             | None -> false ->
+          (* a member function of the dependency an alias names, called
+             through the alias, `Events.items()`: it's the dependency's, run
+             with the alias's implementation (Infer, Lower) *)
+          let q = Option.get (alias_of env p) in
+          let path = Path.member q f.name in
+          sc.fn.calls <- path :: sc.fn.calls;
+          Option.iter (fun n -> Hashtbl.replace env.through n p) node;
+          Global path
       | Some { tref = Named p; _ } -> (
           let shown = show_tyname t in
           let decl =
@@ -2254,8 +2316,8 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
             ]
           ~help:(sprintf "call it directly: `%s(...)`" f.name)
           (sprintf "a function of `%s` calls another directly" t.tid.name);
-        Var (item env sc t f)
-    | Var (Item (t, f)) -> Var (item env sc t f)
+        Var (item env sc ~node:e.node t f)
+    | Var (Item (t, f)) -> Var (item env sc ~node:e.node t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
     | Binop (op, a, b, n) ->
         let a = go a in
@@ -3340,16 +3402,18 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
                  td.type_name.name)
         | _ -> ()))
     f.params;
-  (* a parameter with a default comes after those without, but before a
-     block given last (compiler.md, "Stage 11a", "The surface"), so a
-     call's positional arguments read in order *)
-  (let rec trailing = function
-     | [ (q : Parsed.param) ] -> (
-         match q.pty with Some (TyFn _) -> [] | _ -> [ q ])
-     | q :: rest -> q :: trailing rest
-     | [] -> []
+  (* a parameter with a default comes after those without, but before the
+     blocks given last (compiler.md, "Stage 11a", "The surface"), so a
+     call's positional arguments read in order: `Async.produce(cap: 2, f)
+     fn(items) => ...` (compiler.md, "Services stage", step 5) *)
+  (let block (q : Parsed.param) =
+     match q.pty with Some (TyFn _) -> true | _ -> false
    in
-   let ps = trailing f.params in
+   let rec before_blocks = function
+     | q :: rest when block q -> before_blocks rest
+     | qs -> qs
+   in
+   let ps = List.rev (before_blocks (List.rev f.params)) in
    let rec check = function
      | (q : Parsed.param) :: rest when q.pdefault <> None -> (
          match
@@ -5044,6 +5108,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       imports = imported;
       ifaces = imports;
       own_ops = Hashtbl.create 8;
+      through = Hashtbl.create 4;
       own_numeric = Hashtbl.create 8;
       own_tests = Hashtbl.create 8;
       own_private = Hashtbl.create 16;
@@ -5468,6 +5533,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       List.filter_map
         (fun (w : Parsed.wiring_def) -> Hashtbl.find_opt env.wirings w.wname.name)
         wiring_defs;
+    through = env.through;
   }
 
 (* How each link function of the module's wirings is written where its

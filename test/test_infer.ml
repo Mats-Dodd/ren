@@ -1275,6 +1275,8 @@ fn main() = print(Some(true))
       | Some (Generic_op r) -> print_endline ("an operator, by its " ^ r)
       | Some (Tags_given ts) -> print_endline ("tags " ^ String.concat " | " ts)
       | Some (Args _) -> print_endline "arguments in order"
+      | Some Pulls_block -> print_endline "a block pulled"
+      | Some (Pulled _) -> print_endline "a pull argument"
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);
   [%expect
@@ -1443,7 +1445,7 @@ fn main() = f()
       ┌─ test.ren:1:22
     1 │ fn f() uses Console, Disk = 1
       │                      ^^^^
-      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
+      = the dependencies in scope are: `Alloc`, `Async`, `Clock`, `Console`, `Fs`, `Net`, `Os`, `Proc`, `Random`, `Send`, `TestClock`, `TestConsole`, `TestProc`, `TestRandom`, `Unsafe`
       help: use one of those, or declare it with `dep`
     |}]
 

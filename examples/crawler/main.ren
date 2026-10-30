@@ -1,6 +1,8 @@
 // A crawler (async.md, "A crawler"): the links below a page are crawled
 // at once, a task each, every url is claimed once, and at most 16
-// requests reach the web at a time, however deep the crawl goes.
+// requests reach the web at a time, however deep the crawl goes. The
+// pages found are sent as they're found, to the body of an
+// `Async.produce` that collects them (streams.md, "Concurrency and time").
 
 import sync
 
@@ -23,24 +25,24 @@ handler seen_set() for Seen =
       &seen.add(url)
       true
 
-// the pages from `url` down, `depth` links deep; a page that can't be
-// fetched is skipped
-fn crawl(url: Str, depth: Int) -> Array<Page> uses Web, Seen, Async =
-  if depth == 0 || not Seen.claim(url) then []
-  else
+// sends the pages from `url` down, `depth` links deep; a page that can't
+// be fetched is skipped
+fn crawl(url: Str, depth: Int) =
+  if depth > 0 && Seen.claim(url) then
     match attempt Web.get(url)
-      Err(_) => []
+      Err(_) => ()
       Ok(page) =>
-        let below = Async.map(page.links) fn(link) => crawl(link, depth - 1)
-        var pages = [page]
-        for p in below.flat_map(fn(ps) => ps)
-          &pages.push(p)
-        pages
+        Send.send(page)
+        Async.each(page.links) fn(link) => crawl(link, depth - 1)
 
 // the urls of the pages found from `root`, three links deep, sorted
 pub fn crawl_site(root: Str) -> Array<Str> uses Web, Async =
   with seen_set(), sync.semaphore(16), sync.limit() over Web in
-    crawl(root, 3).map(fn(p) => p.url).sort()
+    var urls: Array<Str> = []
+    Async.produce(fn() => crawl(root, 3)) fn(pages) =>
+      for p in pages
+        &urls.push(p.url)
+    urls.sort()
 
 // ---- tests ----
 

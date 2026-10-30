@@ -66,6 +66,10 @@ type t =
   | Task_beside
   | Task_background
   | Background_spawn
+  | Task_produce
+  | Task_map_pull
+  | Outbox_send
+  | Inbox_take
   | Async_yield
   | Async_tick
   | Runtime_single

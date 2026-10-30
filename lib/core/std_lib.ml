@@ -270,6 +270,16 @@ pub dep Chan<T> =
   // says nothing more will be sent: what was sent can still be received
   close: fn()
 
+  // what's received, until the channel is closed and empty: a cursor whose
+  // `next` is `recv()`, pulled where it's written, in a `for` or as a pull
+  // argument, `Async.each(Events.items())` (streams.md, "Channels")
+  pub fn items() -> Items<T> uses Chan<T> = Items {}
+
+// what a channel's `items()` gives: a cursor over the channel it's pulled
+// from, which holds nothing of it
+pub type Items<T> = opaque {}
+  pub fn next(inout self) -> Option<T> uses Chan<T> = Chan.recv()
+
 // a channel holding at most `cap`, 1 or more
 pub handler channel<T>(cap: Int) for Chan<T> uses Async =
   var items: Array<T> = []

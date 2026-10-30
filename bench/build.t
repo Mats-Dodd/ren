@@ -2140,3 +2140,27 @@ says so of the stripes it reaches first:
   > EOF
   $ ren build --release background.ren -o ./background.bin 2>&1 | head -n 1
   error: `Async.background` runs tasks, and tasks aren't native yet
+
+`Async.produce` and `Async.map_pull` (step 5) start tasks too, and so
+are refused; `Async.map` and `Async.each` over a pull argument are
+`map` and `each` as before:
+
+  $ cat > produce.ren <<'EOF'
+  > fn two() uses Send<Int> =
+  >   Send.send(1)
+  >   Send.send(2)
+  > fn main() uses Console, Async =
+  >   Async.produce(fn() => two()) fn(items) =>
+  >     for x in items
+  >       print(x)
+  > EOF
+  $ ren build produce.ren -o ./produce.bin 2>&1 | head -n 1
+  error: `Async.produce` runs tasks, and tasks aren't native yet
+  $ cat > map_pull.ren <<'EOF'
+  > fn main() uses Console, Async =
+  >   Async.map_pull([1, 2], fn(x) => x * 2) fn(results) =>
+  >     for r in results
+  >       print(r)
+  > EOF
+  $ ren build --release map_pull.ren -o ./map_pull.bin 2>&1 | head -n 1
+  error: `Async.map_pull` runs tasks, and tasks aren't native yet
