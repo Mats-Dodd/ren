@@ -108,6 +108,9 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
   Hashtbl.filter_map_inplace
     (fun (l : Loc.t) w -> if l.file = file then None else Some w)
     Ast.char_literals;
+  Hashtbl.filter_map_inplace
+    (fun (l : Loc.t) w -> if l.file = file then None else Some w)
+    Ast.bytes_literals;
   (* Mutable lexer state. [bol] is the index where the current line begins,
      so the column of index [i] is [i - bol + 1]. *)
   let i = ref 0 and line = ref 1 and bol = ref 0 in
@@ -249,8 +252,11 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       || starts_stage)
   in
 
-  (* A string literal, `"Ren\n"`: its contents, with each escape undone.
-     It ends on the line it starts on; `\n` writes a line break.
+  (* A string literal, `"Ren\n"`: its contents, with each escape undone
+     (strings.md, "Literals"). The escapes are `\n`, `\t`, `\r`, `\0`,
+     `\"`, `\\` and `\u{...}`, a code point; `\x41`, a byte, is only in a
+     `b"..."`, since in a `Str` it could make invalid UTF-8. A `"..."`
+     ends on the line it starts on; `\n` writes a line break.
 
      A hole, `"jobs/\{job}"`, holds an expression (strings.md, "Building
      strings"; compiler.md, "Bytes stage, part two", "The API"). The
@@ -262,7 +268,21 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
      the string's line, and then lexed as any code is, in brackets, so
      a string in it may have holes of its own. `\\{` is a backslash and
      a brace, and a brace alone is text. `\{x=}` is `x=\{x}`, for a name
-     or a path. *)
+     or a path.
+
+     Three things change that, alone or together (compiler.md, "Bytes
+     stage, part two", "Step 5b, as built"):
+
+     - `"""`: the text starts on the line after it and ends before the
+       line of the closing `"""`, whose indentation is taken off every
+       line; a blank line may be shorter. A `\` at the end of a line
+       joins it to the next, and a `"` is text. However many lines it
+       has, it's one token, so the layout rule never sees inside it.
+     - `#`s around it, `#"..."#`: it's raw. Its escape is `\` and as
+       many `#`s, `\#n` and the hole `\#{x}`, so `\` alone is text, and
+       it ends at a quote with as many `#`s after it.
+     - `b` before it, `b"\r\n"`: a [BYTES], the UTF-8 of the text as
+       written, plus a byte for each `\x`. It has no holes. *)
   (* [lex_token], below, which a hole's code is lexed with *)
   let lex_token_ref = ref (fun (_ : char) (_ : Loc.pos) -> ()) in
   (* whether [s] is a name, or names with `.` between them, `u.name` *)
@@ -272,8 +292,124 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
          (fun w -> w <> "" && is_ident_start w.[0] && String.for_all is_ident_char w)
          (String.split_on_char '.' s)
   in
-  let rec lex_string start =
-    incr i;
+  let is_hex c =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+  in
+  (* where index [k] of the line being lexed is *)
+  let pos_of k = { Loc.line = !line; col = k - !bol + 1 } in
+  let error_at ?help start stop msg = Diag.error ?help { Loc.file; start; stop } msg in
+  (* The escapes, for a help: [lead] is how one starts, `\`, or `\#` in a
+     raw string; [quote] the quote one writes. *)
+  let escapes_help ~lead ~quote ~bytes ~in_char =
+    let e s = "`" ^ lead ^ s ^ "`" in
+    Printf.sprintf
+      "the escapes%s are %s, %s, %s, %s, %s, %s, which writes a backslash, \
+       and %s, a code point%s"
+      (if in_char then " in a character literal" else "")
+      (e "n") (e "t") (e "r") (e "0") (e (String.make 1 quote)) (e "\\")
+      (e "u{E9}")
+      (if bytes then Printf.sprintf ", and %s, a byte" (e "x41") else "")
+  in
+  (* The escape whose letter is at [!i], its `\` at [e0]: what it writes,
+     added to [b]. *)
+  let escape b ~lead ~quote ~bytes ~in_char e0 =
+    let add ch =
+      incr i;
+      Buffer.add_char b ch
+    in
+    match peek 0 with
+    | 'n' -> add '\n'
+    | 't' -> add '\t'
+    | 'r' -> add '\r'
+    | '0' -> add '\000'
+    | '\\' -> add '\\'
+    | c when c = quote -> add c
+    | 'u' ->
+        (* a code point, `\u{E9}`: 1 to 6 hex digits, a scalar value *)
+        incr i;
+        let help = "a code point is written in hex, `\\u{E9}` for é, `\\u{1F600}` for 😀" in
+        if peek 0 <> '{' then
+          error ~help (pos_of e0) (Printf.sprintf "`%su` needs its code point in braces" lead);
+        incr i;
+        let d0 = !i in
+        while is_hex (peek 0) do
+          incr i
+        done;
+        let digits = String.sub src d0 (!i - d0) in
+        if peek 0 <> '}' || digits = "" then (
+          if peek 0 <> '\n' && !i < len then incr i;
+          error ~help (pos_of e0)
+            (Printf.sprintf "`%su{...}` holds a code point, 1 to 6 hex digits" lead));
+        incr i;
+        let written = String.sub src e0 (!i - e0) in
+        let scalar =
+          "a code point is `\\u{0}` to `\\u{10FFFF}`, but not `\\u{D800}` to \
+           `\\u{DFFF}`, the surrogates"
+        in
+        if String.length digits > 6 then
+          error ~help:"the last code point is `\\u{10FFFF}`" (pos_of e0)
+            (Printf.sprintf "`%s` has %d hex digits; a code point has at most 6"
+               written (String.length digits));
+        let n = int_of_string ("0x" ^ digits) in
+        if n >= 0xD800 && n <= 0xDFFF then
+          error ~help:scalar (pos_of e0)
+            (Printf.sprintf "`%s` is a surrogate, not a character" written);
+        if n > 0x10FFFF then
+          error ~help:scalar (pos_of e0)
+            (Printf.sprintf "`%s` is past the last code point, `\\u{10FFFF}`" written);
+        Buffer.add_utf_8_uchar b (Uchar.of_int n)
+    | 'x' ->
+        (* a byte, `\x0A`, two hex digits, in a `b"..."` only *)
+        incr i;
+        let h0 = !i in
+        while !i - h0 < 2 && is_hex (peek 0) do
+          incr i
+        done;
+        let hh = String.sub src h0 (!i - h0) in
+        if not bytes then
+          error
+            ~help:
+              (if String.length hh = 2 then
+                 Printf.sprintf
+                   "write the code point, `%su{%X}`; `%sx%s` writes a byte only \
+                    in a `b\"...\"`"
+                   lead (int_of_string ("0x" ^ hh)) lead hh
+               else "write a code point as `\\u{E9}`; a byte is written `\\x41` only in a `b\"...\"`")
+            (pos_of e0)
+            (Printf.sprintf "`%sx%s` writes a byte, and %s" lead hh
+               (if in_char then "a character literal is a code point"
+                else "a `Str` is UTF-8"));
+        if String.length hh < 2 then
+          error ~help:"a byte is two hex digits, `\\x00` to `\\xFF`" (pos_of e0)
+            (Printf.sprintf "`%sx` takes two hex digits" lead);
+        Buffer.add_char b (Char.chr (int_of_string ("0x" ^ hh)))
+    | c ->
+        if c <> '\n' && !i < len then incr i;
+        error
+          ~help:(escapes_help ~lead ~quote ~bytes ~in_char)
+          (pos_of e0)
+          (if c = '\n' || !i >= len then
+             Printf.sprintf "a `%s` at the end of a line escapes nothing" lead
+           else Printf.sprintf "`%s%c` isn't an escape" lead c)
+  in
+  (* the string whose quote is at [!i]: [hashes] `#`s before it (and as
+     many after its closing quote), [bytes] whether a `b` came first, the
+     literal written from [s0], at [start] *)
+  let rec lex_string ?(bytes = false) ?(hashes = 0) ?(s0 = !i) start =
+    let lead = "\\" ^ String.make hashes '#' in
+    let hashes_text = String.make hashes '#' in
+    (* whether [hashes] `#`s start at [k] *)
+    let hashes_at k =
+      let rec go j = j >= hashes || (k + j < len && src.[k + j] = '#' && go (j + 1)) in
+      go 0
+    in
+    let at_escape () = peek 0 = '\\' && hashes_at (!i + 1) in
+    (* whether a closing triple quote, and its `#`s, starts at [k] *)
+    let closes_multi k =
+      k + 2 < len && src.[k] = '"' && src.[k + 1] = '"' && src.[k + 2] = '"'
+      && hashes_at (k + 3)
+    in
+    let multi = peek 1 = '"' && peek 2 = '"' in
     let b = Buffer.create 16 in
     (* whether a hole has been lexed yet: the next text is a [STR_MID],
        not a [STR_HEAD] *)
@@ -281,49 +417,41 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
     (* this string's text so far, checked: a `Str` is always UTF-8 *)
     let text () =
       let t = Buffer.contents b in
-      if not (String.is_valid_utf_8 t) then
+      if (not bytes) && not (String.is_valid_utf_8 t) then
         error ~help:"save the file as UTF-8" start "this string isn't UTF-8";
       Buffer.clear b;
       t
     in
-    let rec go () =
-      if !i >= len || peek 0 = '\n' then
-        error
-          ~help:"close it with `\"` on this line; write `\\n` for a line break"
-          start "this string isn't closed"
-      else
-        match peek 0 with
-        | '"' -> incr i
-        | '\\' when peek 1 = '{' ->
-            hole ();
-            go ()
-        | '\\' -> (
-            let esc = pos () in
-            incr i;
-            match peek 0 with
-            | ('n' | 't' | '\\' | '"') as c ->
-                incr i;
-                Buffer.add_char b
-                  (match c with 'n' -> '\n' | 't' -> '\t' | c -> c);
-                go ()
-            | c ->
-                if c <> '\n' && !i < len then incr i;
-                error
-                  ~help:
-                    "the escapes are `\\n`, `\\t`, `\\\"` and `\\\\`, which \
-                     writes a backslash"
-                  esc
-                  (if c = '\n' || !i >= len then
-                     "a `\\` at the end of a line escapes nothing"
-                   else Printf.sprintf "`\\%c` isn't an escape" c))
-        | c ->
-            Buffer.add_char b c;
-            incr i;
-            go ()
-    (* the hole at [!i], its `\{`: the text before it, then its tokens *)
-    and hole () =
-      let at = pos () in
-      let from = !i + 2 in
+    let newline () =
+      incr i;
+      incr line;
+      bol := !i
+    in
+    (* one piece of the text at [!i], not a line break: an escape, a
+       hole, or a character as it is *)
+    let rec one () =
+      if at_escape () then (
+        let e0 = !i in
+        i := !i + 1 + hashes;
+        if peek 0 = '{' then (
+          if bytes then (
+            i := !i + 1;
+            error
+              ~help:
+                (Printf.sprintf
+                   "`Bytes` has no `show` to put into one; to write values as \
+                    bytes, see formats.md. A backslash and a brace are written `%s{`"
+                   (if hashes = 0 then "\\\\" else "\\"))
+              (pos_of e0) "a `b\"...\"` literal has no holes");
+          hole e0 (!i + 1))
+        else escape b ~lead ~quote:'"' ~bytes ~in_char:false e0)
+      else (
+        Buffer.add_char b (peek 0);
+        incr i)
+    (* the hole whose `\{` is at [e0], its code starting at [from]: the
+       text before it, then its tokens *)
+    and hole e0 from =
+      let at = pos_of e0 in
       let stop =
         match hole_end from with
         | Some k -> k
@@ -374,9 +502,150 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       close_bracket (pos ());
       i := stop + 1
     in
-    go ();
+    (* `"..."`, on one line *)
+    let single () =
+      incr i;
+      let rec go () =
+        if !i >= len || peek 0 = '\n' then
+          error
+            ~help:
+              (Printf.sprintf
+                 "close it with `\"%s` on this line; write `%sn` for a line break"
+                 hashes_text lead)
+            start "this string isn't closed"
+        else if peek 0 = '"' && hashes_at (!i + 1) then i := !i + 1 + hashes
+        else (
+          one ();
+          go ())
+      in
+      go ()
+    in
+    (* `"""`, its lines up to the closing `"""`'s, without its indentation *)
+    let mid_help () =
+      Printf.sprintf
+        "end the line first; to write `\"\"\"` in the text, escape a quote: `%s\"\"\"`"
+        lead
+    in
+    let multi_line () =
+      let closing =
+        Printf.sprintf "close it with `\"\"\"%s` on a line of its own" hashes_text
+      in
+      i := !i + 3;
+      while peek 0 = ' ' || peek 0 = '\r' do
+        incr i
+      done;
+      if !i >= len then error ~help:closing start "this string isn't closed";
+      if peek 0 <> '\n' then
+        error ~help:"start its text on the next line" (pos ())
+          "a `\"\"\"` string's text starts on the line after the `\"\"\"`";
+      newline ();
+      (* the closing line: where it starts, its indentation, its number *)
+      let rec find j ln =
+        let k = ref j in
+        while !k < len && (src.[!k] = ' ' || src.[!k] = '\t') do
+          incr k
+        done;
+        if closes_multi !k then Some (j, String.sub src j (!k - j), ln)
+        else
+          match String.index_from_opt src !k '\n' with
+          | Some e -> find (e + 1) (ln + 1)
+          | None -> None
+      in
+      let close_at, indent, close_line =
+        match if !i < len then find !i !line else None with
+        | Some c -> c
+        | None -> (
+            (* the mistake is a closing triple quote after text on its
+               line, if there's one *)
+            let rec mid k =
+              if k >= len then None else if closes_multi k then Some k else mid (k + 1)
+            in
+            match mid !i with
+            | Some k ->
+                let ln = ref !line and lb = ref !bol in
+                String.iteri
+                  (fun j c -> if j >= !i && j < k && c = '\n' then (incr ln; lb := j + 1))
+                  src;
+                error_at ~help:(mid_help ())
+                  { line = !ln; col = k - !lb + 1 }
+                  { line = !ln; col = k - !lb + 4 + hashes }
+                  "the closing `\"\"\"` goes on a line of its own"
+            | None -> error ~help:closing start "this string isn't closed")
+      in
+      let n = String.length indent in
+      let spaces_only = "indent the lines and the closing `\"\"\"` alike, with spaces" in
+      if String.contains indent ' ' && String.contains indent '\t' then
+        error_at ~help:spaces_only
+          { line = close_line; col = 1 }
+          { line = close_line; col = n + 1 }
+          "the closing `\"\"\"`'s indentation mixes tabs and spaces";
+      (* whether a line break, `\n` or `\r\n`, is at [k] *)
+      let breaks k =
+        k < len && (src.[k] = '\n' || (src.[k] = '\r' && k + 1 < len && src.[k + 1] = '\n'))
+      in
+      let first = ref true and joined = ref false in
+      while !i < close_at do
+        (* a line's start: the closing line's indentation taken off *)
+        if not (!first || !joined) then Buffer.add_char b '\n';
+        first := false;
+        joined := false;
+        let k = ref !i in
+        while !k < len && (src.[!k] = ' ' || src.[!k] = '\t') do
+          incr k
+        done;
+        let ws = !k - !i in
+        if ws >= n && String.sub src !i n = indent then i := !i + n
+        else if breaks !k then i := !k
+        else (
+          (* how far its indentation agrees with the closing line's *)
+          let rec agree j =
+            if j < ws && j < n && src.[!i + j] = indent.[j] then agree (j + 1) else j
+          in
+          let here = { Loc.line = !line; col = 1 } and stop = { Loc.line = !line; col = ws + 1 } in
+          if agree 0 = ws then
+            error_at
+              ~help:
+                (Printf.sprintf
+                   "indent it at least as far as the closing `\"\"\"` on line %d, \
+                    which sets the string's indentation"
+                   close_line)
+              here stop "this line is indented less than the closing `\"\"\"`"
+          else
+            error_at ~help:spaces_only here stop
+              "this line's indentation mixes tabs and spaces");
+        (* the line's text, to its line break *)
+        let rec go () =
+          match peek 0 with
+          | '\n' -> newline ()
+          | '\r' when peek 1 = '\n' ->
+              (* `\r\n` is a line break, as `\n` is *)
+              incr i;
+              go ()
+          | '"' when closes_multi !i ->
+              let at = pos () in
+              i := !i + 3 + hashes;
+              error_at ~help:(mid_help ()) at (pos ())
+                "the closing `\"\"\"` goes on a line of its own"
+          | '\\' when at_escape () && breaks (!i + 1 + hashes) ->
+              (* `\` at the end of a line joins the next to it *)
+              i := !i + 1 + hashes;
+              if peek 0 = '\r' then incr i;
+              newline ();
+              joined := true
+          | _ ->
+              one ();
+              go ()
+        in
+        go ()
+      done;
+      i := close_at + n + 3 + hashes
+    in
+    if multi then multi_line () else single ();
     let t = text () in
-    emit (if !holes then STR_TAIL t else STR t) start
+    if bytes then (
+      emit (BYTES t) start;
+      Hashtbl.replace Ast.bytes_literals (snd (List.hd !toks)) (String.sub src s0 (!i - s0)))
+    else emit (if !holes then STR_TAIL t else STR t) start
 
   (* Where the hole whose code starts at [j] ends, its `}`, if it ends on
      its line: braces counted, strings and character literals skipped. *)
@@ -386,6 +655,15 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       else
         match src.[p] with
         | '"' -> Option.bind (string_end (p + 1)) (fun q -> go q depth)
+        | '#' -> (
+            (* a raw string, `#"..."#` *)
+            let q = ref p in
+            while !q < len && src.[!q] = '#' do
+              incr q
+            done;
+            if !q < len && src.[!q] = '"' then
+              Option.bind (raw_end (!q + 1) (!q - p)) (fun q -> go q depth)
+            else go (p + 1) depth)
         | '\'' -> Option.bind (char_end (p + 1)) (fun q -> go q depth)
         | '{' -> go (p + 1) (depth + 1)
         | '}' -> if depth = 0 then Some p else go (p + 1) (depth - 1)
@@ -405,6 +683,14 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | '\\' -> string_end (p + 2)
       | _ -> string_end (p + 1)
 
+  (* Just past the raw string with [n] `#`s whose text starts at [p], if
+     it ends on its line. *)
+  and raw_end p n =
+    if p >= len || src.[p] = '\n' then None
+    else if src.[p] = '"' && p + n < len && String.sub src (p + 1) n = String.make n '#'
+    then Some (p + 1 + n)
+    else raw_end (p + 1) n
+
   (* Just past the character literal whose text starts at [p]. *)
   and char_end p =
     if p >= len || src.[p] = '\n' then None
@@ -415,9 +701,9 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       | _ -> char_end (p + 1)
 
   (* A character literal, `'a'`: an `Int`, its code point (strings.md,
-     "Characters"), with the escapes `\n`, `\t`, `\\` and `\'`. Whether
-     one is stored where a byte is, as a non-ASCII one can't be, is the
-     checker's, which finds it by its spelling (infer_expr.ml,
+     "Characters"), with a string's escapes, `\'` writing the quote, and no `\x`.
+     Whether one is stored where a byte is, as a non-ASCII one can't be,
+     is the checker's, which finds it by its spelling (infer_expr.ml,
      [stored]). *)
   and lex_char start =
     let s0 = !i in
@@ -430,24 +716,11 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
       else
         match peek 0 with
         | '\'' -> incr i
-        | '\\' -> (
-            let esc = pos () in
+        | '\\' ->
+            let e0 = !i in
             incr i;
-            match peek 0 with
-            | ('n' | 't' | '\\' | '\'') as c ->
-                incr i;
-                Buffer.add_char b (match c with 'n' -> '\n' | 't' -> '\t' | c -> c);
-                go ()
-            | c ->
-                if c <> '\n' && !i < len then incr i;
-                error
-                  ~help:
-                    "the escapes in a character literal are `\\n`, `\\t`, \
-                     `\\'` and `\\\\`"
-                  esc
-                  (if c = '\n' || !i >= len then
-                     "a `\\` at the end of a line escapes nothing"
-                   else Printf.sprintf "`\\%c` isn't an escape" c))
+            escape b ~lead:"\\" ~quote:'\'' ~bytes:false ~in_char:true e0;
+            go ()
         | c ->
             Buffer.add_char b c;
             incr i;
@@ -601,6 +874,26 @@ let tokenize ~file (src : string) : (Token.t * Loc.t) array =
         | None, Some n when n = Int64.min_int -> emit (INT n) start
         | _ -> error start "this number is too big to fit in an `Int`")
     else if c = '"' then lex_string start
+    (* `#"..."#`, a raw string; `b"..."` and `b#"..."#`, bytes *)
+    else if c = '#' || (c = 'b' && (peek 1 = '"' || peek 1 = '#')) then (
+      let s0 = !i in
+      let bytes = c = 'b' in
+      let k = ref (if bytes then 1 else 0) in
+      while peek !k = '#' do
+        incr k
+      done;
+      if peek !k = '"' then (
+        let hashes = !k - if bytes then 1 else 0 in
+        i := !i + !k;
+        lex_string ~bytes ~hashes ~s0 start)
+      else if bytes then (
+        (* the name `b`, then `#` *)
+        incr i;
+        emit (IDENT "b") start)
+      else (
+        incr i;
+        error ~help:"a raw string is written `#\"...\"#`" start
+          "unexpected character `#`"))
     else if c = '\'' then lex_char start
     else if is_ident_start c then (
       let s = !i in

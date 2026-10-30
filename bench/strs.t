@@ -60,6 +60,11 @@ Step 5, the rest of the API:
   strs/rest_bytes_replace_panic.ren: as specified
   strs/rest_bytes_split_panic.ren: as specified
 
+Step 5b, literals:
+
+  $ spec strs/literals.ren
+  strs/literals.ren: as specified
+
 Each program built natively prints what `ren run` prints, to stdout and
 stderr, and exits as it does: debug, with Perceus's counting and the
 naive one, and release, under AddressSanitizer and UBSan, with no
@@ -230,6 +235,13 @@ line of what `ren build` said.
   strs/rest_bytes_split_panic.ren, release: the same, exit 1, objects live at exit 1
   strs/rest_bytes_split_panic.ren, tcc: the same, exit 1, objects live at exit 1
   strs/rest_bytes_split_panic.ren, ren run --release: the same
+  $ native strs/literals.ren
+  strs/literals.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/literals.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 7 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/literals.ren, release: the same, exit 0, objects live at exit 0
+  strs/literals.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/literals.ren, ren run --release: the same
 
 What a build allocates (`--stats`), which `ren run` can't show. Step 3:
 20,000 appends to a string nothing else holds, and to `Bytes`, grow
@@ -253,6 +265,10 @@ object (representation A).
   fewer than 200 objects
   $ objects --debug --stats slices_count.ren
   200 objects or more
+  $ objects --release --stats literals.ren
+  fewer than 200 objects
+  $ objects --debug --stats literals.ren
+  fewer than 200 objects
 
 The report (step 3): a debug build of append_report.ren says, once, at
 a normal exit, that its first loop's `+=` copied a string something

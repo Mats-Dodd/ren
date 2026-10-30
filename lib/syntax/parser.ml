@@ -2046,6 +2046,14 @@ and parse_primary p =
   | STR s ->
       advance p;
       mk (Str s) start p
+  | BYTES s ->
+      (* `b"\r\n"` is `"\r\n".bytes()`, its literal holding the bytes:
+         a static owner natively, as a `Str` literal is, since `bytes()`
+         is the same value (Ast.bytes_literals) *)
+      advance p;
+      let lit = mk (Str s) start p in
+      let f = mk (Field (lit, { name = "bytes"; loc = lit.loc })) start p in
+      mk (Call (f, [])) start p
   | STR_HEAD s ->
       (* an interpolated string: its text, then each hole's expression and
          the text after it (lexer.ml, [lex_string]) *)

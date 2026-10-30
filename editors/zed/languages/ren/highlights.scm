@@ -16,6 +16,8 @@
 (number) @number
 (float) @number
 (string) @string
+; b"\r\n", `Bytes`: text all the same
+(bytes) @string
 (escape_sequence) @string.escape
 ; a hole in a string, `\{e}`, is code, not the string's text, and its
 ; braces are its own

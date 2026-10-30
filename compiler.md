@@ -8971,8 +8971,9 @@ validator; and the parts of strings.md's API that are code, in the
 interpreter and natively, agreeing. `Path` as `opaque Bytes` and `Os`'s
 `ArgNotUtf8` are item 7b's; the `unicode` module, short strings inline,
 a capacity-keeping `clear()`, proved copy-on-store, the retention
-report, `b"…"` literals and x86 SIMD are later. The brief is
-briefs/stage-bytes-2.md. Seven steps, each green on its own:
+report and x86 SIMD are later; strings.md's literals, `b"…"` among
+them, joined as step 5b. The brief is briefs/stage-bytes-2.md. Seven
+steps, each green on its own:
 
 0. **This specification,** the baseline, and the tests.
 1. **The boundary:** the validator, `InvalidUtf8(at, incomplete)`,
@@ -9562,7 +9563,7 @@ Choices where strings.md, decision 17 and the brief are silent:
   `char_ceil` and `line_col`, and `replace`'s.
 - `incomplete` is "the bytes from `at` to the end are a proper prefix of
   a valid character"; a character literal's escapes are `\n`, `\t`, `\\`
-  and `\'` (there's no `\r` in either kind of literal).
+  and `\'` (there's no `\r` in either kind of literal until step 5b).
 - `strip_prefix`, `strip_suffix` and `split_once` give an `Option`;
   `lines` and `fields` an `Array`, with Rust's `lines` and
   `split_ascii_whitespace`'s meaning, whitespace `trim`'s set.
@@ -10271,6 +10272,103 @@ string on `Str` and `Bytes`, and `Bytes.split` of no bytes. test_strs.ml's
 s5 is on, no `until "s5"` left. rest.ren and its `.expected` agreed with
 the spec as written, and are unchanged.
 
+### Step 5b, as built: literals
+
+strings.md's "Literals", decided on 2026-10-29 and added to this stage
+as step 5b. All of it is the lexer's; nothing after the parser learned a
+new form.
+
+- **The escapes** are `\n`, `\t`, `\r`, `\0`, `\"` (`\'` in a character
+  literal), `\\` and `\u{...}`, in every string and character literal.
+  `\u{...}` holds 1 to 6 hex digits, a scalar value; in a `b"..."` it
+  writes the code point's UTF-8. `\x` takes exactly two hex digits, and
+  only a `b"..."` has it.
+- **`b"..."`** is a [BYTES] token, which the parser makes
+  `"...".bytes()`: a `Str` literal holding the bytes, and `Str_bytes`,
+  which builtins.ml makes a `VBytes` of the same OCaml string and
+  to_mem.ml the same value. So a release build's `b"\r\n"` is the
+  `Make_struct` of a constant root and range that `str_literal` makes,
+  its root the uncounted static `ren_lit_N`, and a debug build's is that
+  static, A; nothing is allocated, and nothing in to_mem.ml, emit_c.ml or
+  the runtime changed. That literal is the only `Str` literal that may
+  hold bytes that aren't UTF-8, and only `bytes()` reads it; emit_c.ml's
+  `c_string` writes any byte as an octal escape and every literal has
+  its length, so a `\0` or `\xFF` is safe. `Ast.bytes_literals` keeps
+  each one's spelling, as `char_literals` does, so `Ast.source` shows it
+  as written.
+- **`"""`**: the opening `"""` ends its line (spaces may follow); the
+  closing `"""` starts its own, after its indentation, which comes off
+  every line in between. A whitespace-only line shorter than that is
+  empty; one at least as long keeps what's past it. A line joined by
+  `\` at its end has its next line's indentation taken off too. `\r\n`
+  inside is a line break, as `\n`. Tabs may indent the lines, as long as
+  every line's indentation starts with the closing line's, character for
+  character; Ren's rule against tabs is outside literals. A `"""` after
+  text on a line is an error, not the end.
+- **Raw strings**: `\` without its `#`s is text, and so is a quote
+  without them. A hole's code is found as before, to its `}` on its
+  line; a raw string inside it is skipped by its `#`s. In a raw
+  `b#"..."#`, `\{` is text and `\#{` the error.
+- **`t`** isn't combined with anything: templates aren't in the
+  compiler yet, so there's no `t"..."` to combine. The rules here are
+  the lexer's, so `t` gets them when it's built.
+- **The errors**, each with its help (test_strs_literals.ml has every
+  one, carets included):
+
+```
+error: `\x41` writes a byte, and a `Str` is UTF-8
+  help: write the code point, `\u{41}`; `\x41` writes a byte only in a `b"..."`
+error: `\x` takes two hex digits
+  help: a byte is two hex digits, `\x00` to `\xFF`
+error: `\u` needs its code point in braces
+  help: a code point is written in hex, `\u{E9}` for é, `\u{1F600}` for 😀
+error: `\u{...}` holds a code point, 1 to 6 hex digits                (the same help)
+error: `\u{1234567}` has 7 hex digits; a code point has at most 6
+  help: the last code point is `\u{10FFFF}`
+error: `\u{D800}` is a surrogate, not a character
+  help: a code point is `\u{0}` to `\u{10FFFF}`, but not `\u{D800}` to `\u{DFFF}`, the surrogates
+error: `\u{110000}` is past the last code point, `\u{10FFFF}`         (the same help)
+error: a `b"..."` literal has no holes
+  help: `Bytes` has no `show` to put into one; to write values as bytes, see formats.md. A backslash and a brace are written `\\{`
+error: this line is indented less than the closing `"""`
+  help: indent it at least as far as the closing `"""` on line 5, which sets the string's indentation
+error: this line's indentation mixes tabs and spaces
+  help: indent the lines and the closing `"""` alike, with spaces
+error: the closing `"""`'s indentation mixes tabs and spaces           (the same help)
+error: the closing `"""` goes on a line of its own
+  help: end the line first; to write `"""` in the text, escape a quote: `\"""`
+error: a `"""` string's text starts on the line after the `"""`
+  help: start its text on the next line
+error: this string isn't closed
+  help: close it with `"""` on a line of its own
+```
+
+  An escape that isn't one keeps its error, its help now listing the
+  new escapes (`\#n` and the rest in a raw string), which moved two help
+  lines in test_syntax.ml; test_strs_names.ml's `'\r'`, an error until
+  now, is `'\q'`.
+- **Tree-sitter**: the plain `"..."` stays the grammar's; the scanner
+  lexes the rest. Six external tokens: a string's start (`#`s and a
+  quote, or `"""`, `b` before either or before a plain quote), its text
+  to the next escape, hole or end, an escape, a hole's `\{` or `\#{`, and
+  its end, which for `"""` is a `"""` that starts its line after
+  indentation. A start pushes the string (its `#`s, `"""`, `b`) on a
+  stack of its own, serialized before the layout stack, since a hole may
+  hold another string; the hole's `\#{` pushes a bracket, which its `}`
+  pops. Text is one token to the next escape, so no layout token is
+  made inside a string; which lines are indented too little is left to
+  the compiler. `bytes` is a node of its own, highlighted as a string.
+  corpus/literals.txt covers every form, and markers.ren the highlights.
+- **Left as it was:** `show` of a `Str` writes a `\r` or a `\0` in it
+  as the byte, not as its escape, in both builds alike, so a shown
+  string holding one doesn't read back. bench/strs/rest.ren's
+  `Str.of_code(13)` stays: it's step 5's file.
+
+Tests: test/test_strs_literals.ml (every form in `ren run` and
+`--release`, every error), and bench/strs/literals.ren in strs.t, as
+specified, the same in all five native builds, and its 10,000 `b"..."`
+compares fewer than 200 objects in a debug build and a release one.
+
 ### Progress log
 
 | step | commit | what's done | what's left |
@@ -10281,6 +10379,7 @@ the spec as written, and are unchanged.
 | 4, part 1 | "Bytes stage, part two, step 4 (part 1): representation B" | `Str` and `Bytes` two words in release builds (`ren_sv`), inline in locals, small records, arrays and declared fields; boxed (A) at words, blocks, handlers, tuples' and errors' fields and map values; walks given a stack view; `ren_map_set_sv`; literals uncounted; `lend_parts`; tok 0.65, sort 0.35, map 0.85, group 1.00, logs 0.62 of step 3; slices_count's objects on | the uncounted view, the 4 GiB escape (a value past it panics), unboxed map entries, the 16-byte owner experiment; slices json and pages at 1.2× and 1.2 to 1.6× of `_r` and pages 2.8× of Rust, from counting the root on each element read and free |
 | 4, part 2 | "Bytes stage, part two, step 4 (part 2): the uncounted view" | the uncounted view (`Str_view`, `ren_sv_view_slice`), a slice a part of what it's of; lent element reads (`Array_peek`, `Buf_peek`) of arrays nothing takes, in both builds; `lend_parts` to a fixpoint and through calls that take nothing counted; Mem Lint's lent parts and `unlend`; a run of one root dropped at once when an array is freed; strs_lent.t; slices json 1.11 and logs 1.07 of their `_r` forms, json 0.73 and pages 0.61 of part one's instructions | pages at 1.23 of `_r` and 1.97 to 2.15 of Rust, from the free walk; json_r at 2.0 to 2.1 of Rust, its own; the 4 GiB escape (a view of one), unboxed map entries, the 16-byte owner experiment |
 | 5 | "Bytes stage, part two, step 5: the rest of the API" | `includes`, `ends_with`, `strip_prefix`, `strip_suffix`, `split_once`, `lines`, `fields`, `replace`, `ascii_upper`, `line_col` with its panics, on `Str` and `Bytes` alike (`Bytes` given `index`, `starts_with`, `split` and `trim`), in the interpreter and natively, `Str.index` and `starts_with` native too; `count()` on arrays, maps and sets, and `count()` and `count(f)` on every cursor, pulled; rest.ren, rest_count.ren and five panics the same in every build; s5 on; stdlib.md's table | `ren run`'s `Bytes.replace` quadratic in its matches, as its `+=` is |
+| 5b | "Bytes stage, part two, step 5b: literals" | `\r`, `\0`, `\u{...}` in every string and character literal; `b"..."` with `\x`, a static owner (`"...".bytes()`), allocating nothing; `"""` with the closing line's indentation, `\` joins; `#` raw strings with `\#` escapes and `\#{x}` holes; every form with the others; the lexer's errors with help; tree-sitter's scanner, corpus and Zed; test_strs_literals.ml, strs/literals.ren in every build | `t` combined, when templates are built; `show` of a `Str` doesn't escape `\r` or `\0`; rest.ren's `Str.of_code(13)`, step 5's file |
 
 ## Services stage
 

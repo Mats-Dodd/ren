@@ -393,6 +393,20 @@ fn label(n: Int) -> Str = "n: \{n + 1}" + show('a')
 //                                   ^ punctuation.special
 //                                             ^ string.special
 
+// bytes, a raw string and a multi-line one: text, their escapes and
+// holes as a plain string's
+fn crlf() -> Bytes = b"\r\n"
+//                   ^ string
+//                     ^ string.escape
+fn digits(who: Str) -> Str = #"\d{3} \#{who}"#
+//                           ^ string
+//                                   ^ punctuation.special
+//                                      ^ embedded
+fn page() -> Str = """
+  <p>\t</p>
+  """
+//^ string
+
 // a wiring: a named set of `with` items, what it provides a boundary
 pub wiring live(url: Str) provides Users uses Console =
 // <- keyword

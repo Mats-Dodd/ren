@@ -821,7 +821,7 @@ fn main() = "C:\Ren"
       ┌─ test.ren:1:16
     1 │ fn main() = "C:\Ren"
       │                ^^
-      help: the escapes are `\n`, `\t`, `\"` and `\\`, which writes a backslash
+      help: the escapes are `\n`, `\t`, `\r`, `\0`, `\"`, `\\`, which writes a backslash, and `\u{E9}`, a code point
     |}];
   tokens {|
 fn main() = "Ren\
@@ -832,7 +832,7 @@ fn main() = "Ren\
       ┌─ test.ren:1:17
     1 │ fn main() = "Ren\
       │                 ^
-      help: the escapes are `\n`, `\t`, `\"` and `\\`, which writes a backslash
+      help: the escapes are `\n`, `\t`, `\r`, `\0`, `\"`, `\\`, which writes a backslash, and `\u{E9}`, a code point
     |}]
 
 (* a `Str` is UTF-8, so a literal is too: this one's `é` has lost its

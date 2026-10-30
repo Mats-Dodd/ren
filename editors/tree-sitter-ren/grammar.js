@@ -75,6 +75,16 @@ module.exports = grammar({
     // never in the grammar: valid only while tree-sitter recovers from an
     // error, which is how the scanner knows it is
     $._error_sentinel,
+    // the strings whose ends need counting: `#"` (as many `#`s as it
+    // has) and `"""`, and `b"` before either; then their text, an escape
+    // (`\#n` in a raw one), a hole's `\{` (`\#{`), and the closing quote
+    // with its `#`s, which for `"""` starts its own line
+    $._string_start,
+    $._bytes_start,
+    $._string_content,
+    $._string_escape,
+    $._hole_start,
+    $._string_end,
   ],
 
   extras: ($) => [/[ \t\r\n]/, $.comment],
@@ -1144,6 +1154,7 @@ module.exports = grammar({
         $.character,
         $.float,
         $.string,
+        $.bytes,
         $.boolean,
         $.unit,
         $.identifier,
@@ -1182,34 +1193,72 @@ module.exports = grammar({
     float: (_) => /[0-9][0-9_]*\.[0-9][0-9_]*/,
 
     // "Ren\n": it ends on the line it starts on, and its escapes are
-    // `\n`, `\t`, `\"` and `\\`. A hole, `\{e}`, holds an expression,
-    // shown through its type's `show`, and `\{x=}` writes `x=` before it
+    // `\n`, `\t`, `\r`, `\0`, `\"`, `\\` and `\u{E9}`. A hole, `\{e}`,
+    // holds an expression, shown through its type's `show`, and `\{x=}`
+    // writes `x=` before it. A raw string, `#"\d"#`, and a multi-line
+    // one, `"""` to a closing `"""` on its own line, are the scanner's,
+    // which counts the `#`s (strings.md, "Literals")
     string: ($) =>
-      seq(
-        '"',
-        repeat(
-          choice(
-            $.escape_sequence,
-            $.interpolation,
-            token.immediate(prec(1, /[^"\\\n]+/)),
+      choice(
+        seq(
+          '"',
+          repeat(
+            choice(
+              $.escape_sequence,
+              $.interpolation,
+              token.immediate(prec(1, /[^"\\\n]+/)),
+            ),
           ),
+          token.immediate('"'),
         ),
-        token.immediate('"'),
+        seq(
+          $._string_start,
+          repeat(
+            choice(
+              $._string_content,
+              alias($._string_escape, $.escape_sequence),
+              $.interpolation,
+            ),
+          ),
+          $._string_end,
+        ),
       ),
 
-    escape_sequence: (_) => token.immediate(seq('\\', /[nt"\\]/)),
+    // b"\r\n", b#"..."#, b"""...""": `Bytes`, with `\x41` among its
+    // escapes and no holes
+    bytes: ($) =>
+      seq(
+        $._bytes_start,
+        repeat(
+          choice($._string_content, alias($._string_escape, $.escape_sequence)),
+        ),
+        $._string_end,
+      ),
+
+    escape_sequence: (_) =>
+      token.immediate(seq('\\', choice(/[nrt0"\\]/, /u\{[0-9a-fA-F]+\}/))),
 
     interpolation: ($) =>
       seq(
-        alias(token.immediate('\\{'), $.interpolation_start),
+        alias(
+          choice(token.immediate('\\{'), $._hole_start),
+          $.interpolation_start,
+        ),
         field('expression', $._expression),
         optional(field('named', '=')),
         alias('}', $.interpolation_end),
       ),
 
-    // 'a': an `Int`, its code point, with the escapes `\n`, `\t`, `\'`
-    // and `\\`
-    character: (_) => token(seq("'", choice(/[^'\\\n]/, /\\[nt'\\]/), "'")),
+    // 'a': an `Int`, its code point, with the escapes `\n`, `\t`, `\r`,
+    // `\0`, `\'`, `\\` and `\u{E9}`
+    character: (_) =>
+      token(
+        seq(
+          "'",
+          choice(/[^'\\\n]/, /\\[nrt0'\\]/, /\\u\{[0-9a-fA-F]+\}/),
+          "'",
+        ),
+      ),
     boolean: (_) => choice('true', 'false'),
     unit: (_) => seq('(', ')'),
     self: (_) => 'self',
