@@ -21,6 +21,10 @@ let
   scope = pkgs.ocaml-ng.ocamlPackages_5_5.overrideScope (final: prev: {
     inherit ocaml;
     dune_3 = dune;
+    # cppo is a standalone text preprocessor, not a linked OCaml library.
+    # Its fixtures depend on pre-3.24 Dune path spelling; use nixpkgs' tested
+    # executable rather than rebuilding those fixtures under our newer Dune.
+    cppo = pkgs.ocamlPackages.cppo;
     merlin = (prev.merlin.override { version = "5.8-505"; }).overrideAttrs {
       version = "5.9";
       src = pkgs.fetchurl {
