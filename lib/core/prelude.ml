@@ -1848,6 +1848,7 @@ let intrinsics : Iface.t =
           { Iface.vname = Intrinsic.name x; scheme = scheme x; vparams = [] })
         fns;
     tests = [];
+    wirings = [];
   }
 
 let public =

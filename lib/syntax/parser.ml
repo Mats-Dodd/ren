@@ -57,6 +57,13 @@
      group    := "group" IDENT "(" param, ... ")" ["with" witem, ...] "="
                  INDENT test { NEWLINE test } DEDENT
      run      := "group" STR "=" expr               (a call of a group)
+     wiring   := "wiring" IDENT ["(" param, ... ")"] "provides" tyname,
+                 ... [uses] [errors] "=" witem, ...
+                                                   (`wiring` and `provides`
+                                                    are words only here; the
+                                                    items may go on the line
+                                                    after the `=`, indented,
+                                                    and on lines after a `,`)
      op       := ["pub"] fn_def
               |  ["pub"] "let" IDENT [":" type] "=" body
               |  IDENT ["(" param, ... ")"] "=>" body
@@ -2259,7 +2266,7 @@ and parse_with_item p : Parsed.with_item =
       Some (parse_dep_ref p))
     else None
   in
-  { chain; under; alias; iloc = Loc.span start (last_loc p) }
+  { chain; under; alias; iloc = Loc.span start (last_loc p); from = [] }
 
 and parse_match p =
   let start = loc p in
@@ -3166,6 +3173,90 @@ let parse_group p ~pub =
              group_tests;
            })
 
+(* A wiring (language.md §5): `wiring live(url: Str) provides Users uses
+   Console ! DbDown = pg_db(url), console_audit(), db_users()`. `wiring`
+   is a word only at the start of an item, before a name, and `provides`
+   only after its parameters, so neither is reserved. Its body is `with`
+   items, on the line after the `=` if they're indented under it: code
+   that runs around a block stays a function. *)
+let parse_wiring p ~pub =
+  let start = loc p in
+  advance p;
+  let wname = lower_ident p "a wiring's name" in
+  let wparams =
+    if peek p = LPAREN then (
+      advance p;
+      sep_list p ~close:RPAREN parse_param)
+    else []
+  in
+  if peek p <> IDENT "provides" then
+    Diag.error (loc p)
+      ~help:"write `provides` and the dependencies the body may call"
+      "a wiring says what it provides";
+  advance p;
+  let rec provides acc =
+    let d = parse_dep_ref p in
+    if peek p = COMMA then (
+      advance p;
+      provides (d :: acc))
+    else List.rev (d :: acc)
+  in
+  let provides = provides [] in
+  let not_items at =
+    Diag.error at
+      ~help:
+        (Printf.sprintf
+           "code that runs around a block stays a function: `fn %s(body: fn() \
+            -> T) -> T`"
+           wname.name)
+      "a wiring's body lists what it installs"
+  in
+  (* as a handler's signature: what it needs, then what it fails with,
+     each of which may start a line of its own, indented *)
+  let wuses =
+    if peek p = USES then Some (parse_uses ~greedy:true p) else None
+  in
+  let werrors = if peek p = BANG then Some (parse_errors p) else None in
+  let wuses =
+    if wuses = None && peek p = USES then Some (parse_uses ~greedy:true p)
+    else wuses
+  in
+  if peek p <> EQ then
+    Diag.error (loc p)
+      ~help:"write `=`, then what it installs, as a `with` lists it"
+      (Printf.sprintf
+         "expected `uses`, `!` or `=` after what a wiring provides, found %s"
+         (describe (peek p)));
+  advance p;
+  let indented = peek p = INDENT in
+  if indented then advance p;
+  (match peek p with
+  | LET | VAR | WHILE | FOR | IF | MATCH | WITH -> not_items (loc p)
+  | _ -> ());
+  let rec items acc =
+    let item = parse_with_item p in
+    if peek p = COMMA then (
+      advance p;
+      items (item :: acc))
+    else List.rev (item :: acc)
+  in
+  let witems = items [] in
+  if indented then (
+    (* a second line that isn't after a `,` is a statement: a body *)
+    if peek p = NEWLINE then not_items (loc p);
+    if peek p <> DEDENT then fail_expected p "the end of the wiring";
+    advance p);
+  {
+    wpub = pub;
+    wname;
+    wparams;
+    provides;
+    wuses;
+    werrors;
+    witems;
+    wloc = Loc.span start (last_loc p);
+  }
+
 let parse_item ~prelude p =
   p.node <- 0;
   let pub = peek p = PUB in
@@ -3176,6 +3267,8 @@ let parse_item ~prelude p =
   | DEP -> Type (parse_dep p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)
   | GROUP -> parse_group p ~pub
+  | IDENT "wiring" when (match peek2 p with IDENT _ -> true | _ -> false) ->
+      Wiring (parse_wiring p ~pub)
   | TEST when peek2 p = FN || peek2 p = HANDLER ->
       (* a test item, `test fn` or `test handler`, which only tests see
          (testing.md, "Test items") *)

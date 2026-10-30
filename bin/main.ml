@@ -18,6 +18,7 @@ let usage =
                 [--seeds <n>] [--sim] [--list]
        ren test --keep <file.journal>
        ren console <module> [--real <dependency>,...]
+       ren explain-wiring <wiring> <file.ren>
        ren --help | --version
 
 The file is the program's entry module. A module it imports is found from
@@ -119,6 +120,11 @@ commands:
   check   check the program and its tests without running them
   types   print every function's inferred signature, module by module,
           and each type's members under it
+  explain-wiring
+          print how the entry module's wiring <wiring> is installed: its
+          items in the order chosen, what each installs and what it
+          meets, by an item's number or from outside, what the wiring
+          uses, and the order of its teardown
   core    print every module in Core, the language it's lowered to,
           with the evidence of what's installed passed explicitly:
             --types    also each function's type, and the type arguments
@@ -917,6 +923,11 @@ let () =
       build (List.tl (List.tl (Array.to_list args)))
   | args when Array.length args >= 2 && args.(1) = "console" ->
       console (List.tl (List.tl (Array.to_list args)))
+  | [| _; "explain-wiring"; name; path |] -> (
+      let src = read path in
+      let load = loader path in
+      try List.iter print_endline (Driver.explain_wiring ~load ~file:path ~name src)
+      with e -> fail ~known:[ (path, src) ] e)
   | [| _; cmd; path |] -> (
       let src = read path in
       let load = loader path in

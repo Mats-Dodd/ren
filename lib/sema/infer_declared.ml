@@ -123,8 +123,23 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
         in
         let shown = shown_dep env dep in
         report env
-          (if is_value f then value_uses f shown call
-           else undeclared_use ~why ~notes ?alias f shown call))
+          (match Resolve.checked_wiring (Ast.fn_path env.home f) with
+          | Some wiring ->
+              (* a public wiring's `uses` (resolve.ml, [wiring_fns]): the
+                 item that needs it, as the wiring writes it *)
+              let item =
+                Option.bind
+                  (match first (fun c -> brings c dep) with
+                  | Some c -> Some c
+                  | None -> first (fun c -> has_label c.row dep))
+                  (fun c ->
+                    Option.map (fun (_, text) -> (c.cloc, text)) (wired_need env c))
+              in
+              wiring_undeclared f.name.loc ~wiring ~dep:shown ~call:item
+                ~written:
+                  (match f.uses with Some u -> u.deps <> [] | None -> false)
+          | None when is_value f -> value_uses f shown call
+          | None -> undeclared_use ~why ~notes ?alias f shown call))
     (sorted_labels cx.uses)
 
 (* What the handler [f] needs, [n]: never a dependency it implements,
@@ -267,9 +282,14 @@ let check_errors env ~is_value (f : fn_def) cx declared =
               | None -> None)
         in
         report env
-          (if is_value f then
-             value_fails f ~tag:l.name ~shape:(show_label pr l) from
-           else undeclared_error f ~tag:l.name ~shape:(show_label pr l) from))
+          (match Resolve.checked_wiring (Ast.fn_path env.home f) with
+          | Some wiring ->
+              (* a public wiring's `!` (resolve.ml, [wiring_fns]) *)
+              wiring_undeclared_error f.name.loc ~wiring
+                ~tag:(show_label pr l)
+          | None when is_value f ->
+              value_fails f ~tag:l.name ~shape:(show_label pr l) from
+          | None -> undeclared_error f ~tag:l.name ~shape:(show_label pr l) from))
     (List.sort
        (fun (a : label) b -> String.compare a.name b.name)
        (fst (row_parts cx.errs)));

@@ -99,6 +99,8 @@ type t = {
       (** each module imported, with its alias here, in import order *)
   import_uses : import_use list;
       (** what of each import the module uses, by name (see [unused_imports]) *)
+  wirings : Iface.wiring list;
+      (** the module's wirings, flattened, in the order they're declared *)
 }
 
 (* How module [r] writes the type [p]: the shortest way it can. Bare if
@@ -185,6 +187,10 @@ type env = {
   used_types : (Path.t, unit) Hashtbl.t;
       (** the types used that are another module's: an import nothing uses is an
           error *)
+  wirings : (string, Iface.wiring) Hashtbl.t;
+      (** the module's own wirings, by name, flattened ([wiring_shape]) *)
+  wiring_defs : (string, Parsed.wiring_def) Hashtbl.t;
+      (** and as they're written *)
 }
 
 (* Where a type is written, which says what rows it can name, `..e` and
@@ -246,6 +252,10 @@ and fn_state = {
   test : bool;
       (** whether the function is test code (ast.ml), which alone can use a test
           item *)
+  mutable made : int;
+      (** the last node this pass numbered in the function, for what a wiring
+          is flattened into ([use_wiring]): below -1, apart from the parser's
+          and Test_items' *)
 }
 
 let report env ?help ?notes ?labels loc msg =
@@ -1132,6 +1142,10 @@ let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
       if not sc.fn.test then
         test_item env f.loc ~home:iface.home (i.alias.name ^ "." ^ f.name);
       sc.fn.calls <- p :: sc.fn.calls
+  | None, None when Iface.find_wiring iface f.name <> None ->
+      report env f.loc
+        ~help:(sprintf "install it: `with %s.%s in ...`" i.alias.name f.name)
+        "a wiring isn't a value"
   | None, None ->
       report env f.loc ~help:"if it's defined there, mark it `pub`"
         (sprintf "`%s` has no public `%s`" iface.home f.name));
@@ -1306,6 +1320,12 @@ let lookup env sc loc ~what x =
               env.imports
           in
           (match elsewhere with
+          | [] when Hashtbl.mem env.wiring_defs x ->
+              (* a wiring is installed, never kept or called (language.md
+                 §5) *)
+              report env loc
+                ~help:(sprintf "install it: `with %s in ...`" x)
+                "a wiring isn't a value"
           | [] when x = "_" ->
               report env loc
                 ~help:"give the value a name, `let x = ...`, to use it"
@@ -1810,6 +1830,193 @@ let next_callee env sc (f : Parsed.expr) =
       Some (next_op env (h, o) (Some d) op)
   | _ -> None
 
+(* ---- wirings (language.md §5) ----
+
+   A wiring is flattened where it's used. Its shape ([Iface.wiring]) is
+   made once, from its declaration ([wiring_fns]): each link of each of
+   its items, flattened, is a function of the module that takes the
+   wiring's parameters it reads, `live$1(url: Str) = pg_db(url)`, which
+   makes the link's implementation, so another module can use a `pub`
+   wiring whose items name what it can't see (compiler.md, "Services
+   stage", "Wirings"). A `with` that lists it, `with live(u) in body`,
+   is then
+
+     let url = u                                    (each argument once,
+     with live$1(url), live$2(), live$3() in body    before any item)
+
+   each item knowing the wirings it came through ([with_item.from]), whose
+   `provides` inference enforces at the body. A link that's one of the
+   wiring's parameters, `db` in `wiring app(db: Db) ... = db, ...`, is
+   the argument itself: a parameter of a dependency's type used as a value
+   isn't transparent, so no function could pass it back. *)
+
+(* A `with` item that names a wiring: its shape, or [None] if the wiring
+   is broken (a cycle, reported), how it's written, `live` or
+   `app.live`, the import it's written through if it's another module's,
+   and its arguments. *)
+type wiring_ref = {
+  shape : Iface.wiring option;
+  written : string;
+  through : (import * Iface.t) option;
+  args : Parsed.expr list;
+  rloc : Loc.t;
+}
+
+(* The wiring the item [it] names, if it names one: `live`, `live(url)`,
+   or another module's, `app.live(url)`, alone, not in a chain. [local]
+   says what's a local, which is never a wiring, and [own] finds one of
+   the module's own. *)
+let wiring_ref env ~local ~own (it : Parsed.with_item) =
+  match it.chain with
+  | [ { link; _ } ] -> (
+      let named (f : Parsed.expr) args =
+        match f.kind with
+        | Var (Bare n) when (not (local n)) && Hashtbl.mem env.wiring_defs n
+          ->
+            Some { shape = own n; written = n; through = None; args; rloc = link.loc }
+        | Field ({ kind = Var (Bare m); _ }, n) when not (local m) -> (
+            match Env.find_opt m env.modules with
+            | Some ((_, iface) as imp) -> (
+                match Iface.find_wiring iface n.name with
+                | Some w ->
+                    Some
+                      {
+                        shape = Some w;
+                        written = m ^ "." ^ n.name;
+                        through = Some imp;
+                        args;
+                        rloc = link.loc;
+                      }
+                | None -> None)
+            | None -> None)
+        | _ -> None
+      in
+      match link.kind with Call (f, args) -> named f args | _ -> named link [])
+  | _ -> None
+
+(* What's wrong with how the item [r] names its wiring: anything around
+   it, or the wrong number of arguments. *)
+let wiring_written env (it : Parsed.with_item) (r : wiring_ref) =
+  if it.under <> [] || it.alias <> None then
+    report env it.iloc
+      ~help:
+        (sprintf "list `%s` alone, and put `over` or `as` on its items" r.written)
+      "a wiring is installed as its items: nothing goes under it, and it \
+       isn't installed `as` anything";
+  List.iter
+    (fun (a : Parsed.expr) ->
+      match a.kind with
+      | Named (n, _) ->
+          report env n.loc ~help:"give it by position"
+            "a wiring's arguments are given in order"
+      | _ -> ())
+    r.args;
+  match r.shape with
+  | Some w when List.length r.args <> List.length w.wparams ->
+      let n = List.length w.wparams in
+      report env r.rloc
+        ~help:
+          (sprintf "give it %s: `%s(%s)`"
+             (if n = 1 then "one" else string_of_int n)
+             r.written
+             (String.concat ", " w.wparams))
+        (sprintf "`%s` takes %d argument%s, but this gives it %d" r.written n
+           (plural n) (List.length r.args))
+  | _ -> ()
+
+(* The `with` item [it], which names the wiring [r], flattened (see
+   above): the `let`s that bind its arguments, each once, in order, then
+   its items, each link a call of the function made of it, or the
+   argument passed on. [go] resolves an argument where the `with` is. *)
+let use_wiring env sc ~go (it : Parsed.with_item) (r : wiring_ref) =
+  wiring_written env it r;
+  let fresh () =
+    sc.fn.made <- sc.fn.made - 1;
+    sc.fn.made
+  in
+  (* the wiring's own `with`, which its function checks ([wiring_fns]),
+     points at each item where the wiring lists it; a `with` that lists
+     the wiring, at the wiring's name there *)
+  let own = it.iloc = (match r.shape with Some w -> w.wdeclared | None -> it.iloc) in
+  let at = ref r.rloc in
+  let mk kind : Resolved.expr = { kind; loc = !at; node = fresh () } in
+  (match r.through with
+  | Some ((i : import), _) -> Hashtbl.replace env.used i.alias.name ()
+  | None -> check_private env r.rloc ~key:("wiring " ^ r.written) r.written);
+  match r.shape with
+  | None -> ([], [])
+  | Some w ->
+      (* each argument a local, its own if it's one already: reading a
+         local twice is reading it once *)
+      let bound =
+        List.mapi
+          (fun i (a : Parsed.expr) ->
+            let a = match a.kind with Named (_, v) -> v | _ -> a in
+            match a.kind with
+            | Var (Bare x) when Env.mem x sc.locals ->
+                ignore (go a);
+                (Env.find x sc.locals, None)
+            | _ ->
+                let value = go a in
+                (* named for the parameter it's given to, which no code
+                   sees: only the items read it *)
+                sc.fn.last_id <- sc.fn.last_id + 1;
+                let name =
+                  Option.value (List.nth_opt w.wparams i) ~default:"_"
+                in
+                ( {
+                    id = sc.fn.last_id;
+                    ident = { name; loc = a.loc };
+                    bound = By_let;
+                    depth = sc.depth;
+                  },
+                  Some value ))
+          r.args
+      in
+      let arg i =
+        match List.nth_opt bound i with
+        | Some (b, _) -> mk (Var (Local b))
+        | None -> mk Unit (* the wrong number, reported *)
+      in
+      let home =
+        match r.through with Some (_, iface) -> iface.home | None -> env.home
+      in
+      let link (l : Iface.link) : Resolved.with_link =
+        let link =
+          match l with
+          | Passed i -> arg i
+          | Made (f, used) ->
+              let p = Path.make home f in
+              sc.fn.calls <- p :: sc.fn.calls;
+              mk (Call (mk (Var (Global p)), List.map arg used))
+        in
+        { link; knode = fresh () }
+      in
+      let via =
+        { wiring = r.written; declared = w.wdeclared; provides = w.wprovides }
+      in
+      let items =
+        List.map
+          (fun (wi : Iface.wired_item) : Resolved.with_item ->
+            if own then at := wi.wloc;
+            {
+              chain = List.map link wi.links;
+              under = wi.wunder;
+              alias = wi.walias;
+              iloc = (if own then wi.wloc else it.iloc);
+              from = wi.wvia @ [ via ];
+            })
+          w.witems
+      in
+      ( List.filter_map
+          (fun (b, value) ->
+            Option.map
+              (fun value : Resolved.stmt ->
+                Let { name = b; ty = None; value; mut = false })
+              value)
+          bound,
+        items )
+
 let rec expr env sc (e : Parsed.expr) : Resolved.expr =
   let e = as_item env sc e in
   let go = expr env sc in
@@ -2127,11 +2334,34 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
                   | _ -> None)
               | None -> None);
             iloc = i.iloc;
+            from = [];
           }
         in
-        let items = List.map item items in
+        (* a wiring, flattened into its items, its arguments bound first *)
+        let lets = ref [] in
+        let items =
+          List.concat_map
+            (fun (i : Parsed.with_item) ->
+              match
+                wiring_ref env
+                  ~local:(fun n -> Env.mem n sc.locals)
+                  ~own:(Hashtbl.find_opt env.wirings) i
+              with
+              | Some r ->
+                  let bound, items = use_wiring env sc ~go i r in
+                  lets := !lets @ bound;
+                  items
+              | None -> [ item i ])
+            items
+        in
         let loop = if sc.loop = In_loop then Loop_past_with else sc.loop in
-        With { items; body = expr env { sc with loop } body }
+        let with_ : Resolved.expr_kind =
+          With { items; body = expr env { sc with loop } body }
+        in
+        if !lets = [] then with_
+        else (
+          sc.fn.made <- sc.fn.made - 1;
+          Block (!lets, { kind = with_; loc = e.loc; node = sc.fn.made }))
     | Handler _ ->
         (* the parser makes one only the body of a handler, which
            [handler_body] resolves *)
@@ -2618,7 +2848,7 @@ let no_opaque_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Opaque { rep = t; _ }; _ } as td) ->
           Hashtbl.replace reps td.type_name.name t
-      | Fn _ | Type _ | Import _ | Testing _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
     items;
   (* the opaque type of this module that [t] is, if it's one *)
   let opaque (t : Resolved.ty) =
@@ -2653,7 +2883,7 @@ let no_opaque_cycles env (items : Resolved.program) =
             | None -> ()
           in
           follow [ start.name ] t
-      | Fn _ | Type _ | Import _ | Testing _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
     items
 
 (* A named error set can include others, but never itself, by way of
@@ -2666,7 +2896,7 @@ let no_set_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Errors es; _ } as td) ->
           Hashtbl.replace sets td.type_name.name es
-      | Fn _ | Type _ | Import _ | Testing _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
     items;
   (* the module's own sets [n] includes directly, in the order written *)
   let includes n =
@@ -2709,7 +2939,7 @@ let no_set_cycles env (items : Resolved.program) =
                 (sprintf "`%s` includes itself: %s" n
                    (String.concat " → " (n :: way)))
           | None -> ())
-      | Fn _ | Type _ | Import _ | Testing _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
     items
 
 (* Whether the written type [t] mentions the type parameter [name]. *)
@@ -2822,6 +3052,21 @@ let check_tparams env (f : Parsed.fn_def) =
    own, and is named after the type, `Stack.push` (ast.ml); its first
    parameter can be `self`, which has the type, `Stack<T>`. `self` is no
    other parameter. *)
+(* The lowest node numbered in [e], or -1: [wiring_fns] numbers what it
+   makes below zero, so what a `with` in it flattens is numbered below
+   that ([fn_state.made]). *)
+let rec lowest_node (e : Parsed.expr) =
+  let own =
+    match e.kind with
+    | With { items; _ } ->
+        List.fold_left
+          (fun m (i : Parsed.with_item) ->
+            List.fold_left (fun m (l : Parsed.with_link) -> min m l.knode) m i.chain)
+          e.node items
+    | _ -> e.node
+  in
+  List.fold_left (fun m c -> min m (lowest_node c)) (min (-1) own) (Ast.children e)
+
 let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     Resolved.fn_def * Path.t list * (string * Path.t option) list =
   let outer = match owner with Some td -> td.type_params | None -> [] in
@@ -2900,7 +3145,15 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       rows = [];
       depth = 0;
       loop = No_loop;
-      fn = { last_id = 0; calls = []; dots = []; typed = []; test = f.test };
+      fn =
+        {
+          last_id = 0;
+          calls = [];
+          dots = [];
+          typed = [];
+          test = f.test;
+          made = lowest_node f.body;
+        };
       next =
         (match f.body.kind with
         | Handler { over = true; _ } ->
@@ -3697,7 +3950,7 @@ let no_kept_blocks env (items : Resolved.program) =
           List.iter
             (fun (o : Resolved.op) -> fn ~value:(o.op_kind = Op_value) o.op_fn)
             td.type_ops
-      | Import _ | Testing _ -> ())
+      | Import _ | Testing _ | Wiring _ -> ())
     items
 
 let no_leaks env ~private_ ~groups (items : Resolved.program) =
@@ -3830,7 +4083,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
               no_private_errors env ~private_ es
                 ~set:(sprintf "`pub type %s` includes `%s`" t)
                 ~tag:(sprintf "`pub type %s`'s error `%s` mentions `%s`" t))
-      | Fn _ | Type _ | Import _ | Testing _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
     items
 
 (* What isn't used is reported once: the whole import, or one of the types
@@ -3877,7 +4130,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
     List.filter_map
       (function
         | Type (td : Resolved.type_def) -> Some td
-        | Fn _ | Import _ | Testing _ -> None)
+        | Fn _ | Import _ | Testing _ | Wiring _ -> None)
       items
   in
   let method_ (td : Resolved.type_def) =
@@ -3908,6 +4161,282 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
       | _ -> callees td)
   | Some None | None -> []
 
+(* The name of the function a wiring's own `with` is checked in
+   ([wiring_fns]), and the wiring a function of that name checks. *)
+let check_fn name = name ^ "$wiring"
+
+let checked_wiring (f : Path.t) =
+  let suffix = "$wiring" in
+  if f.member = None && String.ends_with ~suffix f.name then
+    Some (String.sub f.name 0 (String.length f.name - String.length suffix))
+  else None
+
+(* The module's wirings [defs], flattened into their shapes, in
+   [env.wirings], and the functions that makes: one for each link
+   ([use_wiring], above), and one for each wiring, its own `with`, which
+   is how inference checks it as it checks a function:
+
+     fn live$wiring(url: Str) = try with live(url) in ()
+
+   what it uses is the wiring's `uses`, and what it fails with its `!`,
+   written for a `pub` one, inferred for a private one; the `try`, whose
+   node is Test_items' [passed_on], needn't cover anything, since a
+   wiring may start without failing. Nothing calls it, and Lower drops
+   it. A wiring that lists itself, through any number of others, is
+   reported once, at the first of the loop, and has no shape. *)
+let wiring_fns env (defs : Parsed.wiring_def list) =
+  let made = ref [] in
+  let broken = Hashtbl.create 4 in
+  let rec shape ~visiting (w : Parsed.wiring_def) =
+    let name = w.wname.name in
+    match Hashtbl.find_opt env.wirings name with
+    | Some s -> Some s
+    | None when Hashtbl.mem broken name -> None
+    | None when List.mem name visiting ->
+        (* [visiting] is the way here, most recent first *)
+        let rec upto acc = function
+          | x :: _ when x = name -> x :: acc
+          | x :: rest -> upto (x :: acc) rest
+          | [] -> acc
+        in
+        let loop = upto [] visiting in
+        List.iter (fun n -> Hashtbl.replace broken n ()) loop;
+        let first = List.hd loop in
+        let at =
+          match Hashtbl.find_opt env.wiring_defs first with
+          | Some d -> d.wname.loc
+          | None -> w.wname.loc
+        in
+        report env at
+          ~help:"a wiring can list another, but not one that lists it"
+          (sprintf "`%s` lists itself: %s" first
+             (String.concat " → " (loop @ [ first ])));
+        None
+    | None -> (
+        let params = List.map (fun (p : Parsed.param) -> p.pname.name) w.wparams in
+        let index n =
+          let rec go i = function
+            | p :: _ when p = n -> Some i
+            | _ :: rest -> go (i + 1) rest
+            | [] -> None
+          in
+          go 0 params
+        in
+        (* the parameters [e] reads, by their places *)
+        let reads (e : Parsed.expr) =
+          let rec go acc (e : Parsed.expr) =
+            let acc =
+              match e.kind with
+              | Var (Bare x) -> (
+                  match index x with Some i -> i :: acc | None -> acc)
+              | _ -> acc
+            in
+            List.fold_left go acc (Ast.children e)
+          in
+          List.sort_uniq compare (go [] e)
+        in
+        let count = ref 0 in
+        (* the link [body], as a function of what it reads, or a
+           parameter passed on *)
+        let link_fn (body : Parsed.expr) : Iface.link =
+          match body.kind with
+          | Var (Bare p) when index p <> None -> Passed (Option.get (index p))
+          | _ ->
+              incr count;
+              let fname = sprintf "%s$%d" name !count in
+              let used = reads body in
+              made :=
+                Fn
+                  {
+                    pub = false;
+                    name = { name = fname; loc = w.wname.loc };
+                    tparams = [];
+                    tneeds = [];
+                    params =
+                      List.filteri (fun i _ -> List.mem i used)
+                        (List.map
+                           (fun (p : Parsed.param) -> { p with pdefault = None })
+                           w.wparams);
+                    ret = None;
+                    errors = None;
+                    uses = None;
+                    body;
+                    owner = None;
+                    overload = 0;
+                    test = false;
+                    loc = body.loc;
+                  }
+                :: !made;
+              Made (fname, used)
+        in
+        let fresh = ref (-1) in
+        let mk loc kind : Parsed.expr =
+          decr fresh;
+          { kind; loc; node = !fresh }
+        in
+        let own n =
+          Option.bind (Hashtbl.find_opt env.wiring_defs n)
+            (shape ~visiting:(name :: visiting))
+        in
+        let items =
+          List.concat_map
+            (fun (it : Parsed.with_item) ->
+              match
+                wiring_ref env ~local:(fun n -> index n <> None) ~own it
+              with
+              | Some r -> (
+                  wiring_written env it r;
+                  match r.shape with
+                  | None -> []
+                  | Some inner ->
+                      (* each of its links, given this one's arguments *)
+                      let callee f : Parsed.expr_kind =
+                        match r.through with
+                        | None -> Var (Bare f)
+                        | Some ((i : import), _) ->
+                            Field
+                              ( mk r.rloc (Var (Bare i.alias.name)),
+                                { name = f; loc = r.rloc } )
+                      in
+                      let arg i = List.nth_opt r.args i in
+                      List.map
+                        (fun (wi : Iface.wired_item) : Iface.wired_item ->
+                          {
+                            wi with
+                            links =
+                              List.map
+                                (function
+                                  | Iface.Passed i -> (
+                                      match arg i with
+                                      | Some a -> link_fn a
+                                      | None -> Iface.Passed 0
+                                      (* the wrong number, reported *))
+                                  | Made (f, used) ->
+                                      link_fn
+                                        (mk r.rloc
+                                           (Call
+                                              ( mk r.rloc (callee f),
+                                                List.filter_map arg used ))))
+                                wi.links;
+                            wvia =
+                              wi.wvia
+                              @ [
+                                  {
+                                    wiring = r.written;
+                                    declared = inner.wdeclared;
+                                    provides = inner.wprovides;
+                                  };
+                                ];
+                            wloc = it.iloc;
+                          })
+                        inner.witems)
+              | None ->
+                  [
+                    {
+                      links =
+                        List.map
+                          (fun (l : Parsed.with_link) -> link_fn l.link)
+                          it.chain;
+                      wunder = uses env ~params:[] it.under;
+                      walias =
+                        Option.bind it.alias (fun d ->
+                            match uses env ~params:[] [ d ] with
+                            | [ d ] -> Some d
+                            | _ -> None);
+                      wvia = [];
+                      wloc = it.iloc;
+                    };
+                  ])
+            w.witems
+        in
+        (* a cycle met inside reports itself; this one is broken then too *)
+        if Hashtbl.mem broken name then None
+        else
+          let s : Iface.wiring =
+            {
+              wname = name;
+              wpub = w.wpub;
+              wparams = params;
+              wprovides = Iface.dep_paths (uses env ~params:[] w.provides);
+              witems = items;
+              wdeclared = w.wname.loc;
+              wwritten = [];
+            }
+          in
+          Hashtbl.replace env.wirings name s;
+          Some s)
+  in
+  List.iter
+    (fun (w : Parsed.wiring_def) ->
+      List.iter
+        (fun (p : Parsed.param) ->
+          Option.iter
+            (fun (_, l, _) ->
+              report env l ~help:"give it in the `with` that lists the wiring"
+                "a wiring's parameter has no default")
+            p.pdefault)
+        w.wparams;
+      match shape ~visiting:[] w with
+      | None -> ()
+      | Some _ ->
+          let loc = w.wname.loc in
+          let none_used = { deps = []; dtail = None; uloc = loc } in
+          let no_errors = { errs = []; etail = None; eloc = loc } in
+          let node = ref (-1) in
+          let mk kind : Parsed.expr =
+            decr node;
+            { kind; loc; node = !node }
+          in
+          let listed =
+            match w.wparams with
+            | [] -> mk (Var (Bare w.wname.name))
+            | ps ->
+                mk
+                  (Call
+                     ( mk (Var (Bare w.wname.name)),
+                       List.map
+                         (fun (p : Parsed.param) -> mk (Var (Bare p.pname.name)))
+                         ps ))
+          in
+          decr node;
+          let item : Parsed.with_item =
+            {
+              chain = [ { link = listed; knode = !node } ];
+              under = [];
+              alias = None;
+              iloc = loc;
+              from = [];
+            }
+          in
+          let with_ = mk (With { items = [ item ]; body = mk Unit }) in
+          made :=
+            Fn
+              {
+                pub = false;
+                name = { name = check_fn w.wname.name; loc };
+                tparams = [];
+                tneeds = [];
+                params =
+                  List.map
+                    (fun (p : Parsed.param) -> { p with pdefault = None })
+                    w.wparams;
+                ret = None;
+                errors =
+                  (if w.wpub then Some (Option.value w.werrors ~default:no_errors)
+                   else w.werrors);
+                uses =
+                  (if w.wpub then Some (Option.value w.wuses ~default:none_used)
+                   else w.wuses);
+                body = { with_ with kind = Try with_; node = Test_items.passed_on };
+                owner = None;
+                overload = 0;
+                test = false;
+                loc = w.wloc;
+              }
+            :: !made)
+    defs;
+  List.rev !made
+
 let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     (prog : Parsed.program) =
   (* tests are functions by now (test_items.ml); any left are ignored *)
@@ -3919,7 +4448,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       (function
         | Import (i : import) ->
             Some (i, List.find (fun (m : Iface.t) -> m.home = i.path) imports)
-        | Fn _ | Type _ | Testing _ -> None)
+        | Fn _ | Type _ | Testing _ | Wiring _ -> None)
       prog
   in
   let env =
@@ -3948,6 +4477,8 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
           Env.empty imported;
       used = Hashtbl.create 8;
       used_types = Hashtbl.create 8;
+      wirings = Hashtbl.create 8;
+      wiring_defs = Hashtbl.create 8;
     }
   in
   (* what's in scope bare: the prelude, which every module imports
@@ -4048,7 +4579,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                     (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
                     td.type_ops,
                 fields )
-      | Fn _ | Import _ | Testing _ -> ())
+      | Fn _ | Import _ | Testing _ | Wiring _ -> ())
     prog;
   let first_local = Hashtbl.create 16 in
   List.iter
@@ -4102,7 +4633,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
               Hashtbl.replace first_local name.name name.loc;
               Hashtbl.replace env.types name.name
                 (Path.make home name.name, List.length td.type_params))
-      | Fn _ | Import _ | Testing _ -> ())
+      | Fn _ | Import _ | Testing _ | Wiring _ -> ())
     prog;
   (* the sum types in scope bare, and their by-name constructors, which a
      bare `Name { ... }` can mean ([braces_name]) *)
@@ -4178,13 +4709,44 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
           Hashtbl.replace env.own_tests v.vname ())
         iface.tests)
     prelude;
+  (* the wirings, each made functions (see [wiring_fns]), which are the
+     module's from here on *)
+  let wiring_defs =
+    List.filter_map (function Wiring w -> Some w | _ -> None) prog
+  in
+  List.iter
+    (fun (w : Parsed.wiring_def) ->
+      let n = w.wname in
+      (match Hashtbl.find_opt env.wiring_defs n.name with
+      | Some (first : Parsed.wiring_def) ->
+          report env n.loc ~help:"rename one of them"
+            ~labels:[ (first.wname.loc, sprintf "the first `%s` is here" n.name) ]
+            (sprintf "there are two wirings named `%s`" n.name)
+      | None -> Hashtbl.replace env.wiring_defs n.name w);
+      if not w.wpub then Hashtbl.replace env.own_private ("wiring " ^ n.name) ())
+    wiring_defs;
+  let prog =
+    List.filter (function Wiring _ -> false | _ -> true) prog
+    @ wiring_fns env wiring_defs
+  in
   let fns =
     List.filter_map
       (function
         | Fn (f : Parsed.fn_def) -> Some f
-        | Type _ | Import _ | Testing _ -> None)
+        | Type _ | Import _ | Testing _ | Wiring _ -> None)
       prog
   in
+  List.iter
+    (fun (f : Parsed.fn_def) ->
+      match Hashtbl.find_opt env.wiring_defs f.name.name with
+      | Some w ->
+          report env f.name.loc ~help:"rename one of them"
+            ~labels:[ (w.wname.loc, sprintf "the wiring `%s` is here" f.name.name) ]
+            (sprintf "a wiring and a %s are both named `%s`"
+               (if Ast.is_handler f then "handler" else "function")
+               f.name.name)
+      | None -> ())
+    fns;
   (* a handler is a function of its parameters, so it shares their names *)
   let seen = Hashtbl.create 16 in
   let what (f : Parsed.fn_def) =
@@ -4231,7 +4793,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                let f', calls, dots = fn_def env f in
                (Fn f', [ (Ast.fn_path home f', calls, dots) ])
            | Import i -> (Import i, [])
-           | Testing _ -> (* left out above *) assert false)
+           | Testing _ | Wiring _ -> (* left out above *) assert false)
          prog)
   in
   let private_ = Hashtbl.create 8 in
@@ -4239,7 +4801,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     (function
       | Type (td : Resolved.type_def) when not td.type_pub ->
           Hashtbl.replace private_ td.type_name.name td.type_name.loc
-      | Fn _ | Type _ | Import _ | Testing _ -> ())
+      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ -> ())
     items;
   no_leaks env ~private_ ~groups items;
   no_opaque_cycles env items;
@@ -4258,7 +4820,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                 when intrinsic.body = Builtin ->
                   Iface.join intrinsic d
               | _ -> d)
-        | Fn _ | Import _ | Testing _ -> None)
+        | Fn _ | Import _ | Testing _ | Wiring _ -> None)
       items
   in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one
@@ -4307,4 +4869,45 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     aliases =
       List.map (fun ((i : import), _) -> (i.path, i.alias.name)) env.imports;
     import_uses;
+    wirings =
+      List.filter_map
+        (fun (w : Parsed.wiring_def) -> Hashtbl.find_opt env.wirings w.wname.name)
+        wiring_defs;
   }
+
+(* How each link function of the module's wirings is written where its
+   wiring lists it, `pg_db(url)`, by its name, for a message: its body,
+   as the module writes it, or, for a link of a wiring listed inside
+   another, `live$3() = core$1()`, the inner one's link, as written
+   there, which [other] says for another module's. *)
+let written (r : t) ~(other : Path.t -> string option) =
+  let bodies = Hashtbl.create 16 in
+  List.iter
+    (function
+      | Fn (f : Resolved.fn_def) -> Hashtbl.replace bodies f.name.name f.body
+      | Type _ | Import _ | Testing _ | Wiring _ -> ())
+    r.prog;
+  let is_link (p : Path.t) =
+    p.member = None && String.contains p.name '$' && checked_wiring p = None
+  in
+  let rec text name =
+    match Hashtbl.find_opt bodies name with
+    | None -> None
+    | Some (body : Resolved.expr) -> (
+        match body.kind with
+        | Call ({ kind = Var (Global p); _ }, _) when is_link p ->
+            if p.home = r.home then text p.name else other p
+        | _ -> Ast.source ~type_name:(type_name r) ~value_name:(value_name r) body)
+  in
+  List.concat_map
+    (fun (w : Iface.wiring) ->
+      List.concat_map
+        (fun (wi : Iface.wired_item) ->
+          List.filter_map
+            (function
+              | Iface.Made (f, _) ->
+                  Some (f, Option.value (text f) ~default:"this")
+              | Passed _ -> None)
+            wi.links)
+        w.witems)
+    r.wirings

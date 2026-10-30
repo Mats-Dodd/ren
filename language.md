@@ -264,7 +264,7 @@ The Strategy pattern written as handlers can do none of that.
 ### What Ren has today
 
 Tested against the compiler on 2026-10-30, after the data stage and the
-services stage's pipe:
+services stage's pipe and wirings:
 
 | Feature | Today |
 |---|---|
@@ -287,7 +287,8 @@ services stage's pipe:
 | One constructor name in two types | resolved by the expected type, else "write `A.Open`" |
 | A stateful handler called as a method | an error, "`c` may be a description of `counter`, which keeps state, so it isn't called as a method", whose help writes the `with`, checked on the linked program by `ren run`, `ren test` and `ren build` (not `ren check` of one module); a stateless one is called as a method |
 | Records | nominal: same-shaped records don't mix |
-| The pipe | `x \|> f(a)` is `f(x, a)`, checked as that call, in the interpreter and natively; a step is a function by name, `f`, `module.f` or `Type.f`, and each step that can fail carries its own `try`, which `\|>` stops; `orelse` may follow a chain; a line starting with `\|>`, or with `.` and a name, indented further, continues the one above; the errors of §8, each with its help (examples/checkout, language.md's end-to-end program but its wiring) |
+| The pipe | `x \|> f(a)` is `f(x, a)`, checked as that call, in the interpreter and natively; a step is a function by name, `f`, `module.f` or `Type.f`, and each step that can fail carries its own `try`, which `\|>` stops; `orelse` may follow a chain; a line starting with `\|>`, or with `.` and a name, indented further, continues the one above; the errors of §8, each with its help (examples/checkout, language.md's end-to-end program) |
+| Wirings | `wiring live(url: Str) provides Users uses Console ! DbDown = pg_db(url), console_audit(), db_users()`, flattened where a `with` lists it into one set, so an item beside it shares what it installs, in the interpreter and natively; `provides` is all the body may call, `uses` and `!` are inferred for a private wiring and written for a `pub` one, another module lists a `pub` one as `app.live`; wirings nest, a test splits one, a parameter can be a description; every error of §5 with its help, and `ren explain-wiring live main.ren` (examples/checkout, examples/ledger, examples/server) |
 | Layout, natively | a small record or tuple inside a small value is flattened into its parent's slots; an array of small records that hold objects keeps them inline, counted by the mask of the slots that hold them; a sum's tag is a byte, and a sum with one constructor that has fields, the rest without, has no tag, a pointer niche: `Option<Item>` is two words, not three. `show`, `==` and `hash` of a small value still box its type program-wide (bench/native/RESULTS.md, "Data stage: layout") |
 
 The core is right. What's missing is convenience, and two layout rules

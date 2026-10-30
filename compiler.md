@@ -11654,13 +11654,83 @@ Chosen in step 1, as built:
   an `Int` away (`let _ = try Orders.save(p)`), and bench/services/pipe's
   `attempt [7]`, which covers nothing (`attempt validate([7])`).
 
+Chosen in step 2, as built:
+
+- **An item's `from` is the list of wirings it came through,** `via
+  list`, innermost first, [] for an item a `with` writes, rather than a
+  `wired option`; how each link is written, `pg_db(url)`, is recovered
+  from the function it was made into (`Resolve.written`, its resolved
+  body printed, a nested wiring's link followed to the inner one's), and
+  shown wherever inference shows the call, so every message about a
+  `with` writes a wiring's items as the wiring does. An interface's
+  wiring carries those texts (`Iface.wiring.wwritten`), filled in by the
+  driver, as a public group's tests are.
+- **A link's function takes only the wiring's parameters it reads,**
+  `Iface.Made (f, used)`: a parameter of a dependency's type given to a
+  function that doesn't install it would be used as a value. An
+  argument that's a local already isn't bound again, since reading a
+  local twice is reading it once; the wiring's own function passes its
+  parameters on so.
+- **The wiring's own function is `live$wiring(url: Str) = try with
+  live(url) in ()`,** flattened by the same path as any `with` that
+  lists it, its `try` Test_items' `passed_on`, so it needn't cover
+  anything. Lower doesn't drop it: nothing calls it, and an uncalled
+  function costs nothing.
+- **What a `with` flattens is numbered below the lowest node of its
+  function** (`Resolve.lowest_node`), since the functions a wiring is
+  made into number theirs below zero too.
+- **`provides` is enforced at the body's calls that bring the hidden
+  dependency in themselves** (`call.own`), not by the body's row: this
+  checker relates a `with`'s rows by unification, so the body's row
+  holds what the items need as well. A call of a function of the same
+  recursive group, whose row isn't known when the call is met, isn't
+  caught: step 9's review.
+- **A problem among the items of one wiring is reported once,** at its
+  own `with`, not again where it's listed: a dependency installed twice,
+  two items that need each other.
+- **A missing need through a wiring** gets §5's message where a runner
+  installs the world, `main` and a test; inside a function whose `uses`
+  is written it's today's "doesn't declare".
+- **New errors §5 doesn't list:** a wiring listed with `over` or `as`
+  ("a wiring is installed as its items"), an argument by name ("given in
+  order"), the wrong number of arguments, a parameter with a default, a
+  wiring and a function of one name, two wirings of one name.
+- **`ren types` shows a wiring as its own function's signature,**
+  `wiring live(url: Str) provides Users uses Console`, its link
+  functions not at all; `ren explain-wiring` says "needs nothing" of an
+  item that needs nothing, joins what's met and what's from outside with
+  `;`, and adds "fails to start with ..." when the wiring can.
+- **language.md's end-to-end `main` is `pub fn main() ! DbDown uses
+  Console, Net, Os`** in examples/checkout: a public function writes its
+  errors, and `try with live(...)` fails with `DbDown`. Its body, for
+  `http.serve(routes)`, is `serve()`, three checkouts printed; `pg.pool`
+  is examples/checkout/pg.ren's stand-in, a pool that refuses a URL that
+  isn't `pg://` and keeps its tables in memory, needing `Net` as a real
+  one would. It uses the real `Net`, which isn't native, so
+  examples/checkout left bench/build.t's native loops; bench/services'
+  `pipe` and `wiring` build its chain and its wiring natively.
+- **examples/server's wiring is its tests',** `pub wiring simulated
+  provides Net, SimNet uses Async = sim.net()`: `main` installs nothing
+  but built-ins, so the inventory's `live(addr)` would have nothing to
+  list. examples/ledger's is `ledger(down: Outage)` (the inventory's
+  `mem(fail: FailAt)`: the type is `Outage`).
+- **Step 0's programs that weren't Ren, mended:** the `types` test's
+  `core` declares `uses Db` but listed `console_audit()`, which needs
+  `Console`, so it lists a quiet audit; the cross-module test's `app.ren`
+  is `pub_all`, since `main` calls `app.Users`. Their targets are
+  unchanged.
+- **README's and deps.md's `with_fake_net(body: fn() uses Net)`** show
+  where a block's dependencies are found, so they stay, with a note that
+  a helper that only installs is better a wiring.
+
 ### Progress log
 
 | step | commit | done | left |
 |---|---|---|---|
 | 0 | 7a624b2 | this section: each step's grammar, AST, passes, files, errors, the family's representation, journal version 3, the native line, the choices where the design is silent; the inventory (`keyed` 36 sites, the background rule 23, `Async.map`'s `Array` 9, `Proc.run` 48 with journals and docs, the examples to move to wirings, counted); test/test_services.ml, every test of a feature behind `until "sN"`, a refusal test for each error, the two that hold already written plainly; bench/services' programs (`pipe`, `wiring` and its `explain`, `release`, `refused` and its native line) in bench/build.t, and the milestone (`docs`, `lost_update`, `memory`) in bench/tasks.t, all `not yet` | steps 1 to 9 |
 | 1 | 5f9409d | the pipe through the whole pipeline: `PIPEGT`, `\|>` and `.` continuing a line (lexer.ml's `continues ()`, tree-sitter's scanner), `parse_pipe` and `parse_step` with `try` stopping at `\|>` (`parse_expr ~chain:false`), `Pipe`/`Piped` (ast.ml), Resolve's field-of-a-value error, `infer_pipe` (each link's own markers, a step's `try` passing on to the chain's, the first argument's message, a method of the subject's own type, `try` stopping at `\|>` in the solver), Lower's `let`, every §8 error and the two of "Where this stage may differ" as refusal tests (test_services.ml's s1, all on); natively, bench/services/pipe in the `same`, `release` and `tcc_same` loops; tree-sitter's `pipe_expression`, `pipe_step` and `step_path`, the corpus (pipe.txt), the highlights, differential.py over bench/services too; examples/checkout, language.md's end-to-end program but its wiring, with tests, natively in build.t; operators.md, errors.md, language.md's table, the README | steps 2 to 9; examples/checkout's `with` becomes `live`'s wiring in step 2 |
-| 0 (decision 20) | this commit | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
+| 0 (decision 20) | 0ce9d61 | re-specified after decision 20 (0bc2d5b, f02e66a): the decisions table renumbered to the brief's eleven; the keyed instance family, a runtime primitive in lib/eval/family.ml reached through the prelude's ambient `Instances` (its intrinsics Core Lint checks), its soundness and no-deadlock rules, the LRU as its order of release, names by one rule; `D.Call<R ! E>` with its clause and members, formats.md's all-data rule, `post` spelled `Docs.post(k, Doc.Call.Edit { op })` (383f921: no trailing call); `striped` and `actors` as plain Ren over them, `by: Key(n: 16) \| Worker`, `Fold`, a missing `merge:` a panic at the `with`, `chaos: true` with `Random`; `Async.worker()`; field defaults; `items()` an ordinary `sync` function; Errors, the step files and "Where this stage may differ" (`Merge<D>`, `ren test --chaos` and the Infer rules for `striped` and `actors` gone); s4's variant-default tests, s6, s7 and s8 rewritten to the new API, still behind `until`; bench/services/refused, docs and memory and bench/tasks.t's milestone without `--chaos` | steps 1 to 9; the choices above flagged for steps 6 and 7 (the merge clause's two results, `D.Call`'s fold members, `actors` using `Random`) |
+| 2 | this commit | wirings through the whole pipeline: `wiring` and `provides` as words (`parse_wiring`), `Wiring` and `with_item.from` (ast.ml); Resolve's shapes (`wiring_fns`: a function per link, `live$1`, one per wiring for its own `with`, the cycle), the flattening where a `with` lists one (`wiring_ref`, `use_wiring`), "a wiring isn't a value"; `Iface.wiring`, a `pub` one's link functions in the interface (driver.ml); inference's `with_` naming wirings in its errors, `provides` enforced at the body, the wiring's own checks (`wiring_checks`), a `pub` wiring's `uses` and `!` declared; every §5 error and the step's own as refusal tests (test_services.ml's s2, all on); `ren types`' line, `ren explain-wiring`; natively, bench/services/wiring in the `same`, `release` and `tcc_same` loops, `wiring.explain`; tree-sitter's `wiring_definition`, the corpus (wiring.txt), highlights, Zed's outline; examples/checkout's `live` as language.md writes it, examples/ledger's `ledger(down)`, examples/server's `simulated`; language.md's table, the README, deps.md | steps 3 to 9; the review's adversarial wirings (step 9), `provides` through a call of the same recursive group |
 
 ## The runtime model
 

@@ -57,4 +57,9 @@
   "group" @context
   label: (string) @name) @item
 
+(wiring_definition
+  (visibility)? @context
+  "wiring" @context
+  name: (identifier) @name) @item
+
 (comment) @annotation

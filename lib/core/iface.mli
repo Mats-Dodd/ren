@@ -86,6 +86,36 @@ type value = {
           name names *)
 }
 
+(* A wiring (language.md §5), as a `with` that lists it needs it: its
+   items, flattened, each a chain of links, top first, each a function of
+   the wiring's module Resolve made, `live$1`, which makes the link's
+   implementation from those of the wiring's parameters it's given, by
+   their places, or one of its parameters, passed on (resolve.ml,
+   "Wirings"). What's installed under it, and as
+   what, are an item's as written; [wvia] are the wirings it came
+   through inside this one, innermost first. [wwritten] is how each
+   function's link is written in the wiring that lists it, `pg_db(url)`,
+   for a message: the driver fills it in for an interface. *)
+type link = Made of string * int list | Passed of int
+
+type wired_item = {
+  links : link list;
+  wunder : Ast.tname Ast.dep_ref list;
+  walias : Ast.tname Ast.dep_ref option;
+  wvia : Ast.via list;
+  wloc : Loc.t;  (** the item, in the wiring that lists it *)
+}
+
+type wiring = {
+  wname : string;
+  wpub : bool;
+  wparams : string list;
+  wprovides : Path.t list;
+  witems : wired_item list;
+  wdeclared : Loc.t;  (** its name, where it's declared *)
+  wwritten : (string * string) list;
+}
+
 type t = {
   home : string;  (** the module this is the interface of *)
   types : type_decl list;  (** in the order they're declared *)
@@ -94,6 +124,9 @@ type t = {
       (** its test code that another module's tests can call: its public test
           items, `pub test fn`, and its public groups' tests (driver.ml). Only
           test code sees them, so `ren run` never needs them *)
+  wirings : wiring list;
+      (** its public wirings: their link functions are among [values], with
+          the types inference found for them (driver.ml) *)
 }
 
 (* The type, or function, of that name in the interface, if it has one. *)
@@ -103,6 +136,9 @@ val find_value : t -> string -> value option
 (* The public test item of that name, or a public group's test, if the
    interface has one. *)
 val find_test : t -> string -> value option
+
+(* The public wiring of that name, if the interface has one. *)
+val find_wiring : t -> string -> wiring option
 
 (* The member of that name of a type, if it has one: the first, if it's
    an operator written for several types on its right. *)

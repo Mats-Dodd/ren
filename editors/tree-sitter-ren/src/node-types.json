@@ -3855,6 +3855,10 @@
         {
           "type": "type_definition",
           "named": true
+        },
+        {
+          "type": "wiring_definition",
+          "named": true
         }
       ]
     }
@@ -4660,6 +4664,90 @@
     }
   },
   {
+    "type": "wiring_definition",
+    "named": true,
+    "fields": {
+      "errors": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "error_set",
+            "named": true
+          }
+        ]
+      },
+      "item": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "with_as",
+            "named": true
+          },
+          {
+            "type": "with_chain",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "parameters",
+            "named": true
+          }
+        ]
+      },
+      "provides": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "dependency",
+            "named": true
+          }
+        ]
+      },
+      "uses": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "uses_clause",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "visibility",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "with_as",
     "named": true,
     "fields": {
@@ -5044,6 +5132,10 @@
     "named": false
   },
   {
+    "type": "provides",
+    "named": false
+  },
+  {
     "type": "self",
     "named": true
   },
@@ -5098,6 +5190,10 @@
   {
     "type": "wildcard",
     "named": true
+  },
+  {
+    "type": "wiring",
+    "named": false
   },
   {
     "type": "with",

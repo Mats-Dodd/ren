@@ -2,7 +2,34 @@
 // tests built from data, nothing mocked by hand.
 
 import order.{Cart, Discount, Line, Money, Sku}
-import checkout.{CustomerId, Discounts, OrderId, Orders}
+import checkout.{CustomerId, Discounts, OrderId, Orders, Receipt}
+import pg.{Pg}
+
+// The services, named: `main` installs them with the database's URL. The
+// body of a `with` that lists `live` sees `Orders` and `Discounts`, and
+// not the pool they're kept in, which only they meet.
+pub wiring live(url: Str) provides Orders, Discounts uses Net ! DbDown =
+  pg.pool(url), sql_orders(), discounts_from_db()
+
+// language.md's `main` serves `routes` over HTTP, which Ren can't yet;
+// `serve` answers three requests, as it would
+pub fn main() ! DbDown uses Console, Net, Os =
+  try with live(Os.args()[0]) in serve()
+
+fn serve() uses Console, Orders, Discounts =
+  print(attempt checkout.checkout(ann(), cart_of_20()))   // Ok(Receipt { id: OrderId(1), total: Money(1500) })
+  print(attempt checkout.checkout(ann(), cart_of_20()))   // Ok(Receipt { id: OrderId(2), total: Money(2000) })
+  print(attempt checkout.checkout(ann(), Cart { lines: [] }))   // Err(Empty)
+
+// orders saved through the pool, each numbered by it
+pub handler sql_orders() for Orders uses Pg =
+  save(o) => OrderId.of(try Pg.insert("orders", show(o.total())))
+
+// a discount kept in the database: a customer's first order is $5 off,
+// counted by the orders it holds
+pub handler discounts_from_db() for Discounts uses Pg =
+  for_customer(_) =>
+    if Pg.count("orders") == 0 then Flat(Money.dollars(5)) else NoDiscount
 
 // orders kept in memory, numbered from 1
 pub handler mem_orders() for Orders =
@@ -29,14 +56,6 @@ pub fn cart_of_20() -> Cart =
     ],
   }
 
-fn main() uses Console =
-  let five_over_20 = OverAmount { min: Money.dollars(20), off: Money.dollars(5) }
-  with mem_orders(), fixed(five_over_20) in
-    print(attempt checkout.checkout(ann(), cart_of_20()))   // Ok(Receipt { id: OrderId(1), total: Money(1500) })
-    print(attempt checkout.checkout(ann(), Cart { lines: [] }))   // Err(Empty)
-  with down(), fixed(NoDiscount) in
-    print(attempt checkout.checkout(ann(), cart_of_20()))   // Err(DbDown)
-
 test "a flat discount comes off the total" =
   with mem_orders(), fixed(Flat(Money.dollars(5))) in
     let r = try checkout.checkout(ann(), cart_of_20())
@@ -54,3 +73,15 @@ test "an empty cart is refused, and nothing is saved" =
 test "a database that's down fails the checkout" =
   with down(), fixed(NoDiscount) in
     assert attempt checkout.checkout(ann(), cart_of_20()) == Err(DbDown)
+
+// `live` itself, in a test: the built-ins get their test implementations,
+// so the pool is reached over the test's network, nothing replaced
+test "the live wiring saves through the pool, a first order $5 off" =
+  try with live("pg://test") in
+    let first = try checkout.checkout(ann(), cart_of_20())
+    let second = try checkout.checkout(ann(), cart_of_20())
+    assert first == Receipt { id: OrderId.of(1), total: Money.dollars(15) }
+    assert second == Receipt { id: OrderId.of(2), total: Money.dollars(20) }
+
+test "a pool that can't connect doesn't start" =
+  assert attempt (with live("mysql://shop") in ()) == Err(DbDown)

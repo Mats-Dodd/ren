@@ -46,6 +46,10 @@ pub fn main() ! NetError uses Net, Clock, Console, Async =
 
 // ---- tests, on `sim.net()`: connections in memory, in virtual time ----
 
+// the world every test runs in, named once: a network in memory, and
+// what sends to it. `pub`, since a test sees what an importer sees
+pub wiring simulated provides Net, SimNet uses Async = sim.net()
+
 test fn here() -> Addr = Addr { host: "127.0.0.1", port: 8080 }
 
 // the server, in a task: one that fails says so
@@ -61,7 +65,7 @@ test fn send(req: Str) -> Conn ! NetError uses Net, SimNet =
   c
 
 test "a request is answered" =
-  with sim.net() in
+  with simulated in
     try Async.scope fn(s) =>
       s.spawn fn() => run_server()
       let c = try send("hello")
@@ -70,7 +74,7 @@ test "a request is answered" =
   assert TestConsole.errors() == []
 
 test "shutdown lets a request in flight finish" =
-  with sim.net() in
+  with simulated in
     try Async.scope fn(s) =>
       s.spawn fn() => run_server()
       let c = try send("slow")
@@ -82,7 +86,7 @@ test "shutdown lets a request in flight finish" =
 test "a request still running at the deadline is cut off" =
   // the signal at 1 s, so the deadline is at 6 s: the connection is
   // closed then, with nothing written
-  with sim.net() in
+  with simulated in
     try Async.scope fn(s) =>
       s.spawn fn() => run_server()
       let c = try send("stuck")
@@ -92,7 +96,7 @@ test "a request still running at the deadline is cut off" =
       assert Clock.now() == Time.epoch + Duration.seconds(6)
 
 test "after the signal, nothing new is accepted" =
-  with sim.net() in
+  with simulated in
     Async.scope fn(s) =>
       let server = s.start fn() => run_server()
       SimNet.signal(Signal.term)

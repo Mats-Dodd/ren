@@ -655,6 +655,31 @@ and replayed cx (item : expr) link =
 and with_ core env cx (e : expr) (items : with_item list) body =
   let kw = keyword e.loc 4 in
   let src (x : expr) = Option.value (env.source x) ~default:"this" in
+  (* the items a wiring flattened (resolve.ml, "Wirings"): the function
+     each link was made into, with the wirings its item came through and
+     how the wiring writes it, for a message about what it needs *)
+  List.iter
+    (fun (it : with_item) ->
+      if it.from <> [] then
+        List.iter
+          (fun (lk : with_link) ->
+            match lk.link.kind with
+            | Call ({ kind = Var (Global p); _ }, _) ->
+                Hashtbl.replace env.wired_from p (it.from, src lk.link)
+            | _ -> ())
+          it.chain)
+    items;
+  (* whether this is a wiring's own `with`, which its function checks; a
+     problem among the items of one wiring is reported there, and not
+     again where it's listed *)
+  let own_check = Resolve.checked_wiring cx.self <> None in
+  let one_wiring (a : with_item) (b : with_item) =
+    (not own_check)
+    &&
+    match (List.rev a.from, List.rev b.from) with
+    | x :: _, y :: _ -> x.declared = y.declared
+    | _ -> false
+  in
   let shown deps = shown_deps env deps in
   let paths (ds : dep list) = List.map (fun d -> d.dpath) ds in
   let checked =
@@ -879,13 +904,28 @@ and with_ core env cx (e : expr) (items : with_item list) body =
                 else None
               in
               let names ls = List.map (shown_dep env) ls in
-              report env
-                (installed_twice it.iloc ~deps:(names deps) ~first:first.iloc
-                   ~chain
-                   ~all:
-                     (if List.length all > 1 then
-                        Some (String.concat " & " (names all))
-                      else None))
+              let top (i : with_item) = src (List.hd i.chain).link in
+              if one_wiring first it then ()
+              else if first.from <> [] || it.from <> [] then (
+                (* one came through a wiring: name it, and where it's
+                   declared (language.md §5) *)
+                let wired, plain =
+                  if first.from <> [] then (first, it) else (it, first)
+                in
+                let via = List.hd wired.from in
+                report env
+                  (installed_twice_wired it.iloc
+                     ~dep:(List.hd (names deps))
+                     ~here:(top plain) ~there:(top wired) ~tloc:wired.iloc
+                     ~wiring:via.wiring ~declared:via.declared))
+              else
+                report env
+                  (installed_twice it.iloc ~deps:(names deps)
+                     ~first:first.iloc ~chain
+                     ~all:
+                       (if List.length all > 1 then
+                          Some (String.concat " & " (names all))
+                        else None))
           | [] -> ())
       | _ -> ())
     sorted;
@@ -897,7 +937,9 @@ and with_ core env cx (e : expr) (items : with_item list) body =
         | _ -> None)
       sorted
   in
-  let order = if !ok then install_order env ~src installs else None in
+  let order =
+    if !ok then install_order env ~src ~one_wiring installs else None
+  in
   match order with
   | None ->
       (* what the body uses isn't passed on: something that isn't installed
@@ -924,9 +966,52 @@ and with_ core env cx (e : expr) (items : with_item list) body =
       (* and only that: a call in the body is a place the code can stop,
          marked where it is *)
       let cx = { cx with markers = [] } in
+      if own_check then wiring_checks env ~src order;
+      (* what a wiring installs but doesn't provide, which the body can't
+         call (language.md §5): each with the wiring, and the item, which
+         the help installs inside instead *)
+      let hidden =
+        if own_check then []
+        else
+          List.concat_map
+            (fun (_, (it : with_item), links, installs) ->
+              List.filter_map
+                (fun ((l : label), p) ->
+                  Option.map
+                    (fun (v : Ast.via) ->
+                      (l, v.wiring, src (fst (List.hd links)).link))
+                    (List.find_opt
+                       (fun (v : Ast.via) -> not (List.mem p v.provides))
+                       it.from))
+                installs)
+            order
+      in
       (* each item around the ones after it, each chain's bottom outermost *)
       let rec nest cx = function
-        | [] -> core.infer env cx body
+        | [] when hidden = [] -> core.infer env cx body
+        | [] ->
+            (* the body's calls, none of which may bring in what's hidden:
+               what a call brings in itself is known as it's made, and a
+               `with` inside the body that installs its own takes it out *)
+            let inside = { cx with calls = ref [] } in
+            let t = core.infer env inside body in
+            let calls = !(inside.calls) in
+            cx.calls := calls @ !(cx.calls);
+            let pos (l : Loc.t) = (l.start.line, l.start.col) in
+            List.iter
+              (fun ((l : label), wiring, maker) ->
+                match
+                  List.sort
+                    (fun a b -> compare (pos a.cloc) (pos b.cloc))
+                    (List.filter (fun c -> brings c l) calls)
+                with
+                | c :: _ ->
+                    report env
+                      (hidden_used c.cloc ~wiring ~dep:(shown_dep env l)
+                         ~maker)
+                | [] -> ())
+              hidden;
+            t
         | (_, _, links, keys) :: rest ->
             let rec chain cx = function
               | [] -> nest cx rest
@@ -1152,12 +1237,76 @@ and any_links env cx (it : with_item) impls ~src ~laters =
   let made = List.rev (go None (List.rev impls)) in
   if !ok then Some made else None
 
+(* A wiring's own `with` ([with_]'s [own_check]), installed in [order]:
+   what it says it provides, each installed by an item; what each of its
+   own items installs, provided or needed by another; and what it
+   provides of a wiring listed inside it, which that one provides too
+   (language.md §5). *)
+and wiring_checks env ~src order =
+  let wiring (it : with_item) = List.nth it.from (List.length it.from - 1) in
+  match order with
+  | [] -> ()
+  | (_, (first : with_item), _, _) :: _ ->
+      let own = wiring first in
+      let installs =
+        List.concat_map (fun (_, _, _, ins) -> List.map snd ins) order
+      in
+      List.iter
+        (fun p ->
+          if not (List.mem p installs) then
+            report env
+              (provides_nothing own.declared ~wiring:own.wiring
+                 ~dep:(env.names p)))
+        own.provides;
+      let needed =
+        List.concat_map
+          (fun (_, _, links, _) ->
+            List.concat_map (fun (_, (i : impl)) -> row_names i.needs) links)
+          order
+      in
+      List.iter
+        (fun (_, (it : with_item), links, ins) ->
+          let top = src (fst (List.hd links)).link in
+          match it.from with
+          | [ _ ] ->
+              (* one of its own *)
+              let unused =
+                List.filter
+                  (fun ((l : label), p) ->
+                    (not (List.mem p own.provides))
+                    && not (List.mem l.name needed))
+                  ins
+              in
+              if unused <> [] && List.length unused = List.length ins then
+                report env
+                  (item_unused it.iloc ~wiring:own.wiring ~item:top
+                     ~deps:(List.map (fun (_, p) -> env.names p) unused))
+          | inner ->
+              (* one a wiring inside it lists: what this one provides of
+                 it, that one has to *)
+              List.iter
+                (fun (_, p) ->
+                  if List.mem p own.provides then
+                    match
+                      List.find_opt
+                        (fun (v : Ast.via) -> not (List.mem p v.provides))
+                        inner
+                    with
+                    | Some v when v.declared <> own.declared ->
+                        report env
+                          (hidden_used it.iloc ~wiring:v.wiring
+                             ~dep:(env.names p))
+                    | _ -> ())
+                ins)
+        order
+
 (* The order to install a `with`'s [items] in, outermost first: one that
    installs what another needs goes around it, and otherwise the one whose
    first dependency, by name, comes first does, so the order is the set's,
    never how they're written. Two that each need the other are reported,
-   and there's no order. *)
-and install_order env ~src items =
+   and there's no order; two of one wiring's items only at its own `with`
+   ([one_wiring]), which reported them already. *)
+and install_order env ~src ~one_wiring items =
   (* by name: an item's needs are met by whatever installs a dependency
      of that name *)
   let labels deps =
@@ -1206,11 +1355,21 @@ and install_order env ~src items =
             let iloc (_, (it : with_item), _, _) = it.iloc in
             let first l = env.names (Ty.dep_path (List.hd l)) in
             let b_needs = before b a in
-            report env
-              (needs_each_other (iloc a) ~a:(top a)
-                 ~a_needs:(first (before a b))
-                 ~bloc:(iloc b) ~b:(top b)
-                 ~b_needs:(if b_needs = [] then "?" else first b_needs));
+            let item (_, (it : with_item), _, _) = it in
+            (if one_wiring (item a) (item b) then ()
+             else
+               match (item a).from with
+               | (v : Ast.via) :: _ when (item b).from <> [] ->
+                   (* two items of a wiring: drawn as a loop *)
+                   report env
+                     (needs_each_other_wired (iloc a) ~wiring:v.wiring
+                        ~a:(top a) ~b:(top b))
+               | _ ->
+                   report env
+                     (needs_each_other (iloc a) ~a:(top a)
+                        ~a_needs:(first (before a b))
+                        ~bloc:(iloc b) ~b:(top b)
+                        ~b_needs:(if b_needs = [] then "?" else first b_needs)));
             None
         | r :: rest ->
             let pick =
@@ -1232,7 +1391,17 @@ and install_order env ~src items =
 and install env cx (lk : with_link) (i : impl) ~keys inner =
   let loc = lk.link.loc in
   let src = Option.value (env.source lk.link) ~default:"this" in
-  use_row env cx ~loc ~needs:true (copy_needs env ~loc ~what:Installing i.needs);
+  (* the function a wiring's link was made into, which a message about
+     what it needs names as the wiring writes it *)
+  let callee =
+    match lk.link.kind with
+    | Call ({ kind = Var (Global p); _ }, _) when Hashtbl.mem env.wired_from p
+      ->
+        Some p
+    | _ -> None
+  in
+  use_row env cx ~loc ~needs:true ?callee
+    (copy_needs env ~loc ~what:Installing i.needs);
   (* its kind is recorded at a node of its own, which needs a type *)
   Hashtbl.replace cx.nodes lk.knode (TImpl i);
   (* a link above the bottom of a chain is installed as what it goes

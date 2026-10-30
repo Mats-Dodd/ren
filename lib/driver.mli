@@ -84,6 +84,13 @@ val types :
   string ->
   (string * string list) list
 
+(* `ren explain-wiring name file`: the lines that say how the entry
+   module's wiring [name] is installed (language.md §5): its items in the
+   order chosen, what each installs and meets, what it uses, and its
+   teardown. *)
+val explain_wiring :
+  ?load:loader -> file:string -> name:string -> string -> string list
+
 (* A program's tests, checked and lowered with the functions they were
    made (test_items.ml), ready to run (test_runner.ml). *)
 type suite = {

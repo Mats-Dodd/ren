@@ -15,9 +15,16 @@ ren test ledger            # every module's tests
 | File | What's in it |
 |---|---|
 | `sql.ren` | `Sql`, a dependency with `get`, `set`, `begin`, `commit` and `rollback`; `Outage`, when the database is down, `AtFirstBegin` only the first time; `mem_sql`, a handler for `Sql` that keeps balances in a `Map`, and those when the last transaction began; `transaction`, a handler over `Sql` |
-| `main.ren` | `transfer`, which credits one account and then debits the other inside a transaction; `main`; tests of a commit, a rollback, a failed commit, a transfer retried, and a transaction that can't begin |
+| `main.ren` | `transfer`, which credits one account and then debits the other inside a transaction; `ledger`, the wiring each run installs; `main`; tests of a commit, a rollback, a failed commit, a transfer retried, and a transaction that can't begin |
 
 ## What to look at
+
+**Each run installs the same database, named.** `main` and each test
+install `ledger(down)`, a wiring (language.md §5), rather than repeating
+what's in it: `wiring ledger(down: Outage) provides Sql =
+sql.mem_sql(start(), down)`. Its parameter is the substitution its
+author planned for, when the database is down; a test that wants
+another database installs that instead.
 
 **A transaction is a handler over `Sql`.** `transaction() over Sql !
 DbDown` begins in its state, `let tx = try next.begin()`, and leaves

@@ -233,6 +233,11 @@ type env = {
           method), its name and its literal *)
       (** each top-level function's parameters' names, by its path, which a
           message about an argument passed by name names *)
+  wired_from : (Path.t, Ast.via list * string) Hashtbl.t;
+      (** each function a wiring's link was made into (resolve.ml, "Wirings")
+          that a `with` of the module calls, with the wirings its item came
+          through and how it's written there: a message about what it needs
+          names them *)
   test_reported : (Path.t, unit) Hashtbl.t;
       (** what test code has reached for that it can't see, which is reported at
           the first use of each only: the module's own opaque types, whose
@@ -731,6 +736,16 @@ let has_dep ls l = List.exists (same_label l) ls
 (* Whether the call [c] brings in [dep] itself: it had it before the
    join, and no `with` around it installs it. *)
 let brings c dep = has_dep c.own dep
+
+(* If the `with` item [c] installs was flattened from a wiring: the
+   innermost wiring it came through, and how it's written there. *)
+let wired_need env (c : call) =
+  match c.callee with
+  | Some p -> (
+      match Hashtbl.find_opt env.wired_from p with
+      | Some (via :: _, text) -> Some (via, text)
+      | _ -> None)
+  | None -> None
 
 (* Name the block at [node]: the next of the function it's in
    (Ty.lambda_id), recorded at [node] for lowering, which gives the

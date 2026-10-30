@@ -1,0 +1,26 @@
+// A stand-in for a Postgres client, which language.md's end-to-end
+// program installs as `pg.pool(url)`: Ren has no database driver yet, so
+// the pool keeps its tables in memory, and what the checkout needs of a
+// database is this much.
+
+pub dep Pg =
+  // adds a row to `table`, and gives its id, counting from 1
+  insert: fn(table: Str, row: Str) -> Int ! DbDown
+  // how many rows `table` has
+  count: fn(table: Str) -> Int
+
+// A pool of connections to `url`. One that isn't a `pg://` URL can't be
+// connected to, so installing the pool fails. A real one reaches the
+// database through `Net`, so this one needs it too: what `main`
+// installs it with doesn't change when the driver arrives.
+pub handler pool(url: Str) for Pg ! DbDown uses Net =
+  let _ = try connect(url)
+  var tables: Map<Str, Int> = Map.of([])
+  insert(table, _) =>
+    let id = (tables.get(table) orelse 0) + 1
+    &tables.set(table, id)
+    id
+  count(table) => tables.get(table) orelse 0
+
+fn connect(url: Str) ! DbDown =
+  if not url.starts_with("pg://") then fail DbDown

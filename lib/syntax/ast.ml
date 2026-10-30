@@ -419,7 +419,19 @@ and ('v, 'b, 't) with_item = {
           implements, `with queue() as Jobs`, or that dependency written out,
           `as Chan<Int>` (compiler.md, "Generic dependencies") *)
   iloc : Loc.t;  (** the whole item *)
+  from : via list;
+      (** the wirings it was flattened from, innermost first, the last the
+          one the `with` names: [] as parsed, and for every item a `with`
+          writes itself (resolve.ml, "Wirings"). What the `with` calls is a
+          function Resolve made of the item's link, `live$1(url)`, which
+          inference shows as the wiring writes it, `pg_db(url)` *)
 }
+
+(* One wiring an item came through (language.md §5): its name, as written
+   where it's listed, `live` or `app.live`, where it's declared, and what
+   it provides, which is all a `with`'s body may call of what it
+   installs. *)
+and via = { wiring : string; declared : Loc.t; provides : Path.t list }
 
 (* One implementation of an item's chain, [link]; [knode] is the node
    inference records what it installs at. *)
@@ -630,11 +642,35 @@ type ('v, 'b, 't) testing =
       run_call : ('v, 'b, 't) expr;  (** [g(args)] *)
     }
 
+(* A wiring (language.md §5): a named set of `with` items, which a `with`
+   lists by name, flattened there into its items:
+
+     pub wiring live(url: Str) provides Users uses Console ! DbDown =
+       pg_db(url), console_audit(), db_users()
+
+   [provides] is all the body of a `with` that lists it may call of what
+   it installs; [wuses] and [werrors] are what it needs from outside and
+   fails to start with, written for a `pub` one. None reaches inference:
+   Resolve makes each a function for each link of its items, and one its
+   own `with` is checked in (resolve.ml, "Wirings"). *)
+type ('v, 'b, 't) wiring_def = {
+  wpub : bool;
+  wname : ident;
+  wparams : ('b, 't) param list;
+  provides : 't dep_ref list;
+  wuses : 't uses option;
+  werrors : 't errors option;
+  witems : ('v, 'b, 't) with_item list;
+  wloc : Loc.t;  (** the whole declaration *)
+}
+
 type ('v, 'b, 't) item =
   | Fn of ('v, 'b, 't) fn_def
   | Type of ('v, 'b, 't) type_def
   | Import of import
   | Testing of ('v, 'b, 't) testing
+  | Wiring of ('v, 'b, 't) wiring_def
+      (** only as parsed: Resolve makes each functions (see [wiring_def]) *)
 
 type ('v, 'b, 't) program = ('v, 'b, 't) item list
 
@@ -645,7 +681,7 @@ let functions (prog : ('v, 'b, 't) program) =
     (function
       | Fn f -> [ f ]
       | Type td -> List.map (fun o -> o.op_fn) td.type_ops
-      | Import _ | Testing _ -> [])
+      | Import _ | Testing _ | Wiring _ -> [])
     prog
 
 (* The path of [f], declared in module [home]: a member's is its type's,
@@ -853,6 +889,7 @@ module Parsed = struct
   type nonrec item = (vname, ident, tyname) item
   type nonrec test_def = (vname, ident, tyname) test_def
   type nonrec testing = (vname, ident, tyname) testing
+  type nonrec wiring_def = (vname, ident, tyname) wiring_def
   type nonrec program = (vname, ident, tyname) program
 end
 
@@ -880,6 +917,7 @@ module Resolved = struct
   type nonrec type_def = (name, binder, tname) type_def
   type nonrec fn_def = (name, binder, tname) fn_def
   type nonrec item = (name, binder, tname) item
+  type nonrec wiring_def = (name, binder, tname) wiring_def
   type nonrec program = (name, binder, tname) program
 end
 
@@ -1341,6 +1379,25 @@ let show_item : item -> string = function
         @ List.map show_test g.group_tests)
   | Testing (Run_group r) ->
       parens [ "group"; show_str r.run_label; show_expr r.run_call ]
+  | Wiring w ->
+      let uses =
+        match w.wuses with Some u -> [ parens [ show_uses u ] ] | None -> []
+      in
+      let errors =
+        match w.werrors with
+        | Some es -> [ parens [ show_errors es ] ]
+        | None -> []
+      in
+      parens
+        ((if w.wpub then [ "pub" ] else [])
+        @ [
+            "wiring";
+            w.wname.name;
+            parens (List.map show_param w.wparams);
+            parens ("provides" :: List.map show_dep w.provides);
+          ]
+        @ uses @ errors
+        @ List.map show_with_item w.witems)
 
 (* ---- code as it's written, for messages ----
 

@@ -29,6 +29,9 @@ type t = {
   aliases : (string * string) list;
       (** each module it imports, with its alias, in import order *)
   import_uses : import_use list;  (** what of each import the module uses *)
+  wirings : Iface.wiring list;
+      (** its wirings (language.md §5), flattened, in the order they're
+          declared: each is functions in [prog] by now *)
 }
 
 (* How the module writes the type [p] in a message or a signature: bare if
@@ -67,3 +70,12 @@ val program :
   ?sees_all:bool ->
   Ast.Parsed.program ->
   t
+
+(* The wiring whose own `with` the function [f] is made to check, if it's
+   one: `live` for `live$wiring`. *)
+val checked_wiring : Path.t -> string option
+
+(* How each link function of the module's wirings is written in the
+   wiring that lists it, `pg_db(url)`, by its name. [other] says that of
+   another module's. *)
+val written : t -> other:(Path.t -> string option) -> (string * string) list

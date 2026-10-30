@@ -1,0 +1,154 @@
+================================================================================
+wiring: a name, what it provides, and its items
+================================================================================
+
+pub wiring live(url: Str) provides Orders, Discounts uses Net ! DbDown =
+  pg.pool(url), sql_orders(), discounts_from_db()
+
+wiring core provides Users = console_audit(), db_users()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (wiring_definition
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (dependency
+      (type_identifier))
+    (dependency
+      (type_identifier))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (error_set
+      (error_tag
+        (type_identifier)))
+    (method_call_expression
+      (identifier)
+      (identifier)
+      (arguments
+        (identifier)))
+    (call_expression
+      (identifier)
+      (arguments))
+    (call_expression
+      (identifier)
+      (arguments)))
+  (wiring_definition
+    (identifier)
+    (dependency
+      (type_identifier))
+    (call_expression
+      (identifier)
+      (arguments))
+    (call_expression
+      (identifier)
+      (arguments))))
+
+================================================================================
+wiring: items on lines of their own, a parameter passed on, `as` and `over`
+================================================================================
+
+wiring app(db: Db) provides Users, Jobs
+    uses Console =
+  db,
+  queue() as Jobs, slow_clock(2) over Clock
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (wiring_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (dependency
+      (type_identifier))
+    (dependency
+      (type_identifier))
+    (uses_clause
+      (dependency
+        (type_identifier)))
+    (identifier)
+    (with_as
+      (call_expression
+        (identifier)
+        (arguments))
+      (dependency
+        (type_identifier)))
+    (with_chain
+      (call_expression
+        (identifier)
+        (arguments
+          (number)))
+      (dependency
+        (type_identifier)))))
+
+================================================================================
+wiring: listed in a `with`, beside an item, and another module's
+================================================================================
+
+fn main() =
+  with live(url), metrics() in serve()
+  with core, app.live in serve()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (with_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)))
+        (call_expression
+          (identifier)
+          (arguments))
+        (call_expression
+          (identifier)
+          (arguments)))
+      (with_expression
+        (identifier)
+        (field_expression
+          (identifier)
+          (identifier))
+        (call_expression
+          (identifier)
+          (arguments))))))
+
+================================================================================
+wiring: `wiring` and `provides` are names elsewhere
+================================================================================
+
+fn wiring(provides: Int) =
+  let wiring = provides
+  wiring
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (let_statement
+        (identifier)
+        (identifier))
+      (identifier))))

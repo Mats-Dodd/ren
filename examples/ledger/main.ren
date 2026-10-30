@@ -2,7 +2,7 @@
 // would leave an account short changes nothing. README.md says what to
 // look at.
 
-import sql.{Sql}
+import sql.{Outage, Sql}
 
 // `pub`, as the rest of this module is, since its tests call it.
 // `to` is credited first, so a transfer that fails part way has
@@ -20,8 +20,13 @@ pub fn balances() -> (Int, Int) ! DbDown uses Sql =
 // the balances each run starts with
 pub fn start() -> Array<(Str, Int)> = [("ann", 100), ("bob", 20)]
 
+// the database every run uses, with the balances it starts with, down
+// when `down` says: `main` and each test install it, a different outage
+// each, rather than repeating what's in it
+pub wiring ledger(down: Outage) provides Sql = sql.mem_sql(start(), down)
+
 pub fn main() uses Console =
-  with sql.mem_sql(start(), Never) in
+  with ledger(Never) in
     print(attempt transfer("ann", "bob", 30))   // Ok(())
     print(attempt transfer("ann", "bob", 500))  // Err(Short("ann"))
     print(attempt balances())                   // Ok((70, 50))
@@ -31,19 +36,19 @@ test "main prints each transfer, and the balances" =
   assert TestConsole.output() == ["Ok(())", "Err(Short(\"ann\"))", "Ok((70, 50))"]
 
 test "a transfer that leaves an account short changes nothing" =
-  with sql.mem_sql(start(), Never) in
+  with ledger(Never) in
     assert attempt transfer("bob", "ann", 50) == Err(Short("bob"))
     assert try balances() == (100, 20)
 
 test "a commit that fails changes nothing" =
-  with sql.mem_sql(start(), AtCommit) in
+  with ledger(AtCommit) in
     assert attempt transfer("ann", "bob", 30) == Err(DbDown)
     assert try balances() == (100, 20)
 
 test "a transfer is tried again when its transaction can't begin" =
   // the block changes `tries`, a variable from outside it: a block
   // captures by reference
-  with sql.mem_sql(start(), AtFirstBegin) in
+  with ledger(AtFirstBegin) in
     var tries = 0
     try retry(3, on: DbDown) fn() =>
       tries += 1
@@ -52,7 +57,7 @@ test "a transfer is tried again when its transaction can't begin" =
     assert try balances() == (70, 50)
 
 test "a transaction that can't begin doesn't run its body" =
-  with sql.mem_sql(start(), AtBegin) in
+  with ledger(AtBegin) in
     var ran = false
     let r = attempt (with sql.transaction() over Sql in ran = true)
     assert r == Err(DbDown)

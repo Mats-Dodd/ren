@@ -692,7 +692,10 @@ stage, or settled something the plan left open:
   or a parameter whose type isn't written, gives nothing, so `fn
   run_at(f: fn() -> Time) = with at(1) in try f()` doesn't change the
   clock `f` sees: a wrapper can't handle a block's calls by accident,
-  and a helper that installs something for its body says so. A block
+  and a helper that installs something for its body says so (one that
+  only installs is better a wiring, `wiring faked provides Net =
+  fake_net()`, language.md §5: a function that takes a block is for
+  code that runs around it). A block
   passed where its callee gives more than its type lists is an error,
   whose help is to list them where it's written: `let b: fn() uses Net =
   fn() => ...`, or in its parameter's type. Its errors stay its

@@ -4202,3 +4202,108 @@ let no_param_named loc ~fn ~given ~names =
             (sprintf "its parameters given by name: %s"
                (String.concat ", " (List.map (sprintf "`%s`") ns))))
     (sprintf "`%s` has no parameter named `%s`" fn given)
+
+(* ---- wirings (language.md §5) ---- *)
+
+(* Where a wiring is declared, for a message that names it: `main.ren:2`. *)
+let declared_at (l : Loc.t) = sprintf "%s:%d" l.file l.start.line
+
+(* The body of a `with` calls [dep], which the wiring [wiring] installs
+   but doesn't provide: it may call only what's in its `provides`. *)
+let hidden_used ?maker loc ~wiring ~dep =
+  Diag.make loc
+    ~notes:
+      [
+        "a wiring's items meet each other, but what's listed beside it and \
+         the body see only what its `provides` says";
+      ]
+    ~help:
+      (match maker with
+      | Some m ->
+          sprintf
+            "add `%s` to `%s`'s `provides`, or install your own inside: `with \
+             %s in`"
+            dep wiring m
+      | None -> sprintf "add `%s` to `%s`'s `provides`" dep wiring)
+    (sprintf "`%s` installs `%s` but doesn't provide it" wiring dep)
+
+(* An item [here] and one a wiring flattened, [there] in [wiring],
+   declared at [declared], both install [dep]. *)
+let installed_twice_wired loc ~dep ~here ~there ~tloc ~wiring ~declared =
+  Diag.make loc ~says:"and again here"
+    ~labels:[ (tloc, sprintf "`%s` installs `%s` here" wiring dep) ]
+    ~notes:
+      [ "a wiring is flattened where it's listed: its items are the `with`'s" ]
+    ~help:(sprintf "use a smaller wiring that leaves `%s` out, or remove one" dep)
+    (sprintf "this `with` installs `%s` twice: `%s` here, and `%s` in `%s` (%s)"
+       dep here there wiring (declared_at declared))
+
+(* Two items of the wiring [wiring], [a] and [b], each needing what the
+   other installs. *)
+let needs_each_other_wired loc ~wiring ~a ~b =
+  Diag.make loc
+    ~notes:[ sprintf "`%s` → `%s` → `%s`" a b a ]
+    ~help:"install one of them in a `with` around this one"
+    (sprintf "`%s` and `%s` in `%s` each need what the other installs" a b
+       wiring)
+
+(* What the item [item] of the wiring [wiring] needs, [dep], which nothing
+   installs where the wiring is listed. [maker] makes one, if something
+   does. *)
+let wired_need_missing loc ~wiring ~item ~dep ~maker ~declared =
+  Diag.make loc
+    ~labels:[ (declared, sprintf "`%s` lists `%s` here" wiring item) ]
+    ~help:
+      (sprintf "add an item that installs `%s` beside `%s`: `with %s, %s in`"
+         dep wiring wiring maker)
+    (sprintf "nothing installs `%s`, which `%s` in `%s` needs" dep item wiring)
+
+(* The public wiring [wiring] needs [dep] from outside, which its `uses`
+   doesn't list. *)
+let wiring_undeclared loc ~wiring ~dep ~call ~written =
+  Diag.make loc
+    ~labels:
+      (match call with
+      | Some (l, item) -> [ (l, sprintf "`%s` needs `%s`" item dep) ]
+      | None -> [])
+    ~notes:
+      [
+        "a public wiring's `uses` lists what it needs from outside, which is \
+         what a `with` that lists it has to have";
+      ]
+    ~help:
+      (if written then sprintf "add `%s` to its `uses`" dep
+       else sprintf "add it to `uses`: `uses %s`" dep)
+    (sprintf "`%s` needs `%s`, which it doesn't declare" wiring dep)
+
+(* The public wiring [wiring] can fail to start with [tag], which its `!`
+   doesn't list. *)
+let wiring_undeclared_error loc ~wiring ~tag =
+  Diag.make loc
+    ~notes:
+      [
+        "a public wiring's `!` lists what installing it can fail with, which a \
+         `with` that lists it handles";
+      ]
+    ~help:(sprintf "add it after `!`: `! %s`" tag)
+    (sprintf "installing `%s` can fail with `%s`, which it doesn't declare"
+       wiring tag)
+
+(* The wiring [wiring] says it provides [dep], which none of its items
+   installs. *)
+let provides_nothing loc ~wiring ~dep =
+  Diag.make loc
+    ~help:"remove it from `provides`, or add an item that installs it"
+    (sprintf "`%s` provides `%s`, which nothing in it installs" wiring dep)
+
+(* The item [item] of [wiring] installs [deps], which the wiring doesn't
+   provide and none of its other items needs. *)
+let item_unused loc ~wiring ~item ~deps =
+  Diag.make loc
+    ~notes:[ "Ren has no warnings: what nothing uses is an error" ]
+    ~help:
+      (sprintf "remove it, or add %s to `%s`'s `provides`"
+         (and_list deps)
+         wiring)
+    (sprintf "`%s` in `%s` provides %s, which nothing needs" item wiring
+       (and_list deps))

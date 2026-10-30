@@ -628,43 +628,26 @@ handler db_users() for Users uses Db, Audit =
 
 let%expect_test "[s2 accept] a wiring is flattened where it's used" =
   (* `live` names three handlers; the body sees only `Users` *)
-  until "s2"
-    ~want:{|
-audit: 7
-pg main
-Ok("pg7")
-()
-|}
-    (fun () ->
-      run
-        (users_deps
-       ^ {|
+  run
+    (users_deps
+   ^ {|
 wiring live(url: Str) provides Users = pg_db(url), console_audit(), db_users()
 
 fn main() uses Console =
   with live("main") in print(attempt Users.name(7))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring live(url: Str) provides Users = pg_db(url), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    audit: 7
+    pg main
+    Ok("pg7")
+    ()
     |}]
 
 let%expect_test "[s2 accept] an item beside a wiring meets what the wiring installs" =
   (* one set, one instance of each: `counted()` shares `live`'s `Db` *)
-  until "s2"
-    ~want:{|
-counted 1
-Ok("ann1")
-()
-|}
-    (fun () ->
-      run
-        (users_deps
-       ^ {|
+  run
+    (users_deps
+   ^ {|
 dep Count =
   hit: fn() -> Str ! DbDown
 
@@ -679,14 +662,11 @@ wiring live provides Users = mem_db(), console_audit(), db_users()
 
 fn main() uses Console =
   with live, counted() in print(attempt Count.hit())
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:34:1
-    34 │ wiring live provides Users = mem_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    counted 1
+    Ok("ann1")
+    ()
     |}]
 
 let%expect_test "[s2 accept] wirings combine and nest, and a test splits one" =
@@ -694,19 +674,10 @@ let%expect_test "[s2 accept] wirings combine and nest, and a test splits one" =
      needs `Db`; `live` adds the real one, a test a memory one. A test
      sees what an importer sees, so `core` is `pub` here, its needs
      written *)
-  until "s2"
-    ~want:{|
-test.ren
-  ✓ a lookup is audited
-
-1 passed
-[exit 0]
-|}
-    (fun () ->
-      test
-        (pub_all
-         (users_deps
-       ^ {|
+  test
+    (pub_all
+     (users_deps
+   ^ {|
 wiring core provides Users uses Db, Console = console_audit(), db_users()
 wiring live(url: Str) provides Users uses Console = core, pg_db(url)
 
@@ -716,58 +687,35 @@ pub fn main() uses Console =
 test "a lookup is audited" =
   with core, mem_db() in
     assert try Users.name(2) == "ann2"
-|})));
+|}));
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:5
-    24 │ pub wiring core provides Users uses Db, Console = console_audit(), db_users()
-       │     ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    test.ren
+      ✓ a lookup is audited
 
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:25:5
-    25 │ pub wiring live(url: Str) provides Users uses Console = core, pg_db(url)
-       │     ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    1 passed
+    [exit 0]
     |}]
 
 let%expect_test "[s2 accept] a wiring's parameter can be a description" =
   (* functor-style: `app(db: Db)` installs the `Db` it's given *)
-  until "s2"
-    ~want:{|
-audit: 3
-Ok("ann3")
-()
-|}
-    (fun () ->
-      run
-        (users_deps
-       ^ {|
+  run
+    (users_deps
+   ^ {|
 wiring app(db: Db) provides Users = db, console_audit(), db_users()
 
 fn main() uses Console =
   with app(mem_db()) in print(attempt Users.name(3))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring app(db: Db) provides Users = db, console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    audit: 3
+    Ok("ann3")
+    ()
     |}]
 
 let%expect_test "[s2 accept] a wiring fails to start with its items' errors, installed with `try with`" =
-  until "s2"
-    ~want:{|
-Err(DbDown)
-()
-|}
-    (fun () ->
-      run
-        (users_deps
-       ^ {|
+  run
+    (users_deps
+   ^ {|
 handler down_db() for Db =
   let n = try refuse()
   get(id) => show(n)
@@ -780,28 +728,15 @@ fn go() ! DbDown uses Console =
   try with live in print(try Users.name(1))
 
 fn main() uses Console = print(attempt go())
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:30:1
-    30 │ wiring live provides Users = down_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    Err(DbDown)
+    ()
     |}]
 
 let%expect_test "[s2 accept] teardown runs `finally` in reverse install order" =
-  until "s2"
-    ~want:{|
-in body
-users done
-db done
-audit done
-()
-|}
-    (fun () ->
-      run
-        {|
+  run
+    {|
 dep Db =
   get: fn() -> Int
 dep Audit =
@@ -832,232 +767,181 @@ wiring live provides Users = users(), audit(), db()
 fn main() uses Console =
   with live in
     print("in body")
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:26:1
-    26 │ wiring live provides Users = users(), audit(), db()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    in body
+    users done
+    db done
+    audit done
+    ()
     |}]
 
 let%expect_test "[s2 accept] a plain `with` still exposes everything it installs" =
-  until "s2"
-    ~want:{|
-Ok("ann5")
-()
-|}
-    (fun () ->
-      run
-        (users_deps
-       ^ {|
+  run
+    (users_deps
+   ^ {|
 wiring live provides Users = mem_db(), console_audit(), db_users()
 
 fn main() uses Console =
   with mem_db() in print(attempt Db.get(5))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring live provides Users = mem_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    Ok("ann5")
+    ()
     |}]
 
 let%expect_test "[s2 accept] a private wiring's `uses` and `!` are inferred, a `pub` one's written" =
-  until "s2" ~checks:true
-    ~says:[ "wiring live(url: Str) provides Users uses Console"; "pub wiring core provides Users uses Db" ]
-    (fun () ->
-      types
-        (users_deps
-       ^ {|
-pub wiring core provides Users uses Db = console_audit(), db_users()
+  (* `core`'s audit keeps quiet, so all it needs from outside is `Db`;
+     `live`'s `pg_db` prints *)
+  types
+    (users_deps
+   ^ {|
+handler quiet_audit() for Audit =
+  note(_) => ()
+
+pub wiring core provides Users uses Db = quiet_audit(), db_users()
 wiring live(url: Str) provides Users = core, pg_db(url)
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:5
-    24 │ pub wiring core provides Users uses Db = console_audit(), db_users()
-       │     ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
-
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:25:1
-    25 │ wiring live(url: Str) provides Users = core, pg_db(url)
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    dep Db
+      get: fn(Int) -> Str ! DbDown
+    dep Audit
+      note: fn(Str)
+    dep Users
+      name: fn(Int) -> Str ! DbDown
+    handler mem_db() for Db
+    handler pg_db(url: Str) for Db uses Console
+    handler console_audit() for Audit uses Console
+    handler db_users() for Users uses Audit, Db
+    handler quiet_audit() for Audit
+    fn main() -> Int
+    pub wiring core provides Users uses Db
+    wiring live(url: Str) provides Users uses Console
     |}]
 
 let%expect_test "[s2 accept] a pub wiring used from another module" =
-  until "s2"
-    ~want:{|
-audit: 4
-Ok("ann4")
-()
-|}
-    (fun () ->
-      run_files
-        [
-          ( "main.ren",
-            {|
+  run_files
+    [
+      ( "main.ren",
+        {|
 import app
 
 fn main() uses Console =
   with app.live in print(attempt app.Users.name(4))
 |} );
-          ( "app.ren",
-            users_deps
-            ^ {|
+      ( "app.ren",
+        pub_all users_deps
+        ^ {|
 pub wiring live provides Users uses Console = mem_db(), console_audit(), db_users()
 |} );
-        ]);
+    ];
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ app.ren:24:5
-    24 │ pub wiring live provides Users uses Console = mem_db(), console_audit(), db_users()
-       │     ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    audit: 4
+    Ok("ann4")
+    ()
     |}]
 
 let%expect_test "[s2 reject] a missing need" =
-  until "s2"
-    ~says:
-      [
-        "error: nothing installs `Db`, which `db_users()` in `live` needs";
-        "help: add an item that installs `Db` beside `live`: `with live, mem_db() in`";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live provides Users = console_audit(), db_users()
 
 fn main() uses Console =
   with live in print(attempt Users.name(1))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
+    error: nothing installs `Db`, which `db_users()` in `live` needs
+       ┌─ test.ren:27:8
     24 │ wiring live provides Users = console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │        ---- `live` lists `db_users()` here
+    27 │   with live in print(attempt Users.name(1))
+       │        ^^^^
+       help: add an item that installs `Db` beside `live`: `with live, mem_db() in`
     |}]
 
 let%expect_test "[s2 reject] a pub wiring's need it doesn't declare" =
-  until "s2"
-    ~says:
-      [
-        "error: `live` needs `Db`, which it doesn't declare";
-        "help: add it to `uses`: `uses Db`";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 pub wiring live provides Users = console_audit(), db_users()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:5
+    error: `live` needs `Console`, which it doesn't declare
+       ┌─ test.ren:24:12
     24 │ pub wiring live provides Users = console_audit(), db_users()
-       │     ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │            ^^^^
+       │                                  --------------- `console_audit()` needs `Console`
+       = a public wiring's `uses` lists what it needs from outside, which is what a `with` that lists it has to have
+       help: add it to `uses`: `uses Console`
+
+    error: `live` needs `Db`, which it doesn't declare
+       ┌─ test.ren:24:12
+    24 │ pub wiring live provides Users = console_audit(), db_users()
+       │            ^^^^
+       │                                                   ---------- `db_users()` needs `Db`
+       = a public wiring's `uses` lists what it needs from outside, which is what a `with` that lists it has to have
+       help: add it to `uses`: `uses Db`
     |}]
 
 let%expect_test "[s2 reject] a hidden service used" =
-  until "s2"
-    ~says:
-      [
-        "error: `live` installs `Db` but doesn't provide it";
-        "help: add `Db` to `live`'s `provides`, or install your own inside: `with mem_db() in`";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live provides Users = mem_db(), console_audit(), db_users()
 
 fn main() uses Console =
   with live in print(attempt Db.get(1))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring live provides Users = mem_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    error: `live` installs `Db` but doesn't provide it
+       ┌─ test.ren:27:30
+    27 │   with live in print(attempt Db.get(1))
+       │                              ^^^^^^^^^
+       = a wiring's items meet each other, but what's listed beside it and the body see only what its `provides` says
+       help: add `Db` to `live`'s `provides`, or install your own inside: `with mem_db() in`
     |}]
 
 let%expect_test "[s2 reject] a duplicate through flattening" =
-  until "s2"
-    ~says:
-      [
-        "error: this `with` installs `Db` twice: `mem_db()` here, and `pg_db(url)` in `live`";
-        "help: use a smaller wiring that leaves `Db` out, or remove one";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live(url: Str) provides Users = pg_db(url), console_audit(), db_users()
 
 fn main() uses Console =
   with live("x"), mem_db() in print(attempt Users.name(1))
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring live(url: Str) provides Users = pg_db(url), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    error: this `with` installs `Db` twice: `mem_db()` here, and `pg_db(url)` in `live` (test.ren:24)
+       ┌─ test.ren:27:19
+    27 │   with live("x"), mem_db() in print(attempt Users.name(1))
+       │                   ^^^^^^^^ and again here
+       │        --------- `live` installs `Db` here
+       = a wiring is flattened where it's listed: its items are the `with`'s
+       help: use a smaller wiring that leaves `Db` out, or remove one
     |}]
 
 let%expect_test "[s2 reject] a cycle through wirings" =
-  until "s2"
-    ~says:[ "error: `a` lists itself: a → b → a" ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring a provides Users = b, db_users()
 wiring b provides Audit = a, console_audit()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
+    error: `a` lists itself: a → b → a
+       ┌─ test.ren:24:8
     24 │ wiring a provides Users = b, db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
-
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:25:1
-    25 │ wiring b provides Audit = a, console_audit()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │        ^
+       help: a wiring can list another, but not one that lists it
     |}]
 
 let%expect_test "[s2 reject] a cycle among the items a wiring flattens" =
-  until "s2"
-    ~says:
-      [
-        "error: `ping()` and `pong()` in `both` each need what the other installs";
-        "`ping()` → `pong()` → `ping()`";
-      ]
-    (fun () ->
-      check_error
-        {|
+  check_error
+    {|
 dep Ping =
   ping: fn()
 dep Pong =
@@ -1068,154 +952,113 @@ handler pong() for Pong uses Ping =
   pong() => Ping.ping()
 wiring both provides Ping = ping(), pong()
 fn main() = with both in Ping.ping()
-|});
+|};
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-      ┌─ test.ren:9:1
+    error: `ping()` and `pong()` in `both` each need what the other installs
+      ┌─ test.ren:9:29
     9 │ wiring both provides Ping = ping(), pong()
-      │ ^^^^^^
-      help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+      │                             ^^^^^^
+      = `ping()` → `pong()` → `ping()`
+      help: install one of them in a `with` around this one
     |}]
 
 let%expect_test "[s2 reject] `provides` names what nothing installs" =
-  until "s2"
-    ~says:[ "error: `live` provides `Clock`, which nothing in it installs" ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live provides Users, Clock = mem_db(), console_audit(), db_users()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
+    error: `live` provides `Clock`, which nothing in it installs
+       ┌─ test.ren:24:8
     24 │ wiring live provides Users, Clock = mem_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │        ^^^^
+       help: remove it from `provides`, or add an item that installs it
     |}]
 
 let%expect_test "[s2 reject] an item nothing uses" =
-  until "s2"
-    ~says:[ "error: `console_audit()` in `live` provides `Audit`, which nothing needs" ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 handler plain_users() for Users uses Db =
   name(id) => try Db.get(id)
 wiring live provides Users = mem_db(), console_audit(), plain_users()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:26:1
+    error: `console_audit()` in `live` provides `Audit`, which nothing needs
+       ┌─ test.ren:26:40
     26 │ wiring live provides Users = mem_db(), console_audit(), plain_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │                                        ^^^^^^^^^^^^^^^
+       = Ren has no warnings: what nothing uses is an error
+       help: remove it, or add `Audit` to `live`'s `provides`
     |}]
 
 let%expect_test "[s2 reject] a wiring used as a value" =
-  until "s2"
-    ~says:
-      [ "error: a wiring isn't a value"; "help: install it: `with live in ...`" ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live provides Users = mem_db(), console_audit(), db_users()
 fn main() =
   let w = live
   1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring live provides Users = mem_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    error: a wiring isn't a value
+       ┌─ test.ren:26:11
+    26 │   let w = live
+       │           ^^^^
+       help: install it: `with live in ...`
     |}]
 
 let%expect_test "[s2 reject] a wiring with no `provides`" =
-  until "s2"
-    ~says:
-      [
-        "error: a wiring says what it provides";
-        "help: write `provides` and the dependencies the body may call";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live = mem_db(), console_audit(), db_users()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
+    error: a wiring says what it provides
+       ┌─ test.ren:24:13
     24 │ wiring live = mem_db(), console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │             ^
+       help: write `provides` and the dependencies the body may call
     |}]
 
 let%expect_test "[s2 reject] a wiring's body is items only" =
-  until "s2"
-    ~says:
-      [
-        "error: a wiring's body lists what it installs";
-        "help: code that runs around a block stays a function: `fn live(body: fn() -> T) -> T`";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring live provides Users =
   print("starting")
   mem_db()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring live provides Users =
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+    error: a wiring's body lists what it installs
+       ┌─ test.ren:26:3
+    26 │   mem_db()
+       │   ^
+       help: code that runs around a block stays a function: `fn live(body: fn() -> T) -> T`
     |}]
 
 let%expect_test "[s2 reject] `provides` names what a nested wiring hides" =
-  until "s2"
-    ~says:
-      [
-        "error: `core` installs `Audit` but doesn't provide it";
-        "help: add `Audit` to `core`'s `provides`";
-      ]
-    (fun () ->
-      check_error
-        (users_deps
-       ^ {|
+  check_error
+    (users_deps
+   ^ {|
 wiring core provides Users = console_audit(), db_users()
 wiring live provides Users, Audit = core, mem_db()
 fn main() = 1
-|}));
+|});
   [%expect {|
-    (until s2)
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:24:1
-    24 │ wiring core provides Users = console_audit(), db_users()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
-
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:25:1
+    error: `core` installs `Audit` but doesn't provide it
+       ┌─ test.ren:25:37
     25 │ wiring live provides Users, Audit = core, mem_db()
-       │ ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
+       │                                     ^^^^
+       = a wiring's items meet each other, but what's listed beside it and the body see only what its `provides` says
+       help: add `Audit` to `core`'s `provides`
     |}]
 
 (* ---- s3: background work (decision 7) ---- *)
@@ -4248,12 +4091,6 @@ test "every edit is in the store, in one order" =
        ┌─ test.ren:29:35
     29 │ pub dep Docs = Actors<DocId, Doc> ! StoreDown
        │                                   ^
-
-    error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `wiring`
-       ┌─ test.ren:31:5
-    31 │ pub wiring live provides Docs uses Console, Random = mem_store(), actors(doc, max: 2, chaos: true) as Docs
-       │     ^^^^^^
-       help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)
 
     error: this block ends with a `let`, so it has no value
        ┌─ test.ren:38:15

@@ -127,6 +127,7 @@ module.exports = grammar({
         $.test_definition,
         $.group_definition,
         $.group_run,
+        $.wiring_definition,
       ),
 
     comment: (_) => token(seq('//', /[^\n]*/)),
@@ -497,6 +498,33 @@ module.exports = grammar({
         sep1(field('test', $.test_definition), $._newline),
         $._dedent,
       ),
+
+    // a wiring (language.md §5), a named set of `with` items, which a
+    // `with` lists by name:
+    //
+    //   pub wiring live(url: Str) provides Users uses Console ! DbDown =
+    //     pg_db(url), console_audit(), db_users()
+    //
+    // `wiring` and `provides` are words only here. Its body is items only,
+    // on the line after the `=` if they're indented under it
+    wiring_definition: ($) =>
+      seq(
+        optional($.visibility),
+        'wiring',
+        field('name', $.identifier),
+        optional(field('parameters', $.parameters)),
+        'provides',
+        commaSep1Strict(field('provides', $.dependency)),
+        optional(field('uses', $.uses_clause)),
+        optional(field('errors', $.error_set)),
+        '=',
+        choice(
+          $._wiring_items,
+          seq($._indent, $._wiring_items, $._dedent),
+        ),
+      ),
+
+    _wiring_items: ($) => commaSep1Strict(field('item', $._with_item)),
 
     // group "frozen" = clock_conforms(Clock.frozen(Time.epoch)): a run of
     // a group's tests, with these arguments; the compiler checks it's a call

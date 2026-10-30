@@ -182,7 +182,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
           | Errors es -> errors_ es
           | Dep_alias _ | Builtin -> ());
           List.iter (fun (o : op) -> fn_ o.op_fn) td.type_ops
-      | Import _ | Testing _ -> ())
+      | Import _ | Testing _ | Wiring _ -> ())
     prog
 
 (* The error sets and `Result`s written in the module make sense: an
@@ -474,7 +474,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
                 if o.op_kind = Op_value then Some (Ast.fn_path r.home o.op_fn)
                 else None)
               td.type_ops
-        | Fn _ | Import _ | Testing _ -> [])
+        | Fn _ | Import _ | Testing _ | Wiring _ -> [])
       r.prog
   in
   (* a function that makes an implementation of [p] *)
@@ -547,24 +547,33 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
            in [check_uses]. Once `main`'s uses are joined every call's row
            has what it lists, so for one it lists, only a call that brings
            it in itself is that. *)
-        let needs =
+        let call =
           let first has = List.find_opt has calls in
-          match
-            match first (fun c -> brings c dep) with
-            | Some c -> Some c
-            | None when written = None -> first (fun c -> has_label c.row dep)
-            | None -> None
-          with
+          match first (fun c -> brings c dep) with
+          | Some c -> Some c
+          | None when written = None -> first (fun c -> has_label c.row dep)
+          | None -> None
+        in
+        let needs, why =
+          match call with
           | Some c ->
               ( [ (c.cloc, if c.needs then Installing else Call_uses) ],
                 withheld_notes withheld dep (Some c) )
           | None -> ([], [])
         in
-        let needs, why = needs in
         let loc = match written with Some t -> t.tloc | None -> run.at in
-        report env
-          (not_installed loc run.kind ~dep:d ~short:p.name ~real:(run.real_of p)
-             ~maker:(maker p) ~declared:(Hashtbl.mem env.types p) ~needs ~why))
+        match Option.bind call (wired_need env) with
+        | Some (via, item) when written = None ->
+            (* an item a wiring flattened needs it (language.md §5) *)
+            report env
+              (wired_need_missing (Option.get call).cloc ~wiring:via.wiring ~item ~dep:d
+                 ~maker:(Option.value (maker p) ~default:"h()")
+                 ~declared:via.declared)
+        | _ ->
+            report env
+              (not_installed loc run.kind ~dep:d ~short:p.name
+                 ~real:(run.real_of p) ~maker:(maker p)
+                 ~declared:(Hashtbl.mem env.types p) ~needs ~why))
     uses
 
 (* The runtime installs exactly the built-in dependencies `main` uses, as
@@ -670,15 +679,36 @@ let new_env sink ~reachable (r : Resolve.t) =
      module can name bare. [r.scope] is sorted by name, and two of its
      types never share one. *)
   let visible = List.map (fun (_, p) -> Hashtbl.find types p) r.scope in
+  (* how each function a wiring's link was made into is written in the
+     wiring, `pg_db(url)`: a message shows a `with`'s items so *)
+  let wired = Hashtbl.create 8 in
+  List.iter
+    (fun (i : Iface.t) ->
+      List.iter
+        (fun (w : Iface.wiring) ->
+          List.iter
+            (fun (f, text) -> Hashtbl.replace wired (Path.make i.home f) text)
+            w.wwritten)
+        i.wirings)
+    reachable;
+  List.iter
+    (fun (f, text) -> Hashtbl.replace wired (Path.make r.home f) text)
+    (Resolve.written r ~other:(Hashtbl.find_opt wired));
+  let source (e : expr) =
+    match e.kind with
+    | Call ({ kind = Var (Global p); _ }, _) when Hashtbl.mem wired p ->
+        Hashtbl.find_opt wired p
+    | _ ->
+        Ast.source ~type_name:(Resolve.type_name r)
+          ~value_name:(Resolve.value_name r) e
+  in
   {
     st;
     sink;
     home = r.home;
     names = Resolve.type_name r;
     can_name = Resolve.can_name r;
-    source =
-      Ast.source ~type_name:(Resolve.type_name r)
-        ~value_name:(Resolve.value_name r);
+    source;
     types;
     sets =
       (fun p ->
@@ -704,6 +734,7 @@ let new_env sink ~reachable (r : Resolve.t) =
     any_call = None;
     params_of = Hashtbl.create 16;
     defaults_of = Hashtbl.create 16;
+    wired_from = Hashtbl.create 4;
     test_reported = Hashtbl.create 4;
   }
 
@@ -1202,7 +1233,7 @@ let check_keeps_rules env so_far (r : Resolve.t) =
     (function
       | Type ({ type_pub = true; type_body = Fields _ | Ctors _; _ } as td) ->
           check td
-      | Type _ | Fn _ | Import _ | Testing _ -> ())
+      | Type _ | Fn _ | Import _ | Testing _ | Wiring _ -> ())
     r.prog
 
 (* ---- the client view ---- *)
@@ -1220,7 +1251,7 @@ let client_view env (r : Resolve.t) =
       (function
         | Type (td : type_def) when td.type_pub ->
             Some (Path.make r.home td.type_name.name)
-        | Type _ | Fn _ | Import _ | Testing _ -> None)
+        | Type _ | Fn _ | Import _ | Testing _ | Wiring _ -> None)
       r.prog
   in
   List.map
@@ -2097,7 +2128,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                 if o.op_kind = Op_value then Some (Ast.fn_path home o.op_fn)
                 else None)
               td.type_ops
-        | Fn _ | Import _ | Testing _ -> [])
+        | Fn _ | Import _ | Testing _ | Wiring _ -> [])
       r.prog
   in
   let is_value (f : fn_def) = List.mem (Ast.fn_path home f) values in
@@ -2112,7 +2143,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                 report env
                   (Infer_msg.key_loops o.op_fn.name.loc ~owner:td.type_name.name))
             td.type_ops
-      | Fn _ | Import _ | Testing _ -> ())
+      | Fn _ | Import _ | Testing _ | Wiring _ -> ())
     r.prog;
   let so_far =
     { schemes = Hashtbl.create 16; tables = Hashtbl.create 16; withheld = [] }

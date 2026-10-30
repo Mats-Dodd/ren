@@ -186,7 +186,74 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
         else [])
       items.groups
   in
-  (r, { iface with tests = iface.tests @ group_tests }, inferred, items)
+  (* Another module that lists a public wiring calls the functions its
+     links were made into (resolve.ml, "Wirings"), so they're in the
+     interface too, with the types inference found: they have no
+     signature to declare one. So is the wiring's shape, with how each
+     link is written, for a message there. *)
+  let other (p : Path.t) =
+    List.find_map
+      (fun (i : Iface.t) ->
+        if i.home <> p.home then None
+        else
+          List.find_map
+            (fun (w : Iface.wiring) -> List.assoc_opt p.name w.wwritten)
+            i.wirings)
+      reachable
+  in
+  let written = Resolve.written r ~other in
+  let wirings = List.filter (fun (w : Iface.wiring) -> w.wpub) r.wirings in
+  let made (w : Iface.wiring) =
+    List.concat_map
+      (fun (wi : Iface.wired_item) ->
+        List.filter_map
+          (function Iface.Made (f, _) -> Some f | Passed _ -> None)
+          wi.links)
+      w.witems
+  in
+  let links =
+    List.concat_map
+      (fun w ->
+        List.map
+          (fun f ->
+            let params =
+              List.find_map
+                (function
+                  | Ast.Fn (g : Ast.Resolved.fn_def) when g.name.name = f ->
+                      Some
+                        (List.map
+                           (fun (q : Ast.Resolved.param) -> q.pname.ident.name)
+                           g.params)
+                  | _ -> None)
+                r.prog
+            in
+            {
+              Iface.vname = f;
+              scheme = Path.Map.find (Path.make home f) inferred.schemes;
+              vparams = Option.value params ~default:[];
+            })
+          (made w))
+      wirings
+  in
+  ( r,
+    {
+      iface with
+      values = iface.values @ links;
+      tests = iface.tests @ group_tests;
+      wirings =
+        List.map
+          (fun (w : Iface.wiring) ->
+            {
+              w with
+              wwritten =
+                List.filter_map
+                  (fun f -> Option.map (fun t -> (f, t)) (List.assoc_opt f written))
+                  (made w);
+            })
+          wirings;
+    },
+    inferred,
+    items )
 
 (* A checked module, lowered to Core. *)
 (* [reachable] are the interfaces the module's imports reach, whose
@@ -847,6 +914,49 @@ let types ?(lint = false) ?load ~file src =
                       (Path.Map.find (Ast.fn_path home f) inferred.schemes);
                   ]
             | Ast.Fn f when List.mem f.name.name items.made -> []
+            | Ast.Fn f when String.contains f.name.name '$' -> (
+                (* a wiring is shown as the function its own `with` is
+                   checked in, which says what it uses and fails with
+                   (resolve.ml, [wiring_fns]); the functions its links
+                   were made into aren't shown *)
+                match Resolve.checked_wiring (Ast.fn_path home f) with
+                | None -> []
+                | Some name ->
+                    let w =
+                      List.find
+                        (fun (w : Iface.wiring) -> w.wname = name)
+                        resolved.wirings
+                    in
+                    let line = fn_ ~name f in
+                    (* after `fn name`: its parameters, then the rest *)
+                    let rest =
+                      String.sub line
+                        (String.length name + 3)
+                        (String.length line - String.length name - 3)
+                    in
+                    let close =
+                      let rec go i depth =
+                        match rest.[i] with
+                        | '(' -> go (i + 1) (depth + 1)
+                        | ')' when depth = 1 -> i
+                        | ')' -> go (i + 1) (depth - 1)
+                        | _ -> go (i + 1) depth
+                      in
+                      go 0 0
+                    in
+                    let params =
+                      if w.wparams = [] then "" else String.sub rest 0 (close + 1)
+                    in
+                    let after =
+                      String.sub rest (close + 1) (String.length rest - close - 1)
+                    in
+                    [
+                      sprintf "%swiring %s%s provides %s%s"
+                        (if w.wpub then "pub " else "")
+                        name params
+                        (String.concat ", " (List.map names w.wprovides))
+                        after;
+                    ])
             | Ast.Fn f -> [ tested f (fn_ ~name:f.name.name f) ]
             | Type ({ type_body = Dep _; _ } as td) ->
                 (* a dependency: its operations, each with its type, then
@@ -944,9 +1054,201 @@ let types ?(lint = false) ?load ~file src =
                     td.type_name.name
                     (String.concat " | " errors);
                 ]
-            | Type _ | Import _ | Testing _ -> [])
+            | Type _ | Import _ | Testing _ | Wiring _ -> [])
           resolved.prog ))
     modules
+
+(* `ren explain-wiring live [file]` (language.md §5): the wiring [name]
+   of the program's entry module, as its own `with` is checked
+   (resolve.ml, [wiring_fns]): its items in the order they're installed,
+   numbered, each with what it installs and what it needs, met by an item
+   of that number or from outside, and the wiring it came through if it
+   came through one inside this one; then what the wiring uses, and the
+   order of its teardown, the reverse. *)
+let explain_wiring ?load ~file ~name src =
+  let modules = check_all ?load ~file src in
+  let m = entry_of modules in
+  let r = m.resolved in
+  let names = Resolve.type_name r in
+  let w =
+    match List.find_opt (fun (w : Iface.wiring) -> w.wname = name) r.wirings with
+    | Some w -> w
+    | None ->
+        raise
+          (Diag.Error
+             (Diag.make
+                (Loc.point ~file 1 1)
+                ~help:"name one of its wirings: `ren explain-wiring live main.ren`"
+                (sprintf "`%s` has no wiring `%s`" file name)))
+  in
+  let check = Path.make m.home (name ^ "$wiring") in
+  let nodes = Path.Map.find check m.inferred.nodes in
+  let f =
+    List.find_map
+      (function
+        | Ast.Fn (f : Ast.Resolved.fn_def) when f.name.name = name ^ "$wiring" ->
+            Some f
+        | _ -> None)
+      r.prog
+    |> Option.get
+  in
+  (* its body: `try with <its items> in ()` *)
+  let rec with_of (e : Ast.Resolved.expr) =
+    match e.kind with
+    | Try e | Block (_, e) -> with_of e
+    | With { items; _ } -> (e.node, items)
+    | _ -> failwith "a wiring's function is its `with`"
+  in
+  let node, items = with_of f.body in
+  let order =
+    match (Infer.Nodes.find node nodes).found with
+    | Some (Install_order o) -> o
+    | _ -> []
+  in
+  let written =
+    Resolve.written r ~other:(fun (p : Path.t) ->
+        List.find_map
+          (fun (c : checked) ->
+            if c.home <> p.home then None
+            else
+              List.find_map
+                (fun (w : Iface.wiring) -> List.assoc_opt p.name w.wwritten)
+                c.iface.wirings)
+          modules)
+  in
+  let text (lk : Ast.Resolved.with_link) =
+    match lk.link.kind with
+    | Call ({ kind = Var (Global p); _ }, _) ->
+        Option.value (List.assoc_opt p.name written) ~default:p.name
+    | Var (Local b) -> b.ident.name
+    | _ -> "this"
+  in
+  let dep_name (l : Ty.label) = names (Ty.dep_path l.name) in
+  (* each item in the order it's installed: how it's written, what it
+     installs and what its links need, and where it came from *)
+  let rows =
+    List.map
+      (fun i ->
+        let (it : Ast.Resolved.with_item) = List.nth items i in
+        let top = List.hd it.chain in
+        let installs =
+          match (Infer.Nodes.find top.knode nodes).found with
+          | Some (Installs { key; _ }) -> [ key ]
+          | Some (Installs_handler keys) -> keys
+          | _ -> []
+        in
+        let needs =
+          List.concat_map
+            (fun (lk : Ast.Resolved.with_link) ->
+              match (Infer.Nodes.find lk.knode nodes).ty with
+              | Impl i -> i.needs.labels
+              | _ -> [])
+            it.chain
+          |> List.filter (fun (l : Ty.label) ->
+                 not (List.exists (fun (k : Ty.label) -> k.name = l.name) installs))
+        in
+        let origin =
+          match it.from with
+          | (v : Ast.via) :: _ :: _ -> Some v.wiring
+          | _ -> None
+        in
+        (text top, installs, needs, origin))
+      order
+  in
+  let number (l : Ty.label) =
+    let rec go n = function
+      | (_, installs, _, _) :: rest ->
+          if List.exists (fun (k : Ty.label) -> k.name = l.name) installs then
+            Some n
+          else go (n + 1) rest
+      | [] -> None
+    in
+    go 1 rows
+  in
+  let cells =
+    List.map
+      (fun (shown, installs, needs, origin) ->
+        let met, outside =
+          List.partition_map
+            (fun l ->
+              match number l with
+              | Some n -> Left (sprintf "%s (%d)" (dep_name l) n)
+              | None -> Right (dep_name l))
+            (List.sort_uniq compare needs)
+        in
+        let needs =
+          String.concat "; "
+            ((if met = [] then [] else [ "meets " ^ String.concat ", " met ])
+            @
+            if outside = [] then []
+            else [ "needs " ^ String.concat ", " outside ^ ", from outside" ])
+        in
+        ( shown,
+          "installs " ^ String.concat ", " (List.map dep_name installs),
+          (if needs = "" then "needs nothing" else needs),
+          origin ))
+      rows
+  in
+  let width f = 4 + List.fold_left (fun m c -> max m (String.length (f c))) 0 cells in
+  let pad n x = x ^ String.make (n - String.length x) ' ' in
+  let w1 = width (fun (a, _, _, _) -> a)
+  and w2 = width (fun (_, b, _, _) -> b)
+  and w3 = width (fun (_, _, c, _) -> c) in
+  let scheme = Path.Map.find check m.inferred.schemes in
+  let uses, errors =
+    match scheme.ty with
+    | Fun (_, _, errs, uses) -> (uses.labels, errs.labels)
+    | _ -> ([], [])
+  in
+  let params =
+    match w.wparams with
+    | [] -> ""
+    | _ ->
+        (* as `ren types` writes them *)
+        let line =
+          Ty.signature ~names ~pub:false ~name
+            ~params:
+              (List.map (fun (p : Ast.Resolved.param) -> p.pname.ident.name) f.params)
+            scheme
+        in
+        let rest = String.sub line (String.length name + 3) (String.length line - String.length name - 3) in
+        let rec close i depth =
+          match rest.[i] with
+          | '(' -> close (i + 1) (depth + 1)
+          | ')' when depth = 1 -> i
+          | ')' -> close (i + 1) (depth - 1)
+          | _ -> close (i + 1) depth
+        in
+        String.sub rest 0 (close 0 0 + 1)
+  in
+  let pr = Ty.printer ~names scheme in
+  (sprintf "%s%s, %s:%d, provides %s" name params w.wdeclared.file
+     w.wdeclared.start.line
+     (String.concat ", " (List.map names w.wprovides)))
+  :: List.mapi
+       (fun i (a, b, c, o) ->
+         let row = sprintf "  %d. %s%s" (i + 1) (pad w1 a) (pad w2 b) in
+         match o with
+         | Some o -> sprintf "%s%s (%s)" row (pad w3 c) o
+         | None -> row ^ c)
+       cells
+  @ [
+      (match uses with
+      | [] -> "  uses nothing"
+      | ls -> "  uses " ^ String.concat ", " (List.map dep_name ls));
+    ]
+  @ (match errors with
+    | [] -> []
+    | ls ->
+        [
+          "  fails to start with "
+          ^ String.concat " | " (List.map (Ty.show_label pr) ls);
+        ])
+  @ [
+      "  teardown: "
+      ^ String.concat ", "
+          (List.rev (List.mapi (fun i _ -> string_of_int (i + 1)) rows));
+    ]
 
 (* [path], a file of the program in the folder [dir], from that folder:
    where a journal says a panic was, so it reads the same wherever the

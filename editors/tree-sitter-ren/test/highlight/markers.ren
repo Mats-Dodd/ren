@@ -386,3 +386,12 @@ fn label(n: Int) -> Str = "n: \{n + 1}" + show('a')
 //                                ^ operator
 //                                   ^ punctuation.special
 //                                             ^ string.special
+
+// a wiring: a named set of `with` items, what it provides a boundary
+pub wiring live(url: Str) provides Users uses Console =
+// <- keyword
+//  ^ keyword
+//         ^ function
+//                        ^ keyword
+//                                 ^ type.dependency
+  pg_db(url), console_audit(), db_users()

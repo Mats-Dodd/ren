@@ -101,11 +101,42 @@ type value = {
           name names *)
 }
 
+(* A wiring (language.md §5), as a `with` that lists it needs it: its
+   items, flattened, each a chain of links, top first, each a function of
+   the wiring's module Resolve made, `live$1`, which makes the link's
+   implementation from those of the wiring's parameters it's given, by
+   their places, or one of its parameters, passed on (resolve.ml,
+   "Wirings"). What's installed under it, and as
+   what, are an item's as written; [wvia] are the wirings it came
+   through inside this one, innermost first. [wwritten] is how each
+   function's link is written in the wiring that lists it, `pg_db(url)`,
+   for a message: the driver fills it in for an interface. *)
+type link = Made of string * int list | Passed of int
+
+type wired_item = {
+  links : link list;
+  wunder : Ast.tname Ast.dep_ref list;
+  walias : Ast.tname Ast.dep_ref option;
+  wvia : Ast.via list;
+  wloc : Loc.t;  (** the item, in the wiring that lists it *)
+}
+
+type wiring = {
+  wname : string;
+  wpub : bool;
+  wparams : string list;
+  wprovides : Path.t list;
+  witems : wired_item list;
+  wdeclared : Loc.t;  (** its name, where it's declared *)
+  wwritten : (string * string) list;
+}
+
 type t = {
   home : string;  (** the module this is the interface of *)
   types : type_decl list;  (** in the order they're declared *)
   values : value list;
   tests : value list;
+  wirings : wiring list;
 }
 
 let find_type iface name =
@@ -113,6 +144,7 @@ let find_type iface name =
 
 let find_value iface name = List.find_opt (fun v -> v.vname = name) iface.values
 let find_test iface name = List.find_opt (fun v -> v.vname = name) iface.tests
+let find_wiring iface name = List.find_opt (fun w -> w.wname = name) iface.wirings
 
 (* The member [name] of the type [d], if it has one: the first of that
    name, if it's an operator written for several types on its right. *)
@@ -674,11 +706,12 @@ let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
         (function
           | Ast.Type td when td.type_pub ->
               Some (public (of_type_def ~home ~sets td))
-          | Type _ | Fn _ | Import _ | Testing _ -> None)
+          | Type _ | Fn _ | Import _ | Testing _ | Wiring _ -> None)
         prog;
     (* a public test item is in its own tier, which only tests read *)
     values = public_fns ~test:false;
     tests = public_fns ~test:true;
+    wirings = [];
   }
 
 (* A built-in type [a] with the members [b], its declaration in the
@@ -708,4 +741,5 @@ let union a b =
       @ List.filter (fun d -> find_type a d.path.name = None) b.types;
     values = a.values @ b.values;
     tests = a.tests @ b.tests;
+    wirings = a.wirings @ b.wirings;
   }
