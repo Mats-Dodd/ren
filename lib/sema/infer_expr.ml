@@ -406,6 +406,13 @@ let pins_for_a_block env (p : Path.t) =
            ps
      | _ -> false
 
+(* Whether [p], a function, posts to a family: the family's own post, and
+   `Actors.post`. *)
+let family_posts =
+  [ Path.member (Path.prelude "Instances") "post"; Path.member (Path.prelude "Actors") "post" ]
+
+let posts_to_a_family (p : Path.t) = List.mem p family_posts
+
 let rec infer env cx (e : expr) : ty = read_wide cx e (infer_raw env cx e)
 
 (* [e]'s type, from [e] alone, as it's written: a place's, which a sized
@@ -2833,8 +2840,8 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
             if op <> None then
               List.iter (fun (a : expr) -> Hashtbl.remove op_args a.node) args)
           (fun () ->
-            pinning env cx e f errs (fun () ->
-                check_args env cx ~name ?callee ~written ps args);
+            pinning env e f (fun () ->
+                check_args env cx ~name ?callee ?at:(post_at env f) ~written ps args);
             (* a block bound by `let` and passed here brings in only what
                the parameter's type lists, as one written here does *)
             if op <> None then
@@ -2850,7 +2857,7 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
                   | _ -> ())
                 ps args);
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
-        given_for env cx ~node:(e.node, e.loc, cx.self) ~fnode:f.node ~at:e.loc ~ename ps args (made env ret))
+        given_for env cx ~fnode:f.node ~at:e.loc ~ename ps args (made env ret))
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          block, whose errors are the call's. Its type isn't written, so it
@@ -2901,7 +2908,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
   (* the parameters and arguments that aren't of `Tags`, checked as any
      call's *)
   let rest_checked ps written args =
-    pinning env cx e f errs (fun () -> check_args env cx ~name ?callee ~written ps args);
+    pinning env e f (fun () -> check_args env cx ~name ?callee ?at:(post_at env f) ~written ps args);
     absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses
   in
   if ntags > 0 && given = n - ntags && not (List.exists named args) then (
@@ -2996,7 +3003,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
                        (tags_cant_fail loc ~fn ~param ~tag:t ~what ~can))
                  names)))
       (List.rev !given_tags);
-    kept_needs env ~node:(e.node, e.loc, cx.self) ps (made env ret)
+    kept_needs env ps (made env ret)
 
 (* [t], what a call gives, once its arguments [args] are checked, for
    the parameters [ps]: if it's a handler `for D`'s (Ty.param_path;
@@ -3008,7 +3015,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
    is given (Lower). A [D] that isn't a handler's description of one
    dependency whose operations are data is said, and the call is then of
    no type, so its `with` says nothing more. *)
-and given_for env cx ?node ~fnode ~at ~ename ps args t =
+and given_for env cx ~fnode ~at ~ename ps args t =
   match repr t with
   | TImpl ({ deps = [ { dpath; dargs = [ d ] } ]; _ } as i)
     when dpath = Ty.param_path -> (
@@ -3063,7 +3070,7 @@ and given_for env cx ?node ~fnode ~at ~ename ps args t =
                  | None -> "this")
                (show (printer env) dt));
           TError)
-  | _ -> kept_needs env ?node ps t
+  | _ -> kept_needs env ps t
 
 (* [t], what a call of a handler gives, given [ps], its parameters: one
    given a maker, a parameter that's a function giving a description,
@@ -3071,7 +3078,7 @@ and given_for env cx ?node ~fnode ~at ~ename ps args t =
    what it describes where it's installed (the runtime's family does,
    with the evidence there), so it needs what those need too
    (compiler.md, "Services stage", "Actors (step 7)"). *)
-and kept_needs env ?node ps t =
+and kept_needs env ps t =
   match repr t with
   | TImpl i ->
       let kept =
@@ -3089,36 +3096,31 @@ and kept_needs env ?node ps t =
       else
         let ls = fst (row_parts i.needs) in
         let only = without_labels ls kept in
-        Option.iter
-          (fun (n, l, self) ->
-            Hashtbl.replace env.kept_own (n, l) only;
-            Hashtbl.replace env.kept_in self only)
-          node;
         TImpl { i with needs = extend (ls @ only) (row_end i.needs) }
   | _ -> t
 
-(* [check ()], checking the arguments of the call [e] of [f], whose
-   errors are [errs]: if it pins an instance of a keyed instance family
-   for a block (compiler.md, "Services stage", "Actors (step 7)"),
-   decision 18's no-deadlock rules, as checks on that pin. One inside a
-   block that pins one of the same family could wait for a slot its own
-   block holds, which is refused; one inside a block of another family
-   could close a cycle of waits, and fails with `Full` instead of waiting
-   where that's so, which this call says it can, and lowering tells the
-   family ([Full_marked]). A handler's arms' pins are kept, for the
-   family that keeps it ([kept_pins]). Its blocks are checked as pinned
-   by it. *)
-and pinning env cx (e : expr) (f : expr) errs check =
-  let family =
+(* [check ()], checking the arguments of the call [e] of [f]: if it
+   pins an instance of a keyed instance family for a block, or posts to
+   one (compiler.md, "Services stage", "Step 10: structured actors"),
+   rule 3 as a check on it. Inside a block that pins one of a family's
+   instances, the block holds the family, and a call that reaches it, or
+   one installed inside it, could wait for what the block holds, which is
+   refused where the `with`s that tell are in sight ([installed_inside]),
+   and is the family's panic where they aren't. A pin's blocks are
+   checked as held by it. *)
+and pinning env (e : expr) (f : expr) check =
+  let reach =
     match f.kind with
     | Var (Global p) when pins_for_a_block env p && not (List.mem p family_pins) ->
-        Some (match Hashtbl.find_opt env.through (f.node, f.loc) with Some alias -> alias | None -> Path.owner p)
-    | Var (Dep_op (p, op)) when Hashtbl.mem env.pin_ops (p, op) -> Some p
+        Some (Pins, match Hashtbl.find_opt env.through (f.node, f.loc) with Some alias -> alias | None -> Path.owner p)
+    | Var (Global p) when posts_to_a_family p && not (Path.owner p = Path.prelude "Instances") ->
+        Some (Posts, match Hashtbl.find_opt env.through (f.node, f.loc) with Some alias -> alias | None -> Path.owner p)
+    | Var (Dep_op (p, op)) -> Option.map (fun r -> (r, p)) (Hashtbl.find_opt env.pin_ops (p, op))
     | _ -> None
   in
-  match family with
+  match reach with
   | None -> check ()
-  | Some fam ->
+  | Some (reach, fam) -> (
       (* as it's written: through the alias it's called by *)
       let written =
         match f.kind with
@@ -3126,26 +3128,40 @@ and pinning env cx (e : expr) (f : expr) errs check =
         | Var (Global p) -> env.names fam ^ "." ^ Path.short p
         | _ -> Option.value (env.source f) ~default:(env.names fam)
       in
-      (match List.assoc_opt fam env.pinned_by with
-      | Some outer -> report env (pinned_inside e.loc ~inner:written ~outer)
-      | None when env.pinned_by <> [] -> (
-          (* `Full` where waiting could close a cycle, if what the call
-             fails with can say so *)
-          let full = { name = "Full"; payload = []; dep = false; written = unmarked () } in
-          match
-            Unify.atomically env.st (Unify.copier ()) (fun st (c : Unify.copy) ->
-                Unify.unify_row st (c.row errs) (c.row (RExtend (full, fresh_row st))))
-          with
-          | Ok () ->
-              Hashtbl.replace cx.nodes (full_node e.node) unit;
-              Hashtbl.replace cx.found (full_node e.node) Full_marked
-          | Error _ -> ())
+      (match List.find_opt (fun (outer, _) -> installed_inside env fam ~outer) env.pinned_by with
+      | Some (outer, block) when outer = fam && reach = Pins ->
+          report env (pinned_inside e.loc ~inner:written ~outer:block)
+      | Some (outer, block) ->
+          report env
+            (reaches_held e.loc ~call:written ~block ~family:(env.names fam)
+               ~holds:(env.names outer) ~same:(outer = fam))
       | None -> ());
-      Hashtbl.replace env.kept_pins cx.self
-        ((Ty.dep_label fam, written, e.loc)
-        :: Option.value (Hashtbl.find_opt env.kept_pins cx.self) ~default:[]);
-      env.pinned_by <- (fam, written) :: env.pinned_by;
-      Fun.protect ~finally:(fun () -> env.pinned_by <- List.tl env.pinned_by) check
+      match reach with
+      | Posts -> check ()
+      | Pins ->
+          env.pinned_by <- (fam, written) :: env.pinned_by;
+          Fun.protect ~finally:(fun () -> env.pinned_by <- List.tl env.pinned_by) check)
+
+(* Whether the family installed as [fam] is [outer] or installed inside
+   it, as far as the `with`s in sight say ([env.in_sight]): one installed
+   in this function is inside one that isn't, which is installed by its
+   callers; of two installed here, the one nearer the code is inside the
+   other. Of two installed by its callers, nothing's known here. *)
+and installed_inside env fam ~outer =
+  fam = outer
+  ||
+  let index p =
+    let l = Ty.dep_label p in
+    let rec go i = function
+      | [] -> None
+      | (m : label) :: rest -> if m.name = l then Some i else go (i + 1) rest
+    in
+    go 0 env.in_sight
+  in
+  match (index fam, index outer) with
+  | Some i, Some j -> i < j
+  | Some _, None -> true
+  | _ -> false
 
 (* Whether [t] is the prelude's `Tags`. *)
 and is_tags t =
@@ -3193,7 +3209,18 @@ and known_calls expected =
    with the help decision 18 gives; anything else is an ordinary
    mismatch. It's no rule written for `post`: any function's parameter of
    such a type says the same (compiler.md, "Services stage", "`D.Call`"). *)
-and call_arg env cx ~name (a : expr) expected =
+(* For [f], `Docs.post`, the `at` of the family it posts to, as it's
+   written, `Docs.at`: what the help of a post of a call that can fail
+   names (call_not_taken). *)
+and post_at env (f : expr) =
+  match f.kind with
+  | Var (Global p) when p = Path.member (Path.prelude "Actors") "post" ->
+      Option.map
+        (fun alias -> env.names alias ^ ".at")
+        (Hashtbl.find_opt env.through (f.node, f.loc))
+  | _ -> None
+
+and call_arg env cx ~name ?at (a : expr) expected =
   let t = infer env cx a in
   (* the first case [t] may be that [expected], a `D.Call<R ! E>`, doesn't
      take: one whose operation gives something else than R, or can fail
@@ -3230,12 +3257,12 @@ and call_arg env cx ~name (a : expr) expected =
         | None -> "this"
       in
       report env
-        (call_not_taken (result_loc a) ~fn ~gives:(shown r) ~fails:(row_names e) ~op:c.op
+        (call_not_taken (result_loc a) ?at ~fn ~gives:(shown r) ~fails:(row_names e) ~op:c.op
            ~op_gives:(if same_ty gives r then None else Some (shown gives))
-           ~op_fails:(List.map (fun (l : Ty.label) -> l.name) c.fails.labels))
+           ~op_fails:(List.map (fun (l : Ty.label) -> l.name) c.fails.labels) ())
   | None -> ignore (unifies env plain (result_loc a) ~found:t ~expected)
 
-and check_args env cx ~name ?callee ~written ps args =
+and check_args env cx ~name ?callee ?at ~written ps args =
   List.iter2
     (fun ((p : Types.param), written) (a : expr) ->
       (* `f(&s.pop())` passes the call's result: its `&` is the
@@ -3277,7 +3304,7 @@ and check_args env cx ~name ?callee ~written ps args =
       | Read, Ref place when passed ->
           ignore (infer env cx place);
           report env (arg_not_changed a.loc name)
-      | Read, _ when known_calls p.ty <> None -> call_arg env cx ~name a p.ty
+      | Read, _ when known_calls p.ty <> None -> call_arg env cx ~name ?at a p.ty
       | Read, _ -> (
           let why =
             match (cant_fail_why env callee a p.ty, callee) with
@@ -4476,5 +4503,5 @@ and core =
     stmt;
     infer_call;
     call_with;
-    check_args;
+    check_args = (fun env cx ~name ?callee ~written ps args -> check_args env cx ~name ?callee ~written ps args);
   }

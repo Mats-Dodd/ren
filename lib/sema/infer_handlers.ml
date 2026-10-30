@@ -1531,36 +1531,12 @@ and install env cx (lk : with_link) (i : impl) ~keys inner =
         Some p
     | _ -> None
   in
-  (* what it needs only for the instances of a family it keeps, which
-     post to their siblings through what it's installed as, `doc` that
-     uses `Docs` in `actors(doc) as Docs`, it meets itself: the family
-     adds its own install to their evidence (decision 18, "Siblings";
-     Infer_expr.kept_needs) *)
-  let needs =
-    let kept =
-      match (Hashtbl.find_opt env.kept_own (lk.link.node, lk.link.loc), lk.link.kind) with
-      | Some only, _ -> Some only
-      | None, Call ({ kind = Var (Global p); _ }, _) when Hashtbl.mem env.wired_from p ->
-          (* a wiring's link, made into a function whose body is its item *)
-          Hashtbl.find_opt env.kept_in p
-      | None, _ -> None
-    in
-    match kept with
-    | Some only ->
-        let own = List.filter (fun l -> List.exists (fun (k, _) -> same_label l k) keys) only in
-        if own = [] then i.needs
-        else (
-          let needs = extend (without_labels own (fst (row_parts i.needs))) (row_end i.needs) in
-          (* and so lowering passes it nothing for them *)
-          (match Hashtbl.find_opt cx.nodes lk.link.node with
-          | Some t -> (
-              match repr t with
-              | TImpl ti -> Hashtbl.replace cx.nodes lk.link.node (TImpl { ti with needs })
-              | _ -> ())
-          | None -> ());
-          needs)
-    | None -> i.needs
-  in
+  (* what it needs includes what the instances of a family it keeps
+     need (Infer_expr.kept_needs), so an actor that names its own
+     family, `doc` that uses `Docs` in `actors(doc) as Docs`, is the
+     ordinary cycle in one `with` set: there's no mail inside a family
+     (structured-actors.md, rule 3) *)
+  let needs = i.needs in
   use_row env cx ~loc ~needs:true ?callee
     (copy_needs env ~loc ~what:Installing needs);
   (* its kind is recorded at a node of its own, which needs a type *)
@@ -1582,7 +1558,10 @@ and install env cx (lk : with_link) (i : impl) ~keys inner =
         (* the body's own row, which the solver relates to the outer one
            once the group is done *)
         let inside = { cx with uses = fresh_row env.st; calls = ref [] } in
-        let tb = around inside rest in
+        (* in sight of what's inside it, for rule 3 (Infer_expr.pinning) *)
+        let sight = env.in_sight in
+        env.in_sight <- label :: sight;
+        let tb = Fun.protect ~finally:(fun () -> env.in_sight <- sight) (fun () -> around inside rest) in
         defer env
           (Install
              {
@@ -1603,28 +1582,6 @@ and install env cx (lk : with_link) (i : impl) ~keys inner =
         tb
   in
   around cx keys
-
-(* A handler [link] keeps, given to it by name, `actors(doc) as Docs`,
-   whose arms pin an instance of the family it's installed as, [a]: one
-   of its own siblings, which is refused (foundations.md, decision 18,
-   "No deadlock"; Infer_expr.pinning keeps what each arm pins). *)
-and kept_own_family env (link : expr) (a : tname dep_ref) =
-  match (link.kind, a.dep.tref) with
-  | Call (_, args), Named fam ->
-      List.iter
-        (fun (arg : expr) ->
-          let arg = match arg.kind with Named (_, v) -> v | _ -> arg in
-          match arg.kind with
-          | Var (Global p) ->
-              List.iter
-                (fun (family, call, loc) ->
-                  if family = Ty.dep_label fam then
-                    report env
-                      (kept_pins_own loc ~handler:(Path.short p) ~family:(env.names fam) ~call))
-                (List.rev (Option.value (Hashtbl.find_opt env.kept_pins p) ~default:[]))
-          | _ -> ())
-        args
-  | _ -> ()
 
 (* What the item [it], a chain of [links], is installed as, written after
    `as`, [a]: an alias of an instance of the dependency it implements,
@@ -1670,9 +1627,7 @@ and installed_as env cx (it : with_item) links (a : tname dep_ref) =
               (fun x y -> Unify.unify st (c.ty x) (c.ty y))
               d.dargs target.dargs)
       with
-      | Ok () ->
-          kept_own_family env lk.link a;
-          Some (key, d.dpath)
+      | Ok () -> Some (key, d.dpath)
       | Error _ -> (
           (* a description among the type arguments that fails to start
              with more than the alias declares, `Actors<DocId, Doc> !

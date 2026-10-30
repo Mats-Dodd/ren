@@ -302,10 +302,7 @@ let run ~opts ~sources (suite : Driver.suite) =
             let first =
               match opts.seed with Some s -> s | None -> seed_of (full_name t)
             in
-            (* under each seed in turn, until one fails; and the most
-               posts each keyed instance family queued at once, under
-               any of them *)
-            Family.reset_highs ();
+            (* under each seed in turn, until one fails *)
             let rec under seed =
               let how, console =
                 Eval.run_test ~dir:(Filename.dirname file) cx
@@ -323,12 +320,6 @@ let run ~opts ~sources (suite : Driver.suite) =
             | _ ->
                 failures := { test = t; file; seed; how; console } :: !failures;
                 print_endline (indent ^ "✗ " ^ one_line t.name));
-            List.iter
-              (fun (dep, high) ->
-                print_endline
-                  (sprintf "%s    `%s`'s high-water mark: %d post%s queued at once" indent dep high
-                     (if high = 1 then "" else "s")))
-              !Family.highs;
             flush stdout))
       files;
     let b = Buffer.create 1024 in

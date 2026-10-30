@@ -2336,21 +2336,6 @@ and plain_call cx ~changed ?callee ?through (e : expr) f args =
       | Some alias -> rebound cx ~alias e.loc (fun () -> mk (Call (f, args, cx.ev)) ty e.loc)
       | None -> mk (Call (f, args, cx.ev)) ty e.loc
     in
-    (* a pin inside another family's pinned block that can fail with
-       `Full` (Infer.Full_marked): the family is told so around it, and
-       fails it with `Full` rather than panicking where it would wait *)
-    let call =
-      match Infer.Nodes.find_opt (Infer.full_node e.node) cx.nodes with
-      | Some { found = Some Full_marked; _ } ->
-          let mark on =
-            let a : Ty.args = { tys = []; rows = [ Ty.closed; Ty.closed ] } in
-            let fty = Ty.apply a (Prelude.scheme Family_full).ty in
-            let f = mk (Intrinsic (Family_full, a, [], [])) fty e.loc in
-            mk (Call (f, [ Value (mk (Bool on) Ty.bool e.loc) ], cx.ev)) Ty.unit e.loc
-          in
-          mk (Seq (mark true, mk (Finally (call, mark false)) ty e.loc)) ty e.loc
-      | _ -> call
-    in
     if C.fails f.ty then
       (* the places are written back even if it fails *)
       lets binds (mk (Finally (call, seq_all e.loc writes)) ty e.loc)

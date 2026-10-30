@@ -329,7 +329,9 @@ fn main() uses Console, Random =
        │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     |}]
 
-let%expect_test "waiting for a family installed inside one a task pins, hidden in a helper, panics" =
+let%expect_test "`at` of a family installed inside the one a block holds, hidden in a helper, panics" =
+  (* rule 3's run-time check (step 10a): at the pin, whether or not it
+     would wait; it was a panic only where it waited for a slot *)
   run_error
     {|
 type Key = | Key(n: Int)
@@ -358,7 +360,7 @@ fn main() uses Console, Async, Random =
         s.spawn fn() => Outers.at(Key(1)) fn() => poke(2)
 |};
   [%expect {|
-    error: panic: a task pinning `Outers` would wait for a slot of `Inners`, installed inside it
+    error: panic: a block that pins one of `Outers`'s instances pins one of `Inners`'s, installed inside it, which could wait for what the block holds
        ┌─ test.ren:14:3
     14 │   Inners.at(Key(n)) fn() => Inner.poke()
        │   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1168,9 +1168,29 @@ let pinned_inside loc ~inner ~outer =
            can wait for room in the family"
           outer;
       ]
-    ~help:"finish with the first, then call the second; or post to it, which holds nothing"
+    ~help:"finish with the first, then call the second"
     (sprintf "`%s` inside a block of `%s` could wait for a slot its own block holds"
        inner outer)
+
+(* A call [call], `Docs.post` or `Inners.at`, inside a block of [block],
+   `Docs.at`, that holds the family installed as [holds], reaching
+   [family], which is that one ([same]) or installed inside it
+   (structured-actors.md, rule 3). *)
+let reaches_held loc ~call ~block ~family ~holds ~same =
+  Diag.make loc
+    ~notes:
+      [
+        sprintf
+          "a block of `%s` holds `%s` until it ends: inside it, only families installed outside `%s` can be reached, so every wait points outward"
+          block holds holds;
+      ]
+    ~help:
+      (if same then sprintf "call `%s` after the block" call
+       else
+         sprintf "call `%s` after the block, or reach `%s` first and `%s` inside its block"
+           call family holds)
+    (if same then sprintf "`%s` inside a block of `%s` reaches the family its block holds" call block
+     else sprintf "`%s` inside a block of `%s` reaches `%s`, installed inside `%s`" call block family holds)
 
 (* The handler [maker], kept by a family installed as [alias], whose
    setup can fail with [errors], which the alias doesn't declare as what
@@ -1214,13 +1234,11 @@ let kept_finally_fails loc ~handler =
     ~help:"save in its operations, write-through, or flush before the family ends"
     (sprintf "`%s` is kept by a family, so its `finally` can't fail" handler)
 
-(* The handler [handler], kept by the family installed as [family], whose
-   arm calls [call], which pins one of that family's instances. *)
 (* A call given to [fn]'s parameter of `D.Call<R ! E>`, [gives] and
    [fails] as written, `()` and none, that may be a call of [op], which
    gives [op_gives] or can fail with [op_fails] (compiler.md, "Services
    stage", "`D.Call`"): an ordinary type rule, whatever [fn] is. *)
-let call_not_taken loc ~fn ~gives ~fails ~op ~op_gives ~op_fails =
+let call_not_taken loc ?at ~fn ~gives ~fails ~op ~op_gives ~op_fails () =
   let wanted =
     match fails with
     | [] -> sprintf "gives `%s` and can't fail" gives
@@ -1235,18 +1253,17 @@ let call_not_taken loc ~fn ~gives ~fails ~op ~op_gives ~op_fails =
         sprintf "`%s` can fail with %s" op
           (String.concat " or " (List.map (sprintf "`%s`") op_fails))
   in
-  Diag.make loc
-    ~help:
-      "use the value, or handle the error, inside the operation, or make the \
-       call directly where its result is wanted"
-    (sprintf "`%s` takes a call that %s, and %s" fn wanted found)
-
-let kept_pins_own loc ~handler ~family ~call =
-  Diag.make loc
-    ~notes:[ sprintf "an actor's siblings are the other instances of `%s`" family ]
-    ~help:"post to it instead, which holds nothing"
-    (sprintf "`%s` is kept by `%s`'s family, so it can't call `%s`, which pins one of its siblings"
-       handler family call)
+  (* the two ways out: inside the operation, or a call of it where its
+     value or error is wanted, `Docs.at`'s block, for a family's post *)
+  let help =
+    match (at, op_gives) with
+    | Some at, Some _ -> sprintf "use its value inside the operation, or call it with `%s`" at
+    | Some at, None -> sprintf "handle it inside the operation, or call it with `%s`" at
+    | None, _ ->
+        "use the value, or handle the error, inside the operation, or make the \
+         call directly where its result is wanted"
+  in
+  Diag.make loc ~help (sprintf "`%s` takes a call that %s, and %s" fn wanted found)
 
 (* A block passed to the operation [op], `Tally.change`, that uses [dep],
    which its parameter's type, [param], doesn't list: the operation holds
