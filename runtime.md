@@ -258,10 +258,78 @@ handlers installed above it, and `sim` and `over` see every call.
   different specialization from a `per_core` one; what they share is
   the set of points.
 
+## The call record: a header the core owns, a body the language owns
+
+Every record that crosses an owner has two parts. **The header is the
+core's:** what it needs to route a call, find its waiter and end it
+once. **The body is the language's:** the `D.Call` value itself, whose
+meaning only the compiler knows. One header schema and one body
+encoding serve every carrier: a core's queues, the journal, a hosted
+driver, a place with no shared memory, and the wire between processes.
+
+| | Core (C) | Language (compiler, prelude) | std (Ren) |
+|---|---|---|---|
+| Identity | the call id and its generation | | |
+| Lifecycle | the kinds: call, post, cancel, reply; release as a journal event | which construct makes which kind | |
+| Routing | the queue; a key's home, from its hash | a key's hash and equality, in its descriptor | which driver answers which dependency |
+| Waiter | the task and frame by id, park and wake | the resume sites | |
+| Order | every choice, and the step | | |
+| Body | carried, never read: a type id and bytes or a pointer | `D.Call` (its tag is the operation), `D.Reply`, `D.Error` | |
+| Encoding | | each shape's `bin` look | text looks for reading; `Secret`'s redaction |
+| Journal | order records | | content records, by the recorder |
+| Between processes | | | the envelope, the version handshake, `Chunk`, a remote defect |
+
+**The core does generic work over descriptors and never knows a type.**
+A family's key map is the core's, in C: keys are opaque bytes with the
+hash, equality and drop the compiler emits for their type, so the lookup
+runs at the key's home, where `per_core` needs it.
+
+```
+id      u64   slot:32 | generation:32      ends once
+kind    u8    Call | Post | Cancel | Reply  the lifecycle
+state   u8    Done | Cancelled (a reply)    the cancel race
+flags   u16   reserved
+to      u32   0 = the world, else a family  routing
+task    u32   the waiting task              waking, traces
+lane    u32   the inbound event's tree      hosted affinity (1.0, reserved)
+shape   u32   the body's type id            carried, never read
+len     u32   the body's length
+(body   ptr   in memory only)
+```
+
+Every field is one the core reads, except `shape`, which is the one
+hook between the two sides: whatever decodes a body keys on it. In
+memory the body is the value, with `inout` buffers lent as pointers;
+serialized, it's the `bin` look's bytes.
+
+- **The operation is the body's tag,** not a header field. The core
+  never branches on it; a driver, which is Ren, does.
+- **A call has exactly one reply.** A stream across an owner is pulls,
+  each answered once; the wire's `Chunk` is std batching pulls under
+  credit. Ends once stays one generation check.
+- **A post is its own kind:** no waiter, drained or dropped when its
+  family ends, acked only where a task's order needs it.
+- **A cancel names an id,** and the call it cancels still gets its one
+  reply, `Done` or `Cancelled`.
+- **A defect isn't a kind.** A panic ends the program; a remote panic
+  is a reply, `Err(Unavailable(Server))`, which is std's.
+- **A leased buffer's return is a post to the world,** not a kind of
+  its own.
+- **How a buffer is journaled,** inline, hashed or not at all, is the
+  recorder's choice, beside its `Secret` rule, not the core's config.
+
 ## What's journaled: time and order, and place only when it's read
 
-The core writes the journal, through the host's `journal` hook: each
-choice it made, each world call and its reply, each post. **Place isn't
+The journal is two streams joined by call id. **The core writes order,**
+through the host's `journal` hook, in small binary records: each choice
+it made, each delivery at its step, each cancel, release and post, and
+a family's opened, made and evicted. **Ren writes content:** the
+recorder, a handler `over any`, writes each call and its reply through
+its shape's `bin` look. A replay feeds the order to the scheduler, as
+`sim` feeds its tape, and the content to the replay driver. The binary
+journal is the one format on disk, and journal v3's text is a view of
+it, `ren journal show`, so the interpreter's journals and native ones
+are the same files. **Place isn't
 journaled, because a program can't observe it unless it asks:** which
 core ran a task, where a key lives, whether `at` moved the task or
 shipped each call. So a journal recorded on sixteen cores replays on
@@ -333,8 +401,8 @@ names and signatures are the runtime core stage's:
 
 ## Open
 
-- The core's own record layout, shared with the journal and the hosted
-  wire: the runtime core stage.
+- The descriptor: what the compiler hands the core for each type it
+  carries (hash, equality, drop, size, the `bin` encoder).
 - A user-written scheduler: later, inside `trust`, against this page.
 - The core's wake, cancel and reply protocol: model-checked in
   research/runtime-core-model/, which found a use after free at every

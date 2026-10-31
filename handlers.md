@@ -557,7 +557,10 @@ trace is for reading, and replay doesn't need them.
 9 main exit 0
 ```
 
-That's version 3, the services stage's, which is stage 11a's version 2
+From the runtime core on, this text is a view of the binary journal, the
+core's order records joined with the recorder's content records
+([runtime.md](runtime.md#the-call-record-a-header-the-core-owns-a-body-the-language-owns)),
+and the interpreter writes the same files. That's version 3, the services stage's, which is stage 11a's version 2
 (compiler.md, "Journal version 2") with the lines of the runtime's
 instance families, below: a
 number, the task that made the call, `main` or a spawned task's path
