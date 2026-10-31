@@ -150,6 +150,37 @@ $ ren test --only "two deposits" --seed 3815     # the same failure, exactly
   yet: the interpreter has no debug builds, and `ren test` no line for
   it (compiler.md, "Step 10: structured actors", "Chosen in step 10b").
 
+### A dependency names its test default
+
+Decided on 2026-10-30; not built yet. Any `pub dep` may name the
+handler `ren test` installs when a test wires nothing else, in the same
+slot as `Fs.real`:
+
+```ren
+pub dep Mailer =
+  send: fn(to: Addr, body: Str) ! MailError
+
+  let test: Mailer = memory_mailer()
+```
+
+- **`ren test` installs it at each test's root,** for every dependency
+  the test reaches and no `with` above it provides.
+- **No default is a build error:** a test that reaches a dependency
+  with no `test` and doesn't wire it doesn't build, and the error names
+  the dependency, as an unwired one in `main` does. Nothing falls back
+  to the real world.
+- **The world's dependencies follow the same rule.** `Fs`, `Net`,
+  `Clock` and the rest name their in-memory implementation as `test`,
+  and `--sim` swaps in the simulated ones, so the built-ins are no
+  special case.
+- **A `with` in the test overrides it,** and the fake can be inspected
+  after, as today.
+- **It ships in the dependency's own module** (layers.md, rule 2).
+  Above L1, a dependency simulated from below can name its real
+  implementation, which runs over the test's `Fs` and `Net`.
+- **A test default may use other dependencies,** resolved the same way,
+  by their own defaults; a cycle among them is a build error.
+
 ### Test items
 
 Tests need helpers: a handler that keeps accounts in memory, a builder for
