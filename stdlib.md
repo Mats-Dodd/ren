@@ -49,14 +49,13 @@ How `std.x` is versioned (decided on 2026-10-30):
 
 ### The tests
 
-A module belongs in `std` if it passes any of these:
+A module belongs in `std` if it passes any of these. (A fifth, "does the toolchain need it?", was dropped on 2026-10-30: the toolchain can use `std.x`, which ships at its version.)
 
 | Test | Question | Example |
 |---|---|---|
 | **Shared type** | Must libraries agree on this type to fit together? | `Time`, `Request`, `Sql` |
 | **Determinism** | Must it be controlled for simulation and replay to hold? | `math`, hashing, Unicode tables, DNS, time zones |
 | **Trust** | Does it need `trust` or FFI, or is it critical to security? | crypto, TLS, compression |
-| **Toolchain** | Does the Ren toolchain itself need it? | TOML, tar, SHA-256, an HTTP client, JSON |
 | **Ubiquity** | Does nearly every service need it? | JSON, HTTP, logging, configuration |
 
 It goes to `std.x`, or stays out, if it fails the **stability test**: does the domain change faster than the compatibility promise allows?
@@ -65,25 +64,30 @@ The determinism test is the one other languages don't have. A third-party `sin`,
 
 ### Layers
 
+Each module sits on a layer of [layers.md](layers.md), and uses only those below it:
+
 ```
-prelude    Int, Str, Bytes, Array, Map, Set, Option, Result, Duration, Time
-           (what nearly every module needs)
+L0  the language    the prelude: Int Float Bool Str Bytes Decimal Template Duration
+                    Unit, Option Result Array, ranges, Map Set, Async Alloc Unsafe
+                    Console, print dbg assert; the runtime's built-in handlers
 
-pure       str, bytes, fmt, sort, math, unicode, decimal, bigint, random, uuid,
-           collections, regex, json, schema, base64, hex, url, csv, toml,
-           compress, crypto
+L1  the world       Fs, Net, Clock, Random, Console, Proc, Os, Signal
+                    each real, in-memory and simulated (runtime-io.md, Part 4)
 
-deps       Fs, Net, Clock, Random, Console, Alloc, Async, Os
-           each with real, in-memory and simulated implementations
+L2  the kit         str, bytes, fmt, sort, math, unicode, decimal, bigint, random,
+                    uuid, collections, regex, clock (Time, Instant), path, shape,
+                    json, schema, base64, hex, url, csv, toml, compress, crypto,
+                    writers (Send<T>), framing, sync, channel, schedule, retry,
+                    cache, log, trace, metrics (observers)
 
-services   http, tls, x509, dns, sql, sqlite, postgres, config, cli, log, trace,
-           metrics, schedule, retry, cache, channel, test, sim
+L3  protocols       http, tls, x509, dns, sql, sqlite, config, cli, exporters
+                    (console, file); infra types Blob, BlobCas, Kv, Cache, Queue,
+                    implemented by vendor packages
 
-infra      Blob, BlobCas, Kv, Cache, Queue: dependency types only, implemented
-           by vendor packages
+L4  batteries       the http server's routing and middleware, test, sim harnesses
 
-std.x      websocket, protobuf, grpc, yaml, mysql, redis, jwt, prometheus,
-           ren.syntax, ...
+std.x               postgres, HTTP/2, OTLP, websocket, protobuf, grpc, yaml, mysql,
+                    redis, jwt, prometheus, ren.syntax, ...
 ```
 
 ---
@@ -180,7 +184,7 @@ A `u64` too large for an `Int`, or a `VarUInt` longer than 10 bytes, is `Malform
 
 ### `x.hash()`, and a map's own hash
 
-Every type with a derived or written `hash` ([operators.md](operators.md#equality-hashing-and-show)) has a method `x.hash()` that gives an `Int`, through the type's `key` if it has one, so two values `==` hash the same. It has **no seed**: the same value on every run, in `ren run` and in every native build, so a hash that's printed, stored or journaled replays the same. A `Map` or `Set` doesn't use it: inside, it hashes its keys with a fast hash mixed with a seed drawn when the process starts (fixed under `ren test` and `ren replay`), so keys chosen by an attacker can't force collisions. A map iterates in insertion order, so the seed changes only its speed, never what a program sees (compiler.md, "Bytes stage", "Step 3, as built").
+Every type with a derived or written `hash` ([operators.md](operators.md#equality-hashing-and-show)) has a method `x.hash()` that gives an `Int`, through the type's `key` if it has one, so two values `==` hash the same. It has **no seed**: the same value on every run, in `ren run` and in every native build, so a hash that's printed, stored or journaled replays the same. A `Map` or `Set` doesn't use it: inside, it hashes its keys with a fast hash mixed with a seed drawn when the process starts (fixed under `ren test` and `ren replay`) and readable by any library as `std.hash.seed()`, one per run and journaled, as `Async.worker()` is, so a library's own table gets the same protection, and keys chosen by an attacker can't force collisions. A map iterates in insertion order, so the seed changes only its speed, never what a program sees (compiler.md, "Bytes stage", "Step 3, as built").
 
 ### `Time` and `Instant`
 
@@ -356,7 +360,8 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 | `net` (TCP, UDP, Unix sockets) | std | primitives |
 | `dns` | std | determinism: simulation controls name resolution, so Ren owns the resolver |
 | `tls`, `x509` | std | trust |
-| `http` (1.1 and 2, server, client, router, SSE) | std | shared types; HTTP/2 because gRPC and modern clients need it |
+| `http` (1.1, server, client, router, SSE) | std | shared types |
+| HTTP/2 | std.x | a protocol that freezes or dies in a stdlib; flottning doesn't need it for 1.0 |
 | `websocket` | std.x | promote once the API settles |
 | HTTP/3, QUIC | std.x | still changing |
 | `smtp` | out | Go's `net/smtp` is frozen, which is the lesson |
@@ -369,7 +374,7 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 |---|---|---|
 | `sql` (the interface) | std | shared type |
 | `sqlite` | std | embedded; the interpreted-Ren milestone needs a database |
-| `postgres` | std | the database most services use; the wire protocol is written in Ren |
+| `postgres` | std.x | the wire protocol is written in Ren, but a protocol client freezes in a stdlib; flottning doesn't need it |
 | MySQL, Redis clients | std.x | useful, not universal |
 | Kafka, NATS, cloud SDKs | out | vendor churn; they implement the infrastructure types instead |
 
@@ -388,7 +393,7 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 
 All of it is interpreter-only but `release`, which is a plain call natively; `ren build` refuses the rest as it refuses `Async.scope` (compiler.md, "Services stage").
 
-**Observability:** `trace`, `log`, `metrics`, the flight recorder and the OTLP exporter, all std. Logging is the trace stream, so there's no Go-style split between `log` and `slog`. A Prometheus exporter goes in `std.x`.
+**Observability:** `trace`, `log`, `metrics` and the flight recorder, all std, all observers ([layers.md](layers.md#observers-logs-spans-and-metrics)), so there's no Go-style split between `log` and `slog`. Exporters are handlers: console and file in std, OTLP and Prometheus in `std.x`.
 
 **OS and process:** `os` (environment, arguments, signals, exit), `process`, `path`, directory walking and globbing, and minimal terminal support (detecting a TTY, colors), all std. Full terminal UIs are out.
 
@@ -487,10 +492,10 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 | **Services** | `striped` and `actors` in the prelude over the runtime's `Instances`; `Async.produce`, `Async.map_pull`, `Send<T>`, `Async.worker()`, `Async.beside` and `Async.background`; `Chan<T>`'s `items()`; `Proc.run(kill:)` (done, in the interpreter) |
 | **Stage 12** | `Decimal`, a language number type, and its `d` suffix; `Secret<T>`; interpolation libraries can intercept; `json`, `cli`, `config` and SQL rows over shapes ([shapes.md](shapes.md)); cursors over files, sockets and SQL rows; `http` server, client and router; `sqlite`; `cache`; `log`; property and snapshot tests |
 | **↑ interpreted Ren** | a JSON API on SQLite, configured from the environment, with retries on an outgoing HTTPS call, whose tests run in under a second on in-memory fakes |
-| **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd, `postgres`, HTTP/2; conformance suites for vendor packages |
+| **Stage 13** | packages and `std.x`; the compatibility promise starts; `tls`, crypto, `dns`, `toml`, tar, zstd; `postgres` and HTTP/2 in `std.x`; conformance suites for vendor packages |
 | **Stage 15** | non-allocating pure modules (`checksum`, `hash`, parsers), `push_within`, registered buffers |
 | **Stage 16** | `Array<T, soa>`, in-place `unique` APIs in `collections` |
-| **Stage 17** | `sim.*` for every dependency; the flight recorder and the OTLP exporter |
+| **Stage 17** | `sim.*` for every dependency; the flight recorder; the OTLP exporter in `std.x` |
 | **After 1.0** | promotions from `std.x`; perhaps the TLS state machine in Ren |
 
 ---

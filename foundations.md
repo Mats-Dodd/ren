@@ -1289,7 +1289,8 @@ builds abstractions out of them. Every feature is placed by five rules:
    runtime come in through dependencies (decision 9), and their
    built-in handlers are the only privileged code. The list is closed
    and complete:
-   - **the world:** `Fs`, `Net`, `Clock`, `Random`, `Console`, `Os`,
+   - **the world:** whatever can block or differ between two runs
+     (the criterion, decided Oct 30, [layers.md](layers.md)): `Fs`, `Net`, `Clock`, `Random`, `Console`, `Os`,
      `Proc` and `Signal`;
    - **the runtime:** the scheduler (`Async`), the keyed instance
      family (decision 18), `Mem` with its arenas and `Mem.snapshot`,
@@ -1298,7 +1299,16 @@ builds abstractions out of them. Every feature is placed by five rules:
 
    Everything else in std is plain Ren: `actors` and `striped` over the
    family, tracing, the flight recorder and recording a user's own
-   dependencies over `over any` and `call(c: D.Call)`.
+   dependencies over `over any` and `call(c: D.Call)`. Logs, spans,
+   metrics and `dbg` are observers, a rule any dependency can use
+   ([layers.md](layers.md#observers-logs-spans-and-metrics)), and a map's
+   hash seed is `std.hash.seed()`, one per run, journaled, which any
+   library reads.
+   - **std is compiled with the language users have:** no feature is
+     enabled for std alone (Rust's nightly std is the mistake avoided).
+   - **The build refuses a program its driver can't answer:** one that
+     reaches `Fs`, built for a target whose driver has no files, fails
+     at build time, naming the dependency.
 3. **The language owns what only the compiler can know or guarantee:**
    the program's declarations as data (a type's shape, a dependency's
    operations, `D.Call`), building a value that respects its type's
@@ -1323,7 +1333,9 @@ builds abstractions out of them. Every feature is placed by five rules:
 4. **Optimizations are invisible.** Specializing a library over a
    constant, a string `match` compiled to a perfect hash, unboxing:
    none changes what a program means. A debug build means the same,
-   slower.
+   slower. **No optimization is keyed to a declaration's name,** std's
+   or anyone's (Swift's `@_semantics` is the mistake avoided): a fast
+   path std wants is a general rule every library gets.
 5. **A policy lives with the library that applies it.** How json writes
    a sum, strict decoding, the first error or all of them: each is that
    library's default, in its settings. Consistency across std is a
