@@ -778,7 +778,7 @@ The array of options, `optional_array.ren` above:
       for round in 0..10
         for o in os
           match o
-            Some(i) => t += i.price + i.name.len() + round
+            Some(i) => t += i.price + i.name.byte_len() + round
             None => t += 1
       print(t)
 

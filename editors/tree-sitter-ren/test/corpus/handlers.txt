@@ -336,7 +336,7 @@ handler pool() for Pool =
 Inline handlers
 ================================================================================
 
-fn page(body: Str) -> Route = handler fn(path) => path.concat(body)
+fn page(body: Str) -> Route = handler fn(path) => path + body
 
 fn main() =
   let routes: Array<Route> = [handler fn(p) => p, page("x")]
@@ -364,11 +364,9 @@ fn main() =
         (parameters
           (parameter
             (identifier)))
-        (method_call_expression
+        (binary_expression
           (identifier)
-          (identifier)
-          (arguments
-            (identifier))))))
+          (identifier)))))
   (function_definition
     (identifier)
     (parameters)

@@ -13,9 +13,15 @@ Zig, Go, Swift, Python, Java, Erlang, Roc, Lean, Mojo and others),
 seventeen programs written against the candidate designs, two judges
 of those programs, and measurements of five layouts and policies on a
 C model of Ren's runtime. The documents it amends keep their current
-text until they're updated to match. Already built: `Str` is valid
-UTF-8, slices share their root and panic if they cut a character,
-equality is by bytes, and `trim` and `lower` are ASCII. Items marked
+text until they're updated to match. Already built (compiler.md,
+"Bytes stage, part two"): `Str` valid UTF-8, compared by bytes; in
+release builds the 16-byte value, inline, its slices of a string a
+function holds uncounted, and the 4 GiB escape;
+`+=` in place, with the debug report; the block validator and
+`InvalidUtf8(at, incomplete)`; the API table but `unicode`, in `ren run`
+and natively; and the literals: `'a'`, `\{x}` and `\{x=}`, `"""`, `#`
+raw strings, the escapes and `b"..."`. Not built: templates, `unicode`,
+`Path` as `opaque Bytes`, `ArgNotUtf8`, and the retention report. Items marked
 **later** are noted so they aren't lost.
 
 ## Contents

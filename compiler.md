@@ -8982,6 +8982,7 @@ steps, each green on its own:
 3. **Appending in place,** on representation A, with the debug report.
 4. **Representation B,** release builds, fix by fix, measured.
 5. **The rest of the API:** strings.md's table and `count()`.
+5b. **Literals:** strings.md's "Literals", added on 2026-10-29.
 6. **A review:** soundness, the spec, the docs and tooling.
 
 **Done when** (Staging item 7a's): the slices kernels' json and pages
@@ -9039,6 +9040,10 @@ This container has 15 GB, so the step that lands it runs it here.
 | `slices_count` | 10,000 slices kept in an array of small records, which `objects` counts | 2; 4 counts |
 | `rest` | step 5's names on `Str` and on `Bytes`, `line_col`, `count()` on every receiver | 5 |
 | `escape` (strs_big.t) | `Bytes` of 2^32 + 1 bytes, slices on both sides of the 32-bit edge, read, compared, hashed and appended to | 4 |
+| `lent` (strs_lent.t) | views and lent element reads, only read, kept, returned, captured, and outliving what they're of | 4, part 2 |
+| `escape_ops` (strs_big.t) | `+=` in place past the edge, views of an escape, `==`, hashing, sorting, layer 3's reads and `from_utf8` of one | 4, part 3 |
+| `maps`, `opaque_key`, `opaque_key_generic` (strs_maps.t) | maps and sets of `Str` and `Bytes`, their entries two words; an `opaque Str` key with its own `key`, and generic code over it | 4, part 3; 6 |
+| `literals` | every literal form of step 5b, and 10,000 `b"..."` compares that `objects` counts | 5b |
 
 **test/test_strs.ml** holds what a program's output can't say, each
 behind `until "s1"`, `"s2"` or `"s5"` (test/helpers.ml), as
@@ -9596,6 +9601,10 @@ Choices where strings.md, decision 17 and the brief are silent:
   `concat` move to `+` unchanged.
 - Step 2: an interpolated string whose hole is a `Str` uses it as it is,
   without `show` (the same value), and a string of one hole is that value.
+- Step 2: a hole whose value is of a type with a `show` of its own
+  doesn't build natively yet, since `show(x)` of one doesn't (the bytes
+  stage's step 3 refuses such a type at a walk); `ren run` shows it, and
+  `\{x.show()}` builds.
 - Step 3: a copy made by `_taking` gets room for twice the left side's
   length, not twice its owner's room: a loop that copies a shared string
   on every pass would otherwise double the room it asks for each time
@@ -9630,7 +9639,8 @@ Choices where strings.md, decision 17 and the brief are silent:
   its words": the walks are A's, unchanged, and see a box or a view
   where they meet a string, and two words where an array or a field
   holds them. A map's key is boxed only if the map keeps it.
-- Step 4: a value past 4 GiB panics where it's made, until the escape.
+- Step 4 (part 1): a value past 4 GiB panicked where it was made, until
+  part 3 built the escape.
 - Step 4 (part 2): the uncounted view is a slice of any `Str` or `Bytes`
   a function holds in a variable that never changes, not only a borrowed
   parameter's: a local's, a field's or an element's is a part of what
@@ -9677,6 +9687,18 @@ Choices where strings.md, decision 17 and the brief are silent:
   (`ren_map_layout`), and generic code's words are boxes, unboxed into
   the entry and boxed out. A `for` over a map still makes a tuple a
   pair, its `Str` part a box (a tuple's parts are words, part one).
+- Step 5: `split_once("")` is `Some(("", s))` and `includes("")` true,
+  as `index("")` is `Some(0)`; `lines` drops a `\r` only before a `\n`;
+  `count()` on an array, a map or a set is its `len()`, and on a cursor
+  a loop lowering writes out; `Bytes.replace` of no bytes has its own
+  wording, and `ren run`'s is quadratic in its matches.
+- Step 5b: `b"..."` is the parser's `"...".bytes()` of a literal that may
+  hold any bytes; a `"""` after text on a line is an error, not the end;
+  `\r\n` inside a `"""` is a line break; tabs may indent the lines when
+  every line's indentation starts with the closing line's; a line joined
+  by `\` loses its next line's indentation too; `t` isn't combined with
+  any form, since templates aren't built; and `show` of a `Str` writes a
+  `\r` or a `\0` as the byte, not as its escape.
 
 ### Step 1, as built
 
@@ -10405,6 +10427,7 @@ compares fewer than 200 objects in a debug build and a release one.
 
 | step | commit | what's done | what's left |
 |---|---|---|---|
+| 0 | "Bytes stage, part two, step 0: the spec and the tests", "... the baseline kernels and twins" | this section; bench/strs.t, strs_big.t and test_strs.ml, each marked for its step; bench/native/strs (tok, sort, map, group, logs, `out`, `utf8`) with Rust and Go twins, the slices kernels, and the `Map` claim restated (0.99× of Rust with FxHash), x86_64 | the baseline on the M4 Max, the owner's |
 | 1 | "Bytes stage, part two, step 1: the boundary" | the NEON block validator and its scalar path, the rescan; `InvalidUtf8(at, incomplete)` in every use; `from_utf8_lossy`; test/utf8/'s differential test, natively and under qemu-aarch64, 0 disagreements; invalid_utf8 and s1 on; scalar path 21×, 1.23× and 2.3× the old loop on ASCII, CJK and mixed (x86_64) | the NEON GB/s targets, the owner's to time on the M4 Max |
 | 2 | "Bytes stage, part two, step 2: the API" | `'a'`, interpolation with `\{x=}`, `ascii_lower`, `byte_len`, `is_empty`, the `len`/`s[i]`/`lower`/`concat` errors, `+` and `+=` (copying), `char_floor`/`char_ceil` and the cut panic's help natively, `chars`, `code`, `of_code`, `join`, `cursor(from:)`; tree-sitter and Zed; every program moved; s2 on | in-place `+=` (step 3); excl.ml got one constructor in its list of nodes to walk, the only touch of the services stage's files beyond the shared ones |
 | 3 | "Bytes stage, part two, step 3: appending in place" | the owner's `cap` and `REN_STR_SLICE`; `ren_str_concat_taking` (in place, doubling, copying with room) where the left side dies, `Bytes` too; the debug report with `REN_NOTES`; append_count and the report's block on; `+=` 1.06× Rust on logfmt, linear on both | json's `+=` at 1.41× of Rust, not 1.1×: A's slice objects and `show`'s strings, not the appending (step 4 makes the slices values) |
