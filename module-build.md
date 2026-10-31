@@ -248,7 +248,7 @@ The prelude is an ordinary module that every module imports implicitly. **It hol
 | Dependencies | `Async` `Alloc` `Unsafe` `Console` | spawning, allocation, `trust`, and `print` |
 | Functions | `print` `dbg` `assert` | |
 
-The world's dependencies aren't in it: `Clock`, `Random`, `Net`, `Fs`, `Os` and `Proc` are imported, `import std/net`, so where the world enters a module shows at its imports. Everything else in the standard library is imported like any other module: `import std/json` gives you `json.decode`. (Decided 2026-10-30; the prelude moves to this in stage 12.)
+The world's dependencies aren't in it: `Clock`, `Random`, `Net`, `Fs`, `Os` and `Proc` are imported, `import std/net`, so where the world enters a module shows at its imports. Neither are libraries written in Ren: `actors`, `striped` and `Instances` come from `std/actors`, `retry` from `std/retry`. `Send<T>` stays, as part of `Async`'s surface, since `Async.produce` installs it. Everything else in the standard library is imported like any other module: `import std/json` gives you `json.decode`. (Decided 2026-10-30; the prelude moves to this in stage 12.)
 
 **`print` uses `Console`.** It's an ordinary function, `Console.write(show(x))`, so calling it from code that doesn't declare `Console` is an error. Otherwise any pure function could quietly reach the outside world, and simulation and replay would stop being trustworthy.
 

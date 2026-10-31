@@ -1103,9 +1103,10 @@ names the format and its size.
 The compiler's part. None of it changes what a program means; a debug
 build means the same, slower.
 
-- **A `Look` is represented as the compiler likes.** In a closed world
-  the compiler knows every `format` in the program, so it can number
-  them: an enum it writes, one tag per format. A `via` runs inside its
+- **A `Look` is represented as the compiler likes,** named by its
+  qualified path, never by a number the whole program assigns
+  ([module-build.md](module-build.md#incremental-by-construction),
+  rule 5): a release build may fold it to a tag inside one copy. A `via` runs inside its
   tag's arm and is never stored. Debug builds `match` on the tag (or
   point at a static record, as `Handler_tag` does); release builds use
   a number. No program sees which.
