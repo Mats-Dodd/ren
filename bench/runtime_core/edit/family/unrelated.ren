@@ -1,1 +1,8 @@
 pub fn unrelated(n: Int) -> Int = n + 1
+
+pub dep Extra =
+  note: fn(n: Int)
+
+pub handler other(key: Int) for Extra =
+  var value = key
+  note(n) => value += n

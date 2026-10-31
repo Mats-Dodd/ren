@@ -127,30 +127,22 @@ let%expect_test "[c2] binary journals, unchanged v3 view and schema checks" =
           "truncated-header-refused"; "truncated-record-refused" ]);
   [%expect {| SKIP until c2 |}]
 
-(* MODEL.md: all five condensed counterexamples, the fourth wake site,
-   every mutant, and the no-cancel deliver race. Each mutant runner case
-   must build with its named rule disabled, observe the predicted
-   invariant fail, then rebuild with it enabled and observe success. *)
+(* MODEL.md's traces and mutants are concrete C bodies in
+   bench/runtime_core/core_protocol.c, driven by its official runner.
+   REN_CORE_TEST_SOURCES supplies real core/adapter sources when c3 lands. *)
+let core_tests extra =
+  let script = "../bench/runtime_core/core_tests.py" in
+  let command =
+    String.concat " " (List.map Filename.quote ("python3" :: script :: "--run" :: extra))
+  in
+  if Sys.command command <> 0 then failwith "production C core protocol checks failed"
+
 let%expect_test "[c3] model counterexamples and mutants with rule on and off" =
-  until "c3" (fun () ->
-      runner "REN_CORE_C_TEST"
-        [ "deliver-ref-cancel"; "deliver-ref-spurious"; "scope-end-ref";
-          "instance-handoff-ref"; "until-signal-ref"; "retract-wake";
-          "retract-other-call-in-flight"; "stop-retract-wake";
-          "stop-until-notify-all-live"; "cancel-does-not-free-op";
-          "reply-generation-cas"; "cancel-generation-cas-finally";
-          "store-before-notify"; "park-announcement-recheck";
-          "cancelled-task-waits-for-reply"; "take-lock-recheck";
-          "stop-running-before-park" ]);
+  until "c3" (fun () -> core_tests []);
   [%expect {| SKIP until c3 |}]
 
 let%expect_test "[c3] ends once, host ABI and sanitizer host replies" =
-  until "c3" (fun () ->
-      runner "REN_CORE_C_TEST"
-        [ "late-reply-release"; "reused-slot-old-generation-refused";
-          "inline-reply"; "duplicate-reply-release"; "task-ends-once";
-          "scope-ends-after-children"; "all-nine-host-functions";
-          "asan"; "ubsan"; "tsan-two-host-replier-threads" ]);
+  until "c3" (fun () -> core_tests [ "--sanitizers" ]);
   [%expect {| SKIP until c3 |}]
 
 let%expect_test "[c4] task journals and frames across interpreter and native" =

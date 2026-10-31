@@ -67,8 +67,11 @@ def main():
         for tool in ["clang", "cc", "ocamlc", "dune"]:
             metadata[tool] = run([tool, "--version" if tool != "ocamlc" else "-version"]).stdout.splitlines()[0]
         metadata["tcc"] = run([os.environ.get("REN_TCC", "tcc"), "-v"]).stdout.strip()
-        if args.ren.exists():
-            metadata["ren_sha256"] = hashlib.sha256(args.ren.read_bytes()).hexdigest()
+        reference = args.ren if args.mode in ["build", "frames"] else out / "ren-reference"
+        if reference.exists():
+            metadata["ren_sha256"] = hashlib.sha256(reference.read_bytes()).hexdigest()
+            metadata["ren_reference"] = str(reference.resolve())
+        metadata["kernels"] = KERNELS
         (out / (args.mode + "-metadata.json")).write_text(json.dumps(metadata, indent=2) + "\n")
     if args.mode == "frames":
         x1 = ROOT / "experiments/runtime-frames/x1"

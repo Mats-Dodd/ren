@@ -1,11 +1,17 @@
-import store.{Counter}
-import unrelated
+import store.{Counter, Key}
+import unrelated.{Extra}
 
-dep Counters = Actors<Str, Counter>
+dep Counters = Actors<Key, Counter>
+dep Others = Actors<Int, Extra>
 
 fn main() uses Console, Async, Random =
   print(unrelated.unrelated(0))
-  with actors(store.counter) as Counters in
-    Counters.at("a") fn() =>
-      Counter.add(1)
-      print(Counter.read())
+  with unrelated.other(0) in
+    Extra.note(1)
+  with actors(unrelated.other) as Others in
+    Others.at(0) fn() => Extra.note(1)
+    with actors(store.counter) as Counters in
+      Counters.at(Key { value: "a" }) fn() =>
+        Counter.add(1)
+        print(Counter.read())
+      Counters.post(Key { value: "a" }, store.Counter.Call.Add { n: 2 })

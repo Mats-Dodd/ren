@@ -1521,10 +1521,14 @@ and block o d b =
         let os, rest = run [] b in
         (match os with
         | a :: (_ :: _ as others) ->
-            line o d
-              (sprintf "if (%s) ren_dup_by(%s, %d); else ren_dup_each(%d, %s);"
-                 (String.concat " && " (List.map (fun x -> sprintf "%s == %s" x a) others))
-                 a (List.length os) (List.length os) (String.concat ", " os))
+            let compared = List.filter (fun x -> x <> a) others in
+            if compared = [] then
+              line o d (sprintf "ren_dup_by(%s, %d);" a (List.length os))
+            else
+              line o d
+                (sprintf "if (%s) ren_dup_by(%s, %d); else ren_dup_each(%d, %s);"
+                   (String.concat " && " (List.map (fun x -> sprintf "%s == %s" x a) compared))
+                   a (List.length os) (List.length os) (String.concat ", " os))
         | _ -> List.iter (fun x -> line o d (sprintf "ren_dup(%s);" x)) os);
         go rest
     | s :: rest ->

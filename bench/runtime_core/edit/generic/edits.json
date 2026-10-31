@@ -1,0 +1,109 @@
+[
+  {
+    "name": "unrelated-body",
+    "declarations": [
+      "unrelated/unrelated"
+    ],
+    "facts": [
+      "body:unrelated/unrelated"
+    ],
+    "actions": [
+      {
+        "file": "unrelated.ren",
+        "replace": [
+          "n + 1",
+          "n + 2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "source-lines",
+    "actions": [
+      {
+        "file": "worker.ren",
+        "prefix": "\n\n\n"
+      }
+    ]
+  },
+  {
+    "name": "callee-frame-growth",
+    "declarations": [
+      "worker/roundtrip"
+    ],
+    "facts": [
+      "body:worker/roundtrip"
+    ],
+    "actions": [
+      {
+        "file": "worker.ren",
+        "replace": [
+          "    Clock.sleep(Duration.ms(1))\n    value",
+          "    let retained = [value, value]\n    Clock.sleep(Duration.ms(1))\n    retained[0]"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "callee-colour",
+    "declarations": [
+      "worker/identity"
+    ],
+    "facts": [
+      "colour:worker/identity",
+      "body:worker/identity"
+    ],
+    "actions": [
+      {
+        "file": "worker.ren",
+        "replace": [
+          "pub fn identity<T>(value: T) -> T = value",
+          "pub fn identity<T>(value: T) -> T uses Clock =\n  Clock.sleep(Duration.ms(1))\n  value"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "recorded-inliner",
+    "declarations": [
+      "worker/inline_adjust"
+    ],
+    "facts": [
+      "body:worker/inline_adjust"
+    ],
+    "actions": [
+      {
+        "file": "worker.ren",
+        "replace": [
+          "n + 0",
+          "n + 1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "unrelated-generic-and-carry",
+    "new_declarations": [
+      "worker/roundtrip",
+      "added/Payload"
+    ],
+    "declarations": [
+      "main/main"
+    ],
+    "facts": [],
+    "actions": [
+      {
+        "file": "added.ren",
+        "write": "pub type Payload = { number: Int, text: Str }\n"
+      },
+      {
+        "file": "main.ren",
+        "prefix": "import added\n",
+        "replace": [
+          "  let _ = worker.adjusted(0)",
+          "  let _ = worker.adjusted(0)\n  let _ = worker.roundtrip(added.Payload { number: 7, text: \"added\" }, 1)"
+        ]
+      }
+    ]
+  }
+]

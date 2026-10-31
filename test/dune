@@ -4,7 +4,10 @@
  (name ren_tests)
  (inline_tests
   (deps
-   (glob_files ../examples/*.ren)))
+   (glob_files ../examples/*.ren)
+   ../bench/runtime_core/core_tests.py
+   ../bench/runtime_core/core_protocol.c
+   ../bench/runtime_core/core_hooks.h))
  (preprocess
   (pps ppx_expect))
  (libraries ren unix))

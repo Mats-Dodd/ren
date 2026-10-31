@@ -1,0 +1,32 @@
+pub dep Seen =
+  note: fn()
+  count: fn() -> Int
+
+pub handler seen() for Seen =
+  var count = 0
+  note() => count += 1
+  count() => count
+
+pub dep Worker =
+  poke: fn()
+
+pub dep Workers = Actors<Int, Worker>
+
+pub handler worker(key: Int) for Worker uses Seen, Console =
+  poke() =>
+    Seen.note()
+    print(key)
+
+test "order observation preserves reference" =
+  with seen() in
+    with actors(worker) as Workers in
+      Async.scope fn(s) =>
+        s.spawn fn() => Workers.post(1, Worker.Call.Poke)
+        s.spawn fn() => Workers.post(1, Worker.Call.Poke)
+    assert Seen.count() == 2
+
+pub fn boom(xs: Array<Int>) -> Int = xs[3]
+
+test "panic site stays in original" =
+  let _ = boom([1])
+  ()

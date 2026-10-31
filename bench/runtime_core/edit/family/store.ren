@@ -1,8 +1,14 @@
+pub type Key = { value: Str }
+
 pub dep Counter =
   add: fn(n: Int)
   read: fn() -> Int
 
-pub handler counter(key: Str) for Counter =
+pub handler counter(key: Key) for Counter uses Console =
+  let _ = print("setup " + key.value)
   var value = 0
+  finally(result) =>
+    print("finally " + key.value + ": " + show(value))
+    try result
   add(n) => value += n
   read() => value

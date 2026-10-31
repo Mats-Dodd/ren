@@ -1,0 +1,50 @@
+{
+  "interpreter": {
+    "paths": [
+      "lib",
+      "bin",
+      "std",
+      "examples/transfer",
+      "examples/refresh",
+      "examples/server",
+      "examples/crawler",
+      "examples/just",
+      "examples/breaker",
+      "examples/docs",
+      "bench/11a/tasks/lost_update",
+      "bench/services/lost_update",
+      "bench/services/memory"
+    ],
+    "exclude": [
+      "lib/native/"
+    ],
+    "historical_commit": "12da2291bbbeee241bbe17bfb501fcd834f617a0",
+    "current_commit": "97a152973e0bee31c8355a37ba19de1dc0c827c5",
+    "historical_tree": {
+      "sha256": "a1fca68f21865fd887f6192660c1d7a9ad4aff1fdf6f516ad9c2ae5faed6c3b8",
+      "entries": 115
+    },
+    "current_tree": {
+      "sha256": "a1fca68f21865fd887f6192660c1d7a9ad4aff1fdf6f516ad9c2ae5faed6c3b8",
+      "entries": 115
+    }
+  },
+  "frames": {
+    "paths": [
+      "experiments/runtime-frames/x1",
+      "experiments/runtime-frames/x5",
+      "experiments/runtime-p2/switch/c"
+    ],
+    "historical_committed_adapter_commit": "cb3cb0c",
+    "current_commit": "97a152973e0bee31c8355a37ba19de1dc0c827c5",
+    "historical_tree": {
+      "sha256": "571f12c2d9919e60a68dc96712c07c39668e67d80cc778117ef63aa1668bdf97",
+      "entries": 22
+    },
+    "current_tree": {
+      "sha256": "571f12c2d9919e60a68dc96712c07c39668e67d80cc778117ef63aa1668bdf97",
+      "entries": 22
+    }
+  },
+  "digest_method": "SHA-256 of git ls-tree -rz COMMIT -- PATHS records, excluding records whose path starts with EXCLUDE, joined in git order with NUL after every record; entries counts those records."
+}

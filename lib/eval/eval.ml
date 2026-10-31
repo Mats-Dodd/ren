@@ -3071,8 +3071,8 @@ type outcome =
    if it didn't, and every line it wrote to the test `Console`, which is
    kept even if it panicked; with the real one, it went to stdout. A test
    runs this way, and so does a `ren console` session (driver.ml). *)
-let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
-    ~real ~seed =
+let run_installed ?(dir = Filename.current_dir_name) ?journal
+    ?(record_order = false) ?(root = "test") cx ~(fn : Path.t) ~real ~seed =
   let cx = { cx with dir; entry = Some fn; site = "test" } in
   let what = "installing a test's implementations" in
   (* each built-in dependency's test implementation, the handler [path]
@@ -3095,6 +3095,8 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
      runtime installs") *)
   let installed = ref [] in
   let install () =
+    if record_order then
+      Option.iter (fun j -> ignore (Sched.watch (Some (watched j)))) journal;
     let runtime = made "Async" (sim "sim_runtime") [ VInt (Int64.of_int seed) ] [] in
     let world =
       (* `sim.clock()` and `sim.net()` use `Async`, the runtime's *)
@@ -3127,7 +3129,7 @@ let run_installed ?(dir = Filename.current_dir_name) ?journal cx ~(fn : Path.t)
   let outcome =
     try
       match
-        rooted ~root:"test" (fun () ->
+        rooted ~root (fun () ->
             apply cx (from_outside cx fn) [] (VEvidence (install ())))
       with
       | Ok v -> Ok v

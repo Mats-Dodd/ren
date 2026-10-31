@@ -82,10 +82,15 @@ val run_test :
    `Console`. [dir] is the folder of the file [fn] is in, which a test's
    `replay(file)` finds its journal from. `ren console` runs its session
    this way (driver.ml), with its [journal], whose recorder is put over
-   each built-in dependency. *)
+   each built-in dependency. [record_order] also observes the scheduler
+   in that journal; [root] lets the conformance runner enter an unchanged
+   main as [main], while ordinary tests keep their [test] path. Neither
+   option changes the installed handlers or the seed. *)
 val run_installed :
   ?dir:string ->
   ?journal:Journal.t ->
+  ?record_order:bool ->
+  ?root:string ->
   ctx ->
   fn:Path.t ->
   real:string list ->

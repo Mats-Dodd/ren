@@ -1,0 +1,3 @@
+import worker
+
+pub fn call(n: Int) -> Int uses Clock = worker.roundtrip(n, 1)

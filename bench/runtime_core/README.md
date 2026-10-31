@@ -1,92 +1,125 @@
-# Runtime core test scaffolding
+# Runtime core tests
 
-Step 0 runs the conformance comparator's six self-tests and six small
-interpreter reference programs in `../runtime_core.t`. The native
-milestones in that file and `test/test_runtime_core.ml` say **SKIP**.
-They do not reinterpret today's compiler errors as passing native tests.
+Step 0 runs the comparator self-tests, C source syntax checks, interpreter
+fixtures, and unchanged-Core interpreter-adapter checks in
+`../runtime_core.t`. Native milestones remain explicitly **SKIP** until
+their implementations arrive. Compiler refusals never pass conformance.
 
-`test/test_runtime_core.ml` contains concrete negative source programs
-for sixteen trust/foreign diagnostics. Its remaining entries describe the
-language, journal, C, task, family, channel, edit and driver checks that
-the later steps must provide. The `REN_CORE_*_TEST` variables name future
-executable runners with `--case <name>`; those runners must reject unknown
-cases. They are not implemented in step 0. In particular, **the named C
-counterexamples are an inventory, not executable C mutant tests yet**.
-Enabling a milestone without its runner fails immediately.
+## Concrete C protocol tests, pending c3 linkage
 
-## Conformance comparator
+`core_protocol.c` has 27 concrete test bodies/traces over `core_hooks.h`.
+The header specifies a test-only adapter to the **production** core at
+`lib/native/runtime/ren_core_test.c`; that adapter is deliberately absent
+in step 0. It must invoke real verbs/frame callbacks and observe actual
+ownership/refcount/allocation transitions. The stable observation ledger
+must not implement a replacement protocol. Pauses expose precise atomic
+boundaries, including MODEL.md's logical competing actors. They do not
+introduce a production multicore scheduler.
 
-From the repository root:
+Coverage includes all MODEL counterexamples: four reference-holding wake
+sites, cancel/spurious delivery, retraction alone/with another call/during
+stop, until stop before/after the park decision, P4 cancel-side free, both
+P3 generation races (including a shielded finally), notify-before-store,
+worker park recheck, cancelled-task reply/buffer lease, and take-lock
+recheck. Additional bodies cover inline/duplicate/late replies, stop with
+a pulled call and during publication, PING/PINGY, the nine host functions,
+kill without finally while a driver retains its lent buffer, and two real
+pthread host repliers. The header enumerates all 14 rule-removal flags;
+17 case/flag pairs must fail their exact intended invariant with the rule
+off and pass with it on. A crash or a different assertion is insufficient.
 
 ```
-python3 bench/runtime_core/conformance.py --self-test
+python3 bench/runtime_core/core_tests.py --syntax
+python3 bench/runtime_core/core_tests.py --run --sanitizers \
+  --sources path/to/real/core.c path/to/real/hook_adapter.c path/to/runtime.c
+```
+
+The first command checks only C syntax; it does not validate the core.
+The second builds rule-on and each rule-off binary, verifies the adapter's
+reported compiled flag, and checks invariant diagnostics. ASan/UBSan run
+all correct-core cases; TSan runs the two-host-replier case. It returns
+77 with an explicit SKIP while the production adapter is absent.
+`REN_CORE_TEST_SOURCES` may supply the real source list as a JSON array.
+No stub implementation is supplied or accepted as core validation.
+
+## Conformance adapters
+
+```
+dune build bench/runtime_core/adapter/interpreter.exe
+python3 bench/runtime_core/conformance.py program/main.ren --seed 1 --seeds 1000
 python3 bench/runtime_core/conformance.py program/main.ren \
-  --seed 1 --seeds 1000 --mode debug \
-  --interpreter '["/absolute/interpreter-adapter","{program}","{seed}","{journal}"]' \
-  --native '["/absolute/native-adapter","{program}","{seed}","{journal}","{mode}"]' \
-  --journal-view '["ren","journal","show","{journal}"]'
+  --test 'original test name' --seed 4702 --seeds 1 --mode release
 ```
 
-Adapters are necessary until the native sim CLI is implemented. Each
-runs the program under sim at the supplied seed and records its journal
-to the supplied path. They must return the program's status, stdout and
-stderr, keeping build messages elsewhere. Arguments are JSON arrays,
-expanded without a shell. Both executions use the same program path,
-working directory and journal path. A missing journal or timeout fails.
-Matching failures are permitted so panic and deadlock fixtures can be
-compared. Exit status, stdout, stderr (including panic location), and
-journal bytes must all match. The optional journal view command reports
-the first differing line, including its call and id; a binary difference
-with identical views still fails. `--mode` is passed to the native
-adapter: debug, release, asan, ubsan, tsan or tcc. The harness does not
-claim to compile or instrument a binary itself.
+The interpreter adapter invokes `Driver.suite` and `Eval.run_installed`
+on **unchanged checked Core**. It never renames/wraps main or transforms
+source. Main runs with root `main`, sim/test world dependencies, and real
+Console; source tests retain root `test`, the original generated test
+function, declared real dependencies and the same seeded Random/scheduler
+as `ren test`. The optional `record_order` observer attaches the existing
+journal watcher before runtime installation. Its default is false, so
+ordinary interpreter entry points retain their behavior. Active adapter
+checks compare default/observed outcomes, console, world-call task paths,
+panic location and seed, and assert that family order is recorded.
 
-The self-tests verify byte differences (including truncation), status,
-stdout, stderr, call context, subprocess adaptation, missing journals and
-timeouts. Their synthetic data tests only the comparator.
+`interpreter.py` launches this test-side executable. `native.py` implements
+the planned CLI contract: `ren build --scheduler sim --debug|--release`,
+then host flags `--ren-seed` and `--ren-record`. Tests additionally require
+`--test-entry` at build time and `--ren-test` at runtime. These native
+capabilities are pending c4/c5; today's missing option yields SKIP 77 and
+**no journal**, which causes conformance to fail. Genuine compilation
+errors retain their failure status. Debug, release, ASan, UBSan, TSan and
+tcc modes select their real compiler/instrumentation settings.
 
-## Fixtures and pending coverage
+Custom adapters remain JSON argv arrays with `{program}`, `{seed}`,
+`{journal}` and `{mode}` substitutions, without shell expansion. Missing
+journals and timeouts fail. Exit status, stdout, stderr (including panic
+location) and journal bytes must match. `--journal-view` accepts a JSON
+argv such as `["ren","journal","show","{journal}"]` and reports the
+first differing call. Identical text views cannot excuse different binary
+bytes. Seven active comparator tests exercise the comparison and adapter
+seed loop; their synthetic journals test only the harness.
 
-- `cancel_tree.ren`: a timeout cancels nested descendants and returns only
-  after their cleanup.
-- `blocked_producer_cancel.ren`: a consumer breaks and producer teardown
-  precedes the enclosing call's return, with `cap: 1`.
-- `producer_buffered_failure.ren`: admitted values precede producer failure.
-- `channel_drain.ren`: closed-channel buffered values are drained in order.
-  This does not yet force close to race blocked senders and receivers.
-- `edit/generic`: the same generic declaration instantiated at two types.
-- `edit/family`: a keyed family and an independent imported module.
+## Declaration edit tests, pending emitter support
 
-For each edit fixture, compile before and after adding an unused function,
-changing `unrelated.ren`'s body, and inserting lines before a declaration.
-Compare emitted C declaration by declaration, retaining emitted names,
-shape hashes, resume sites, signatures and bodies. Changing an unrelated
-body may change that declaration only; adding one may add its declarations
-only. The runtime and frame-size checks must be enabled when those are
-emitted. The source fixtures run now; the native declaration comparator
-is still missing.
+`edit_compare.py` implements the proposed
+`ren build --scheduler sim --emit-declarations DIR` manifest contract:
+version 1, artifacts `{id,declaration,copy_key,kind,file,reads}` and exact
+raw C files. It compares exact bytes and recorded fact hashes; it never
+renumbers generated identifiers. Only four explicit link-table artifact
+ids are exempt. Seven active comparator tests cover changed bytes,
+inliner dependencies, forbidden callee-size coupling, copy-name stability,
+exact specializer exceptions and artifact path/link-exemption validation.
 
-`python3 bench/runtime_core/inventory.py` discovers the reference family
-tests from services s6/s7/s8, services review, actors, and structured actor
-stages 10a/10b. It includes rejection tests and the old native refusal;
-the future conformance runner must distinguish compile-time refusals,
-runtime programs and the obsolete native-capability refusal explicitly.
-Listing a source test does not execute its native counterpart.
+```
+python3 bench/runtime_core/edit_compare.py --self-test
+python3 bench/runtime_core/edit_compare.py bench/runtime_core/edit/generic
+python3 bench/runtime_core/edit_compare.py bench/runtime_core/edit/family
+```
 
-All MODEL.md condensed counterexamples and mutants have named c3 entries:
-the four reference-holding wake sites, deliver after a spurious wake,
-retraction alone/with another call/during stop, stop on until and before
-park, cancel-side op free, reply/cancel generations, store before notify,
-park recheck, cancelled task waiting, and contended-take recheck. C API
-assertions, controllable interleavings, rule-removal build flags and
-sanitizer builds remain to be written in c3.
+Each fixture's `edits.json` applies independent mutations from the original
+tree, in debug and release. Generic coverage includes recursive coloured
+roundtrip copies at two types, an inline helper, a caller not inlining the
+roundtrip, source-line insertion, body/frame growth, colour change and
+adding an unrelated generic/carry. Family coverage includes setup/finally,
+post/drain, a separate family, source-line insertion, dispatch changes,
+key-layout changes and a newly shared caller. `invalid_rule3.ren` keeps a
+helper-hidden inner-family reach separate from the valid entry.
 
-The c4/c5 inventory covers channels.md's applicable composition cases:
-consumer exit on a full queue; send/receive admission racing cancel;
-close with blocked senders/receivers; buffered failure; merge sibling
-failure with full terminal storage; named generator scope finalization;
-family drain posting outward; actor/channel wait-cycle deadlock and
-seed replay; and expand saturation. General selection's competing
-receive alternatives remain deferred by channels.md. The native
-admission, terminal-state and wait-cycle tests remain to be implemented;
-this stage does not silently change interpreter queue behavior.
+The specializer's two pre-existing breaks can only be reported through
+an explicit artifact/edit/category/before-hash/after-hash exception. Runtime
+frame/resume/carry/dispatcher/ABI artifacts can never be waived. No broad
+release-fixture exemption exists. Actual compiler manifest emission is
+pending; a missing manifest or compilation failure fails the comparator.
+
+## Remaining milestone tests
+
+`test/test_runtime_core.ml` has explicit `until "c1"` through `until "c6"`
+gates. C3 gates invoke the concrete C runner. C1 has concrete future
+source/headline/help assertions; the other language/journal/task/family/
+driver runner obligations remain pending their APIs. Applicable channel
+composition, admission/cancellation, independent terminal state, outward
+family drain and actor/channel deadlock replay remain c4/c5 obligations;
+the four active lifecycle fixtures cover interpreter behavior only.
+`inventory.py` discovers 96 services/actor reference test locations for
+the eventual native suite; listing them is not native execution.

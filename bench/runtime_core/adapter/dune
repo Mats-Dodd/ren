@@ -1,0 +1,5 @@
+; A test-side reference adapter. It executes the original checked Core;
+; it does not rewrite source, wrap main, or modify scheduler semantics.
+(executable
+ (name interpreter)
+ (libraries ren unix))

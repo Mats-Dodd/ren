@@ -1,7 +1,11 @@
 import worker
+import caller
 import unrelated
 
-fn main() uses Console =
+fn main() uses Console, Clock =
   print(unrelated.unrelated(0))
-  print(worker.identity(42))
-  print(worker.identity("kept"))
+  print(worker.roundtrip(worker.identity(42), 1))
+  print(worker.roundtrip(worker.identity("kept"), 1))
+  let _ = caller.call(0)
+  let _ = worker.adjusted(0)
+  ()

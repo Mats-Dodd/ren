@@ -188,6 +188,15 @@
  (deps
   %{bin:ren}
   runtime_core/conformance.py
+  runtime_core/interpreter.py
+  runtime_core/native.py
+  runtime_core/core_tests.py
+  runtime_core/core_protocol.c
+  runtime_core/core_hooks.h
+  runtime_core/edit_compare.py
+  runtime_core/adapter/interpreter.exe
+  runtime_core/edit/generic/edits.json
+  runtime_core/edit/family/edits.json
   (glob_files runtime_core/*.ren)
   (glob_files runtime_core/edit/generic/*.ren)
   (glob_files runtime_core/edit/family/*.ren)))

@@ -1,0 +1,102 @@
+[
+  {
+    "name": "unrelated-body",
+    "declarations": [
+      "unrelated/unrelated"
+    ],
+    "facts": [
+      "body:unrelated/unrelated"
+    ],
+    "actions": [
+      {
+        "file": "unrelated.ren",
+        "replace": [
+          "n + 1",
+          "n + 2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "source-lines",
+    "actions": [
+      {
+        "file": "store.ren",
+        "prefix": "\n\n\n"
+      }
+    ]
+  },
+  {
+    "name": "dispatch-body",
+    "declarations": [
+      "store/counter"
+    ],
+    "facts": [
+      "body:store/counter.add"
+    ],
+    "actions": [
+      {
+        "file": "store.ren",
+        "replace": [
+          "value += n",
+          "value += n * 2"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "key-layout",
+    "declarations": [
+      "store/Key",
+      "main/main",
+      "main/Counters"
+    ],
+    "new_declarations": [
+      "store/Key"
+    ],
+    "facts": [
+      "shape:store/Key"
+    ],
+    "actions": [
+      {
+        "file": "store.ren",
+        "replace": [
+          "{ value: Str }",
+          "{ value: Str, bucket: Int }"
+        ]
+      },
+      {
+        "file": "main.ren",
+        "replace": [
+          "Counters.at(Key { value: \"a\" })",
+          "Counters.at(Key { value: \"a\", bucket: 0 })"
+        ]
+      },
+      {
+        "file": "main.ren",
+        "replace": [
+          "Counters.post(Key { value: \"a\" },",
+          "Counters.post(Key { value: \"a\", bucket: 0 },"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "one-shared-caller",
+    "declarations": [
+      "main/main"
+    ],
+    "facts": [
+      "sharing:main/local-extra"
+    ],
+    "actions": [
+      {
+        "file": "main.ren",
+        "replace": [
+          "  with unrelated.other(0) in\n    Extra.note(1)",
+          "  with unrelated.other(0) in\n    Async.scope fn(s) =>\n      s.spawn fn() => Extra.note(1)"
+        ]
+      }
+    ]
+  }
+]

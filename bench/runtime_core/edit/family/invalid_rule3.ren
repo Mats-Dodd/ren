@@ -1,0 +1,13 @@
+import store.{Counter, Key}
+import unrelated.{Extra}
+
+dep Counters = Actors<Key, Counter>
+dep Others = Actors<Int, Extra>
+
+// The caller holds Others; reaching the inner Counters is hidden here.
+fn hidden() uses Counters = Counters.at(Key { value: "a" }) fn() => Counter.add(1)
+
+fn main() uses Console, Async, Random =
+  with actors(unrelated.other) as Others in
+    with actors(store.counter) as Counters in
+      Others.at(0) fn() => hidden()

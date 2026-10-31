@@ -11,41 +11,79 @@ would fix it. The programs are in this folder ([README.md](README.md));
 
 ## Runtime core stage: step 0 baseline
 
-Measured 2026-10-30 (America/Los_Angeles; raw timestamps are UTC), before
-runtime-core implementation, at `12da2291bbbeee241bbe17bfb501fcd834f617a0`.
+The **current sequential native baseline** was refreshed at
+`97a152973e0bee31c8355a37ba19de1dc0c827c5`, after the upstream bytes-runtime
+changes in `bb8044e` through `93d3ac4`, and includes the new `streams`
+program. Measured 2026-10-30 (America/Los_Angeles; raw timestamps are
+UTC), before runtime-core implementation. The original 21-program
+native measurements at `12da2291` are retained below as historical;
+use the current 22-program table for later runtime-core comparisons.
+
 Machine `310e503d7935`: x86_64 KVM guest, Intel Xeon Platinum 8573C,
 5 visible vCPUs with a 4-CPU cgroup quota and 16 GiB memory limit,
 Linux 6.18.57. The repository's pinned Nix environment supplies Clang
 23.1.3 (`cc`, release `-O2`), OCaml 5.5.2, Dune 3.24.2 and glibc 2.44.
-The interpreter was copied before building the benchmarks; its SHA-256
-and the exact commands, outputs and load observations are in
-[runtime-core-baseline/](runtime-core-baseline/).
+Current raw commands, outputs, load and compiler metadata are in
+[97a1529/](runtime-core-baseline/97a1529/); the original records are
+preserved unchanged in [12da2291/](runtime-core-baseline/12da2291/).
+The current reference executable's SHA-256 starts `627727b1089c`, the
+original's `0164a7e99ce2`; both full hashes are in their build metadata.
 
-Toolchain builds and focused tests finished before the timed runs;
-full checks were held until timing completed. Other agents continued
-light documentation work on the shared guest. Each mode runs one child
-process at a time and rotates its starting workload each round. Native
-programs and interpreter suites are each warmed once before timing. Reported spreads are observed least to most, not
-confidence intervals. These establish the reference for later paired
-before/after runs; this is not a measurement on the owner's M4 Max.
+The compiler and all native programs were rebuilt before the refresh.
+Other agents held compiler/check workloads throughout timing and
+continued light source/documentation work. One child runs at a time;
+each program is warmed once, then the starting program rotates each
+round. Spreads are observed least to most, not confidence intervals.
+This shared guest is not the owner's M4 Max, and the two native tables
+are measurements in separate windows rather than a paired comparison.
 
-Reproduce inside `devenv shell --clean` from the repository root:
+Reproduce the current baseline inside `devenv shell --clean` from the
+repository root:
 
 ```sh
-python3 -I bench/native/runtime-core-baseline.py build /tmp/runtime-core-baseline
-python3 -I bench/native/runtime-core-baseline.py kernels /tmp/runtime-core-baseline --runs 5
-python3 -I bench/native/runtime-core-baseline.py examples /tmp/runtime-core-baseline --runs 5
-python3 -I bench/native/runtime-core-baseline.py frames /tmp/runtime-core-baseline --runs 7
-python3 -I bench/native/runtime-core-baseline.py summarize /tmp/runtime-core-baseline
+dune build
+python3 -I bench/native/runtime-core-baseline.py build /tmp/runtime-core-baseline-97a1529
+python3 -I bench/native/runtime-core-baseline.py kernels /tmp/runtime-core-baseline-97a1529 --runs 5
+python3 -I bench/native/runtime-core-baseline.py summarize /tmp/runtime-core-baseline-97a1529
 ```
 
-**Sequential native programs.** All 21 `*/main.ren` programs, release,
-including the aggregate string, slice, dispatch and vector workloads,
-five runs each. Wall seconds, including process startup; all five
-outputs per program agree. One-minute load during timed runs was
-1.00–1.10. `keywords/main.ren` runs just one round, so its roughly
-5 ms includes substantial startup noise; the dedicated keyword
-measurements below remain the lookup benchmark.
+**Current sequential native programs (97a1529).** All 22
+`*/main.ren` programs, release, five runs each. Wall seconds include
+process startup. Each program's five outputs agree, and all 21 existing
+programs retain their historical checksums. One-minute load during
+current timed runs was 0.80–1.08. `keywords/main.ren` runs only one
+round, so its roughly 5 ms includes substantial startup noise; the
+dedicated keyword measurements below remain the lookup benchmark.
+
+| program | median (s) | least–most (s) |
+|---|---:|---:|
+| binary-trees | 11.4375 | 11.2720–11.4587 |
+| blocks | 1.9947 | 1.9842–2.0424 |
+| bytes | 0.6743 | 0.6544–0.6803 |
+| cfold | 0.1580 | 0.1467–0.1890 |
+| deriv | 1.4320 | 1.2730–1.6081 |
+| dispatch | 0.6927 | 0.6684–0.7533 |
+| fannkuch | 3.2991 | 3.2270–3.3118 |
+| frames | 1.2172 | 1.1930–1.2189 |
+| handlers | 1.9505 | 1.9372–2.0029 |
+| inout | 3.2261 | 3.0422–3.3745 |
+| interp | 0.1325 | 0.1304–0.1413 |
+| keywords | 0.0046 | 0.0036–0.0077 |
+| maps | 1.3280 | 1.3066–1.5042 |
+| nbody | 2.9756 | 2.8795–3.0373 |
+| nested | 1.2928 | 1.2884–1.3302 |
+| nqueens | 1.0610 | 1.0507–1.1685 |
+| rbtree | 1.4210 | 1.3388–1.4759 |
+| slices | 3.4862 | 3.4432–3.5809 |
+| stack | 0.8332 | 0.8297–0.8550 |
+| streams | 2.0567 | 1.9694–2.6664 |
+| strs | 5.7291 | 5.5936–5.7664 |
+| vec | 2.0194 | 2.0065–2.0741 |
+
+**Historical sequential native programs (12da2291).** The original
+five-run, 21-program table follows unchanged; its one-minute load was
+1.00–1.10. These values predate the upstream bytes-runtime changes and
+are superseded as the sequential baseline by the table above.
 
 | program | median (s) | least–most (s) |
 |---|---:|---:|
@@ -71,8 +109,26 @@ measurements below remain the lookup benchmark.
 | strs | 5.8890 | 5.7445–6.2170 |
 | vec | 2.0507 | 2.0346–2.1299 |
 
-**Interpreter tasks and services.** Each command is `test --sim --seeds
-1000`, five runs after one warmup. Times include source loading,
+**Why the other references are retained.** Interpreter/frontend/std
+sources and all measured interpreter fixtures are identical between
+`12da2291` and `97a1529` (115 tracked entries; native compiler/runtime
+sources excluded). X1/X5 and the prototype source trees are also
+unchanged since their adapter was committed in `cb3cb0c`. The matching
+source-tree fingerprints and their exact scope are recorded in
+[retained-inputs.json](runtime-core-baseline/97a1529/retained-inputs.json).
+Their timings below remain the original, explicitly dated same-machine
+references; they were not repeated for this native-only refresh.
+
+The retained interpreter and frame measurements can be reproduced with
+the same harness modes, five and seven rounds respectively:
+
+```sh
+python3 -I bench/native/runtime-core-baseline.py examples /tmp/runtime-core-baseline-97a1529 --runs 5
+python3 -I bench/native/runtime-core-baseline.py frames /tmp/runtime-core-baseline-97a1529 --runs 7
+```
+
+**Retained interpreter tasks and services (12da2291).** Each command
+was `test --sim --seeds 1000`, five runs after one warmup. Times include source loading,
 checking and running every selected test under its 1,000 seeds. The
 seven landed example suites and the four retained correct milestone
 variants all pass. Only the CLI's final elapsed-time suffix is removed
@@ -93,7 +149,7 @@ One-minute load was 0.95–1.00.
 | services-without-chaos | 1 | 1.3430 | 1.3364–1.3606 |
 | transfer | 4 | 0.3307 | 0.3160–0.3369 |
 
-**X1, nested round trip.** Rebuilt the unchanged prototype and register
+**Retained X1, nested round trip (12da2291).** Rebuilt the prototype and register
 convention with Clang `-O2` and pinned TinyCC `e23dabed` (`-O2`, which
 TinyCC accepts without optimization). Seven rotated rounds; each
 process reports the median of five internal repetitions, at 2,000,000
@@ -112,7 +168,7 @@ ASan+UBSan checks pass. One-minute load was 1.00.
 | base_tcc | 103.22 | 100.69–107.77 |
 | reg_tcc | 110.02 | 107.21–115.00 |
 
-**X5, parked tasks.** Seven rotated rounds, a fresh Clang `-O2`
+**Retained X5, parked tasks (12da2291).** Seven rotated rounds, a fresh Clang `-O2`
 process per policy, 100,000 parked tasks. The original experiment uses
 Mach and Apple's malloc metrics. [x5/linux.py](../../experiments/runtime-frames/x5/linux.py)
 generates a Linux copy outside the repository: `CLOCK_MONOTONIC`,

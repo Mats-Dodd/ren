@@ -1,1 +1,12 @@
 pub fn identity<T>(value: T) -> T = value
+
+fn inline_adjust(n: Int) -> Int = n + 0
+
+// Recursion keeps the callee out of its caller's inlining body.
+pub fn roundtrip<T>(value: T, depth: Int) -> T uses Clock =
+  if depth <= 0 then
+    Clock.sleep(Duration.ms(1))
+    value
+  else roundtrip(value, depth - 1)
+
+pub fn adjusted(n: Int) -> Int = inline_adjust(n)

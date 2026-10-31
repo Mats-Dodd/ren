@@ -9,6 +9,8 @@ keep build diagnostics off the program's stdout/stderr.
 """
 
 import argparse
+import contextlib
+from types import SimpleNamespace
 from dataclasses import dataclass
 import json
 import io
@@ -93,13 +95,21 @@ def argv(value):
 
 def conformance(args):
     program = args.program.resolve(strict=True)
+    here = Path(__file__).resolve().parent
+    interpreter = args.interpreter or [sys.executable, str(here / "interpreter.py"), "{program}", "{seed}", "{journal}"]
+    native_adapter = args.native or [sys.executable, str(here / "native.py"), "{program}", "{seed}", "{journal}", "{mode}"]
+    if args.test:
+        if args.interpreter or args.native:
+            raise Mismatch("--test uses the built-in adapters; include test-entry args in custom adapter arrays")
+        interpreter += ["--test", args.test]
+        native_adapter += ["--test", args.test]
     with tempfile.TemporaryDirectory(prefix="ren-conformance-") as directory:
         journal = Path(directory) / "run.journal"
         for seed in range(args.seed, args.seed + args.seeds):
             reference = native = None
             try:
-                reference = run(args.interpreter, program, seed, journal, args.mode, args.timeout)
-                native = run(args.native, program, seed, journal, args.mode, args.timeout)
+                reference = run(interpreter, program, seed, journal, args.mode, args.timeout)
+                native = run(native_adapter, program, seed, journal, args.mode, args.timeout)
                 compare(reference, native)
             except (Mismatch, subprocess.TimeoutExpired) as error:
                 print(f"FAIL {program}: seed {seed}, {args.mode}: {error}", file=sys.stderr)
@@ -154,6 +164,20 @@ class HarnessTests(unittest.TestCase):
         self.assertIn("1 main Fs.read(a)", message)
         self.assertIn("1 main Fs.read(b)", message)
 
+    def test_seed_loop_invokes_both_adapters(self):
+        with tempfile.TemporaryDirectory(prefix="ren-loop-") as directory:
+            program = Path(directory) / "main.ren"
+            program.write_text("fn main() = ()\n")
+            adapter = [sys.executable, "-c",
+                       "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2]); print(sys.argv[2])",
+                       "{journal}", "{seed}"]
+            args = SimpleNamespace(program=program, interpreter=adapter, native=adapter,
+                                   test=None, seed=7, seeds=2, mode="debug", timeout=5, journal_view=None)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(conformance(args), 0)
+            self.assertIn("2 seeds from 7", output.getvalue())
+
     def test_timeout(self):
         with tempfile.TemporaryDirectory(prefix="ren-harness-") as directory:
             program = Path(directory) / "main.ren"
@@ -169,14 +193,15 @@ def main():
         output = io.StringIO()
         result = unittest.TextTestRunner(stream=output, verbosity=0).run(suite)
         if result.wasSuccessful():
-            print("conformance harness: 6 tests passed")
+            print("conformance harness: 7 tests passed")
         else:
             print(output.getvalue(), file=sys.stderr)
         return 0 if result.wasSuccessful() else 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("program", type=Path)
-    parser.add_argument("--interpreter", required=True, type=argv)
-    parser.add_argument("--native", required=True, type=argv)
+    parser.add_argument("--interpreter", type=argv)
+    parser.add_argument("--native", type=argv)
+    parser.add_argument("--test", help="exact original source test name")
     parser.add_argument("--journal-view", type=argv, help="optional JSON argv, e.g. ren journal show {journal}; names the first differing call")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--seeds", type=int, default=1000)
