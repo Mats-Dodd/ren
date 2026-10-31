@@ -9054,6 +9054,8 @@ This container has 15 GB, so the step that lands it runs it here.
 | `lent` (strs_lent.t) | views and lent element reads, only read, kept, returned, captured, and outliving what they're of | 4, part 2 |
 | `escape_ops` (strs_big.t) | `+=` in place past the edge, views of an escape, `==`, hashing, sorting, layer 3's reads and `from_utf8` of one | 4, part 3 |
 | `maps`, `opaque_key`, `opaque_key_generic` (strs_maps.t) | maps and sets of `Str` and `Bytes`, their entries two words; an `opaque Str` key with its own `key`, and generic code over it | 4, part 3; 6 |
+| `edges`, `edges_view_panic` (strs_edges.t) | `[0..0]` and empty slices of a parameter, a local and a field, counted and not, `==` of empty values and of differing lengths, a loop's `l.len()` hoisted, layer 3 at the last byte; a view's panic on the cold path | 4, part 3 |
+| `escape_edges` (strs_big_edges.t) | `[0..0]` of an escape, `at` and layer 3 past its length field, `==` against values whose length field is its length or 0, a loop over one | 4, part 3 |
 | `literals` | every literal form of step 5b, and 10,000 `b"..."` compares that `objects` counts | 5b |
 
 **test/test_strs.ml** holds what a program's output can't say, each
@@ -10449,6 +10451,168 @@ Tests: test/test_strs_literals.ml (every form in `ren run` and
 specified, the same in all five native builds, and its 10,000 `b"..."`
 compares fewer than 200 objects in a debug build and a release one.
 
+### Step 4 (part 3), as built: the escape and map entries
+
+**The escape** (ren_rt.h, "The 4 GiB escape"). A value whose bytes end
+past the first 2^32 - 2 of its owner's (`off + len >= 2^32 - 1`) is its
+range's *offset* field `UINT32_MAX` with its length field 0, and its
+root a slice object, counted, that holds its real `data` and `len`
+(`ren_sv_escape`, `ren_str_window`). Every other value ends before
+2^32 - 1, so every part of it fits too. `ren_sv_len` and `ren_sv_data`
+test the offset field; `ren_sv_make` tests the end, once, where an
+owner's bytes become a value. A part of an escape is
+`ren_sv_slice_escape`'s or `ren_sv_view_escape`'s: a value that fits, of
+the owner, if it ends before the edge; the escape itself if it's all of
+it; else a slice object of its own, which the view's escape holds
+(`ren_kids`, freed with it), so a view still holds no reference.
+`ren_sv_peek` of an owner past the edge, which only generic code's `key`
+reaches, gives it a slice object the owner holds: the escape's one leak,
+32 bytes until the program ends. An escape appends and is written in
+place when its object and its owner are each held once
+(`ren_sv_escape_unique`). The tests are bench/strs/escape_ops.ren (`+=`
+in place past the edge, views of an escape kept in an array and a map,
+`==`, hashing, sorting, layer 3's reads and `from_utf8`) beside
+escape.ren in strs_big.t, run only with `REN_BIG_TESTS=1`.
+
+**Map entries.** A map's entries keep a release build's `Str` or `Bytes`
+key or value as its two words, the root counted
+(`REN_MAP_KEY_SV`, `REN_MAP_VAL_SV` in `nfields`; an entry is 4 words
+for `Map<Str, Int>`, 3 before). The layout is set by a map's first
+change from the descriptors it's given (`ren_map_layout`), so generic
+code, whose words are boxes, unboxes into the entry and boxes out
+(`ren_map_keep`, `ren_map_value_box`). A key is looked up by its bytes
+(`ren_map_probe_bytes`, `ren_map_find_sv`), with no A slice made for
+it. A map's value read where the map doesn't change is lent, a part of
+the map, as an element read is (rc.ml, `Map_value` to `Map_peek`;
+`ren_map_peek_sv`). bench/strs/maps.ren in strs_maps.t.
+
+**What the escape cost, and the fixes.** Part 3 as first built cost
+code that never meets an escape up to 17% of its instructions (pages),
+against the spec's 2%. Its tests sat on per-slice and per-read paths,
+and two of its cold paths were calls that return, which C takes as
+changing any memory. Instructions a round (callgrind; before is
+78d2a26, the commit part 3 is on), and each fix:
+
+1. **A slice or a view checks against the length field alone**
+   (`ren_sv_slice_ok`), which is 0 for the escape, with `j` checked as
+   `j - 1 < n`: every slice of an escape, `[0..0]` too, fails the check
+   and goes to the cold path, which checks a slice of any value and
+   panics or makes it. `[0..0]` of an ordinary value takes the cold path
+   too, correctly. json 332.0 to 326.6 M.
+2. **A loop's `l.len()` of a string it reads bytes of is the length read
+   before it** (hoist.ml, `bytes`: a `Str_len` of a hoisted root is its
+   `$blen`): slices logs' `k == l.len()` had tested for the escape at
+   every byte. logs 226.3 to 188.3 M, below before's 205.8.
+3. **`==` compares the length fields first**: equal and not 0, neither
+   is the escape, so the bytes are compared with no test; only lengths
+   that differ or are 0 test for it, which a literal's side never does.
+   tok 176.5 to 171.9 M.
+4. **Layer 3's checks have no call that returns**: `ren_sv_room` and
+   `ren_sv_load` read the escape's length and data inline where the
+   length field's check fails; a write's slow path takes and gives a
+   value, not the cell's address, which had put the cell in memory and a
+   stack guard in every function that writes one.
+5. **A run of counts is one count where its objects are one**
+   (emit_c.ml, `ren_dup_by`, the rest out of line in `ren_dup_each`): C
+   merged the counts of the slices of one root while their root was the
+   string's, but a slice of an escape has a root of its own, so it can't
+   know they're one. logs (strs) 1935.5 to 1898.5 M, slices pages 37.2 to
+   36.2 M. Written as an `if` with both branches inline, it cost logs 12%
+   (the loop's indices spilled to the stack).
+6. **A map's set reads its key's bytes once** (`ren_map_set_in`), not
+   again in each probe. group 4011.7 to 3972.9 M.
+
+`at` stays as part 3 built it: the length field's check, and the
+escape's read inline where it fails. Every form with a call (out of
+line, `pure`, returning the byte) cost more, losing what C knew of the
+index's range.
+
+| kernel | before | part 3 | fixed | part 3 / before | fixed / before |
+|---|---|---|---|---|---|
+| tok | 171.5 | 177.0 | 171.9 | 1.032 | 1.002 |
+| sort | 1636.9 | 1630.2 | 1629.1 | 0.996 | 0.995 |
+| map | 4104.6 | 4212.1 | 4074.1 | 1.026 | 0.993 |
+| group | 3910.1 | 3915.4 | 3979.4 | 1.001 | 1.018 |
+| logs | 1888.6 | 1931.3 | 1898.5 | 1.023 | 1.005 |
+| out json `+=`, 1M | 2227.1 | 2170.0 | 2180.4 | 0.974 | 0.979 |
+| out logfmt `+=`, 1M | 1145.9 | 1130.9 | 1132.9 | 0.987 | 0.989 |
+| slices logs | 205.8 | 216.8 | 187.7 | 1.053 | 0.912 |
+| slices logs_r | 208.9 | 213.9 | 212.4 | 1.024 | 1.017 |
+| slices json | 313.5 | 332.0 | 325.5 | 1.059 | 1.038 |
+| slices json_r | 329.0 | 341.3 | 337.4 | 1.037 | 1.026 |
+| slices pages | 31.9 | 37.4 | 36.2 | 1.174 | 1.136 |
+| slices pages_r | 24.0 | 25.4 | 25.4 | 1.061 | 1.061 |
+| maps | 294.9 | 295.9 | 295.6 | 1.004 | 1.002 |
+
+**Against the 2%.** Met on tok, sort, map, group, logs, `out`, slices
+logs and logs_r, and maps. Missed on four:
+
+- **slices pages, 1.136** (4.3 M a round): `page` reads its input with
+  `b.at` in `u16`, a function too small to hold a loop, so nothing is
+  hoisted, and the escape's inline read where the check fails costs
+  about 1.5 instructions an `at` in C's register allocation (pages_r's
+  whole 1.4 M, 1.061, is this); the two counts of a record's key and
+  value, one root, cost a compare more than C's merged count did (0.4
+  M); and `r.key.len()` in `query` tests once a record (0.4 M).
+- **slices json, 1.038, and json_r, 1.026**: with every escape test
+  made `false` in the C, json_r is 317.5 M, below before's 329.0, so it's
+  the tests themselves: `equal`'s and `parse_int`'s length and bytes,
+  read before each call's short loop (four tests a call), and json's
+  `t.text.len()` and the slices' cold-path joins.
+
+**Wall time** (7 runs, interleaved, at 1 round and 2): every kernel's
+spread is larger than the difference (pages 2.8 against 3.9 ms a round,
+its runs 160 to 266 ms), on a machine another agent loaded; bench/native
+/RESULTS.md has them. The instructions above are the measure.
+
+**The owner's header** (decision kept, "The owner's header"). Peak RSS
+with the owner 16 bytes larger (`-DREN_OWNER_PAD=16`, standing in for
+the difference between the 32-byte owner and a 16-byte one), 3 runs
+each, interleaved: map 215.8 against 218.9 MB (a 16-byte owner would
+save 1.4%), group 198.9 against 198.9, tok and sort the same within
+0.1%; bench/native/maps 51.7 against 54.8 MB, so a 16-byte owner would
+save **5.6%** of maps' peak memory, past the spec's 5%. Times are within
+noise (map 7.5 to 9.2 s against 7.8 to 10.8). So by the spec's rule
+**the review reopens the 32-byte owner on maps' memory**, not on the
+map kernel's; the header isn't changed here.
+
+### Step 4, all of it, against step 3
+
+Instructions a round (millions; step 3 is 30f7db7), and peak RSS (KB, 1
+round of the strs kernels, 2 of the slices kernels and maps, `/usr/bin/
+time`), x86_64 cloud container, 4 cores, shared:
+
+| kernel | step 3 | step 4 | step 4 / step 3 | target | | peak RSS, step 3 | step 4 |
+|---|---|---|---|---|---|---|---|
+| tok | 323.2 | 171.9 | 0.53 | 0.80 | met | 70,136 | 37,372 |
+| sort | 4355.8 | 1629.1 | 0.37 | 0.80 | met | 100,084 | 81,656 |
+| map | 5167.0 | 4074.1 | 0.79 | 0.95 | met | 214,784 | 215,860 |
+| group | 4524.5 | 3979.4 | 0.88 | 1.00 | met | 198,796 | 198,900 |
+| logs | 3078.5 | 1898.5 | 0.62 | 0.90 | met | 409,584 | 276,724 |
+| out json `+=`, 1M | 2195.2 | 2180.4 | 0.99 | | | 431,480 | 344,048 |
+| out logfmt `+=`, 1M | 954.6 | 1132.9 | 1.19 | | | 539,512 | 406,644 |
+| slices logs | 358.6 | 187.7 | 0.52 | | | 85,484 | 85,484 |
+| slices logs_r | 204.2 | 212.4 | 1.04 | | | 85,612 | 85,612 |
+| slices json | 736.5 | 325.5 | 0.44 | | | 189,108 | 106,220 |
+| slices json_r | 285.8 | 337.4 | 1.18 | | | 106,224 | 106,212 |
+| slices pages | 94.8 | 36.2 | 0.38 | | | 146,032 | 145,904 |
+| slices pages_r | 23.1 | 25.4 | 1.10 | | | 145,904 | 145,904 |
+| maps | 290.7 | 295.6 | 1.02 | | | 48,076 | 51,776 |
+
+The targets in instructions (the spec's are times; parts 1 and 2 timed
+them, and this machine's wall times can't resolve these differences
+now): tok, sort, map, group and logs met; slices json at 0.96 of its
+`_r` form's instructions and logs at 0.88 (1.2 and 1.1 met, as part 2
+timed them, 1.11 and 1.07); pages at 1.42 of `_r` in instructions
+(part 2 timed 1.23, missed, the free walk); the escape's 2% missed on
+pages, pages_r, json and json_r (above). The `_r` forms and logfmt's
+`+=` have more instructions than at step 3 (json_r 1.18, logfmt 1.19):
+the `_r` forms' C moved with the runtime, and logfmt's from part 1's
+`show` and appending as values; part 1 and 2 timed both within noise of
+step 3. Peak memory grew on maps, **+7.7%**, from entries of 4 words
+(two-word keys), and on map by 0.5%; it fell on tok, sort, logs, `out`
+and json, and is the same on the rest.
+
 ### Step 6, the review
 
 Three lenses, as the brief asks: soundness (adversarial programs, in
@@ -10504,6 +10668,13 @@ every panic agree across `ren run`, debug and release.
 - **Medium: slices pages is 1.23× its `_r` form,** not 1.2 (Step 4,
   part 2): freeing its array reads every element to drop its root.
   json_r is 2.0-2.1× Rust, its own C unchanged since part 1.
+- **Medium: the 4 GiB escape costs more than 2%** on four kernels that
+  never meet one (Step 4, part 3): slices pages 1.136 of its
+  instructions before the escape, pages_r 1.061, json 1.038, json_r
+  1.026, from `at` outside a hoisted loop and the length and bytes read
+  before each short loop; the other ten are within 2%. And a 16-byte
+  owner would save 5.6% of bench/native/maps' peak memory, past the
+  spec's 5%, so the owner's header is reopened (the map kernel: 1.4%).
 - **Medium: json's `+=` is 1.22× Rust's `push_str`,** not 1.1 (step 3
   measured 1.41; B took the slice objects away; `show` of a number
   still makes a string).
@@ -10532,6 +10703,7 @@ every panic agree across `ren run`, debug and release.
 | 3 | "Bytes stage, part two, step 3: appending in place" | the owner's `cap` and `REN_STR_SLICE`; `ren_str_concat_taking` (in place, doubling, copying with room) where the left side dies, `Bytes` too; the debug report with `REN_NOTES`; append_count and the report's block on; `+=` 1.06× Rust on logfmt, linear on both | json's `+=` at 1.41× of Rust, not 1.1×: A's slice objects and `show`'s strings, not the appending (step 4 makes the slices values) |
 | 4, part 1 | "Bytes stage, part two, step 4 (part 1): representation B" | `Str` and `Bytes` two words in release builds (`ren_sv`), inline in locals, small records, arrays and declared fields; boxed (A) at words, blocks, handlers, tuples' and errors' fields and map values; walks given a stack view; `ren_map_set_sv`; literals uncounted; `lend_parts`; tok 0.65, sort 0.35, map 0.85, group 1.00, logs 0.62 of step 3; slices_count's objects on | the uncounted view, the 4 GiB escape (a value past it panics), unboxed map entries, the 16-byte owner experiment; slices json and pages at 1.2× and 1.2 to 1.6× of `_r` and pages 2.8× of Rust, from counting the root on each element read and free |
 | 4, part 2 | "Bytes stage, part two, step 4 (part 2): the uncounted view" | the uncounted view (`Str_view`, `ren_sv_view_slice`), a slice a part of what it's of; lent element reads (`Array_peek`, `Buf_peek`) of arrays nothing takes, in both builds; `lend_parts` to a fixpoint and through calls that take nothing counted; Mem Lint's lent parts and `unlend`; a run of one root dropped at once when an array is freed; strs_lent.t; slices json 1.11 and logs 1.07 of their `_r` forms, json 0.73 and pages 0.61 of part one's instructions | pages at 1.23 of `_r` and 1.97 to 2.15 of Rust, from the free walk; json_r at 2.0 to 2.1 of Rust, its own; the 4 GiB escape (a view of one), unboxed map entries, the 16-byte owner experiment |
+| 4, part 3 | "Bytes stage, part two, step 4 (part 3): the escape and map entries", "... the escape's cost" | the 4 GiB escape (an escape's offset field `UINT32_MAX`, its length field 0, the end-based test, its slice object, `ren_sv_view_escape` and `ren_kids`, `ren_sv_escape_unique`); map entries of two-word keys and values (`ren_map_layout`), lent map reads (`Map_peek`); escape_ops, maps, strs_edges.t and strs_big_edges.t; the escape's tests off the per-slice and per-read paths (checks against the length field, `==` by length fields, a loop's `len` hoisted, no returning call on layer 3's paths, runs of counts merged, a set's key read once): 2% or less on 10 of 14 kernels; the 16-byte owner experiment | the escape's 2% missed on slices pages (1.136), pages_r (1.061), json (1.038), json_r (1.026); a 16-byte owner would save 5.6% of maps' memory, so the review reopens the header |
 | 5 | "Bytes stage, part two, step 5: the rest of the API" | `includes`, `ends_with`, `strip_prefix`, `strip_suffix`, `split_once`, `lines`, `fields`, `replace`, `ascii_upper`, `line_col` with its panics, on `Str` and `Bytes` alike (`Bytes` given `index`, `starts_with`, `split` and `trim`), in the interpreter and natively, `Str.index` and `starts_with` native too; `count()` on arrays, maps and sets, and `count()` and `count(f)` on every cursor, pulled; rest.ren, rest_count.ren and five panics the same in every build; s5 on; stdlib.md's table | `ren run`'s `Bytes.replace` quadratic in its matches, as its `+=` is |
 | 5b | "Bytes stage, part two, step 5b: literals" | `\r`, `\0`, `\u{...}` in every string and character literal; `b"..."` with `\x`, a static owner (`"...".bytes()`), allocating nothing; `"""` with the closing line's indentation, `\` joins; `#` raw strings with `\#` escapes and `\#{x}` holes; every form with the others; the lexer's errors with help; tree-sitter's scanner, corpus and Zed; test_strs_literals.ml, strs/literals.ren in every build | `t` combined, when templates are built; `show` of a `Str` doesn't escape `\r` or `\0`; rest.ren's `Str.of_code(13)`, step 5's file |
 | 6 | "Bytes stage, part two, step 6 (soundness): an opaque string's descriptor is counted", "... step 6: a hole calls its type's own `show`", "... Mem Lint's part-two rules rejecting", "... what lent_reads' checks guard", "... step 6 (docs and tooling): status, strings.md's line, compiler.md" | the review (Step 6, the review): an `opaque Str`'s descriptor counted (high), a hole of a type with its own `show` native (medium), Mem Lint's rejection tests, the docs | slices pages 1.23× `_r`; json `+=` 1.22× Rust; two Lint stops older than this stage; the NEON numbers on the M4 Max |

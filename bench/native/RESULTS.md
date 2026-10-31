@@ -144,6 +144,105 @@ task block (248 usable bytes here). After a deep inline excursion,
 `static_xk` keeps the spare and reaches 4,352 bytes. These are step 4's
 reference observations on this machine.
 
+## Bytes stage, part two, step 4 (part 3) (compiler.md, "Bytes stage, part two", "Step 4 (part 3), as built")
+
+The 4 GiB escape, unboxed map entries, and the fixes that took the
+escape's tests off the hot paths. x86_64 cloud container, 4 cores,
+shared (another agent building and testing beside it, load 2 to 14),
+GCC 13.3 -O2. The measure is **callgrind's instructions a round**,
+which don't move with load: each kernel built at R rounds and at 0 by
+the same main.ren as build.sh's (strs at R = 1, the slices kernels and
+maps at 2), (I(R) - I(0)) / R. Before is 78d2a26, the commit part 3 is
+on (step 5b; its slices kernels' C is part 2's, 28c0ac8, to the
+instruction); part 3 is 783b3a7; fixed is this commit; step 3 is
+30f7db7.
+
+```sh
+# each compiler, each kernel k: build at R and 0, count
+(cd $dir && $ren build main.ren --release -o $out/$k-$R)      # main.ren as build.sh writes it
+valgrind --tool=callgrind --callgrind-out-file=/dev/null $out/$k-$R   # and $k-0
+# where the instructions went: the C, -g, per source line, R less 0
+$ren build main.ren --release --emit-c > p.c
+cc -O2 -ffp-contract=off -g p.c -o p -lm -lpthread
+valgrind --tool=callgrind --callgrind-out-file=p.cg ./p
+callgrind_annotate --auto=yes p.cg
+# a bound: the same C with ren_sv_is_escape returning 0
+```
+
+| kernel | step 3 | before | part 3 | fixed | part 3 / before | fixed / before | fixed / step 3 |
+|---|---|---|---|---|---|---|---|
+| tok | 323.2 | 171.5 | 177.0 | 171.9 | 1.032 | 1.002 | 0.53 |
+| sort | 4355.8 | 1636.9 | 1630.2 | 1629.1 | 0.996 | 0.995 | 0.37 |
+| map | 5167.0 | 4104.6 | 4212.1 | 4074.1 | 1.026 | 0.993 | 0.79 |
+| group | 4524.5 | 3910.1 | 3915.4 | 3979.4 | 1.001 | 1.018 | 0.88 |
+| logs | 3078.5 | 1888.6 | 1931.3 | 1898.5 | 1.023 | 1.005 | 0.62 |
+| json_1m | 2195.2 | 2227.1 | 2170.0 | 2180.4 | 0.974 | 0.979 | 0.99 |
+| logfmt_1m | 954.6 | 1145.9 | 1130.9 | 1132.9 | 0.987 | 0.989 | 1.19 |
+| slices_logs | 358.6 | 205.8 | 216.8 | 187.7 | 1.053 | 0.912 | 0.52 |
+| slices_logs_r | 204.2 | 208.9 | 213.9 | 212.4 | 1.024 | 1.017 | 1.04 |
+| slices_json | 736.5 | 313.5 | 332.0 | 325.5 | 1.059 | 1.038 | 0.44 |
+| slices_json_r | 285.8 | 329.0 | 341.3 | 337.4 | 1.037 | 1.026 | 1.18 |
+| slices_pages | 94.8 | 31.9 | 37.4 | 36.2 | 1.174 | 1.136 | 0.38 |
+| slices_pages_r | 23.1 | 24.0 | 25.4 | 25.4 | 1.061 | 1.061 | 1.10 |
+| maps | 290.7 | 294.9 | 295.9 | 295.6 | 1.004 | 1.002 | 1.02 |
+
+Fix by fix (compiler.md has what each is), M instructions a round:
+slices json 332.0 to 326.6 at (1), the checks against the length field;
+slices logs 226.3 to 188.3 at (2), a loop's `len` hoisted (226.3, not
+216.8, since (1) had moved its loop's C); tok 176.5 to 171.9 at (3),
+`==` by length fields; logs 1935.5 to 1898.5 and slices pages 37.2 to
+36.2 at (5), runs of counts merged (with both branches inline instead,
+logs went to 2178.5); group 4011.7 to 3972.9 and map 4113.9 to 4073.9
+at (6), a set's key read once. Tried and dropped: `at`'s escape read
+out of line (pages_r 25.4 to 29.1), or as a `pure` function (more
+than inline even with the index's range assumed); a map probe comparing length fields first (group
+4024.0 to 4059.2). With every escape test made `false` in the fixed C,
+json_r is 317.5 and group 3881.2: what's left on them is the tests.
+
+**Wall time**, before against fixed, 7 runs interleaved and rotated
+(`python3 -I bench/native/strs/ab.py <before> <fixed> 7 tok:1 sort:1
+map:1 group:1 logs:1 json_1m:1 logfmt_1m:1 slices_logs:2 ...`), ms a
+round and the R runs' spread: at these rounds every spread is wider
+than the difference, so these say nothing either way, and the
+instructions above are the measure.
+
+| kernel | before | fixed | fixed / before |
+|---|---|---|---|
+| tok | 31.5 (98-150) | 39.4 (100-155) | 1.25 |
+| sort | 409.8 (686-797) | 396.8 (691-786) | 0.97 |
+| map | 1732.7 (2807-3195) | 1247.4 (2353-2753) | 0.72 |
+| group | 353.6 (1185-1394) | 387.4 (1187-1387) | 1.10 |
+| logs | 293.4 (1033-1333) | 288.5 (1317-1450) | 0.98 |
+| json_1m | 243.3 (1354-1641) | 234.1 (1330-1508) | 0.96 |
+| logfmt_1m | 214.6 (1398-1575) | 149.1 (1464-1643) | 0.69 |
+| slices_logs | 22.8 (128-170) | 17.1 (128-145) | 0.75 |
+| slices_logs_r | 18.4 (122-145) | 15.9 (121-144) | 0.87 |
+| slices_json | 83.3 (270-363) | 90.5 (292-362) | 1.09 |
+| slices_json_r | 70.5 (254-312) | 75.3 (250-311) | 1.07 |
+| slices_pages | 2.8 (160-266) | 3.9 (163-181) | 1.41 |
+| slices_pages_r | 6.6 (148-224) | 9.2 (164-233) | 1.39 |
+| maps | 102.8 (188-247) | 106.9 (205-325) | 1.04 |
+
+**Peak RSS** (KB, `/usr/bin/time -f %M`, one run each, the binaries
+above): step 3 against fixed, tok 70,136 / 37,372, sort 100,084 / 81,656,
+map 214,784 / 215,860, group 198,796 / 198,900, logs 409,584 / 276,724,
+json_1m 431,480 / 344,048, logfmt_1m 539,512 / 406,644, slices json
+189,108 / 106,220, maps 48,076 / 51,776 (+7.7%, entries of two-word
+keys), the other slices kernels the same within 0.1%; before part 3
+the same as fixed but maps, 48,060.
+
+**The owner's header**: the kernels built with `REN_CFLAGS=-DREN_OWNER_PAD=0`
+and `=16` by part 3's tree with an owner 16 bytes larger (`ren_str_size`,
+an experiment, not kept), at tok 10, sort 5, map 5, group 5 and maps 20
+rounds, 3 runs of each interleaved, twice (part 3's and this one's):
+
+| kernel | RSS, pad 0 | RSS, pad 16 | a 16-byte owner saves | s, pad 0 | s, pad 16 |
+|---|---|---|---|---|---|
+| map | 215,816-215,828 | 218,692-218,964 | 1.4% | 7.54-9.23 | 7.84-10.75 |
+| maps | 51,600-51,772 | 54,720-54,848 | 5.6% | 2.50-3.51 | 3.08-3.80 |
+| group | 198,892-198,932 | 198,936-198,964 | 0.0% | 3.21-3.73 | 2.92-3.98 |
+| tok, sort | 37,228-37,444; 82,284-82,412 | 37,344-37,348; 82,292-82,404 | 0.0% | | |
+
 ## Bytes stage, part two, step 4, part 2 (compiler.md, "Bytes stage, part two", "Step 4 (part 2), as built")
 
 The uncounted view, lent element reads, `lend_parts` again, and runs of
