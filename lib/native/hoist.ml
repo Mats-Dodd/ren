@@ -459,7 +459,9 @@ let fn (f : fn) =
    "Bytes stage", "The baseline"). So each `Bytes` a loop reads a byte of
    has its length and its bytes read once, before the loop, [Str_len]
    and [Str_data], and in the loop [Bytes_get] checks the index against
-   that length and loads.
+   that length and loads, and a [Str_len] of it is that length. In a
+   release build each read before the loop is also the one test for the
+   4 GiB escape (ren_rt.h, [ren_sv_len]) the loop makes.
 
    It's sound because the loop reads the same object all through, and
    that object is alive: the variable is a parameter or a [Let], which
@@ -535,6 +537,11 @@ let bytes ?sv (f : fn) =
             Let (v, get site i (Option.get (view x)))
         | Do (Runtime (Bytes_at, [ Var x; i ], site)) when view x <> None ->
             Do (get site i (Option.get (view x)))
+        (* its length, read in the loop (`k == l.len()`), is the one read
+           before it: the same object, which doesn't change *)
+        | Let (v, Runtime (Str_len, [ Var x ], _)) when view x <> None ->
+            let _, len, _ = Option.get (view x) in
+            Let (v, Atom (Var len))
         | s -> Rc.map_blocks (rewrite views) s)
       b
   in

@@ -111,8 +111,8 @@
 
 ; strs.t runs the bytes stage part two's programs, in strs/, as bytes.t
 ; runs bytes/ (compiler.md, "Bytes stage, part two", "The tests"); it
-; needs cc and tcc, as build.t does. strs_big.t runs the 4 GiB escape,
-; which needs 8 GiB, only with REN_BIG_TESTS=1.
+; needs cc and tcc, as build.t does. strs_big.t and strs_big_edges.t run
+; the 4 GiB escape, which needs 8 GiB, only with REN_BIG_TESTS=1.
 
 (cram
  (applies_to strs)
@@ -124,11 +124,12 @@
   (glob_files strs/*.ren)
   (glob_files strs/*.expected)))
 
-; strs_lent.t, step 4's lent reads (part two), and strs_maps.t, its maps of
-; strings (part three), as strs.t checks its programs.
+; strs_lent.t, step 4's lent reads (part two), strs_maps.t, its maps of
+; strings (part three), and strs_edges.t, the fast paths the escape's
+; tests left, as strs.t checks its programs.
 
 (cram
- (applies_to strs_lent strs_maps)
+ (applies_to strs_lent strs_maps strs_edges)
  (deps
   %{bin:ren}
   (env_var REN_TCC)
@@ -136,7 +137,7 @@
   (glob_files strs/*.expected)))
 
 (cram
- (applies_to strs_big)
+ (applies_to strs_big strs_big_edges)
  (enabled_if
   (= %{env:REN_BIG_TESTS=0} 1))
  (deps

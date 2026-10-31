@@ -1,0 +1,56 @@
+// The edges of the fast paths the 4 GiB escape's fixes moved (compiler.md,
+// "Bytes stage, part two", "Step 4 (part 3), as built"), on values that
+// aren't the escape: `[0..0]` and empty slices, which a release build's
+// checks send to the cold path, of a parameter, a local and a field,
+// counted and not; `==` of empty values, of values whose lengths differ,
+// and of a literal; a loop's `l.len()` read once before it; and layer
+// 3's reads and writes at the last byte.
+
+type Rec = { key: Bytes, name: Str }
+
+fn fields(l: Bytes) -> Int =
+  var c = 0
+  for k in 0..l.len() + 1
+    if k == l.len() || l.at(k) == 32 then c += 1
+  c
+
+fn first_word(s: Str) -> Str =
+  var k = 0
+  while k < s.byte_len() && s.bytes().at(k) != 32
+    k += 1
+  s[0..k]
+
+fn empties(b: Bytes, s: Str) -> Array<Int> =
+  [b[0..0].len(), s[0..0].byte_len(), b[b.len()..b.len()].len(), s[2..2].byte_len()]
+
+fn kept(b: Bytes, s: Str) -> Array<Bytes> = [b[0..0], s[0..0].bytes(), b[2..2], b[0..1]]
+
+fn main() uses Console =
+  let b = Bytes.of([104, 32, 105, 32, 106])
+  let s = "é a"
+  print(empties(b, s))
+  let ks = kept(b, s)
+  print(ks)
+  print(ks[0] == ks[1])
+  print(ks[0] == Bytes.zeros(0))
+  print(ks[3] == Bytes.of([104]))
+  print(ks[3] == ks[0])
+  let r = Rec { key: b[2..5], name: s[0..2] }
+  print(r.key[0..0].len())
+  print(r.name[0..0] == "")
+  print(r.name == "é")
+  print(r.name == "e")
+  print(r.name == "")
+  print("" == s[3..3])
+  print(first_word(""))
+  print(first_word(" x"))
+  print(first_word("ab cd"))
+  print(fields(b))
+  print(fields(Bytes.zeros(0)))
+  print(fields(b[0..0]))
+  var w = Bytes.zeros(4)
+  &w.set_u16_le(2, 513)
+  &w.set_u8(3, 9)
+  print(w.u16_le(2))
+  print(w.u8(3))
+  print(w[0..0] == w[4..4])

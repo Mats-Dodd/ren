@@ -1,0 +1,47 @@
+// The 4 GiB escape at the edges of the fast paths (compiler.md, "Bytes
+// stage, part two", "Step 4 (part 3), as built"): a slice or view's
+// checks, made against the length field alone, which is 0 for the
+// escape, so `[0..0]` of one too goes to the cold path; `at` and layer
+// 3's reads and writes past the length field; `==` of an escape against
+// a value whose length field is the same as its real length, or 0; and a
+// loop whose length is read once before it, of an escape. It needs about
+// 4 GiB natively and up to 12 GB in `ren run`, so bench/strs_big_edges.t
+// runs it only with REN_BIG_TESTS=1.
+
+// the spaces in [l] and its end, the loop's `l.len()` the one read
+// before it
+fn fields(l: Bytes) -> Int =
+  var c = 0
+  for k in 0..l.len() + 1
+    if k == l.len() || l.at(k) == 32 then c += 1
+  c
+
+// an empty view of a borrowed parameter, and a counted one kept
+fn empty_view(b: Bytes) -> Int = b[0..0].len()
+fn empty_kept(b: Bytes) -> Array<Bytes> = [b[0..0], b[1..1]]
+
+fn main() uses Console =
+  let n = 4_294_967_299
+  var big = Bytes.zeros(n - 7)
+  big += Bytes.of([64, 66, 15, 0, 0, 32, 0])
+  let all = big
+  print(all.u32_le(n - 7))
+  print(all.at(n - 2))
+  print(empty_view(all))
+  let kept = empty_kept(all)
+  print(kept[0].len() + kept[1].len())
+  print(kept[0] == Bytes.zeros(0))
+  let tail = all[n - 3..n]
+  print(tail)
+  print(tail[0..0].len())
+  print(tail == Bytes.of([0, 32, 0]))
+  print(tail == Bytes.of([0, 32, 1]))
+  print(tail == Bytes.of([0, 32]))
+  print(tail[0..0] == Bytes.zeros(0))
+  print(Bytes.zeros(0) == tail[3..3])
+  print(fields(tail))
+  print(fields(all[n - 10..n]))
+  var t = tail
+  &t.set_u16_be(1, 258)
+  print(t)
+  print(tail)

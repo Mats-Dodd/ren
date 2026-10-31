@@ -1499,7 +1499,39 @@ let rec stmt o d (s : stmt) =
   | Panic (s, msg) ->
       line (sprintf "ren_panic(%s, %s);" (site s) (c_string msg))
 
-and block o d b = List.iter (stmt o d) b
+(* A run of counts is written as one where its objects are one object,
+   [ren_dup_by]: the slices of one root a record or an array is given
+   (pages' key and value, logs' six fields). C merged those itself while
+   a slice's root was its string's, but a slice of the 4 GiB escape has
+   a root of its own (ren_rt.h, [ren_sv_view_escape]), so it can't know
+   they're one. *)
+and block o d b =
+  let objects = function
+    | Dup x when is_struct x -> Some (struct_objects ~kept:[] (atom_layout x) (atom x))
+    | Dup x -> Some [ atom x ]
+    | _ -> None
+  in
+  let rec go = function
+    | [] -> ()
+    | s :: _ as b when objects s <> None ->
+        let rec run acc = function
+          | s :: rest when objects s <> None -> run (acc @ Option.get (objects s)) rest
+          | rest -> (acc, rest)
+        in
+        let os, rest = run [] b in
+        (match os with
+        | a :: (_ :: _ as others) ->
+            line o d
+              (sprintf "if (%s) ren_dup_by(%s, %d); else ren_dup_each(%d, %s);"
+                 (String.concat " && " (List.map (fun x -> sprintf "%s == %s" x a) others))
+                 a (List.length os) (List.length os) (String.concat ", " os))
+        | _ -> List.iter (fun x -> line o d (sprintf "ren_dup(%s);" x)) os);
+        go rest
+    | s :: rest ->
+        stmt o d s;
+        go rest
+  in
+  go b
 
 (* Whether a loop indexes a buffer hoist.ml read before it. *)
 and uses_buffer o b =

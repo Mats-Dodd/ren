@@ -275,6 +275,14 @@ static void ren_todo_push(ren_todo_t *t, ren_obj *o) {
   t->objs[t->len++] = o;
 }
 
+void ren_dup_each(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  for (int i = 0; i < n; i++)
+    ren_dup(va_arg(ap, ren_obj *));
+  va_end(ap);
+}
+
 #ifndef REN_RC_SHARED
 _Noreturn void ren_shared_count(ren_obj *o) {
   (void)o;
@@ -1635,6 +1643,9 @@ static void ren_sv_slice_check(ren_sv s, int64_t i, int64_t j, bool str,
     ren_sv_slice_panic(s, i, j, str, site);
 }
 
+/* [ren_sv_slice] and [ren_sv_view_slice] of what their checks against
+   the length field refuse: a slice of an escape, `[0..0]` of anything,
+   or a slice that's wrong, which panics. Each is right for any value. */
 ren_sv ren_sv_slice_escape(ren_sv s, int64_t i, int64_t j, bool str,
                            const ren_site *site) {
   ren_sv_slice_check(s, i, j, str, site);
@@ -1672,10 +1683,10 @@ static bool ren_sv_escape_unique(ren_sv v) {
   return ren_rc(e) == 1 && (o == e || ren_rc(o) == 1);
 }
 
-char *ren_sv_writable_slow(ren_sv *cell, bool taking) {
-  if (!(taking && ren_sv_is_escape(*cell) && ren_sv_escape_unique(*cell)))
-    *cell = ren_sv_unshare(*cell);
-  return (char *)ren_sv_data(*cell);
+ren_sv ren_sv_writable_slow(ren_sv v, bool taking) {
+  if (taking && ren_sv_is_escape(v) && ren_sv_escape_unique(v))
+    return v;
+  return ren_sv_unshare(v);
 }
 
 
@@ -1724,15 +1735,6 @@ ren_sv ren_sv_take(ren_obj *o) {
   ren_sv v = ren_sv_unbox(o);
   ren_drop(o);
   return v;
-}
-
-void ren_sv_room_slow(ren_sv b, int64_t at, int width, const ren_site *site) {
-  ren_bytes_room(ren_sv_len(b), at, width, site);
-}
-
-int64_t ren_sv_load_slow(ren_sv b, int64_t at, int width, bool sgn, bool big,
-                         const ren_site *site) {
-  return ren_load_at(ren_sv_data(b), ren_sv_len(b), at, width, sgn, big, site);
 }
 
 void ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
@@ -3717,16 +3719,15 @@ static REN_INLINE void ren_map_keep(ren_val *to, ren_sv x, bool xsv, bool tsv,
    whether they're taken or counted again where they're kept. A key
    that's there keeps its first key, and gets [v]. */
 static REN_INLINE void ren_map_put(ren_map *m, uint64_t h, ren_val kw, ren_sv k, bool ksv,
-                        ren_sv v, bool vsv, const ren_desc *kd,
-                        const ren_walk *w, bool owned) {
+                        const char *kp, int64_t kn, ren_sv v, bool vsv,
+                        const ren_desc *kd, const ren_walk *w, bool owned) {
   uint64_t slot;
-  /* a two-word `Str` key into entries of two-word keys: its bytes, as
-     [ren_map_find_sv] looks them up, with no A slice made for it */
+  /* a two-word `Str` key into entries of two-word keys: its bytes, [kp]
+     and [kn], as [ren_map_find_sv] looks them up, with no A slice made
+     for it */
   bool bytes = ksv && kd->kind == REN_D_STR && (m->h.nfields & REN_MAP_KEY_SV);
 #define REN_MAP_PUT_PROBE()                                                    \
-  (bytes ? (m->shift == 0 ? -1                                                 \
-                          : ren_map_probe_bytes(m, h, ren_sv_data(k),          \
-                                                ren_sv_len(k), &slot))         \
+  (bytes ? (m->shift == 0 ? -1 : ren_map_probe_bytes(m, h, kp, kn, &slot))     \
          : ren_map_probe(m, h, kw, kd, NULL, w, &slot))
   int64_t e = REN_MAP_PUT_PROBE();
   bool kobj = m->h.objs & 1, vobj = m->h.objs & 2, set = ren_map_is_set(m);
@@ -3778,11 +3779,16 @@ static REN_INLINE void ren_map_set_in(ren_obj **cell, ren_sv k, bool ksv, ren_sv
   ren_str tmp;
   ren_val kw = {0};
   uint64_t h;
+  const char *kp = NULL;
+  int64_t kn = 0;
   /* hashed first, so a NaN panics before anything changes; a two-word
-     `Str` from its bytes, as [ren_key_hash] would hash its A slice */
-  if (ksv && ((ren_desc *)kd)->kind == REN_D_STR)
-    h = ren_str_key_hash(&w, ren_sv_data(k), ren_sv_len(k));
-  else {
+     `Str` from its bytes, as [ren_key_hash] would hash its A slice,
+     read once for the probes too */
+  if (ksv && ((ren_desc *)kd)->kind == REN_D_STR) {
+    kp = ren_sv_data(k);
+    kn = ren_sv_len(k);
+    h = ren_str_key_hash(&w, kp, kn);
+  } else {
     kw = ksv ? (ren_val){.o = ren_sv_view(&tmp, k)} : k.s[0];
     h = ren_key_hash((ren_desc *)kd, NULL, kw, &w);
   }
@@ -3790,7 +3796,7 @@ static REN_INLINE void ren_map_set_in(ren_obj **cell, ren_sv k, bool ksv, ren_sv
   if (__builtin_expect(m->used == 0, 0))
     ren_map_layout(m, kd, vd);
   m->h.objs = ren_map_objs(kd, vd);
-  ren_map_put(m, h, kw, k, ksv, v, vsv, (ren_desc *)kd, &w, taking);
+  ren_map_put(m, h, kw, k, ksv, kp, kn, v, vsv, (ren_desc *)kd, &w, taking);
 }
 
 static inline ren_sv ren_sv_word(ren_val x) {
@@ -3873,8 +3879,9 @@ ren_obj *ren_map_of(ren_obj *pairs, ren_obj *kd, ren_obj *vd, bool flat,
     }
     ren_str tmp;
     ren_val kw = ksv ? (ren_val){.o = ren_sv_view(&tmp, k)} : k.s[0];
-    ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, kw, &w), kw, k, ksv, v,
-                false, (ren_desc *)kd, &w, false);
+    ren_map_put(m, ren_key_hash((ren_desc *)kd, NULL, kw, &w), kw, k, ksv,
+                ksv ? ren_sv_data(k) : NULL, ksv ? ren_sv_len(k) : 0, v, false,
+                (ren_desc *)kd, &w, false);
   }
   return &m->h;
 }

@@ -30,6 +30,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -432,8 +433,10 @@ typedef struct {
 } ren_stats_t;
 extern ren_stats_t ren_stats;
 #define REN_STAT(field) (ren_stats.field++)
+#define ren_stats_dups_by(n) (ren_stats.dups += (n))
 #else
 #define REN_STAT(field) ((void)0)
+#define ren_stats_dups_by(n) ((void)0)
 #endif
 
 /* ---- panics ---- */
@@ -591,6 +594,31 @@ static inline void ren_dup(ren_obj *o) {
     ren_dup_cold(o);
 #endif
 }
+
+/* [n] more, as [n] [ren_dup]s: what emit_c.ml writes for a run of
+   counts of one object. */
+static inline void ren_dup_by(ren_obj *o, int32_t n) {
+  if (ren_is_scalar(o))
+    return;
+#if defined(REN_RC_ATOMIC)
+  if (ren_rc(o) == 0)
+    return;
+  ren_stats_dups_by(n);
+  __atomic_fetch_add(&o->rc, n, __ATOMIC_RELAXED);
+#else
+  int32_t rc = ren_rc(o);
+  if (__builtin_expect(rc > 0, 1)) {
+    ren_stats_dups_by(n);
+    o->rc = rc + n;
+  } else if (rc != 0)
+    for (int32_t i = 0; i < n; i++)
+      ren_dup_cold(o);
+#endif
+}
+
+/* A [ren_dup] of each of the [n] objects after [n], out of line: the
+   rest of a run of counts whose objects aren't one. */
+__attribute__((cold, noinline)) void ren_dup_each(int n, ...);
 
 /* One reference fewer, freeing the object with the last: lean.h's
    `lean_dec_ref`, whose fast path is a count above 1. */
@@ -1788,10 +1816,20 @@ static inline ren_sv ren_sv_peek(ren_obj *o) {
   return ren_sv_raw(r, off, s->len);
 }
 
+/* The length fields first: equal and not 0, neither value is the escape
+   (whose length field is 0), so the bytes are compared with no test;
+   else they differ or are 0, and only then is either tested for the
+   escape, which a literal's side never is once it's inlined. */
 static inline bool ren_sv_eq(ren_sv a, ren_sv b) {
-  int64_t n = ren_sv_len(a);
-  return n == ren_sv_len(b) &&
-         (n == 0 || memcmp(ren_sv_data(a), ren_sv_data(b), (size_t)n) == 0);
+  uint64_t n = (uint64_t)a.s[1].i >> 32, m = (uint64_t)b.s[1].i >> 32;
+  if (n == m && n != 0)
+    return memcmp(((ren_str *)a.s[0].o)->bytes + ren_sv_off(a),
+                  ((ren_str *)b.s[0].o)->bytes + ren_sv_off(b), (size_t)n) == 0;
+  if (__builtin_expect(!ren_sv_is_escape(a) && !ren_sv_is_escape(b), 1))
+    return n == m;
+  int64_t k = ren_sv_len(a);
+  return k == ren_sv_len(b) &&
+         (k == 0 || memcmp(ren_sv_data(a), ren_sv_data(b), (size_t)k) == 0);
 }
 
 /* `s[i..j]`, counting the root, inline: the checks, then arithmetic.
@@ -1802,29 +1840,36 @@ ren_sv_slice_panic(ren_sv s, int64_t i, int64_t j, bool str,
 static inline bool ren_sv_boundary(ren_sv s, int64_t i) {
   return i == ren_sv_len(s) || ((unsigned char)ren_sv_data(s)[i] & 0xc0) != 0x80;
 }
-/* A part of an ordinary value fits, so neither tests its result; a
-   part of an escape is [ren_sv_slice_escape]'s or [ren_sv_view_escape]'s,
-   which check it as these do, so these test for one once, first. */
-ren_sv ren_sv_slice_escape(ren_sv s, int64_t i, int64_t j, bool str,
-                           const ren_site *site);
-ren_sv ren_sv_view_escape(ren_sv s, int64_t i, int64_t j, bool str,
-                          const ren_site *site);
-static inline bool ren_sv_slice_bad(ren_sv s, int64_t i, int64_t j, bool str) {
-  /* [s] isn't the escape: its length and data with no test */
-  int64_t n = (int64_t)((uint64_t)s.s[1].i >> 32);
+/* A part of an ordinary value fits, so neither tests its result, and
+   neither tests for the escape: the checks are against the length field
+   alone, which is 0 for the escape, and [j] is checked as [j - 1 < n],
+   so every slice of an escape fails them, `[0..0]` too (as does `[0..0]`
+   of an ordinary value, which costs a call and is still right). What
+   fails them is [ren_sv_slice_escape]'s or [ren_sv_view_escape]'s, out
+   of line, which check a slice of any value as the interpreter does, and
+   panic or make it. */
+__attribute__((cold, noinline)) ren_sv
+ren_sv_slice_escape(ren_sv s, int64_t i, int64_t j, bool str,
+                    const ren_site *site);
+__attribute__((cold, noinline)) ren_sv
+ren_sv_view_escape(ren_sv s, int64_t i, int64_t j, bool str,
+                   const ren_site *site);
+static inline bool ren_sv_slice_ok(ren_sv s, int64_t i, int64_t j, bool str) {
+  /* the data as if [s] isn't the escape, read only at an index below
+     the length field, which an escape's has none of */
+  uint64_t n = (uint64_t)s.s[1].i >> 32;
   const char *d = ((ren_str *)s.s[0].o)->bytes + ren_sv_off(s);
   return __builtin_expect(
-      i > j || i < 0 || j > n ||
-          (str && !((i == n || ((unsigned char)d[i] & 0xc0) != 0x80) &&
-                    (j == n || ((unsigned char)d[j] & 0xc0) != 0x80))),
-      0);
+      (uint64_t)i <= (uint64_t)j && (uint64_t)j - 1 < n &&
+          (!str ||
+           (((uint64_t)i == n || ((unsigned char)d[i] & 0xc0) != 0x80) &&
+            ((uint64_t)j == n || ((unsigned char)d[j] & 0xc0) != 0x80))),
+      1);
 }
 static inline ren_sv ren_sv_slice(ren_sv s, int64_t i, int64_t j, bool str,
                                   const ren_site *site) {
-  if (ren_sv_is_escape(s))
+  if (!ren_sv_slice_ok(s, i, j, str))
     return ren_sv_slice_escape(s, i, j, str, site);
-  if (ren_sv_slice_bad(s, i, j, str))
-    ren_sv_slice_panic(s, i, j, str, site);
   ren_dup(s.s[0].o);
   return ren_sv_raw(s.s[0].o, ren_sv_off(s) + i, j - i);
 }
@@ -1835,10 +1880,8 @@ static inline ren_sv ren_sv_slice(ren_sv s, int64_t i, int64_t j, bool str,
    [s]'s object holds ([ren_sv_view_escape]). */
 static inline ren_sv ren_sv_view_slice(ren_sv s, int64_t i, int64_t j, bool str,
                                        const ren_site *site) {
-  if (ren_sv_is_escape(s))
+  if (!ren_sv_slice_ok(s, i, j, str))
     return ren_sv_view_escape(s, i, j, str, site);
-  if (ren_sv_slice_bad(s, i, j, str))
-    ren_sv_slice_panic(s, i, j, str, site);
   return ren_sv_raw(s.s[0].o, ren_sv_off(s) + i, j - i);
 }
 
@@ -1915,39 +1958,50 @@ static inline int64_t ren_sv_at(ren_sv b, int64_t i, const ren_site *site) {
    of its own first ([ren_sv_unshare], which drops [*cell]'s root).
    Each checks its room against the length field alone, which fails
    for the escape (its length field is 0), and tests for one only where
-   that fails ([ren_sv_load_slow], [ren_sv_room_slow], which read its
-   object's length and panic only if that hasn't the room either); an
-   escape's object is a slice, so a write to one is
-   [ren_sv_writable_slow]'s. */
+   that fails, reading its object's length and data then, and panicking
+   only if that hasn't the room either; an escape's object is a slice,
+   so a write to one is [ren_sv_writable_slow]'s. There's no call on
+   the way that returns: one would be taken by C as changing any memory,
+   for the code after it as much as the cold path. */
 static inline int64_t ren_sv_room_len(ren_sv v) {
   return (int64_t)((uint64_t)v.s[1].i >> 32);
 }
-void ren_sv_room_slow(ren_sv b, int64_t at, int width, const ren_site *site);
-int64_t ren_sv_load_slow(ren_sv b, int64_t at, int width, bool sgn, bool big,
-                         const ren_site *site);
+static inline void ren_sv_room(ren_sv v, int64_t at, int width,
+                               const ren_site *site) {
+  int64_t len = ren_sv_room_len(v);
+  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0))
+    ren_bytes_room(ren_sv_len(v), at, width, site);
+}
 static inline int64_t ren_sv_load(ren_sv b, int64_t at, int width, bool sgn,
                                   bool big, const ren_site *site) {
   int64_t len = ren_sv_room_len(b);
-  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0))
-    return ren_sv_load_slow(b, at, width, sgn, big, site);
-  return ren_load_at(((ren_str *)b.s[0].o)->bytes + ren_sv_off(b), len, at,
-                     width, sgn, big, site);
+  const char *data = ((ren_str *)b.s[0].o)->bytes + ren_sv_off(b);
+  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0) &&
+      ren_sv_is_escape(b)) {
+    len = ren_sv_len(b);
+    data = ren_sv_data(b);
+  }
+  return ren_load_at(data, len, at, width, sgn, big, site);
 }
 ren_sv ren_sv_unshare(ren_sv b);
-char *ren_sv_writable_slow(ren_sv *cell, bool taking);
+/* [v] itself if it's an escape that can be written in place, else
+   [ren_sv_unshare]'s copy. It takes and gives a value, not [cell]: a
+   local whose address went to a call would be kept in memory, and given
+   a stack guard, in every function that writes one. */
+ren_sv ren_sv_writable_slow(ren_sv v, bool taking);
 static inline char *ren_sv_writable(ren_sv *cell, bool taking) {
   ren_obj *r = cell->s[0].o;
-  if (!taking || __builtin_expect(!(ren_rc(r) == 1 && !ren_str_is_slice(r)), 0))
-    return ren_sv_writable_slow(cell, taking);
+  if (!taking || __builtin_expect(!(ren_rc(r) == 1 && !ren_str_is_slice(r)), 0)) {
+    *cell = ren_sv_writable_slow(*cell, taking);
+    return (char *)ren_sv_data(*cell);
+  }
   return ((ren_str *)r)->bytes + ren_sv_off(*cell);
 }
 static inline void ren_sv_store(ren_sv *cell, int64_t at, int64_t x, int width,
                                 bool sgn, bool big, bool taking,
                                 const ren_site *site) {
   ren_bytes_fits(x, width, sgn, site);
-  int64_t len = ren_sv_room_len(*cell);
-  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < width, 0))
-    ren_sv_room_slow(*cell, at, width, site);
+  ren_sv_room(*cell, at, width, site);
   ren_store_at(ren_sv_writable(cell, taking) + at, (uint64_t)x, width, big);
 }
 static inline int64_t ren_sv_set_var(ren_sv *cell, int64_t at, int64_t x,
@@ -1955,9 +2009,7 @@ static inline int64_t ren_sv_set_var(ren_sv *cell, int64_t at, int64_t x,
                                      const ren_site *site) {
   uint64_t z = ren_var_bits(x, sgn, site);
   int n = ren_var_len(z);
-  int64_t len = ren_sv_room_len(*cell);
-  if (__builtin_expect((uint64_t)at > (uint64_t)len || len - at < n, 0))
-    ren_sv_room_slow(*cell, at, n, site);
+  ren_sv_room(*cell, at, n, site);
   ren_var_write((unsigned char *)ren_sv_writable(cell, taking) + at, z, n);
   return n;
 }

@@ -1,0 +1,4 @@
+0
+3
+exit 1
+error: panic: slice 3 to 9 is out of bounds for bytes of length 4

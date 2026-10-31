@@ -1,0 +1,12 @@
+// A view past the end of a borrowed parameter's bytes, which a release
+// build's checks send to the cold path with `[0..0]`, panics there as
+// `ren run` does (compiler.md, "Bytes stage, part two", "Step 4 (part
+// 3), as built").
+
+fn part(b: Bytes, i: Int, j: Int) -> Int = b[i..j].len()
+
+fn main() uses Console =
+  let b = Bytes.of([1, 2, 3, 4])
+  print(part(b, 0, 0))
+  print(part(b, 1, 4))
+  print(part(b, 3, 9))
