@@ -10449,6 +10449,79 @@ Tests: test/test_strs_literals.ml (every form in `ren run` and
 specified, the same in all five native builds, and its 10,000 `b"..."`
 compares fewer than 200 objects in a debug build and a release one.
 
+### Step 6, the review
+
+Three lenses, as the brief asks: soundness (adversarial programs, in
+`ren run` and every native build under the sanitizers and tcc, a
+release build with `REN_SPEC_BUDGET=0` too, and Mem Lint mutated to see
+what catches what), the spec (every name of strings.md's API table and
+"Compiler errors", and the brief's scope 5, 6 and 5b, tried in each
+build), and the docs and tooling.
+
+**Found and fixed:**
+
+- **High: an `opaque Str`'s descriptor said "not counted"** in release
+  builds (to_mem.ml, `counted`'s `Rep_decl` arm, asked `is_object`, and
+  under B a `Str` is a two-slot struct whose word is a counted box). A
+  map of such keys leaked them, and generic code counting through the
+  descriptor freed a key early (heap-use-after-free under ASan). It's
+  `Mem.counted` now; bench/strs/opaque_key and opaque_key_generic, in
+  strs_maps.t, at the default budget and at `REN_SPEC_BUDGET=0`.
+  Introduced by step 4 (part 1); debug builds and `ren run` were right.
+- **Medium: a hole of a type with its own `show`** didn't build
+  natively (part one's refusal of an own `show` through a descriptor,
+  reached through interpolation). A hole whose static type has its own
+  `show` now calls it, as `x.show()` does (lower.ml, `own_shown`);
+  bench/strs/interp_show. A hole of a type variable whose instance has
+  one is still refused, with part one's error.
+- **Low: Mem Lint's part-two rules had no test that they reject
+  anything.** test/test_native_strs.ml builds broken Mem by hand for
+  `views`, a lent element (`Array_peek`) read after its array is
+  dropped, given away, taken or written (`unlend`), and `lend_parts`'
+  struct of a part; each test fails with its rule turned off.
+- **Low:** rc.ml's `lent_reads` says its `ssa x`, `taken` and `settled`
+  tests are a second guard, not what makes lending sound.
+- **Docs:** README's status and roadmap row, strings.md's "Already
+  built" line, the test table, the steps list, the corpus's last
+  `concat`, and "Where this stage may differ" for steps 5, 5b and 6.
+
+**Held under attack:** an append or a write through a slice of a
+shared root, a slice of a slice, a unique root whose bytes past the
+slice another value sees, `+=` on a map key, an array element, a
+field, a capture and an `inout`; views and lent elements kept in
+records, arrays, maps, handlers, errors, tuples, options and blocks,
+returned, kept past their parent, across a `var` changed through `&`,
+`split_at`, a block or a cell; strings as a type variable's value in
+sort, `==`, ordering, `hash`, `show`, the NaN walk and map entries;
+`b"..."` written to (it copies); the validator at every 16- and
+64-byte edge, errors placed 6 bytes either side after characters of
+each width, 284,544 inputs with no disagreement on the scalar path and
+on NEON under qemu. Every name of the API, every error's wording and
+every panic agree across `ren run`, debug and release.
+
+**Left, by severity:**
+
+- **Medium: slices pages is 1.23× its `_r` form,** not 1.2 (Step 4,
+  part 2): freeing its array reads every element to drop its root.
+  json_r is 2.0-2.1× Rust, its own C unchanged since part 1.
+- **Medium: json's `+=` is 1.22× Rust's `push_str`,** not 1.1 (step 3
+  measured 1.41; B took the slice objects away; `show` of a number
+  still makes a string).
+- **Medium, not this stage's:** a release build stops in Core Lint on
+  `sort_by` of a type with its own `key` ("`(T, Int)` has no `ord` to
+  derive"), at 78b28ec too.
+- **Low-medium, not this stage's:** past the specialization budget a
+  small-struct `Option` reaches unspecialized code unboxed and Mem Lint
+  stops ("is Struct0, but should be Boxed"), at 78b28ec too; only
+  programs past the million-node budget.
+- **Low:** a hole of a type variable with its own `show` is refused
+  natively (part one's); `t"..."` is a parse error with no help
+  (templates aren't built); `show` writes `\r` and `\0` as bytes;
+  `Bytes.replace` is quadratic in `ren run`; the `+=` report orders
+  sites by number, not strictly by file.
+- **Not measurable here:** the NEON validator's GB/s, and every
+  headline number, which the owner measures on the M4 Max.
+
 ### Progress log
 
 | step | commit | what's done | what's left |
@@ -10461,6 +10534,7 @@ compares fewer than 200 objects in a debug build and a release one.
 | 4, part 2 | "Bytes stage, part two, step 4 (part 2): the uncounted view" | the uncounted view (`Str_view`, `ren_sv_view_slice`), a slice a part of what it's of; lent element reads (`Array_peek`, `Buf_peek`) of arrays nothing takes, in both builds; `lend_parts` to a fixpoint and through calls that take nothing counted; Mem Lint's lent parts and `unlend`; a run of one root dropped at once when an array is freed; strs_lent.t; slices json 1.11 and logs 1.07 of their `_r` forms, json 0.73 and pages 0.61 of part one's instructions | pages at 1.23 of `_r` and 1.97 to 2.15 of Rust, from the free walk; json_r at 2.0 to 2.1 of Rust, its own; the 4 GiB escape (a view of one), unboxed map entries, the 16-byte owner experiment |
 | 5 | "Bytes stage, part two, step 5: the rest of the API" | `includes`, `ends_with`, `strip_prefix`, `strip_suffix`, `split_once`, `lines`, `fields`, `replace`, `ascii_upper`, `line_col` with its panics, on `Str` and `Bytes` alike (`Bytes` given `index`, `starts_with`, `split` and `trim`), in the interpreter and natively, `Str.index` and `starts_with` native too; `count()` on arrays, maps and sets, and `count()` and `count(f)` on every cursor, pulled; rest.ren, rest_count.ren and five panics the same in every build; s5 on; stdlib.md's table | `ren run`'s `Bytes.replace` quadratic in its matches, as its `+=` is |
 | 5b | "Bytes stage, part two, step 5b: literals" | `\r`, `\0`, `\u{...}` in every string and character literal; `b"..."` with `\x`, a static owner (`"...".bytes()`), allocating nothing; `"""` with the closing line's indentation, `\` joins; `#` raw strings with `\#` escapes and `\#{x}` holes; every form with the others; the lexer's errors with help; tree-sitter's scanner, corpus and Zed; test_strs_literals.ml, strs/literals.ren in every build | `t` combined, when templates are built; `show` of a `Str` doesn't escape `\r` or `\0`; rest.ren's `Str.of_code(13)`, step 5's file |
+| 6 | "Bytes stage, part two, step 6 (soundness): an opaque string's descriptor is counted", "... step 6: a hole calls its type's own `show`", "... Mem Lint's part-two rules rejecting", "... what lent_reads' checks guard", "... step 6 (docs and tooling): status, strings.md's line, compiler.md" | the review (Step 6, the review): an `opaque Str`'s descriptor counted (high), a hole of a type with its own `show` native (medium), Mem Lint's rejection tests, the docs | slices pages 1.23× `_r`; json `+=` 1.22× Rust; two Lint stops older than this stage; the NEON numbers on the M4 Max |
 
 ## Services stage
 
