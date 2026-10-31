@@ -4,7 +4,7 @@
 
 open Helpers
 
-let enabled = [ "s1" ]
+let enabled = [ "s1"; "s2" ]
 
 let until step f =
   if List.mem step enabled then f ()
@@ -25,6 +25,7 @@ let output src expected =
 
 let rejects src fragments =
   let src = clean src in
+  let src = if contains src "fn main" then src else src ^ "\nfn main() = ()\n" in
   let said, raised = captured (fun () ->
       report src (fun () -> ignore (Ren.Driver.check ~file src))) in
   Option.iter raise raised;
@@ -84,7 +85,7 @@ fn main() uses Console =
   print(ROUTES.len())
 |}
         "[0, 1, 3, 2]\n2\n()\n");
-  [%expect {| skipped until s2 |}]
+  [%expect {||}]
 
 let%expect_test "[s2] build errors, effects and blocks" =
   until "s2" (fun () ->
@@ -100,7 +101,7 @@ let%expect_test "[s2] build errors, effects and blocks" =
             [ name; "build"; "packages" ])
         [ ("Clock", "Clock.now()"); ("Fs", "try Fs.read(Path.of(\"a\"))") ];
       rejects "let BLOCK = fn(x: Int) => x + 1\n" [ "block" ]);
-  [%expect {| skipped until s2 |}]
+  [%expect {||}]
 
 let%expect_test "[s2] uses is inferred, with a transitive failing path" =
   until "s2" (fun () ->
@@ -117,7 +118,7 @@ fn handle_request() uses Fs = try render()
 assert handle_request.uses <= [Console]
 |}
         [ "handle_request"; "render"; "load_template"; "Fs.read" ]);
-  [%expect {| skipped until s2 |}]
+  [%expect {||}]
 
 let%expect_test "[s3] templates, debug holes and literal forms" =
   until "s3" (fun () ->
@@ -956,13 +957,13 @@ let HANDLER: Numbers = constant(7)
 fn main() uses Console =
   print(with HANDLER in Numbers.get())
 |} "7\n()\n");
-  [%expect {| skipped until s2 |}]
+  [%expect {||}]
 
 let%expect_test "[s2] the same budget failure reports exactly the same steps" =
   until "s2" (fun () ->
       let src = "let NEVER = forever()\nfn forever() -> Int =\n  var n = 0\n  while true\n    n += 1\n  n\n" in
       let once () =
-        let src = clean src in
+        let src = clean src ^ "\nfn main() = ()\n" in
         let said, raised = captured (fun () ->
             report src (fun () -> ignore (Ren.Driver.check ~file src))) in
         Option.iter raise raised;
@@ -970,7 +971,7 @@ let%expect_test "[s2] the same budget failure reports exactly the same steps" =
         said
       in
       assert (once () = once ()));
-  [%expect {| skipped until s2 |}]
+  [%expect {||}]
 
 let%expect_test "[s3] site's stable hash has fixed empty, escaped and Unicode vectors" =
   until "s3" (fun () ->

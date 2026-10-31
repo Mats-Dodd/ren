@@ -43,7 +43,7 @@ let rec erase_owners (e : C.expr) : C.expr =
         | Yield x -> Yield (r x)
         | Yield_from y -> Yield_from { y with pull = r y.pull }
         | Gen_close x -> Gen_close (r x)
-        | (Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
+        | (Const _ | Function_uses _ | Frozen_default _ | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
           | Global_value _ | Intrinsic _ | Break | Gen_step _) as k -> k
         | Dep_call d -> Dep_call { d with args = List.map r d.args }
         | With w -> With { w with impl = r w.impl; body = r w.body }

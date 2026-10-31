@@ -192,7 +192,9 @@ let rec map_vars f (e : C.expr) : C.expr =
     | Owned_assign a -> Owned_assign { a with target = f a.target; value = go a.value }
     | Owner_alias a ->
         Owner_alias { target = f a.target; root = f a.root; body = go a.body }
-    | (Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break) as k ->
+    | Function_uses _ -> e.kind
+    | Frozen_default d -> Frozen_default {d with frozen_args=List.map desc d.frozen_args}
+    | (Const _ | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break) as k ->
         k
     | Local v -> Local (f v)
     | Global (p, a, ds, dicts) ->
@@ -915,7 +917,16 @@ let rec rw cx fb env (e : C.expr) : C.expr =
       mk (Owned_assign { a with target = cvar env a.target; value = r a.value })
   | Owner_alias a ->
       mk (Owner_alias { target = cvar env a.target; root = cvar env a.root; body = r a.body })
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> mk e.kind
+  | Function_uses _ -> mk e.kind
+  | Frozen_default d ->
+      let args = List.map (desc env) d.frozen_args in
+      let known = List.filter_map (function C.Known t -> Some t | _ -> None) args in
+      if List.length known = List.length args then
+        (match List.assoc_opt known d.frozen_cases with
+        | Some c -> mk (Const c)
+        | None -> mk (Frozen_default {d with frozen_args=args}))
+      else mk (Frozen_default {d with frozen_args=args})
+  | Const _ | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> mk e.kind
   | Local v -> (
       match Ids.find_opt v.id env.blocks with
       | Some (l, vars) -> rematerialize fb env e l vars

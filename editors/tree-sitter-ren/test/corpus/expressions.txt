@@ -114,10 +114,11 @@ fn f() = g(Free, Pro(5), Shape.Rect { w: 2, h: 3 }, Plan.Free, billing.Plan.Free
           (type_name
             (type_identifier))
           (identifier))
-        (item_expression
-          (type_name
-            (identifier)
-            (type_identifier))
+        (field_expression
+          (constructor_expression
+            (constructor_ref
+              (identifier)
+              (type_identifier)))
           (identifier))
         (call_expression
           (item_expression

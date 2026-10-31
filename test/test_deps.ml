@@ -158,6 +158,8 @@ let lint_evidence body =
               shows = [];
               keys = [];
               ops = [];
+              build_values = [];
+              build_asserts = [];
               method_calls = [];
             }))
 

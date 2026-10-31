@@ -133,6 +133,8 @@ type atom =
           0, [-1 - t], constructor [t]'s niche in a [Niche] struct *)
   | Lit of int
       (** the program's [strings]'s n-th, a [Str] made once and never freed *)
+  | Static_data of string * layout
+      (** immutable build-time data, named by typed content *)
   | Desc_lit of int
       (** the program's [descs]'s n-th: a [Desc] made once and never freed *)
   | Fn_ptr of string  (** a function's code, a [Ptr] *)
@@ -464,6 +466,7 @@ type rt =
           a panic at a [Caller] site is said to be *)
   | Here_get  (** a [Ptr]: where [Here_set] last said, to put back *)
   | Here_put  (** a [Ptr] [Here_get] gave: where it was again *)
+  | Desc_same  (** structural equality of two type descriptors *)
   | Value_any of bool  (** a descriptor: `zero`, or `one` if [true] *)
   | New_desc of new_desc
       (** a descriptor built of the descriptors given: a named type's, from its
@@ -769,6 +772,18 @@ type decl = {
           [ren_key_fn]) *)
 }
 
+(* Immutable data in the binary. References point only at earlier entries;
+   arrays and objects have immortal owners, so the normal write paths copy. *)
+type static_kind =
+  | Static_string of string
+  | Static_object of int * atom list
+  | Static_array of layout * atom list
+  | Static_struct of atom list
+  | Static_scalar of atom
+  | Static_map of { set : bool; key : layout; value : layout; entries : (atom * atom) list }
+
+type static_data = { sdname : string; sdlayout : layout; sdkind : static_kind }
+
 (* An associated value: its C name, the function that makes it, and its
    layout. *)
 type value = { vname : string; vfn : string; vlayout : layout }
@@ -826,6 +841,7 @@ type program = {
   decls : decl list;
   tags : string list;  (** the error tags' names, by number *)
   values : value list;  (** made in this order, each after those it uses *)
+  static_data : static_data list;
   strings : string list;  (** the string literals, by [Lit]'s index *)
   sites : site list;  (** by [sid] *)
   structs : strukt list;  (** each [Struct], by its n *)
@@ -886,6 +902,7 @@ let show_atom = function
   | Scalar_ctor t when t < 0 -> "#niche" ^ string_of_int (-1 - t) ^ "*"
   | Scalar_ctor t -> "#" ^ string_of_int t ^ "*"
   | Lit n -> "lit" ^ string_of_int n
+  | Static_data (name, _) -> name
   | Desc_lit n -> "desc" ^ string_of_int n
   | Fn_ptr f -> "&" ^ f
   | Handler_tag n -> "handler" ^ string_of_int n
@@ -999,6 +1016,7 @@ let show_rt = function
   | Here_put -> "here-put"
   | Op_any (Some op) -> "op-any" ^ Ast.binop_to_string op
   | Op_any None -> "op-any-neg"
+  | Desc_same -> "desc-same"
   | Value_any one -> if one then "one-any" else "zero-any"
   | New_desc (Of_decl n) -> "new-desc:" ^ string_of_int n
   | New_desc (Of_variant (n, c)) -> Printf.sprintf "new-desc:%d.%d" n c

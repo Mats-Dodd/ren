@@ -70,3 +70,8 @@
   name: (type_identifier) @name) @item
 
 (comment) @annotation
+
+(build_value
+  (visibility)? @context
+  "let" @context
+  name: (identifier) @name) @item

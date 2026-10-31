@@ -1,0 +1,29 @@
+type Packet = { count: UInt8, active: Bool, samples: Array<Int>, name: Str }
+type Choice = None | Some(Packet)
+let GRID = [[1, 2], [1, 2]]
+let PACKET = Packet { count: 7, active: true, samples: GRID[0], name: "fixed" }
+let CHOICE = Choice.Some(PACKET)
+let BYTES = b"\x00\xff"
+let SIZED: Array<UInt8> = [1, 255]
+let PAIR = (PACKET, CHOICE)
+let TABLE = Map.of([("a", GRID[0]), ("b", GRID[1])])
+let SET = Set.of([3, 1, 3])
+fn main() uses Console =
+  var grid = GRID
+  grid[0][0] = 90
+  print((GRID, grid))
+  var table = TABLE
+  &table.set("a", [7, 8])
+  &table.remove("b")
+  &table.set("c", [5])
+  print(TABLE.get("a"))
+  print(table)
+  print(TABLE == Map.of([("b", [1, 2]), ("a", [1, 2])]))
+  print(TABLE.hash() == Map.of([("b", [1, 2]), ("a", [1, 2])]).hash())
+  var members = SET
+  &members.remove(1)
+  &members.add(4)
+  print((SET, members))
+  print((PACKET, CHOICE))
+  print((BYTES, SIZED))
+  print(PAIR)

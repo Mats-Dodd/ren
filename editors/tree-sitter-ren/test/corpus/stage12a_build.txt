@@ -1,0 +1,172 @@
+================================================================================
+stage12a build roots: values and assertions
+================================================================================
+
+let CRC_TABLE: Array<Int> = table()
+pub let settings = { port: 8080 }
+let COUNT =
+  let n = 2
+  n * 3
+assert COUNT == 6
+assert
+  COUNT > 0
+fn main() = CRC_TABLE.len()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (build_value
+    (identifier)
+    (named_type
+      (type_name
+        (type_identifier))
+      (type_arguments
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (call_expression
+      (identifier)
+      (arguments)))
+  (build_value
+    (visibility)
+    (identifier)
+    (record_expression
+      (field_initializer
+        (identifier)
+        (number))))
+  (build_value
+    (identifier)
+    (block
+      (let_statement
+        (identifier)
+        (number))
+      (binary_expression
+        (identifier)
+        (number))))
+  (build_assertion
+    (binary_expression
+      (constructor_expression
+        (constructor_ref
+          (type_identifier)))
+      (number)))
+  (build_assertion
+    (block
+      (binary_expression
+        (constructor_expression
+          (constructor_ref
+            (type_identifier)))
+        (number))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (call_expression
+      (item_expression
+        (type_name
+          (type_identifier))
+        (identifier))
+      (arguments))))
+
+================================================================================
+stage12a build roots: public assertions refused
+:error
+================================================================================
+
+pub assert true
+
+--------------------------------------------------------------------------------
+
+(source_file)
+
+================================================================================
+stage12a build roots: mutable data refused
+:error
+================================================================================
+
+var count = 1
+
+--------------------------------------------------------------------------------
+
+(source_file)
+
+================================================================================
+stage12a build roots: destructuring roots refused
+:error
+================================================================================
+
+let (x, y) = pair()
+
+--------------------------------------------------------------------------------
+
+(source_file)
+
+================================================================================
+stage12a build roots: qualified constants and inferred uses
+================================================================================
+
+import data
+let LOCAL = data.TABLE
+assert data.answer == 42
+assert load<Int>.uses <= [Store<Int>]
+assert load<Int>.uses.includes(Store<Int>)
+fn main() = billing.Plan
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import
+    (module_path
+      (identifier)))
+  (build_value
+    (identifier)
+    (constructor_expression
+      (constructor_ref
+        (identifier)
+        (type_identifier))))
+  (build_assertion
+    (binary_expression
+      (field_expression
+        (identifier)
+        (identifier))
+      (number)))
+  (build_assertion
+    (binary_expression
+      (field_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (identifier))
+      (array_expression
+        (type_application_expression
+          (type_identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))))
+  (build_assertion
+    (method_call_expression
+      (field_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (identifier))
+      (identifier)
+      (arguments
+        (type_application_expression
+          (type_identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (constructor_expression
+      (constructor_ref
+        (identifier)
+        (type_identifier)))))

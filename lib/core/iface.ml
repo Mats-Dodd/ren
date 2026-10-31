@@ -818,6 +818,12 @@ let of_module ?(generators = Path.Map.empty) ?(types = []) ?(replay_unsafe = [])
   let public_fns ~test =
     List.filter_map
       (function
+        | Ast.Top_value f when f.pub && not test ->
+            let path = Path.make home f.name.name in
+            let (scheme : Ty.scheme) = found path in
+            let ty = match scheme.ty with Ty.Fun (_, ret, _, _) -> ret | t -> t in
+            Some { vname = f.name.name;
+                   scheme = needed path { scheme with ty }; vparams = []; generator = None }
         | Ast.Fn (f : Ast.Resolved.fn_def) when f.pub && f.test = test ->
             (* a handler `over any`'s type lists the tags its arm fails
                with itself, which only inference finds (compiler.md,
@@ -890,7 +896,7 @@ let of_module ?(generators = Path.Map.empty) ?(types = []) ?(replay_unsafe = [])
           | Fn f when f.pub ->
               Option.bind (Path.Map.find_opt (Ast.fn_path home f) generators)
                 (fun g -> if g.kind = Ty.Value_gen then Some (generator_type g) else None)
-          | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
+          | Type _ | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
         prog;
     (* a public test item is in its own tier, which only tests read *)
     values = public_fns ~test:false;

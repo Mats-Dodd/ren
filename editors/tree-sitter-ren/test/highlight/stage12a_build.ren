@@ -1,0 +1,14 @@
+pub let CRC_TABLE: Array<Int> = table()
+//  ^ keyword
+//      ^ constant
+//                 ^ type
+//                              ^ function
+let settings = { port: 8080 }
+//  ^ constant
+//               ^ property
+assert CRC_TABLE.len() > 0
+// ^ keyword
+//               ^ function
+fn main() = settings.port
+// ^ function
+//                   ^ property

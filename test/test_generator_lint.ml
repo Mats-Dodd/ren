@@ -70,7 +70,7 @@ let program fns : Core.program =
     { path = cursor_path; params = [ "T" ]; body = Builtin;
       members = Path.Map.empty; numeric = None; opaque = false; loc = None }
   in
-  { home = "generator_lint"; types = [ td ]; fns; values = []; shows = [];
+  { home = "generator_lint"; types = [ td ]; fns; values = []; build_values = []; build_asserts = []; shows = [];
     keys = []; ops = []; method_calls = [] }
 
 let lint fns =

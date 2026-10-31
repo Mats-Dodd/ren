@@ -118,10 +118,11 @@ fn calls(x: Int, text: Str) =
           (identifier)))
       (call_expression
         (type_application_expression
-          (item_expression
-            (type_name
-              (identifier)
-              (type_identifier))
+          (field_expression
+            (constructor_expression
+              (constructor_ref
+                (identifier)
+                (type_identifier)))
             (identifier))
           (type_arguments
             (named_type

@@ -14,6 +14,8 @@
    about an expression or pattern that a later pass needs, so it never
    decides it again. *)
 type 'l found_ =
+  | Function_uses of Path.t
+  | Dependency_id of 'l
   | Field_of of Path.t  (** a field access: the record type the field is in *)
   | Ctor_of of Path.t * string
       (** a constructor, in an expression or a pattern: its type, and its name

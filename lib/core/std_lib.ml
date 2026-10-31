@@ -15,7 +15,7 @@
    [Stdlib] is OCaml's own.) *)
 
 (* The modules' names, which a program's own module can't have. *)
-let homes = [ "sim"; "sync" ]
+let homes = [ "sim"; "sync"; "shape" ]
 
 let is_home h = List.mem h homes
 
@@ -389,5 +389,40 @@ pub handler batcher<K has hash, V>() for Batcher<K, V> uses Fetch<K, V>, Async =
 
 (* Each module's source, by its name; a name of [homes] without one
    isn't written yet. *)
-let sources = [ ("sim", sim); ("sync", sync) ]
+let shape =
+  {|
+pub type Value =
+  | Bool(Bool) | Int(Int) | Float(Float) | Text(Str) | Bytes(Bytes)
+  | List(Array<Value>) | Map(Array<(Value, Value)>)
+  | Fields(Array<(Str, Value)>) | Case { tag: Value, fields: Value } | None
+
+pub type Field = { name: Str, of: Str, exact: Bool, shape: Shape,
+                   default: Option<Value>, doc: Str }
+pub type Case = { name: Str, tag: Value, holes: Array<Str>,
+                  fields: Array<Field>, positional: Bool, doc: Str }
+pub type Shape =
+  | Unit | Bool | Int | Float | Str | Bytes
+  | Signed(bits: Int) | Unsigned(bits: Int) | Float32
+  | Tuple(Array<Shape>) | Array(Shape) | Map { key: Shape, value: Shape }
+  | Set(Shape) | Option(Shape)
+  | Record { name: Str, fields: Array<Field>, doc: Str }
+  | Sum { name: Str, cases: Array<Case>, doc: Str }
+  | Ref(name: Str) | Const(value: Value) | Text
+  | Dependency { name: Str, operations: Array<DepOperation>, doc: Str }
+pub type DepOperation = { name: Str, params: Array<Field>, result: Shape,
+                         errors: Array<Case>, doc: Str }
+pub type Problem = ! Missing(at: Str, field: Str) | Unknown(at: Str) | Mismatch(at: Str, expected: Str, found: Str) | Invalid(at: Str, why: Str) | NoCase(at: Str, tag: Str) | TooDeep(at: Str, limit: Int) | TooLarge(at: Str, what: Str, limit: Int)
+pub type LookError = ! Duplicate(type_name: Str, looks: Array<Str>) | Opaque(at: Str, type_name: Str) | NoRepr(at: Str, type_name: Str) | Direction(at: Str, look: Str) | Cycle(path: Array<Str>)
+pub type Limits = { bytes: Int = 16_777_216, depth: Int = 64,
+                    items: Int = 1_000_000, str_bytes: Int = 1_048_576 }
+pub type TemplateHole = { source: Str, shape: Shape }
+pub type TemplateSite = { parts: Array<Str>, raw_parts: Array<Str>, holes: Array<TemplateHole>, id: Int, hash: Int }
+pub type DepId = { name: Str, args: Array<Shape> }
+pub type Uses = opaque Array<DepId>
+  pub fn includes(self, wanted: DepId) -> Bool = self.any(fn(d) => d == wanted)
+  pub fn subset(self, allowed: Array<DepId>) -> Bool =
+    self.all(fn(d) => allowed.includes(d))
+|}
+
+let sources = [ ("sim", sim); ("sync", sync); ("shape", shape) ]
 let source h = List.assoc_opt h sources

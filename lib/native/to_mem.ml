@@ -166,6 +166,8 @@ type ctx = {
   decls : (Path.t, int) Hashtbl.t;
   decl_bodies : (int, Mem.decl) Hashtbl.t;
   values : (Path.t, Mem.value) Hashtbl.t;
+  statics : (string, Mem.static_data) Hashtbl.t;
+  mutable static_list : Mem.static_data list;
   mutable nwords : int;
   release : bool;
       (** a release build's, which keeps a copied record or tuple as a C struct
@@ -1444,6 +1446,7 @@ let label fs =
 let atom_layout (x : atom) : layout =
   match x with
   | Var v -> v.layout
+  | Static_data (_, l) -> l
   | Int _ -> Int
   | Float _ -> Float
   | Bool _ -> Bool
@@ -2166,6 +2169,31 @@ and expr_at fs env (e : C.expr) : atom =
       let x = expr fs env value in
       return_out fs env x;
       dummy fs env (lay e.ty)
+  | Const c -> constant fs env e.loc c
+  | Function_uses _ -> unsupported_at fs e.loc "an unresolved dependency reach query"
+  | Frozen_default d ->
+      let ds = List.map (desc fs env) d.frozen_args in
+      let out = fresh fs "$frozen" (lay e.ty) in
+      emit fs (Decl out);
+      let rec cases = function
+        | [] -> [Panic (here_site fs, "no frozen field default for these type arguments")]
+        | (tys,c) :: rest ->
+            let fallback = cases rest in
+            let rec tests ds tys = match ds,tys with
+              | [],[] -> block fs (fun () -> branch env (fun () ->
+                  let x = convert fs (constant fs env e.loc c) out.layout in
+                  consume env x;
+                  emit fs (Set (out,x))))
+              | d::ds,t::tys -> block fs (fun () ->
+                  let cond = borrowed fs "$same" Bool (Runtime (Desc_same,
+                    [d; Desc_lit (static_desc cx (at fs e.loc) ~template:false t)],None)) in
+                  emit fs (If(cond, tests ds tys, fallback)))
+              | _ -> bug "frozen default descriptor arity" in
+            tests ds tys in
+      List.iter (emit fs) (cases d.frozen_cases);
+      List.iter (drop fs env) ds;
+      own env out;
+      Var out
   | Int n -> Int n
   | Float f -> Float f
   | Bool b -> Bool b
@@ -4661,6 +4689,158 @@ and instance fs env (e : C.expr) impls finally =
       call_block fs env ~result:(Word (-1)) ~fails:true f (Var h.outer)
         [ d; Var outcome ]
 
+(* Freeze directly into Mem data, retaining the existing layout decisions.
+   Names depend on the typed value, never on the surrounding program's order. *)
+and constant fs env loc (c : C.constant) : atom =
+  let cx = fs.cx in
+  let lay t = layout_at fs loc t in
+  let rec storage (t : Ty.ty) = match t with
+    | Con (p,args) -> (match Hashtbl.find_opt cx.types p with
+        | Some {body=Opaque (Rep r);_} -> storage (subst args r)
+        | _ -> t)
+    | _ -> t in
+  let storage_ty = storage c.cty in
+  let identity = Static_key.constant ~functions:cx.fns c in
+  let name = "ren_const_" ^ Digest.to_hex (Digest.string identity) in
+  let put suffix l k =
+    let n = name ^ suffix in
+    if not (Hashtbl.mem cx.statics n) then (
+      let d = { sdname = n; sdlayout = l; sdkind = k } in
+      Hashtbl.add cx.statics n d;
+      cx.static_list <- d :: cx.static_list);
+    Static_data (n, l)
+  in
+  let kind x = match x with
+    | Static_data (n, _) -> (Hashtbl.find cx.statics n).sdkind
+    | _ -> Static_scalar x
+  in
+  let slots x = match kind x with Static_struct xs -> xs | _ -> bug "static struct slots" in
+  let rec integer x = match kind x with
+    | Static_scalar (Float f) when (match atom_layout x with Sized F32 -> true | _ -> false) -> Int64.of_int32 (Int32.bits_of_float f)
+    | Static_scalar y when y <> x -> integer y
+    | _ -> (match x with
+      | Int n -> n | Bool b -> if b then 1L else 0L | Unit -> 0L
+      | Enum_tag n -> Int64.of_int n
+      | Float f -> Int64.bits_of_float f
+      | _ -> bug "a non-scalar packed in static data")
+  in
+  let pack xs = Int (List.fold_left (fun bits (x, at, width) ->
+    let n = integer x in
+    let n = if width = 64 then n else Int64.logand n (Int64.pred (Int64.shift_left 1L width)) in
+    Int64.logor bits (Int64.shift_left n at)) 0L xs) in
+  let boxed x = match kind x with
+    | Static_struct [root; range] when is_sv cx (atom_layout x) ->
+        (* Whole constant strings already have their representation-A owner. *)
+        (match range with Int _ -> root | _ -> bug "a static string range")
+    | _ -> x
+  in
+  let words (sh : shape) xs =
+    let ws = Array.make sh.words [] in
+    List.iter2 (fun (p, l) x -> match p with
+      | Slot n -> ws.(n) <- [((if l = Boxed then boxed x else x), -1, 0)]
+      | Flat ns -> List.iter2 (fun n x -> ws.(n) <- [(x, -1, 0)]) ns (slots x)
+      | Bits (n, at, width) -> ws.(n) <- ws.(n) @ [(x, at, width)]) sh.places xs;
+    Array.to_list (Array.map (function [(x, -1, _)] -> x | xs -> pack xs) ws)
+  in
+  let product sh xs = match lay c.cty with
+    | Struct _ as l -> put "" l (Static_struct (words sh xs))
+    | _ -> put "" Boxed (Static_object (sh.tag, words sh xs))
+  in
+  let child = constant fs env loc in
+  let l = lay c.cty in
+  match Hashtbl.find_opt cx.statics name with
+  | Some d -> Static_data (name, d.sdlayout)
+  | None -> match c.ckind with
+  | CInt n -> (match l with Sized _ -> put "" l (Static_scalar (Int n)) | _ -> Int n)
+  | CFloat f -> (match l with Sized _ -> put "" l (Static_scalar (Float f)) | _ -> Float f)
+  | CBool b -> Bool b | CUnit -> Unit
+  | CStr s | CBytes s ->
+      let root = put "_owner" Boxed (Static_string s) in
+      if is_sv cx l then put "" l (Static_struct [root; Int (Int64.shift_left (Int64.of_int (String.length s)) 32)]) else root
+  | CArray cs ->
+      let elem = element cx (lay (C.elem_ty storage_ty)) in
+      put "" Boxed (Static_array (elem, List.map child cs))
+  | CTuple cs -> product (tuple_shape cx (at fs loc) storage_ty) (List.map child cs)
+  | CRecord fields ->
+      let xs = List.map (fun (n, _) -> child (List.assoc n fields)) (record_fields cx (at fs loc) c.cty) in
+      product (record_shape cx (at fs loc) c.cty) xs
+  | CCon (_, ctor, cs) ->
+      let sh = ctor_shape cx (at fs loc) c.cty ctor in
+      let xs = List.map child cs in
+      (match l with
+      | Enum -> Enum_tag sh.tag
+      | Struct (n, _) ->
+          let st = struct_of cx n in
+          let zero i = function
+            | Boxed -> Scalar_ctor 0 | Float -> Float 0. | Bool -> Bool false
+            | Unit -> Unit | Enum -> Enum_tag 0
+            | Sized k as l -> put ("_zero" ^ string_of_int i) l
+                (Static_scalar (if Sized.is_float k then Float 0. else Int 0L))
+            | _ -> Int 0L in
+          let ws = Array.of_list (List.mapi zero st.sfields) in
+          let packed = ref [] in
+          (match st.skind with
+          | Tagged 64 -> ws.(0) <- Int (Int64.of_int sh.tag)
+          | Tagged bits -> packed := [(Enum_tag sh.tag, 0, bits)]
+          | Niche {obj_ctor;slot;_} when sh.tag <> obj_ctor -> ws.(slot) <- Scalar_ctor (-1 - sh.tag)
+          | _ -> ());
+          List.iter2 (fun (p, _) x -> match p with
+          | Slot k -> ws.(k) <- x
+          | Flat ks -> List.iter2 (fun k x -> ws.(k) <- x) ks (slots x)
+          | Bits (0, at, bits) -> packed := !packed @ [(x, at, bits)]
+          | Bits _ -> bug "static sum packing") sh.places xs;
+          if !packed <> [] then ws.(0) <- pack !packed;
+          put "" l (Static_struct (Array.to_list ws))
+      | _ when cs = [] -> Scalar_ctor sh.tag
+      | _ -> product sh xs)
+  | CTag (tag, cs) ->
+      if cs = [] then Scalar_ctor (tag_id cx tag)
+      else (
+        let xs = List.map child cs in
+        let ds = List.map (fun (c : C.constant) -> Desc_lit (static_desc cx (at fs loc) ~template:false c.cty)) cs in
+        put "" Boxed (Static_object (tag_id cx tag, List.map boxed xs @ ds)))
+  | CMap entries ->
+      let k, v = match storage_ty with Con (_, [k;v]) -> (lay k, lay v) | _ -> bug "static map type" in
+      word_only cx k; word_only cx v;
+      put "" Boxed (Static_map {set=false; key=k; value=v; entries=List.map (fun (k,v) -> (child k, child v)) entries})
+  | CSet entries ->
+      let k = match storage_ty with Con (_, [k]) -> lay k | _ -> bug "static set type" in
+      word_only cx k;
+      put "" Boxed (Static_map {set=true; key=k; value=Unit; entries=List.map (fun k -> (child k, Unit)) entries})
+  | CHandler h ->
+      let bindings = Hashtbl.create 8 in
+      let local = {env with frames = [{kind=Scope;live=[]}]} in
+      let local = List.fold_left (fun local ((v : C.var), c) ->
+        let x = child c in
+        let m = fresh fs v.name (atom_layout x) in
+        Hashtbl.add bindings m.id x;
+        bind local v m) local h.hcaptures in
+      let saved_words = fs.words in
+      let code, result = Fun.protect ~finally:(fun () -> fs.words <- saved_words)
+        (fun () ->
+          fs.words <- [];
+          sub fs (fun () -> handler fs local
+            {kind=C.Handler {ev=h.hev;captures=List.map fst h.hcaptures;body=h.hbody};ty=c.cty;loc}
+            ~ev:h.hev ~captures:(List.map fst h.hcaptures) h.hbody)) in
+      let resolve = function Var v -> (match Hashtbl.find_opt bindings v.id with
+        | Some x -> x | None -> bug "a runtime variable in a static handler") | x -> x in
+      List.iter (function
+        | Let (v, Atom x) -> Hashtbl.replace bindings v.id (resolve x)
+        | Let (v, Runtime (Str_box, [x], _)) -> Hashtbl.replace bindings v.id (boxed (resolve x))
+        | Let (v, Pack xs) -> Hashtbl.replace bindings v.id (pack (List.map (fun (x,a,b) -> (resolve x,a,b)) xs))
+        | Let (v, Alloc {tag;fields;words=[];at=None}) ->
+            let fields = List.map resolve fields in
+            (match fields with
+            | Handler_tag hid :: _ ->
+                cx.handler_list <- List.map (fun (d : Mem.handler) ->
+                  if d.hid = hid then {d with hname=h.hsite;hshow=h.hsite;hloc=h.hbody.loc} else d)
+                  cx.handler_list
+            | _ -> ());
+            Hashtbl.replace bindings v.id (put "" Boxed (Static_object (tag,fields)))
+        | Dup _ | Drop _ -> ()
+        | _ -> bug "an executable initializer in a static handler") code;
+      resolve result
+
 (* An associated value, made once when the program starts: borrowed from
    where it's kept, and counted again. *)
 and global_value fs env (e : C.expr) p =
@@ -4671,6 +4851,7 @@ and global_value fs env (e : C.expr) p =
     | None -> bug ("the value `" ^ Path.local p ^ "`, which isn't there")
   in
   match f.body.kind with
+  | Const c -> constant fs env e.loc c
   (* `Map.empty` and `Set.empty`, generic, are each a new empty one *)
   | Call ({ kind = Intrinsic (((Map_empty | Set_empty) as x), _, _, _); _ }, [], _) ->
       owned fs env "$empty" Boxed (Runtime (Map_new (x = Set_empty), [], None))
@@ -5349,6 +5530,8 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       decls = Hashtbl.create 16;
       decl_bodies = Hashtbl.create 16;
       values = Hashtbl.create 16;
+      statics = Hashtbl.create 32;
+      static_list = [];
       nwords = 0;
       release;
       boxed;
@@ -5446,6 +5629,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
       List.filter_map
         (Hashtbl.find_opt cx.values)
         (List.concat_map (fun (m : C.program) -> m.values) modules);
+    static_data = List.rev cx.static_list;
     strings = List.rev cx.string_list;
     sites = List.rev cx.sites;
     structs = List.rev cx.struct_list;

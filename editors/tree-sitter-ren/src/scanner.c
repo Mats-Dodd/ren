@@ -171,7 +171,8 @@ static bool type_application_start(TSLexer *lexer, bool adjacent, bool layout) {
   // the `<` touching its head and an expression boundary after its `>`.
   bool boundary = (line_ended && layout) || lexer->eof(lexer) ||
                   lexer->lookahead == ',' || lexer->lookahead == ')' ||
-                  lexer->lookahead == ']' || lexer->lookahead == '}';
+                  lexer->lookahead == ']' || lexer->lookahead == '}' ||
+                  lexer->lookahead == '.';
   if (lexer->lookahead != '(' && !(adjacent && boundary)) {
     if (!adjacent) return false;
     if (lexer->lookahead == '=') {

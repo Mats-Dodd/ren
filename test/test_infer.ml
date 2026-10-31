@@ -1244,6 +1244,8 @@ fn main() = print(Some(true))
   Infer.Nodes.iter
     (fun _ (n : Infer.node) ->
       match n.found with
+      | Some (Function_uses p) -> print_endline ("uses of " ^ path p)
+      | Some (Dependency_id d) -> print_endline ("dependency " ^ d.name)
       | Some (Field_of p) -> print_endline ("field of " ^ path p)
       | Some (Ctor_of (p, c)) ->
           print_endline ("constructor " ^ c ^ " of " ^ path p)

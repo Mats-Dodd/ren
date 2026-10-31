@@ -23,6 +23,7 @@ let lint ?(release = false) ?(structs = []) fns =
       decls = [];
       tags = [];
       values = [];
+      static_data = [];
       strings = [];
       sites = [];
       structs;

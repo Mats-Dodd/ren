@@ -454,18 +454,10 @@ fn main() =
     (fn main () (block (let a (con Light.Red)) (let b (con billing.Plan.Pro 2)) (let c (record rows.Row id=1)) (match b (billing.Plan.Free => (con Plan.Free)) (Plan.Pro(n) => (. user plan)))))
     |}]
 
-let%expect_test "another module's type isn't a value" =
-  ast {|
-fn main() = billing.Plan
-|};
-  [%expect
-    {|
-    error: `billing.Plan` is a type, so it can't be used as a value
-      ┌─ test.ren:1:13
-    1 │ fn main() = billing.Plan
-      │             ^^^^^^^^^^^^
-      help: write one of its constructors after it, like `billing.Plan.Name`, or a record, `billing.Plan { ... }`
-    |}]
+let%expect_test "a qualified uppercase name is resolved from declaration kind" =
+  (* The parser cannot distinguish a type from a build value or service. *)
+  ast {|fn main() = billing.Plan|};
+  [%expect {| (fn main () (. billing Plan)) |}]
 
 let%expect_test "uses, on the signature's line or the next" =
   ast

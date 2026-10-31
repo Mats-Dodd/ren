@@ -763,6 +763,8 @@ type ('v, 'b, 't) service_def = {
 
 type ('v, 'b, 't) item =
   | Fn of ('v, 'b, 't) fn_def
+  | Top_value of ('v, 'b, 't) fn_def
+  | Top_assert of ('v, 'b, 't) fn_def
   | Type of ('v, 'b, 't) type_def
   | Import of import
   | Testing of ('v, 'b, 't) testing
@@ -779,7 +781,7 @@ type ('v, 'b, 't) program = ('v, 'b, 't) item list
 let functions (prog : ('v, 'b, 't) program) =
   List.concat_map
     (function
-      | Fn f -> [ f ]
+      | Fn f | Top_value f | Top_assert f -> [ f ]
       | Type td -> List.map (fun o -> o.op_fn) td.type_ops
       | Import _ | Testing _ | Wiring _ | Service _ -> [])
     prog
@@ -1514,6 +1516,8 @@ let show_test (t : test_def) =
 
 let show_item : item -> string = function
   | Fn f -> show_fn f
+  | Top_value f -> parens [ "let"; f.name.name; show_expr f.body ]
+  | Top_assert f -> parens [ "assert"; show_expr f.body ]
   | Type td -> show_type_def td
   | Import i -> show_import i
   | Testing (Test t) -> show_test t

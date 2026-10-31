@@ -1099,6 +1099,84 @@
     "fields": {}
   },
   {
+    "type": "build_assertion",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "assignment",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "build_value",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_type",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "assignment",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "visibility",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "bytes",
     "named": true,
     "fields": {},
@@ -4385,6 +4463,14 @@
       "required": false,
       "types": [
         {
+          "type": "build_assertion",
+          "named": true
+        },
+        {
+          "type": "build_value",
+          "named": true
+        },
+        {
           "type": "dependency_definition",
           "named": true
         },
@@ -4838,6 +4924,10 @@
           },
           {
             "type": "item_expression",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]

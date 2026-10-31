@@ -777,7 +777,7 @@ fn main() -> Int = down(0)
       │    ^^^^
     |}]
 
-let%expect_test "an associated value that calls too deeply panics" =
+let%expect_test "an associated value that calls too deeply fails while building" =
   run_error
     {|
 fn deep(n: Int) -> Int = if n == 0 then 0 else 1 + deep(n - 1)
@@ -787,13 +787,14 @@ fn main() -> Int = Box.big.v
 |};
   [%expect
     {|
-    error: panic: the stack overflowed: a function called itself too deeply
+    error: `test.Box.big` called too deeply while building
       ┌─ test.ren:3:7
     3 │   let big: Box = Box { v: deep(200000) }
       │       ^^^
+      help: use a loop or tail recursion in this initializer
     |}]
 
-let%expect_test "`ren test` reports a value that calls too deeply as a panic" =
+let%expect_test "`ren test` reports a value that calls too deeply while building" =
   (* its values are made before any test runs, outside them all *)
   test
     {|
@@ -805,10 +806,11 @@ test "uses big" =
 |};
   [%expect
     {|
-    error: panic: the stack overflowed: a function called itself too deeply
+    error: `test.Box.big` called too deeply while building
       ┌─ test.ren:3:11
     3 │   pub let big: Box = Box { v: deep(200000) }
       │           ^^^
+      help: use a loop or tail recursion in this initializer
     |}]
 
 let%expect_test "a call that ends a function still writes back what it changed"

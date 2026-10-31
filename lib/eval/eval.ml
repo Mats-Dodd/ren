@@ -119,7 +119,22 @@ let bug what = failwith ("bug: checking or lowering let through " ^ what)
    program is inside. [depth] is how many calls deep the program is, not
    counting tail calls: one cell, shared by every copy of the [ctx] made
    with [{ cx with ... }]. *)
+type budget = { name : string; limit : int; mutable steps : int }
+
+exception Build_limit of { name : string; steps : int; limit : int }
+
+let build_step_limit = 64_100_000
+
+let tick = function
+  | None -> ()
+  | Some b ->
+      b.steps <- b.steps + 1;
+      if b.steps > b.limit then
+        raise (Build_limit { name = b.name; steps = b.steps; limit = b.limit })
+
 type ctx = {
+  budget : budget option ref;
+  default_value : (Path.t -> Ty.ty list -> Value.t option) option ref;
   fns : (Path.t, fn_def) Hashtbl.t;
   values : (Path.t, Value.t) Hashtbl.t;
   types : Shown.types;
@@ -742,7 +757,127 @@ let ctor_field cx p c f =
       find 0 k.cfields)
   | _ -> bug "a field of a constructor of what isn't a sum"
 
+let rec substitute_types args (t : Ty.ty) : Ty.ty =
+  let ty = substitute_types args in
+  let row (r : Ty.row) = {r with labels=List.map (fun (l : Ty.label) ->
+    {l with payload=List.map ty l.payload}) r.labels} in
+  match t with
+  | Var i -> Option.value (List.nth_opt args i) ~default:t
+  | Con (p,ts) -> Con (p,List.map ty ts)
+  | Variant (p,n,ts) -> Variant (p,n,List.map ty ts)
+  | Fun (ps,r,e,u) -> Fun (List.map (fun (p : Ty.param) -> {p with ty=ty p.ty}) ps,
+      ty r,row e,row u)
+  | Errors e -> Errors (row e)
+  | Impl i -> Impl {i with deps=List.map (fun (d : Ty.dep) ->
+      {d with dargs=List.map ty d.dargs}) i.deps;needs=row i.needs;fails=row i.fails}
+  | Error -> Error
+
+(* A description made while building keeps closed code. Hidden type and
+   dictionary parameters are replaced by their immutable descriptions, so
+   its captures are ordinary data even when the handler was generic. *)
+let close_description env body original_captures =
+  let types = Env.fold (fun id v types -> match !v with
+    | VType t when id < 0 -> (-1-id,t) :: types
+    | _ -> types) env [] in
+  let args = List.init (List.fold_left (fun n (i,_) -> max n (i+1)) 0 types)
+    (fun i -> Option.value (List.assoc_opt i types) ~default:(Ty.Var i)) in
+  let ty = substitute_types args in
+  let var (v : var) = {v with ty = ty v.ty} in
+  let hidden (v : var) = match Env.find_opt v.id env with
+    | Some value -> (match !value with VType _ | VDict _ -> true | _ -> false)
+    | None -> false in
+  let captures vs = List.filter (fun v -> not (hidden v)) (List.map var vs) in
+  let rec desc = function
+    | Known t -> Known (ty t)
+    | Param v -> (match Env.find_opt v.id env with
+        | Some value -> (match !value with VType t -> Known t | _ -> Param (var v))
+        | None -> Param (var v))
+    | Applied (p,ds) -> Applied (p,List.map desc ds)
+    | Applied_variant (p,n,ds) -> Applied_variant (p,n,List.map desc ds)
+    | Errs r -> Errs {r with dlabels = List.map (fun (n,ds) -> (n,List.map desc ds)) r.dlabels}
+  in
+  let dict = function
+    | Dict_param v when hidden v ->
+        let name = v.name in
+        let rec suffix i = if i > 0 && name.[i-1] >= '0' && name.[i-1] <= '9'
+          then suffix (i-1) else i in
+        let i = suffix (String.length name) in
+        let n = int_of_string (String.sub name i (String.length name-i)) in
+        let req = String.sub name 1 (i-1) in
+        let dty = ty (Ty.Var n) in
+        Derived {req; dty; ddesc=Known dty; from=[]}
+    | Dict_param v -> Dict_param (var v)
+    | Derived d -> Derived {d with dty=ty d.dty; ddesc=desc d.ddesc;
+        from=List.filter (fun (_,v) -> not (hidden v)) d.from
+          |> List.map (fun (key,v) -> (key,var v))}
+  in
+  let row (r : Ty.row) = {r with labels=List.map (fun (l : Ty.label) ->
+    {l with payload=List.map ty l.payload}) r.labels} in
+  let arguments (a : Ty.args) = {Ty.tys=List.map ty a.tys; rows=List.map row a.rows} in
+  let key (k : dkey) = {k with kargs=List.map desc k.kargs} in
+  let prim = function
+    | Equal d -> Equal (dict d) | Not_equal d -> Not_equal (dict d)
+    | Compare (op,d) -> Compare (op,dict d)
+    | Op (n,d) -> Op (n,dict d) | Value_of (n,d) -> Value_of (n,dict d)
+    | p -> p in
+  let rec pat (p : pattern) =
+    let pkind = match p.pkind with
+      | PVar v -> PVar (var v)
+      | PCon (p,n,ps) -> PCon (p,n,List.map pat ps)
+      | PTag (n,ps) -> PTag (n,List.map pat ps)
+      | PTuple ps -> PTuple (List.map pat ps)
+      | PRecord (p,ps) -> PRecord (p,List.map pat ps)
+      | POr ps -> POr (List.map pat ps)
+      | PAs (p,v) -> PAs (pat p,var v)
+      | PStr_rest r -> PStr_rest {r with rest=Option.map var r.rest}
+      | PArray _ as p -> Core.map_seq ~pat ~var p
+      | p -> p in
+    {p with pkind; pty=ty p.pty}
+  in
+  let rec code (e : expr) =
+    let e = Core.map_children code e in
+    let kind = match e.kind with
+      | Gen_create g -> Gen_create {g with type_args=arguments g.type_args;
+          tys=List.map desc g.tys;dicts=List.map dict g.dicts;ev=var g.ev;
+          args=List.map(function Ref v->Ref(var v)|a->a)g.args;
+          places=List.map(fun(p:gen_place)->{p with param=var p.param;root=var p.root})g.places}
+      | Gen_step g -> Gen_step {cursor=var g.cursor;ev=var g.ev;errors=row g.errors;uses=row g.uses}
+      | Cleanup_scope g -> Cleanup_scope {g with owner=var g.owner}
+      | Instance_scope g -> Instance_scope {g with owner=var g.owner}
+      | Own g -> Own {g with owner=var g.owner;desc=desc g.desc}
+      | Owned_assign g -> Owned_assign {g with target=var g.target}
+      | Owner_alias g -> Owner_alias {g with target=var g.target;root=var g.root}
+      | Pattern_scope g -> Pattern_scope {g with owner=var g.owner;receiving=var g.receiving;
+          binding=Option.map var g.binding;pat=pat g.pat}
+      | Local v -> Local (var v)
+      | Global (p,a,ds,qs) -> Global (p,arguments a,List.map desc ds,List.map dict qs)
+      | Global_value (p,a) -> Global_value (p,arguments a)
+      | Intrinsic (p,a,ds,qs) -> Intrinsic (p,arguments a,List.map desc ds,List.map dict qs)
+      | Dep_call d -> Dep_call {d with ev=var d.ev; dargs=List.map desc d.dargs; fty=ty d.fty}
+      | With w -> With {w with ev=var w.ev;outer=var w.outer;dargs=List.map desc w.dargs;desc=desc w.desc}
+      | With_handler w -> With_handler {w with ev=var w.ev;outer=var w.outer;
+          deps=List.map (fun (k,p) -> (key k,p)) w.deps;desc=desc w.desc}
+      | Handler h -> Handler {h with ev=var h.ev;captures=captures h.captures}
+      | Lambda l -> Lambda {l with params=List.map (fun p -> {p with var=var p.var}) l.params;
+          ev=var l.ev;outer=var l.outer;given=List.map key l.given;captures=captures l.captures}
+      | Let (v,a,b) -> Let (var v,a,b)
+      | Assign (v,a) -> Assign (var v,a)
+      | Covered c -> Covered {c with result=var c.result}
+      | Prim (p,xs) -> Prim (prim p,xs)
+      | Match (e,arms) -> Match (e,List.map (fun a -> {a with pat=pat a.pat}) arms)
+      | Call (f,xs,ev) -> Call (f,List.map (function Ref v -> Ref (var v) | a -> a) xs,var ev)
+      | Tag (n,xs,ds) -> Tag (n,xs,List.map desc ds)
+      | Handle h -> Handle {h with value=var h.value;error=var h.error}
+      | Assert_equal (a,b,d,q) -> Assert_equal (a,b,desc d,dict q)
+      | Frozen_default d -> Frozen_default {d with frozen_args=List.map desc d.frozen_args}
+      | k -> k
+    in
+    {e with kind;ty=ty e.ty}
+  in
+  (code body,captures original_captures)
+
 let rec eval cx env (e : expr) =
+  tick !(cx.budget);
   match e.kind with
   | Return (target, value) -> raise (Returned (target, Walk.subst cx.type_args value.ty, eval cx env value))
   | Yield value ->
@@ -1010,6 +1145,13 @@ let rec eval cx env (e : expr) =
       Generator.to_value (make ?owner:cx.cleanup ~unstarted_close_at_depth ~run_at_depth ~reach ~blocks
         ~item:(Walk.subst descriptors metadata.item) ~copy_payload ~register_payload ?before_step ?after_step ~name:(Path.local metadata.path)
         ~run:(fun () -> ()) ~failure ~panic:(panic_at e.loc) ())
+  | Const c -> thaw cx c
+  | Function_uses _ -> bug "a dependency reach query reached evaluation"
+  | Frozen_default d ->
+      let args = List.map (type_of env) d.frozen_args in
+      (match List.assoc_opt args d.frozen_cases with
+      | Some c -> thaw cx c
+      | None -> bug "a field default used at a type not found while building")
   | Int n -> VInt n
   | Float f -> VFloat f
   | Bool b -> VBool b
@@ -1054,6 +1196,11 @@ let rec eval cx env (e : expr) =
       with
       | Some { impl = VRecord ops; outer; inst; _ } -> on ops outer inst
       | Some _ -> bug (what ^ " on an implementation that isn't a record")
+      | None when !(cx.budget) <> None ->
+          Diag.error e.loc
+            ~help:"the build's world comes with packages; compute this value inside a function for now"
+            (sprintf "`%s.%s` needs `%s` while building, but the build has no dependencies"
+               dep.name op dep.name)
       | None -> bug (what ^ " where nothing installs `" ^ dep.name ^ "`"))
   | With { ev; outer; dep; dargs; from; impl; desc; body } ->
       let what = "installing `" ^ dep.name ^ "`" in
@@ -1088,6 +1235,8 @@ let rec eval cx env (e : expr) =
           eval cx (Env.add ev.id (ref installed) env) body)
   | Narrowed (_, h) -> eval cx env h
   | Handler { ev; captures; body } ->
+      let body, captures = if !(cx.budget) = None then (body,captures)
+        else close_description env body captures in
       (* like a lambda, it copies what it captures now *)
       let env =
         List.fold_left
@@ -1441,21 +1590,26 @@ let rec eval cx env (e : expr) =
 and tail cx env (e : expr) =
   match e.kind with
   | If (c, t, f) ->
+      tick !(cx.budget);
       if truth (eval cx env c) then tail cx env t else tail cx env f
   | Let (v, value, body) ->
+      tick !(cx.budget);
       let x = eval cx env value in
       let c = ref x in
       if Generator.may_cleanup cx.types (Walk.subst cx.type_args v.ty) then
         Option.iter (fun owner -> Generator.Roots.replace cx.roots c owner) cx.cleanup;
       tail cx (Env.add v.id c env) body
   | Seq (a, b) ->
+      tick !(cx.budget);
       ignore (eval cx env a);
       tail cx env b
   | Match (subject, arms) ->
+      tick !(cx.budget);
       let env, body = arm_for cx env e.loc (eval cx env subject) arms in
       tail cx env body
   | Call (f, args, ev)
     when List.for_all (function Value _ -> true | Ref _ -> false) args ->
+      tick !(cx.budget);
       let f = eval cx env f in
       let args =
         eval_all cx env
@@ -1780,7 +1934,12 @@ and start ?loc cx f cells ev =
     try tail cx env body with
     | Returned (path, _, value) when List.mem path targets -> Done value
   in
-  match f with
+  let frozen = match f, !(cx.default_value) with
+    | VFn (p, tys, _), Some get -> get p tys
+    | _ -> None in
+  match frozen with
+  | Some value -> Done value
+  | None -> match f with
   | VFn (p, tys, dicts) ->
       let f =
         match Hashtbl.find_opt cx.fns p with
@@ -3205,6 +3364,33 @@ and known_dicts cx (f : fn_def) tys =
    dictionary parameter holds, or one derived for the type its descriptor
    describes, with what the hidden type parameters it's built from
    hold. *)
+(* Rebuild only the interpreter's representation; tables get this process's
+   hash buckets from their ordered data and the key's ordinary dictionary. *)
+and thaw cx c =
+  let thaw = thaw cx in
+  match c.ckind with
+  | CInt n -> VInt n
+  | CFloat f -> VFloat f
+  | CBool b -> VBool b
+  | CStr s -> VStr s
+  | CBytes s -> VBytes s
+  | CUnit -> VUnit
+  | CArray xs -> Value.array_of_list (List.map thaw xs)
+  | CTuple xs -> VTuple (List.map thaw xs)
+  | CRecord fs -> VRecord (List.sort compare (List.map (fun (n, v) -> (n, thaw v)) fs))
+  | CCon (ty, name, xs) -> VCon { ty; name; args = List.map thaw xs }
+  | CTag (name, xs) ->
+      VTag { name; args = List.map thaw xs; tys = List.map (fun c -> c.cty) xs }
+  | CMap xs ->
+      VTable (Table.frozen (List.map (fun (k,v) -> (thaw k,thaw v)) xs))
+  | CSet xs ->
+      VTable (Table.frozen (List.map (fun k -> (thaw k,VUnit)) xs))
+  | CHandler h ->
+      let env = List.fold_left
+        (fun env (v, c) -> Env.add v.id (ref (thaw c)) env)
+        Env.empty h.hcaptures in
+      VHandler { ev = h.hev.id; body = h.hbody; env; site = h.hsite; types = [] }
+
 and dict cx env (d : Core.dict) : Value.dict =
   match d with
   | Dict_param v -> dict_in env v
@@ -3259,9 +3445,11 @@ let overflowed cx (p : Path.t) =
    every value it uses, with nothing installed: a value can't use a
    dependency (infer_top.ml). If making one fails, nothing handles the
    error: [Uncaught]. *)
-let load (modules : program list) =
+let context (modules : program list) =
   let cx =
     {
+      budget = ref None;
+      default_value = ref None;
       fns = Hashtbl.create 16;
       values = Hashtbl.create 16;
       types =
@@ -3305,19 +3493,276 @@ let load (modules : program list) =
       List.iter (fun (p, k) -> Hashtbl.replace cx.keys p k) m.keys;
       List.iter (fun (r, o) -> Hashtbl.replace cx.ops r o) m.ops)
     modules;
-  List.iter
-    (fun (m : program) ->
-      List.iter
-        (fun p ->
-          match fst (apply cx (from_outside cx p) [] (VEvidence [])) with
-          | Ok v -> Hashtbl.replace cx.values p v
-          | Error err -> raise (uncaught cx p err)
-          (* caught here, not by whoever called [load], so that `ren test`,
-             which loads outside any test, reports it as `ren run` does *)
-          | exception (Stack_overflow | Too_deep) -> raise (overflowed cx p))
-        m.values)
-    modules;
   cx
+
+let load (modules : program list) =
+  let cx = context modules in
+  let make p =
+    match fst (apply cx (from_outside cx p) [] (VEvidence [])) with
+    | Ok v -> Hashtbl.replace cx.values p v
+    | Error err -> raise (uncaught cx p err)
+    | exception (Stack_overflow | Too_deep) -> raise (overflowed cx p)
+  in
+  (* Frozen top-level data is available before the older associated values,
+     which may refer to it regardless of declaration order. *)
+  List.iter (fun (m : program) -> List.iter make m.build_values) modules;
+  List.iter (fun (m : program) -> List.iter make m.values) modules;
+  cx
+
+(* A value that can be put in Core: walk its declared structure, so every
+   nested item keeps the type needed by both backends. Nothing from an
+   interpreter frame or a table's seeded index escapes this conversion. *)
+let rec freeze cx loc ty v =
+  let data ckind = { cty = ty; ckind } in
+  let freeze = freeze cx loc in
+  let refused what =
+    Diag.error loc
+      ~help:"keep only data in a top-level value; use an enum or a handler description instead of a block"
+      ("a top-level value cannot hold " ^ what)
+  in
+  match v with
+  | VClosure _ | VFn _ | VBuiltin _ -> refused "a block"
+  | VEvidence _ | VInstance _ | VCell _ | VSched _ ->
+      refused "an installed handler, evidence, or a scoped handle"
+  | VType _ | VDict _ -> refused "an interpreter descriptor or dictionary"
+  | VHandler h ->
+      let vars = Hashtbl.create 8 in
+      let add (v : var) = Hashtbl.replace vars v.id v in
+      let rec collect (e : expr) =
+        (match e.kind with
+        | Local v | Assign (v, _) -> add v
+        | Global (_, _, ds, dicts) | Intrinsic (_, _, ds, dicts) ->
+            List.iter add (List.concat_map desc_vars ds @ List.concat_map dict_vars dicts)
+        | _ -> ());
+        List.iter collect (Core.children e)
+      in
+      collect h.body;
+      let captures = Env.bindings h.env |> List.map (fun (id, value) ->
+        match Hashtbl.find_opt vars id with
+        | Some v -> (v, freeze v.ty !value)
+        | None -> refused "a captured interpreter value") in
+      data (CHandler { hev = Core.evidence h.ev; hbody = h.body;
+        hcaptures = captures; hsite = h.site })
+  | _ ->
+      match Walk.view cx.types ty v with
+      | Walk.Opaque (_, rep) -> { (freeze rep v) with cty = ty }
+      | Walk.Elems (elem, xs) ->
+          data (CArray (Array.to_list (Array.map (freeze elem) xs)))
+      | Walk.Parts xs -> data (CTuple (List.map (fun (t, v) -> freeze t v) xs))
+      | Walk.Entries (key, value, table) ->
+          data (CMap (List.map (fun (k, v) -> (freeze key k, freeze value v))
+            (Table.to_list table)))
+      | Walk.Members (elem, table) ->
+          data (CSet (List.map (fun (k, _) -> freeze elem k) (Table.to_list table)))
+      | Walk.Record r ->
+          data (CRecord (List.map (fun (n, t, v) -> (n, freeze t v)) r.fields))
+      | Walk.Ctor c ->
+          let path = match v with VCon c -> c.ty | _ -> assert false in
+          data (CCon (path, c.name, List.map (fun (t, v) -> freeze t v) c.fields))
+      | Walk.Tag (n, xs) -> data (CTag (n, List.map (fun (t, v) -> freeze t v) xs))
+      | Walk.Leaf | Walk.Shape | Walk.Hidden _ ->
+          (match v with
+          | VInt n -> data (CInt n)
+          | VFloat n -> data (CFloat n)
+          | VBool b -> data (CBool b)
+          | VStr s -> data (CStr s)
+          | VBytes s -> data (CBytes s)
+          | VUnit -> data CUnit
+          | _ -> refused "data whose static type is not closed")
+
+(* Defaults of monomorphic fields are associated values in the old Core
+   list. They now share build evaluation with the explicit top level. *)
+let field_defaults modules =
+  let fields = function
+    | Iface.Record fs -> fs
+    | Iface.Sum cs -> List.concat_map (fun (c : Iface.ctor) -> c.cfields) cs
+    | _ -> [] in
+  List.concat_map (fun (m : program) ->
+    List.concat_map (fun (d : Iface.type_decl) ->
+      List.filter_map (fun (f : Iface.field) -> f.fdefault_member) (fields d.body))
+      m.types) modules
+
+let build ?(limit = build_step_limit) ?(uses_traces = []) (modules : program list) =
+  let seed = !(Walk.seed) in
+  Walk.fix_seed ();
+  Fun.protect ~finally:(fun () -> Walk.seed := seed) (fun () ->
+  let cx = context modules in
+  let explicit = List.concat_map (fun (m : program) -> m.build_values @ m.build_asserts) modules in
+  let defaults = field_defaults modules in
+  let default_values = List.filter_map
+    (function Iface.Value_default p -> Some p | Function_default _ -> None) defaults in
+  let root_order p =
+    let f = Hashtbl.find cx.fns p in
+    (p.Path.home, f.loc.start.line, f.loc.start.col, p.Path.name) in
+  let roots = List.sort_uniq (fun a b -> compare (root_order a) (root_order b))
+    (explicit @ default_values @ List.concat_map (fun (m : program) -> m.values) modules) in
+  let is_root p = List.mem p roots in
+  (* Follow function references as well as direct calls: a callback passed
+     to a helper can read a value too. Each edge keeps the helpers that
+     reached it, so a cycle hidden by calls still has a concrete path. *)
+  let dependencies p =
+    let seen = Hashtbl.create 16 in
+    let found = ref [] in
+    let rec fn via p =
+      if not (Hashtbl.mem seen p) then begin
+        Hashtbl.add seen p ();
+        match Hashtbl.find_opt cx.fns p with
+        | Some f -> expr (via @ [p]) f.body
+        | None -> ()
+      end
+    and expr via (e : expr) =
+      (match e.kind with
+      | Global (q, _, _, _) -> fn via q
+      | Global_value (q, _) when is_root q -> found := (q, via @ [q]) :: !found
+      | _ -> ());
+      List.iter (expr via) (Core.children e)
+    in
+    fn [] p;
+    List.rev !found
+  in
+  let generic_defaults = List.filter_map
+    (function Iface.Function_default p -> Some p | Value_default _ -> None) defaults in
+  let evaluate p tys ~keep =
+    let f = Hashtbl.find cx.fns p in
+    let name = Path.full p ^ (if tys = [] then "" else
+      "<" ^ String.concat ", " (List.map (fun t -> Core.show_desc (Known t)) tys) ^ ">") in
+    let previous = !(cx.budget) in
+    cx.budget := Some {name; limit; steps = 0};
+    Fun.protect ~finally:(fun () -> cx.budget := previous) (fun () ->
+      try
+        let callable = if tys = [] && f.tys <> [] then from_outside cx p
+          else VFn (p, tys, known_dicts cx f tys) in
+        match fst (apply cx callable [] (VEvidence [])) with
+        | Ok value ->
+            let constant = if keep then
+              freeze cx f.loc (substitute_types tys f.body.ty) value
+              else { cty = Ty.unit; ckind = CUnit } in
+            (value, constant)
+        | Error err ->
+            Diag.error f.loc ~notes:[error_of cx p err]
+              ~help:"handle this error in the initializer before keeping its value"
+              (sprintf "`%s` failed while building" name)
+      with
+      | Build_limit b ->
+          Diag.error f.loc
+            ~notes:[sprintf "%d evaluation steps; the limit is %d" b.steps b.limit]
+            ~help:"reduce the work in this initializer; the build limit is fixed until packages provide ren.toml"
+            (sprintf "`%s` exceeded the build step limit" b.name)
+      | Assert_failed a ->
+          let paths = Option.value (List.assoc_opt a.loc uses_traces) ~default:[] in
+          let sides = match a.sides with None -> [] | Some (a,b) -> ["left: " ^ a; "right: " ^ b] in
+          Diag.error a.loc ~notes:(sides @ paths)
+            ~help:(if paths = [] then "correct the values or the condition checked by this assert"
+              else "pass the input in or revise the rule")
+            "this assert failed while building"
+      | Panic a ->
+          Diag.error a.loc ~notes:(a.msg :: a.notes)
+            ~help:(Option.value a.help ~default:"correct the initializer so it completes without a panic")
+            (sprintf "`%s` panicked while building" name)
+      | Stack_overflow | Too_deep ->
+          Diag.error f.loc ~help:"use a loop or tail recursion in this initializer"
+            (sprintf "`%s` called too deeply while building" name))
+  in
+  let done_ = Hashtbl.create 16 and active = Hashtbl.create 16 in
+  let constants = Hashtbl.create 16 in
+  let rec make trail p =
+    if Hashtbl.mem active p then begin
+      let f = Hashtbl.find cx.fns p in
+      let rec cycle = function
+        | [] -> [p]
+        | q :: _ as rest when q = p -> rest @ [p]
+        | _ :: rest -> cycle rest in
+      let path = cycle trail in
+      Diag.error f.loc
+        ~notes:[String.concat " -> " (List.map Path.full path)]
+        ~help:"remove one reference in this cycle so each top-level value can be computed first"
+        "top-level values depend on each other in a cycle"
+    end;
+    if not (Hashtbl.mem done_ p) then begin
+      Hashtbl.add active p ();
+      List.iter (fun (q, via) -> make (trail @ via) q) (dependencies p);
+      let value, constant = evaluate p [] ~keep:(List.mem p (explicit @ default_values)) in
+      Hashtbl.replace cx.values p value;
+      Hashtbl.replace constants p constant;
+      Hashtbl.remove active p;
+      Hashtbl.add done_ p ()
+    end
+  in
+  let default_data = Hashtbl.create 16 and default_active = Hashtbl.create 8 in
+  let default p tys =
+    if not (List.mem p generic_defaults) then None
+    else match Hashtbl.find_opt default_data (p, tys) with
+    | Some (v, _) -> Some v
+    | None when Hashtbl.mem default_active (p, tys) ->
+        (* The active helper runs its own original body; recursive calls to
+           it are still bounded by this instance's evaluation budget. *)
+        None
+    | None ->
+        List.iter (fun (q, via) -> make via q) (dependencies p);
+        Hashtbl.add default_active (p, tys) ();
+        let data = Fun.protect
+          ~finally:(fun () -> Hashtbl.remove default_active (p, tys))
+          (fun () -> evaluate p tys ~keep:true) in
+        Hashtbl.add default_data (p, tys) data;
+        Some (fst data)
+  in
+  cx.default_value := Some default;
+  List.iter (make []) roots;
+  (* Find each closed type at which a generic default can be called. Debug
+     keeps one generic function and selects its precomputed data by the
+     descriptors it already receives. Recursion is visited once per type. *)
+  let rec closed (t : Ty.ty) = match t with
+    | Var _ | Error -> false
+    | Con (_, ts) | Variant (_, _, ts) -> List.for_all closed ts
+    | Fun (ps,r,e,u) -> List.for_all (fun (p : Ty.param) -> closed p.ty) ps
+        && closed r && closed_row e && closed_row u
+    | Errors r -> closed_row r
+    | Impl i -> List.for_all (fun (d : Ty.dep) -> List.for_all closed d.dargs) i.deps
+        && closed_row i.needs && closed_row i.fails
+  and closed_row (r : Ty.row) = r.tail = None
+    && List.for_all (fun (l : Ty.label) -> List.for_all closed l.payload) r.labels in
+  let seen = Hashtbl.create 64 in
+  let rec visit p tys =
+    if List.for_all closed tys && not (Hashtbl.mem seen (p,tys)) then begin
+      Hashtbl.add seen (p,tys) ();
+      if List.mem p generic_defaults then ignore (default p tys);
+      match Hashtbl.find_opt cx.fns p with
+      | None -> ()
+      | Some f -> expr tys f.body
+    end
+  and expr tys (e : expr) =
+    (match e.kind with
+    | Global (p,a,_,_) -> visit p (List.map (substitute_types tys) a.tys)
+    | _ -> ());
+    List.iter (expr tys) (Core.children e)
+  in
+  List.iter (fun (m : program) -> List.iter (fun (f : fn_def) ->
+    if f.tys = [] then visit f.path []) m.fns) modules;
+  cx.default_value := None;
+  let rec rewrite (e : expr) =
+    let e = Core.map_children rewrite e in
+    match e.kind with
+    | Call ({kind = Global (p,a,_,_); _}, [], _) ->
+        (match Hashtbl.find_opt default_data (p,a.tys) with
+        | Some (_,c) -> { e with kind = Const c }
+        | None -> e)
+    | _ -> e
+  in
+  List.map (fun (m : program) ->
+    { m with
+      fns = List.map (fun (f : fn_def) ->
+        match Hashtbl.find_opt constants f.path with
+        | Some c when List.mem f.path (explicit @ default_values) ->
+            { f with body = Core.mk (Const c) f.body.ty f.body.loc }
+        | _ when List.mem f.path generic_defaults ->
+            let cases = Hashtbl.fold (fun (p,tys) (_,c) cases ->
+              if p = f.path then (tys,c) :: cases else cases) default_data []
+              |> List.sort compare in
+            { f with body = Core.mk
+                (Frozen_default { frozen_args = List.map (fun v -> Param v) f.tys;
+                  frozen_cases = cases }) f.body.ty f.body.loc }
+        | _ -> { f with body = rewrite f.body }) m.fns;
+      build_asserts = [] }) modules)
 
 (* What's installed for a run: the evidence, built by the runtime, as
    `$start` builds it in Core. A value made already, by its path. *)

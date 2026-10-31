@@ -561,6 +561,8 @@ let%expect_test "Core Lint refuses the world reached from anywhere else" =
           shows = [];
           keys = [];
           ops = [];
+          build_values = [];
+          build_asserts = [];
           method_calls = [];
         };
       print_endline "fine"

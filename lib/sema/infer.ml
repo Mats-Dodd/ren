@@ -59,6 +59,8 @@
    constructors (or fields), so they can be written [Infer.Field_of] as well
    as [Infer_env.Field_of]. *)
 type 'l found_ = 'l Infer_env.found_ =
+  | Function_uses of Path.t
+  | Dependency_id of 'l
   | Field_of of Path.t
   | Ctor_of of Path.t * string
   | Error_tag

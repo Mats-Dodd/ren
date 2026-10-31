@@ -2489,8 +2489,10 @@ typedef struct {
 } ren_map;
 
 /* [h.nfields]: a `Set`, whose entries have no value; a key of two words;
-   a value of two words */
-enum { REN_MAP_SET = 1, REN_MAP_KEY_SV = 2, REN_MAP_VAL_SV = 4 };
+   a value of two words; immutable build-time entries with no hash index.
+   Static entries keep a nonzero live mark in the hash word; their first
+   mutation copies and hashes them with the current process's seed. */
+enum { REN_MAP_SET = 1, REN_MAP_KEY_SV = 2, REN_MAP_VAL_SV = 4, REN_MAP_STATIC = 8 };
 
 static inline bool ren_map_is_set(const ren_map *m) {
   return m->h.nfields & REN_MAP_SET;

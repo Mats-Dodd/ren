@@ -412,7 +412,7 @@ let holds fi env (a : expr) (j : expr) =
 (* [e] with [f] on each of its immediate parts. *)
 let map f (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
+  | Function_uses _ | Frozen_default _ | Const _ | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
   | Global_value _ | Intrinsic _ | Break ->
       e.kind
   | Source_view v -> Source_view { v with value = f v.value }

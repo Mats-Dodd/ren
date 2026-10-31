@@ -18025,3 +18025,96 @@ empty type/default metadata. All required checks passed again on this
 rebased tree, including the grammar differential with zero misses and all
 85 example tests. No runtime-core or generator implementation was changed
 beyond combining the new front-end cases with its existing cases.
+
+### Step 2 implementation
+
+Top-level values and assertions are typed zero-argument build roots. The
+shared interpreter evaluates them for check/run/test/build, orders value
+and function dependencies, reports cycles and failed try/assertion roots,
+and enforces the fixed 64,100,000-step budget per root. Frozen Core data
+retains types, ordered entries and closed handler descriptions, never
+interpreter cells or installed evidence. Generic field defaults are
+computed once per closed instantiation and selected through descriptors
+in debug; release selects their constants directly.
+
+Native constants have immutable uncounted owners and names derived from
+typed contents. Arrays, packed records/sums/tuples, sized scalars, strings,
+bytes, maps, sets and handler descriptions are covered. Static maps/sets
+store insertion-ordered entries without a process seed or buckets; reads
+use the existing equality semantics, and first mutation copies and builds
+an ordinary seeded index. The narrowly additive runtime map flag/probe/
+copy hooks are necessary for this representation; task/carry/journal and
+world-driver code is untouched. Frozen data alone receives whole-program
+representation facts for Core lint, so imported opaque constants remain
+checked without opening their constructors to source code.
+
+Function uses are data in shape.Uses, derived from Core calls and actual
+dependency operations rather than private allowed rows. Installed handlers
+mask provided operations while retaining their needs; abstract callbacks
+retain their typed reach. Dependency identity includes concrete type
+arguments, and a failing architecture assertion shows the transitive path.
+
+The step-2 semantic gates, evaluator/frontend tests and native static-data
+suite pass on the integrated generator tree. Native debug/release under
+ASan/UBSan and actual TinyCC agree, with zero live objects; static reads
+and handler routing allocate nothing. The C inspection gate confirms no
+CRC computation or initialization in the program entry. The grammar adds
+top-level roots and dependency identities. Full required checks follow.
+
+Step 2 review found and fixed a native cache collision: two imported
+handler constructors named `constant` with identical captured data could
+share a static descriptor despite different bodies. Static keys now retain
+fully typed code, qualified declaration identity and declaration-relative
+source spans. The regression returns 809 (distinct 8 and 9) under debug
+and release sanitizers, with zero allocations, and verifies that adding an
+unrelated root in either the caller or defining module changes no static
+name. A dependency member such as Users.Foo also remains a constructor
+error rather than being accepted as the Users dependency identity.
+
+The compatibility pass retained the existing service-installation and
+stateless-check assertions. Qualified service names take their existing
+constructor path rather than dependency-identity resolution; `check` still
+runs all build roots while leaving runtime-only stateless validation to
+run/test/build. Qualified uppercase expressions now defer declaration-kind
+resolution until semantic analysis, with a new refusal test preserving the
+original type-as-value diagnostic. Two existing deep-initializer fixtures
+now assert the build-time stack-limit diagnostic and its help. These
+fixture adjustments follow the owner's explicit authorization; no success
+assertion was weakened.
+
+A final generator integration probe found that a pulled block generator's
+Console dependency was absent from an f.uses architecture assertion. The
+in-progress full gate was stopped before committing; the evaluator already
+refused executing the same world operation while building, but the static
+reach assertion also has to be sound. Step 2 remains uncommitted while the
+reach graph and regression coverage are corrected, preserving the latency
+of unpulled generator factories.
+
+The generator reach regression is fixed. The collector retains callable
+and cursor provenance through arguments, shared alias/capture cells,
+assignments, forwarding helpers and return summaries. Creating a frame
+keeps its body and place callbacks latent; invoking a block or stepping a
+cursor activates the actual producer with its creation-time installed
+handler mask. Internal origin IDs are analysis bookkeeping and never enter
+emitted names or data. The original false architecture assertion now fails
+with consume → watch → print → Console.write reach. Eight new regressions
+cover activation, latency, aliases, helpers, stored cursors, handler masking,
+wide declarations and distinct generic dependency identities. All 29 focused
+architecture/build tests pass; the broader 137-test generator/build pass
+also passed before the final generic-identity addition. Full checks restart
+from the final source after review.
+
+The full native matrix completed with matching runtime results, but its
+existing emitted-C assertions found duplicate forward declarations: static
+data needed the early prototype list, and the old late list remained.
+Only the redundant late emission was removed. The existing restrict and
+direct-handler declaration assertions now pass unchanged, and all eight
+static-data sanitizer tests pass. The full gate is rerun for this final
+one-line emitter correction.
+
+Step 2 final gate passed on the generator-integrated source: dune build,
+dune test --force with real TinyCC, the complete editor check, and all 85
+example tests. The editor parsed all 146 corpus cases; its compiler
+differential had no misses. Existing C declaration and allocation
+assertions remain in force. The native static-data suite also passed after
+the final emitter correction. No required check was skipped.

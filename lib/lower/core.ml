@@ -225,7 +225,33 @@ type assignment = Replace_value | Advance_value
 
 type param = { mode : mode; var : var }
 
-type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
+(* Build-time data: no interpreter cells, hash buckets or process addresses.
+   Each child retains its own type, including sized and opaque values. A
+   description keeps static code and data captures, never installed evidence. *)
+type constant = { cty : Ty.ty; ckind : constant_kind }
+
+and constant_kind =
+  | CInt of Int64.t
+  | CFloat of float
+  | CBool of bool
+  | CStr of string
+  | CBytes of string
+  | CUnit
+  | CArray of constant list
+  | CTuple of constant list
+  | CRecord of (string * constant) list
+  | CCon of Path.t * string * constant list
+  | CTag of string * constant list
+  | CMap of (constant * constant) list
+  | CSet of constant list
+  | CHandler of {
+      hev : var;
+      hbody : expr;
+      hcaptures : (var * constant) list;
+      hsite : string;
+    }
+
+and expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
   | Return of Path.t * expr
@@ -275,6 +301,12 @@ and kind =
           replacement retires displaced leaves, advancement updates their state *)
   | Owner_alias of { target : var; root : var; body : expr }
       (** a projected inout temporary borrows its root's owner capability *)
+  | Const of constant
+  | Function_uses of Path.t * Ty.args
+  | Frozen_default of {
+      frozen_args : desc list;
+      frozen_cases : (Ty.ty list * constant) list;
+    }
   | Int of Int64.t
   | Float of float
   | Bool of bool
@@ -599,6 +631,8 @@ type program = {
   home : string;
   types : Iface.type_decl list;
   fns : fn_def list;
+  build_values : Path.t list;
+  build_asserts : Path.t list;
   values : Path.t list;
       (** its associated values, in the order they're made, each after every
           value it uses; each is one of [fns], of no parameters *)
@@ -820,7 +854,7 @@ let fails (t : Ty.ty) =
    last). *)
 let children (e : expr) =
   match e.kind with
-  | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
+  | Function_uses _ | Const _ | Frozen_default _ | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
   | Global_value _ | Intrinsic _ | Break ->
       []
   | Gen_create { args; places; _ } ->
@@ -867,6 +901,64 @@ let children (e : expr) =
       f :: List.filter_map (function Value a -> Some a | Ref _ -> None) args
   | Record (_, fs) -> List.map snd fs
   | Handle { body; on_value; on_error; _ } -> [ body; on_value; on_error ]
+
+(* Rebuild the direct expression children, leaving binders, patterns and
+   descriptors in the same scope. [f] chooses whether to recurse. *)
+let map_children f (e : expr) =
+  let kind = match e.kind with
+    | Function_uses _ | Const _ | Frozen_default _ | Int _ | Float _ | Bool _ | Str _ | Unit | Local _
+    | Global _ | Global_value _ | Intrinsic _ | Break -> e.kind
+    | Return (p,x) -> Return(p,f x)
+    | Yield x -> Yield(f x)
+    | Yield_from y -> Yield_from {y with pull=f y.pull}
+    | Gen_close x -> Gen_close(f x)
+    | Gen_step _ -> e.kind
+    | Gen_create g -> Gen_create {g with
+        args=List.map(function Value x->Value(f x)|Ref v->Ref v)g.args;
+        places=List.map(fun(p:gen_place)->{p with read=f p.read;write=f p.write})g.places}
+    | Source_view v -> Source_view {v with value=f v.value}
+    | Pattern_scope p -> Pattern_scope {p with source=f p.source;on_match=f p.on_match;on_else=Option.map f p.on_else}
+    | Cleanup_scope s -> Cleanup_scope {s with body=f s.body}
+    | Instance_scope s -> Instance_scope {s with body=f s.body}
+    | Own o -> Own {o with value=f o.value}
+    | Owned_assign a -> Owned_assign {a with value=f a.value}
+    | Owner_alias a -> Owner_alias {a with body=f a.body}
+    | Prim (p, xs) -> Prim (p, List.map f xs)
+    | Array xs -> Array (List.map f xs)
+    | Tuple xs -> Tuple (List.map f xs)
+    | Con (p, c, xs) -> Con (p, c, List.map f xs)
+    | Tag (n, xs, ds) -> Tag (n, List.map f xs, ds)
+    | Dep_call d -> Dep_call { d with args = List.map f d.args }
+    | With w -> With { w with impl = f w.impl; body = f w.body }
+    | With_handler w -> With_handler { w with handler = f w.handler; body = f w.body }
+    | Handler h -> Handler { h with body = f h.body }
+    | Instance i -> Instance { i with
+        impls = List.map (fun (p,e) -> (p, f e)) i.impls;
+        finally = Option.map f i.finally }
+    | Let (v,a,b) -> Let (v,f a,f b)
+    | Covered c -> Covered { c with body = f c.body; after = f c.after }
+    | While (a,b) -> While (f a,f b)
+    | Seq (a,b) -> Seq (f a,f b)
+    | Update (a,n,b) -> Update (f a,n,f b)
+    | Finally (a,b) -> Finally (f a,f b)
+    | Assert_equal (a,b,d,k) -> Assert_equal (f a,f b,d,k)
+    | Assign (v,a) -> Assign (v,f a)
+    | Assert a -> Assert (f a)
+    | Field (a,p,n) -> Field (f a,p,n)
+    | Of_variant a -> Of_variant (f a)
+    | Narrowed (ps,a) -> Narrowed (ps,f a)
+    | Fail a -> Fail (f a)
+    | Lambda l -> Lambda { l with body = f l.body }
+    | If (a,b,c) -> If (f a,f b,f c)
+    | Match (a, arms) -> Match (f a,List.map (fun a ->
+        { a with guard = Option.map f a.guard; body = f a.body }) arms)
+    | Call (callee,args,ev) -> Call (f callee,List.map (function
+        | Value a -> Value (f a) | Ref v -> Ref v) args,ev)
+    | Record (p,fs) -> Record (p,List.map (fun (n,e) -> (n,f e)) fs)
+    | Handle h -> Handle { h with body = f h.body;
+        on_value = f h.on_value; on_error = f h.on_error }
+  in
+  { e with kind }
 
 (* Whether running [e] can fail: whether it can reach a [Fail] or a call
    that can fail, that no [Handle] in it catches. A lambda's body runs only
@@ -1156,6 +1248,14 @@ let rec sexp_with ?(ownership = false) t e =
              var target; sexp value ]
   | Owner_alias { target; root; body } ->
       List [ atom "owner-alias"; var target; var root; sexp body ]
+  | Const c -> List [ atom "const"; constant_sexp t c ]
+  | Function_uses (p, _) -> List [atom "uses"; atom (Path.full p)]
+  | Frozen_default d ->
+      List [atom "frozen_default";
+        List (List.map (fun d -> atom (show_desc d)) d.frozen_args);
+        List (List.map (fun (ts,c) -> List [
+          List (List.map (fun ty -> atom (show_desc (Known ty))) ts);
+          constant_sexp t c]) d.frozen_cases)]
   | Int n -> Atom (Int64.to_string n)
   | Float f -> Atom (Ast.show_float f)
   | Bool b -> Atom (string_of_bool b)
@@ -1288,6 +1388,33 @@ let rec sexp_with ?(ownership = false) t e =
   | Assert a -> List [ atom "assert"; sexp a ]
   | Assert_equal (a, b, _, d) ->
       List (atom "assert" :: atom "==" :: dict d [ sexp a; sexp b ])
+
+and constant_sexp t c =
+  let constant = constant_sexp t in
+  let data =
+    match c.ckind with
+    | CInt n -> Atom (Int64.to_string n)
+    | CFloat f -> Atom (Ast.show_float f)
+    | CBool b -> Atom (string_of_bool b)
+    | CStr s -> Atom (Ast.show_str s)
+    | CBytes s -> List [ atom "bytes"; Atom (Ast.show_str s) ]
+    | CUnit -> atom "()"
+    | CArray xs -> List (atom "array" :: List.map constant xs)
+    | CTuple xs -> List (atom "tuple" :: List.map constant xs)
+    | CRecord fs ->
+        List (atom "record" :: List.map (fun (n, v) -> List [atom n; constant v]) fs)
+    | CCon (p, n, xs) ->
+        List (atom "con" :: atom (Path.full p ^ "." ^ n) :: List.map constant xs)
+    | CTag (n, xs) -> List (atom "tag" :: atom n :: List.map constant xs)
+    | CMap xs ->
+        List (atom "map" :: List.map (fun (k, v) -> List [constant k; constant v]) xs)
+    | CSet xs -> List (atom "set" :: List.map constant xs)
+    | CHandler h ->
+        List [atom "description"; atom h.hsite; var h.hev;
+          List (List.map (fun (v, c) -> List [var v; constant c]) h.hcaptures);
+          sexp_with t h.hbody]
+  in
+  List [ atom (show_desc (Known c.cty)); data ]
 
 and arm_sexp_with ~ownership t a =
   let guard =

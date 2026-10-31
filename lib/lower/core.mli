@@ -185,7 +185,33 @@ type assignment = Replace_value | Advance_value
 
 type param = { mode : mode; var : var }
 
-type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
+(* Build-time data: no interpreter cells, hash buckets or process addresses.
+   Each child retains its own type, including sized and opaque values. A
+   description keeps static code and data captures, never installed evidence. *)
+type constant = { cty : Ty.ty; ckind : constant_kind }
+
+and constant_kind =
+  | CInt of Int64.t
+  | CFloat of float
+  | CBool of bool
+  | CStr of string
+  | CBytes of string
+  | CUnit
+  | CArray of constant list
+  | CTuple of constant list
+  | CRecord of (string * constant) list
+  | CCon of Path.t * string * constant list
+  | CTag of string * constant list
+  | CMap of (constant * constant) list
+  | CSet of constant list
+  | CHandler of {
+      hev : var;
+      hbody : expr;
+      hcaptures : (var * constant) list;
+      hsite : string;
+    }
+
+and expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
   | Return of Path.t * expr
@@ -235,6 +261,12 @@ and kind =
           replacement retires displaced leaves, advancement updates their state *)
   | Owner_alias of { target : var; root : var; body : expr }
       (** a projected inout temporary borrows its root's owner capability *)
+  | Const of constant
+  | Function_uses of Path.t * Ty.args
+  | Frozen_default of {
+      frozen_args : desc list;
+      frozen_cases : (Ty.ty list * constant) list;
+    }
   | Int of Int64.t
   | Float of float
   | Bool of bool
@@ -559,6 +591,8 @@ type program = {
   home : string;
   types : Iface.type_decl list;
   fns : fn_def list;
+  build_values : Path.t list;
+  build_asserts : Path.t list;
   values : Path.t list;
       (** its associated values, in the order they're made, each after every
           value it uses; each is one of [fns], of no parameters *)
@@ -674,6 +708,9 @@ val fails : Ty.ty -> bool
 (* The expressions directly inside one, in the order they're evaluated,
    a lambda's or handler's body last. *)
 val children : expr -> expr list
+
+(* Map the direct expression children, keeping their binders in scope. *)
+val map_children : (expr -> expr) -> expr -> expr
 
 (* Whether running an expression can fail: whether it can reach a [Fail]
    or a call that can fail that no [Handle] in it catches. A lambda's

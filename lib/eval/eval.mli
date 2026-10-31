@@ -100,3 +100,14 @@ val run_installed :
 (* A value of the type [t], as it's written, through its type: what `ren
    console` shows of what a line gave. *)
 val show : ctx -> Ty.ty -> Value.t -> string
+
+(* The fixed build budget counts each expression dispatch exactly once,
+   including expressions handled directly in tail position. *)
+val build_step_limit : int
+exception Build_limit of { name : string; steps : int; limit : int }
+
+(* Compute all build roots with empty evidence and replace their bodies by
+   immutable typed constants, before any native specialization. *)
+val build :
+  ?limit:int -> ?uses_traces:(Loc.t * string list) list ->
+  Core.program list -> Core.program list

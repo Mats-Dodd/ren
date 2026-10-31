@@ -742,6 +742,12 @@ and expr_of cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
   let here kind = mk kind (ty ()) e.loc in
   match e.kind with
+  | Type_apply _ when (match (node cx e.node).found with
+      | Some (Dependency_id _) -> true | _ -> false) ->
+      let d = match (node cx e.node).found with
+        | Some (Dependency_id d) -> d | _ -> assert false in
+      here (Const (Build_uses.dep_constant ~lookup:cx.types ~home:cx.self.home ~loc:e.loc
+              (Ty.dep_path d.name) d.payload))
   | Type_apply (f, _) -> expr cx f
   | Int n -> here (Int n)
   | Float f -> here (Float f)
@@ -911,6 +917,13 @@ and expr_of cx (e : expr) : C.expr =
       let d = dict cx "eq" a.ty in
       let op : C.prim = if op = Eq then Equal d else Not_equal d in
       here (Prim (op, [ a; expr cx b ]))
+  | Binop (Le, a, b, onode)
+    when (match Infer.Nodes.find_opt onode cx.nodes with
+      | Some { found = Some (Method_of p); _ } ->
+          p = Path.member (Path.make "shape" "Uses") "subset"
+      | _ -> false) ->
+      operator cx ~onode ~meth:"subset" C.Not
+        Ty.bool e.loc [expr cx a; expr cx b]
   | Binop (((Lt | Le | Gt | Ge) as op), a, b, _) ->
       (* a number's own, or else through the `ord` dictionary of what it
          compares *)
@@ -951,6 +964,9 @@ and expr_of cx (e : expr) : C.expr =
       lexical_scope cx e.loc (fun () -> block cx ?return_target stmts last)
   | Con (tag, args) -> (
       match (node cx e.node).found with
+      | Some (Dependency_id d) ->
+          here (Const (Build_uses.dep_constant ~lookup:cx.types ~home:cx.self.home ~loc:e.loc
+              (Ty.dep_path d.name) d.payload))
       | Some Error_tag ->
           (* a tag, inside `Err(...)`: the error it holds *)
           let args = List.map (fun (_, a) -> source_value cx (expr cx a)) args in
@@ -990,6 +1006,9 @@ and expr_of cx (e : expr) : C.expr =
   | Update { base; fields; _ } -> update cx e base fields
   | Field (r, f) -> (
       match (node cx e.node).found with
+      | Some (Function_uses p) ->
+          let at = match r.kind with Type_apply (head, _) -> head.node | _ -> r.node in
+          here (Function_uses (p, targs_of cx at))
       | Some (Field_of p) -> here (Field (expr cx r, p, f.name))
       | _ -> bug "a field inference didn't find")
   | Match (subject, arms) when handles cx e.node ->
@@ -3542,7 +3561,7 @@ and free (e : C.expr) =
   let bind (v : C.var) = bound := Ids.add v.id !bound in
   let rec go (e : C.expr) =
     match e.kind with
-    | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break -> ()
+    | Function_uses _ | Frozen_default _ | Const _ | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break -> ()
     | Return (_, a) | Yield a | Yield_from { pull = a; _ } | Gen_close a -> go a
     | Gen_create { args; places; tys; dicts; ev; _ } ->
         use ev;
@@ -4037,6 +4056,10 @@ let program ~types (r : Resolve.t) (inferred : Infer.t) =
        home = r.home;
        types = declared;
        fns;
+       build_values = List.filter_map (function
+           | Top_value f -> Some (Ast.fn_path r.home f) | _ -> None) r.prog;
+       build_asserts = List.filter_map (function
+           | Top_assert f -> Some (Ast.fn_path r.home f) | _ -> None) r.prog;
        values = inferred.values;
        shows = shows inferred.types fns;
        keys = keys inferred.types fns;

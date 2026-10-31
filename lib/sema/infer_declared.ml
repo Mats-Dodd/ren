@@ -18,6 +18,7 @@ open Infer_written
    inference works out what it uses. *)
 let declared_uses env ~is_value ~tparams ?(named = []) (f : fn_def) =
   match f.uses with
+  | _ when is_value f && f.owner = None -> None
   | _ when is_value f -> Some []
   | Some (u : Resolved.uses) ->
       (* a row it names inside one of them, `Actors<K, (D ! ..e)>`, is its
@@ -27,7 +28,8 @@ let declared_uses env ~is_value ~tparams ?(named = []) (f : fn_def) =
   | None -> None
 
 (* Whether [f] declares what it uses ([declared_uses]). *)
-let declares_uses ~is_value (f : fn_def) = is_value f || f.uses <> None || f.pub
+let declares_uses ~is_value (f : fn_def) =
+  (is_value f && f.owner <> None) || f.uses <> None || (f.pub && not (is_value f))
 
 (* Whether the runtime installs the dependency [p] around `main`: one of
    the prelude's built-ins (deps.md, "`main`"). *)
@@ -239,6 +241,7 @@ let check_needs env (f : fn_def) n =
    declares nothing, and inference works out what it fails with. *)
 let declared_errors env ~is_value ~tparams (f : fn_def) =
   match f.errors with
+  | _ when is_value f && f.owner = None -> None
   | _ when is_value f -> Some []
   | Some es -> Some (error_labels env ~tvars:tparams es)
   | None when f.pub -> Some []

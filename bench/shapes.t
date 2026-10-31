@@ -5,12 +5,12 @@ fail an enabled case. See shapes/README.md for the remaining coverage.
 
   $ python3 shapes/check.py
   front_end: interpreter, release run, sanitizers and tcc agree
-  static_data: until s2
+  static_data: interpreter, release run, sanitizers and tcc agree
   template: until s3
   json: until s7
   bin: until s7
   freezing: until s8
-  static C: until s2
+  static C: no build-time function or startup call
   template allocations: until s3
   copy names: until s7
   walk and explain: until s4

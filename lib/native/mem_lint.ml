@@ -73,6 +73,7 @@ let struct_of env k =
 let atom_layout (x : atom) : layout =
   match x with
   | Var v -> v.layout
+  | Static_data (_, l) -> l
   | Int _ -> Int
   | Float _ -> Float
   | Bool _ -> Bool
@@ -101,6 +102,9 @@ let use env (v : var) =
 let atom env x =
   (match x with
   | Var v -> use env v
+  | Static_data (name, l) -> (match Hashtbl.find_opt env.values name with
+      | Some actual when actual = l -> ()
+      | _ -> fail env ("a missing or mistyped static " ^ name))
   | Desc_lit n ->
       if n < 0 || n >= env.ndescs then
         fail env (sprintf "a descriptor desc%d, which isn't in the program" n)
@@ -198,6 +202,7 @@ let rt_sig ~(str : layout) (rt : rt) : layout list * layout =
   | Here_put -> ([ Ptr ], Unit)
   | Op_any (Some _) -> ([ Desc; Word 0; Word 0 ], Word 0)
   | Op_any None -> ([ Desc; Word 0 ], Word 0)
+  | Desc_same -> ([Desc; Desc], Bool)
   | Value_any _ -> ([ Desc ], Word 0)
   | New_desc _ -> ([], Desc)
   | Map_new _ -> ([], Boxed)
@@ -1849,6 +1854,52 @@ let program (p : program) =
       | _ -> failwith ("Mem Lint: the value " ^ v.vname ^ " isn't made right"));
       Hashtbl.replace values v.vname v.vlayout)
     p.values;
+  (* Static data is a closed, acyclic graph. Only relocations into earlier
+     nodes are legal: no local, evidence, descriptor parameter or block. *)
+  let bad s = failwith ("Mem Lint: static data: " ^ s) in
+  let check_atom x =
+    (match x with
+    | Var _ | No_ev | Fn_ptr _ -> bad "a runtime/scoped value"
+    | Static_data (n,l) -> (match Hashtbl.find_opt values n with
+        | Some actual when actual = l -> () | _ -> bad ("a forward, missing or mistyped reference " ^ n))
+    | Desc_lit n when n < 0 || n >= List.length p.descs -> bad "a missing descriptor"
+    | Handler_tag n when n < 0 || n >= List.length p.handlers -> bad "a missing handler"
+    | _ -> ());
+    atom_layout x in
+  let stored x = match check_atom x with
+    | Cell _ | Block | Ev | Ptr | Token | Word _ -> bad "a scoped or unresolved stored value"
+    | l -> l in
+  List.iter (fun d ->
+    if Hashtbl.mem values d.sdname then bad ("duplicate name " ^ d.sdname);
+    let want l = if l <> d.sdlayout then bad ("layout of " ^ d.sdname) in
+    (match d.sdkind with
+    | Static_string _ -> want Boxed
+    | Static_scalar x ->
+        let l = stored x in
+        (match d.sdlayout,l with Sized k,Int when not (Sized.is_float k) -> ()
+        | Sized F32, Float -> () | _ when d.sdlayout = l -> () | _ -> bad "scalar layout")
+    | Static_object (tag,xs) ->
+        want Boxed;
+        if tag < 0 || tag >= 0xFFFC || List.length xs > 64 then bad "object header";
+        List.iter (fun x -> match x with Handler_tag _ -> ignore(check_atom x)
+          | _ -> (match stored x with Struct _ -> bad "a struct in an object word" | _ -> ())) xs
+    | Static_array (elem,xs) ->
+        want Boxed;
+        List.iter (fun x -> if stored x <> elem then bad "array element layout") xs
+    | Static_struct xs -> (match d.sdlayout with
+        | Struct (n,_) when n >= 0 && n < List.length p.structs ->
+            let st = List.nth p.structs n in
+            if List.length xs <> List.length st.sfields then bad "struct field count";
+            List.iter2 (fun x l -> let actual = stored x in
+              if actual <> l && not (l=Boxed && match x with Scalar_ctor _ -> true | _ -> false)
+              then bad "struct slot layout") xs st.sfields
+        | _ -> bad "struct layout")
+    | Static_map {set;key;value;entries} ->
+        want Boxed;
+        List.iter (fun (k,v) ->
+          if stored k <> key then bad "map key layout";
+          if not set && stored v <> value then bad "map value layout") entries);
+    Hashtbl.add values d.sdname d.sdlayout) p.static_data;
   (* each handler's record, by its tag's number, pointing at code of the
      signatures the runtime calls it with (ren_rt.h, [ren_handler]) *)
   List.iteri

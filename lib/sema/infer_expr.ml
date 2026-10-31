@@ -46,6 +46,35 @@ open Infer_handlers
 
 (* ---- expressions ---- *)
 
+let uses_path = Path.make "shape" "Uses"
+let dep_id_path = Path.make "shape" "DepId"
+
+(* A dependency name in data position denotes its declaration, rather than
+   an installed implementation. Constructors of ordinary sums keep their
+   existing lookup. *)
+let dependency_named env (c : ctor_ref) =
+  let candidate = match c.qual with
+    | Some { tref = Named p; _ } when p.name = c.name.name -> Hashtbl.find_opt env.types p
+    | Some { tref = Named _; _ } -> None
+    | Some _ -> None
+    | None -> List.find_opt
+        (fun (d : Iface.type_decl) -> d.path.name = c.name.name)
+        env.visible in
+  match candidate with
+  | Some ({ body = (Iface.Dep _ | Dep_alias _); _ } as d) -> Some d
+  | _ -> None
+
+let infer_dependency_id env cx ?(args = []) (e : expr) (d : Iface.type_decl) =
+  env.in_scope <- d.path :: env.in_scope;
+  if List.length args <> List.length d.params then
+    report env (Diag.make e.loc
+      ~help:"write the dependency at concrete type arguments"
+      "a generic dependency identity needs its type arguments");
+  Hashtbl.replace cx.found e.node
+    (Dependency_id (Types.dep ~args (Ty.dep_label d.path)));
+  TCon (dep_id_path, [])
+
+
 let want_int env use (e : expr) t =
   unify_at env e.loc ~found:t ~expected:int ~notes:[ int_note use ]
 
@@ -516,12 +545,22 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
     | _ -> why
   in
   match (e.kind, reveal env.st expected) with
+  | Type_apply ({ kind = Con (c, []); _ }, ts), _
+    when dependency_named env c <> None ->
+      let args = List.map (convert env ~tvars:cx.tparams ~named:cx.named ~row:closed) ts in
+      let t = infer_dependency_id env cx ~args e (Option.get (dependency_named env c)) in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
   | Type_apply (f, ts), _ ->
       ignore
         (with_type_args env cx f ts (fun () ->
              check env cx ~why ?written ~exact f expected;
              expected));
       fits ()
+  | Con (c, []), _ when dependency_named env c <> None ->
+      let t = infer_dependency_id env cx e (Option.get (dependency_named env c)) in
+      Hashtbl.replace cx.nodes e.node t;
+      ignore (unifies env why e.loc ~found:t ~expected)
   | Con (c, args), _ ->
       let t = infer_con env cx e c args ~written ~expected in
       Hashtbl.replace cx.nodes e.node t;
@@ -747,10 +786,16 @@ and synth env cx (e : expr) : ty =
              has to have an order, which is known once the group's types
              are, as `==` is *)
           let ta = infer env cx a in
-          compared env cx ~name a ta b;
-          defer env
-            (Compared { qty = ta; qloc = e.loc; qop = name; qreq = "ord" });
-          bool
+          if op = Le && repr ta = TCon (uses_path, []) then (
+            check env cx b (array (TCon (dep_id_path, [])));
+            let tb = array (TCon (dep_id_path, [])) in
+            op_method env cx e ~onode a ta (Some (b, tb))
+              (Path.member uses_path "subset"))
+          else (
+            compared env cx ~name a ta b;
+            defer env
+              (Compared { qty = ta; qloc = e.loc; qop = name; qreq = "ord" });
+            bool)
       | And | Or ->
           want_bool env (Side name) a (infer env cx a);
           want_bool env (Side name) b (infer env cx b);
@@ -832,6 +877,10 @@ and synth env cx (e : expr) : ty =
       | Some a -> check env cx a cx.return_ty
       | None -> unify_at env e.loc ~found:unit ~expected:cx.return_ty);
       fresh_var env.st
+  | Type_apply ({ kind = Con (c, []); _ }, ts)
+    when dependency_named env c <> None ->
+      let args = List.map (convert env ~tvars:cx.tparams ~named:cx.named ~row:closed) ts in
+      infer_dependency_id env cx ~args e (Option.get (dependency_named env c))
   | Type_apply (f, ts) -> with_type_args env cx f ts (fun () -> infer env cx f)
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
@@ -849,6 +898,8 @@ and synth env cx (e : expr) : ty =
       Hashtbl.replace lambda_calls e.node bcx.calls;
       TFun (ps, tb, errs, REmpty)
   | Block (stmts, last) -> block env cx stmts (fun cx -> infer env cx last)
+  | Con (c, []) when dependency_named env c <> None ->
+      infer_dependency_id env cx e (Option.get (dependency_named env c))
   | Con (c, args) ->
       infer_con env cx e c args ~written:None ~expected:(fresh_var env.st)
   | Con_named (c, fields) ->
@@ -4386,7 +4437,21 @@ and impl_record env cx (e : expr) (td : Iface.type_decl) fields =
    has to be known by now, or be the one record type that has a field
    named [f]. *)
 and infer_field env cx (e : expr) r (f : ident) =
-  field_access env cx e r (infer env cx r) f
+  match r.kind with
+  | Type_apply (({ kind = Var (Global p); _ } as head), ts)
+    when f.name = "uses" ->
+      let t = with_type_args env cx head ts
+          (fun () -> lookup env cx ~node:head.node head.loc (Global p)) in
+      Hashtbl.replace cx.nodes head.node t;
+      Hashtbl.replace cx.nodes r.node t;
+      Hashtbl.replace cx.found e.node (Function_uses p);
+      TCon (uses_path, [])
+  | Var (Global p) when f.name = "uses" ->
+      let t = lookup env cx ~node:r.node r.loc (Global p) in
+      Hashtbl.replace cx.nodes r.node t;
+      Hashtbl.replace cx.found e.node (Function_uses p);
+      TCon (uses_path, [])
+  | _ -> field_access env cx e r (infer env cx r) f
 
 (* A `match`. With [want], every arm is checked against the type it says;
    otherwise the first arm says what the others have to be.

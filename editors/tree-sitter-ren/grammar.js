@@ -94,6 +94,8 @@ module.exports = grammar({
   word: ($) => $.identifier,
 
   conflicts: ($) => [
+    [$.type_name, $._module_constructor_ref],
+    [$.dependency, $._module_constructor_ref],
     // `billing.Plan` is a module's type, and `user.plan` a field: the token
     // after the dot decides; `kv.Kv(cfg)` is another module's service
     // installed, which the `(` after it decides
@@ -140,6 +142,8 @@ module.exports = grammar({
       choice(
         $.import,
         $.function_definition,
+        $.build_value,
+        $.build_assertion,
         $.type_definition,
         $.dependency_definition,
         $.handler_definition,
@@ -164,6 +168,21 @@ module.exports = grammar({
       ),
 
     module_path: ($) => sep1($.identifier, '/'),
+
+    // Build roots are data computed while building. Their names may be
+    // uppercase, as CRC_TABLE is, or ordinary lowercase bindings.
+    build_value: ($) =>
+      seq(
+        optional($.visibility),
+        'let',
+        field('name', choice($.identifier, alias($.type_identifier, $.identifier))),
+        optional(seq(':', field('type', $._type))),
+        '=',
+        field('value', $._body),
+      ),
+
+    build_assertion: ($) =>
+      seq('assert', field('condition', $._body)),
 
     // ---- functions ----
 
@@ -1118,7 +1137,7 @@ module.exports = grammar({
         seq(
           field(
             'function',
-            choice($.identifier, $.field_expression, $.item_expression),
+            choice($.identifier, $.type_identifier, $.field_expression, $.item_expression),
           ),
           field('type_arguments', alias($._value_type_arguments, $.type_arguments)),
         ),
@@ -1130,7 +1149,7 @@ module.exports = grammar({
     field_expression: ($) =>
       prec(
         PREC.postfix,
-        seq(field('value', $._postfix), '.', field('field', $.identifier)),
+        seq(field('value', $._postfix), '.', field('field', choice($.identifier, alias('uses', $.identifier)))),
       ),
 
     // xs[i], and a slice, xs[a..b]
@@ -1403,10 +1422,10 @@ module.exports = grammar({
         // kv.Kv(cfg): another module's service, installed in a `with` or
         // a wiring (language.md §4), which the compiler reads as a call of
         // it
-        seq(
+        prec.right(seq(
           field('constructor', alias($._module_constructor_ref, $.constructor_ref)),
-          field('arguments', $.constructor_arguments),
-        ),
+          optional(field('arguments', $.constructor_arguments)),
+        )),
       ),
 
     _module_constructor_ref: ($) =>

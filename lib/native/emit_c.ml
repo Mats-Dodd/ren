@@ -135,6 +135,7 @@ let var (v : var) =
 let atom_layout (x : atom) : layout =
   match x with
   | Var v -> v.layout
+  | Static_data (_, l) -> l
   | Int _ -> Int
   | Float _ -> Float
   | Bool _ -> Bool
@@ -159,6 +160,7 @@ let atom (x : atom) =
   | Var v -> var v
   | Int n when n = Int64.min_int -> "INT64_MIN"
   | Int n -> sprintf "INT64_C(%Ld)" n
+  | Float f when Float.is_nan f -> "NAN"
   | Float f when f = Float.infinity -> "INFINITY"
   | Float f when f = Float.neg_infinity -> "(-INFINITY)"
   (* hexadecimal, which C reads back exactly *)
@@ -170,6 +172,8 @@ let atom (x : atom) =
      object or constructor is *)
   | Scalar_ctor t when t < 0 -> sprintf "ren_box(UINT32_MAX - %d)" (-1 - t)
   | Scalar_ctor t -> sprintf "ren_box(%d)" t
+  | Static_data (n, (Boxed | Desc)) -> sprintf "((ren_obj*)&%s)" n
+  | Static_data (n, _) -> n
   | Lit n -> sprintf "((ren_obj*)&ren_lit_%d)" n
   | Desc_lit n -> sprintf "((ren_obj*)&ren_desc_%d)" n
   | Fn_ptr f -> sprintf "((void*)%s)" f
@@ -770,6 +774,7 @@ let rec runtime ?result rt args site_arg =
       let b = if op = None then "(ren_val){0}" else w 2 in
       let t = match site_arg with Some s -> tag s | None -> "0" in
       sprintf "ren_op_any(%s, %s, %s, %s, %s, %s)" (a 0) code (w 1) b (site ()) t
+  | Desc_same -> sprintf "ren_desc_same((const ren_desc*)%s, (const ren_desc*)%s)" (a 0) (a 1)
   | Value_any one -> sprintf "ren_value_any(%s, %b)" (a 0) one
   (* maps and sets (ren_rt.c, "maps and sets"): keys and values as words,
      each with its descriptor *)
@@ -2084,6 +2089,63 @@ let key_wrapper (fns : fn list) i name =
         else word_of f.result call));
   Buffer.contents b
 
+(* Constant initializers are expanded through scalar/struct references:
+   C permits address relocations here, but reading another global's value
+   would turn this into executable initialization. *)
+let static_definitions add (p : program) =
+  let defs = Hashtbl.create 32 in
+  List.iter (fun d -> Hashtbl.add defs d.sdname d) p.static_data;
+  let rec scalar x = match x with
+    | Static_data (n, l) -> (match (Hashtbl.find defs n).sdkind with
+      | Static_scalar x -> sprintf "((%s)%s)" (ctype l) (scalar x)
+      | _ -> atom x)
+    | Scalar_ctor t ->
+        let tag = if t < 0 then Int64.sub 0xffff_ffffL (Int64.of_int (-1-t)) else Int64.of_int t in
+        sprintf "((ren_obj*)(uintptr_t)UINT64_C(%Lu))" (Int64.logor (Int64.shift_left tag 1) 1L)
+    | _ -> atom x
+  and word x =
+    let l = atom_layout x in
+    let member = match l with Boxed | Desc -> "o" | Ptr -> "p" | Float | Sized F32 -> "f" | _ -> "i" in
+    sprintf "{.%s = %s}" member (scalar x)
+  and fields x = match x with
+    | Static_data (n, Struct _) -> (match (Hashtbl.find defs n).sdkind with
+      | Static_struct xs -> xs | _ -> failwith "bug: a static struct")
+    | _ -> [x]
+  in
+  let mask xs = List.fold_left (fun (i, m) x -> (i+1, if is_object (atom_layout x) then Int64.logor m (Int64.shift_left 1L i) else m)) (0,0L) xs |> snd in
+  let word_array xs = braces (match xs with [] -> ["{.i = 0}"] | _ -> List.map word xs) in
+  List.iter (fun d ->
+    let n = d.sdname in
+    match d.sdkind with
+    | Static_string str ->
+        let len = String.length str in
+        add (sprintf "%sconst struct %s { ren_obj h; int64_t len; const char *data; int64_t cap; char bytes[%d]; } %s = {{0, REN_TAG_STR, 0, 0}, %d, %s.bytes, %d, %s};\n" !linkage n (len+1) n len n len (c_string str))
+    | Static_object (tag, xs) ->
+        let count = List.length xs in
+        let m = mask xs in
+        let stored = if count > 8 then xs @ [Int m] else xs in
+        add (sprintf "%sconst struct %s { ren_obj h; ren_val fields[%d]; } %s = {{0, %d, %d, %Ld}, %s};\n" !linkage n (max 1 (List.length stored)) n tag count (Int64.logand m 255L) (word_array stored))
+    | Static_array (elem, xs) ->
+        let flattened = List.concat_map fields xs in
+        let stride = match elem with Struct (i, _) -> List.length (List.nth p.structs i).sfields | _ -> 1 in
+        let emask = match elem with Struct (i, _) -> struct_mask i | _ -> if is_object elem then 1 else 0 in
+        let ctyp, kind, contents = match elem with
+          | Sized k -> (sized_ctype k, sized_kind k, braces (match xs with [] -> ["0"] | _ -> List.map scalar xs))
+          | _ -> ("ren_val", "REN_ELEM_WORD", word_array flattened) in
+        add (sprintf "%sconst struct %s { ren_array a; %s data[%d]; } %s = {{{0, REN_TAG_ARRAY, %s, %d}, %d, %d, (ren_val*)%s.data, %d, NULL}, %s};\n" !linkage n ctyp (max 1 (List.length flattened)) n kind emask (List.length xs) (max 1 (List.length xs)) n stride contents)
+    | Static_struct xs ->
+        add (sprintf "%sconst %s %s = {%s};\n" !linkage (ctype d.sdlayout) n (word_array xs))
+    | Static_scalar x ->
+        add (sprintf "%sconst %s %s = %s;\n" !linkage (ctype d.sdlayout) n (scalar x))
+    | Static_map {set;key;value;entries} ->
+        let keysv = is_sv key and valsv = not set && is_sv value in
+        let width = 1 + (if keysv then 2 else 1) + (if set then 0 else if valsv then 2 else 1) in
+        let flags = (if set then 1 else 0) + (if keysv then 2 else 0) + (if valsv then 4 else 0) in
+        let objs = (if counted key then 1 else 0) + (if not set && counted value then 2 else 0) in
+        let xs = List.concat_map (fun (k,v) -> [Int 1L] @ fields k @ (if set then [] else fields v)) entries in
+        add (sprintf "%sconst struct %s { ren_map m; ren_val entries[%d]; } %s = {{{0, REN_TAG_MAP, REN_MAP_STATIC | %d, %d}, %d, %d, %d, 0, %d, (ren_val*)%s.entries, NULL}, %s};\n" !linkage n (max 1 (List.length xs)) n flags objs (List.length entries) (List.length entries) (List.length entries) width n (word_array xs))
+  ) p.static_data
+
 let parts ~restrict ~release ~site_pieces (p : program) =
   is_release := release;
   sv := p.sv;
@@ -2174,6 +2236,7 @@ let parts ~restrict ~release ~site_pieces (p : program) =
     (fun (v : value) ->
       add (sprintf "%s%s %s;\n" !linkage (ctype v.vlayout) v.vname))
     p.values;
+  static_definitions add p;
   let data = Buffer.contents b in
   let protos =
     List.map (fun (f : fn) -> (f.name, signature ~restrict f ^ ";\n")) p.fns
@@ -2328,11 +2391,11 @@ let program ?(restrict = false) ?(release = false)
   add Runtime_c.source;
   add "\n/* ---- the program ---- */\n\n";
   add ps.typedefs;
+  List.iter (fun (_, proto) -> add proto) ps.protos;
   add ps.data;
   List.iter add ps.site_defs;
   List.iter (fun (_, d) -> add d) ps.appends;
   add "\n";
-  List.iter (fun (_, proto) -> add proto) ps.protos;
   add "\n";
   List.iter (fun (_, c) -> add c) ps.lookups;
   List.iter (fun (_, c) -> add c) ps.fns;
@@ -2402,6 +2465,11 @@ let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
   let decls = Hashtbl.create 4096 in
   List.iter (fun (name, d) -> Hashtbl.replace decls name d) ps.protos;
   List.iter (fun (name, d) -> Hashtbl.replace decls name d) ps.externs;
+  List.iter (fun d ->
+    let decl = match d.sdlayout with
+      | Boxed | Desc -> sprintf "extern const struct %s %s;\n" d.sdname d.sdname
+      | l -> sprintf "extern const %s %s;\n" (ctype l) d.sdname in
+    Hashtbl.replace decls d.sdname decl) p.static_data;
   List.iteri
     (fun i _ ->
       let n = sprintf "ren_lit_%d" i in
@@ -2453,6 +2521,7 @@ let units ~jobs ~(site_pieces : site -> Diag.piece list) (p : program) =
     let b = Buffer.create 65536 in
     Buffer.add_string b "#define REN_UNIT\n#include \"ren_rt.h\"\n\n";
     Buffer.add_string b ps.typedefs;
+    List.iter (fun (_, proto) -> Buffer.add_string b proto) ps.protos;
     Buffer.add_string b ps.data;
     List.iter
       (fun id ->

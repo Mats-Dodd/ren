@@ -45,6 +45,8 @@ let sprintf = Printf.sprintf
 
 type env = {
   types : (Path.t, Iface.type_decl) Hashtbl.t;
+  data_types : (Path.t, Iface.type_decl) Hashtbl.t;
+      (** complete representations, used only to validate frozen data *)
   schemes : (Path.t, Ty.scheme) Hashtbl.t;
       (** every top-level function, and every function among a type's members *)
   values : (Path.t, Ty.scheme) Hashtbl.t;
@@ -740,7 +742,69 @@ let retained_place env loc (place : gen_place) =
       (match leaf.kind with Local v when v = place.param -> () | _ -> bad ())
   | _ -> bad ()
 
-let rec expr env sc (e : expr) =
+(* Validate the serialized tree separately from executable expressions. Field
+   order is part of the format, and each child carries its storage type. *)
+let rec constant env sc loc (c : constant) =
+  let env = {env with types=env.data_types} in
+  let fail_data s = fail env loc ("invalid build-time data: " ^ s) in
+  let t = reveal env c.cty in
+  let check cs = List.iter (constant env sc loc) cs in
+  let same_data want c = same env loc "a constant child" want c.cty in
+  let primitive want = if not (equal env t want) then fail_data "a primitive has the wrong type" in
+  let parameters () = match t with
+    | Ty.Con (p, args) | Variant (p, _, args) -> (p,args)
+    | _ -> fail_data "a product has no declaration" in
+  let fields fs cs =
+    if List.length fs <> List.length cs then fail_data "field count";
+    List.iter2 (fun (f : Iface.field) c -> same_data (subst (snd (parameters ())) f.fty) c) fs cs;
+    check cs in
+  match c.ckind with
+  | CInt n -> (match t with Ty.Con (p, []) when Sized.of_path p <> None ->
+      let k = Option.get (Sized.of_path p) in
+      if Sized.is_float k || not (Sized.fits k n) then fail_data "integer outside its storage type"
+      | _ -> primitive Ty.int)
+  | CFloat f -> (match t with Ty.Con (p, []) when Sized.of_path p = Some Sized.F32 ->
+      (match Sized.float32 f with Some rounded when rounded = f || (Float.is_nan rounded && Float.is_nan f) -> ()
+      | _ -> fail_data "unrounded Float32") | _ -> primitive Ty.float)
+  | CBool _ -> primitive Ty.bool | CUnit -> primitive Ty.unit
+  | CStr _ -> primitive Ty.str | CBytes _ -> primitive (Ty.Con (Path.prelude "Bytes", []))
+  | CArray cs -> (match t with Ty.Con (p,[et]) when p = Path.prelude "Array" ->
+      List.iter (same_data et) cs; check cs | _ -> fail_data "array type")
+  | CTuple cs -> (match t with Ty.Con (p,args) when Ty.is_tuple p && List.length args = List.length cs ->
+      List.iter2 same_data args cs; check cs | _ -> fail_data "tuple type")
+  | CRecord fs ->
+      let p,_ = parameters () in
+      (match Hashtbl.find_opt env.types p with
+      | Some { body = Record ds; _ } ->
+          if List.map fst fs <> List.map (fun (f : Iface.field) -> f.fname) ds then fail_data "record field order";
+          fields ds (List.map snd fs)
+      | _ -> fail_data "record declaration")
+  | CCon (p,name,cs) ->
+      let q,_ = parameters () in
+      if p <> q then fail_data "constructor declaration";
+      (match Hashtbl.find_opt env.types p with
+      | Some { body = Sum ds; _ } -> (match List.find_opt (fun (d : Iface.ctor) -> d.cname = name) ds with
+        | Some d -> fields d.cfields cs | None -> fail_data "constructor name")
+      | _ -> fail_data "sum declaration")
+  | CTag (tag,cs) ->
+      check cs;
+      (match t with
+      | Ty.Errors row when List.exists (fun (l : Ty.label) ->
+          l.name = tag && List.length l.payload = List.length cs
+          && List.for_all2 (fun t c -> equal env t c.cty) l.payload cs) row.labels -> ()
+      | _ -> fail_data "error tag or payload type")
+  | CMap entries -> (match t with Ty.Con (p,[k;v]) when p = Path.prelude "Map" ->
+      List.iter (fun (a,b) -> same_data k a; same_data v b; check [a;b]) entries
+      | _ -> fail_data "map type")
+  | CSet cs -> (match t with Ty.Con (p,[et]) when p = Path.prelude "Set" ->
+      List.iter (same_data et) cs; check cs | _ -> fail_data "set type")
+  | CHandler h ->
+      check (List.map snd h.hcaptures);
+      List.iter (fun ((v : var), c) -> same_data v.ty c) h.hcaptures;
+      let sc = List.fold_left (fun sc (v,_) -> add v sc) sc h.hcaptures in
+      expr env sc { kind = Handler {ev=h.hev; captures=List.map fst h.hcaptures; body=h.hbody}; ty=c.cty; loc }
+
+and expr env sc (e : expr) =
   let loc = e.loc in
   if has_error e.ty then fail env loc "a node has an error type";
   let is what t = same env loc what e.ty t in
@@ -917,6 +981,16 @@ let rec expr env sc (e : expr) =
       in_scope env sc loc root;
       expr env sc body;
       is "an owner alias" body.ty
+  | Function_uses _ -> is "a dependency reach query" (Ty.Con (Path.make "shape" "Uses", []))
+  | Frozen_default d ->
+      List.iter (function Param v -> in_scope env sc loc v | _ -> ()) d.frozen_args;
+      List.iter (fun (tys,c) ->
+        if List.length tys <> List.length d.frozen_args then fail env loc "frozen default arity";
+        same env loc "a frozen default" (subst tys e.ty) c.cty;
+        constant env sc loc c) d.frozen_cases
+  | Const c ->
+      same env loc "a constant's type" e.ty c.cty;
+      constant env sc loc c
   | Int _ -> is "an `Int`" Ty.int
   | Float _ -> is "a `Float`" Ty.float
   | Bool _ -> is "a `Bool`" Ty.bool
@@ -2260,6 +2334,7 @@ let rec globals (e : expr) =
       producer :: (List.concat_map (function Value a -> globals a | Ref _ -> []) args
       @ List.concat_map (fun (p : gen_place) -> globals p.read @ globals p.write) places)
   | Gen_step _ -> []
+  | Function_uses _ | Const _ | Frozen_default _ -> []
   | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ | Break ->
       []
   | Prim (_, es)
@@ -2652,7 +2727,7 @@ let add_ifaces env put_type put (ifaces : Iface.t list) =
         iface.types;
       List.iter
         (fun (v : Iface.value) ->
-          put env.schemes (Path.make iface.home v.vname) v.scheme)
+          put (match v.scheme.ty with Ty.Fun _ -> env.schemes | _ -> env.values) (Path.make iface.home v.vname) v.scheme)
         (iface.values @ iface.tests))
     ifaces
 
@@ -2661,7 +2736,7 @@ let add_ifaces env put_type put (ifaces : Iface.t list) =
    is all the rest of the module sees of it. *)
 let scheme_entry env (m : program) (f : fn_def) =
   match f.scheme with
-  | { ty = Fun ([], t, _, _); _ } as s when List.mem f.path m.values ->
+  | { ty = Fun ([], t, _, _); _ } as s when List.mem f.path (m.values @ m.build_values @ m.build_asserts) ->
       (env.values, { s with ty = t })
   | s -> (env.schemes, s)
 
@@ -2669,6 +2744,7 @@ let whole ~everyone (linked : program list) =
   let base =
     {
       types = Hashtbl.create 256;
+      data_types = Hashtbl.create 256;
       schemes = Hashtbl.create 1024;
       values = Hashtbl.create 64;
       generators = Hashtbl.create 64;
@@ -2686,11 +2762,13 @@ let whole ~everyone (linked : program list) =
     }
   in
   add_ifaces base Hashtbl.replace Hashtbl.replace everyone;
+  Hashtbl.iter (fun p td -> Hashtbl.replace base.data_types p td) base.types;
   let deps = Hashtbl.create 16 in
   List.iter
     (fun (m : program) ->
       List.iter
         (fun (td : Iface.type_decl) ->
+          Hashtbl.replace base.data_types td.path td;
           match td.body with
           | Dep _ | Dep_alias _ ->
               Hashtbl.replace deps td.path td;

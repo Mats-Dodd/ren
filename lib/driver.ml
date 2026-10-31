@@ -169,8 +169,12 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
   in
   List.iter
     (fun (v : Iface.value) ->
-      check v.vname v.scheme
-        (Path.Map.find (Path.make home v.vname) inferred.schemes))
+      let found = Path.Map.find (Path.make home v.vname) inferred.schemes in
+      let found = match v.scheme.ty, found.ty with
+        | (Ty.Con _ | Variant _ | Var _ | Impl _ | Errors _ | Error),
+          Ty.Fun ([], ty, _, _) -> Ty.canonical { found with ty }
+        | _ -> found in
+      check v.vname v.scheme found)
     (iface.values @ iface.tests);
   (* and so was each public member's, which is in its type's entry *)
   List.iter
@@ -588,7 +592,9 @@ let check_roots ?console ~load ~dir ~entry roots =
                ([ prelude_iface ], Homes.singleton prelude_iface.home)
                direct
            in
-           List.rev rev
+           let reached = List.rev rev in
+           if List.exists (fun (i : Iface.t) -> i.home = "shape") reached then reached
+           else reached @ [(Lazy.force (List.assoc "shape" std_modules)).iface]
          in
          let groups =
            List.map
@@ -641,7 +647,6 @@ let check_all ?(load = fun _ -> None) ~file src =
 
 (* The module the program starts in. *)
 let entry_of modules = List.nth modules (List.length modules - 1)
-let check ?load ~file src = (entry_of (check_all ?load ~file src)).prog
 let inferred ?load ~file src = (entry_of (check_all ?load ~file src)).inferred
 let schemes ?load ~file src = (inferred ?load ~file src).schemes
 let interface ?load ~file src = (entry_of (check_all ?load ~file src)).iface
@@ -652,7 +657,7 @@ let implementation ?load ~file src =
 (* The whole program in Core, the prelude first. Test code, its test
    items and the functions its tests were made, is left out, unless it's
    [for_tests]: nothing else calls it (Core Lint checks that). *)
-let link ?lint ?(for_tests = false) (modules : checked list) =
+let link ?lint ?(for_tests = false) ?(stateless = true) (modules : checked list) =
   let prelude, _, pr, pinf, whole = Lazy.force prelude in
   (* the standard library's modules, linked into every program after the
      prelude: `ren test` installs `sim`'s around each test, whether the
@@ -729,10 +734,25 @@ let link ?lint ?(for_tests = false) (modules : checked list) =
   (* which handlers a description may be is the whole program's to say,
      so a method call on one of a handler with state is refused here
      (stateless.ml), before anything runs or builds *)
-  pass "stateless" (fun () -> Stateless.check linked);
-  linked
+  if stateless then pass "stateless" (fun () -> Stateless.check linked);
+  let linked, uses_traces = pass "inferred dependency reach" (fun () -> Build_uses.program linked) in
+  let built = pass "build evaluation" (fun () -> Eval.build ~uses_traces linked) in
+  if Option.value lint ~default:false then
+    pass "build data lint" (fun () ->
+      Core_lint.programs
+        ~imports:([ Prelude.intrinsics ]
+          :: List.map (fun _ -> [ whole ]) std
+          @ List.map (fun c -> c.reachable) modules) built);
+  built
 
 let linked ?lint ?load ~file src = link ?lint (check_all ?load ~file src)
+
+let check ?load ~file src =
+  let modules = check_all ?load ~file src in
+  (* Check still builds initializers, but retains its module-checking
+     contract: description dispatch is validated by run/test/build's link. *)
+  ignore (link ~stateless:false modules);
+  (entry_of modules).prog
 
 (* A release build's program (specialize.ml): what [link] makes, with
    what `$start` reaches specialized. Core Lint checks every module of
@@ -995,6 +1015,13 @@ let types ?(lint = false) ?load ~file src =
                         after;
                     ])
             | Ast.Fn f -> [ tested f (fn_ ~name:f.name.name f) ]
+            | Ast.Top_value f -> (
+                match Path.Map.find (Ast.fn_path home f) inferred.schemes with
+                | { ty = Fun ([], ty, _, _); _ } as scheme ->
+                    [ Ty.value_signature ~names ~pub:f.pub ~name:f.name.name
+                        { scheme with ty } ]
+                | _ -> assert false)
+            | Ast.Top_assert _ -> []
             | Type ({ type_body = Dep _; _ } as td) ->
                 (* a dependency: its operations, each with its type, then
                    its members *)

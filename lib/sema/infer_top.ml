@@ -179,7 +179,7 @@ let walk ~ty ~errors ~pattern (prog : program) =
   in
   List.iter
     (function
-      | Fn f -> fn_ f
+      | Fn f | Top_value f | Top_assert f -> fn_ f
       | Type td ->
           let field (fd : Resolved.field) = ty_ fd.field_ty in
           (match td.type_body with
@@ -370,7 +370,12 @@ let value_order (env : Infer_env.env) (r : Resolve.t) (fns : fn_def list) ~is_va
             reported :=
               List.filter (fun m -> value_named m <> None) chain @ !reported;
             report env
-              (made_from_itself v.name.loc (Path.local n)
+              (if v.owner = None then
+                 Diag.make v.name.loc
+                   ~help:"break the cycle by computing one value without the other"
+                   ("build-time value cycle: " ^
+                    String.concat " → " (List.map Path.local chain))
+               else made_from_itself v.name.loc (Path.local n)
                  (List.map Path.local chain))
         | None -> ())
     values;
@@ -492,7 +497,7 @@ let check_installed (env : Infer_env.env) (r : Resolve.t) ~fns ~schemes ~withhel
                 if o.op_kind = Op_value then Some (Ast.fn_path r.home o.op_fn)
                 else None)
               td.type_ops
-        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
+        | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
       r.prog
   in
   (* a function that makes an implementation of [p] *)
@@ -887,7 +892,10 @@ let add_globals (env : Infer_env.env) ~imports ~reachable fns =
         (fun (v : Iface.value) ->
           Hashtbl.replace env.globals
             (Path.make iface.home v.vname)
-            (of_scheme env.st v.scheme);
+            (let t = of_scheme env.st v.scheme in
+             match v.scheme.ty with
+             | Ty.Fun _ -> t
+             | _ -> TFun ([], t, REmpty, REmpty));
           Hashtbl.replace env.type_params (Path.make iface.home v.vname)
             v.scheme.tparams;
           Hashtbl.replace env.params_of (Path.make iface.home v.vname) v.vparams;
@@ -1460,7 +1468,7 @@ let check_keeps_rules (env : Infer_env.env) so_far (r : Resolve.t) =
     (function
       | Type ({ type_pub = true; type_body = Fields _ | Ctors _; _ } as td) ->
           check td
-      | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Type _ | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     r.prog
 
 (* ---- the client view ---- *)
@@ -1478,7 +1486,7 @@ let client_view (env : Infer_env.env) (r : Resolve.t) =
       (function
         | Type (td : type_def) when td.type_pub ->
             Some (Path.make r.home td.type_name.name)
-        | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
+        | Type _ | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       r.prog
   in
   List.map
@@ -1916,6 +1924,8 @@ let canonical (env : Infer_env.env) so_far (f : fn_def) =
         | Calls_op c -> Calls_op { c with key = label c.key }
         | Inline_op o -> Inline_op o
         | Block { name; given } -> Block { name; given = List.map label given }
+        | Function_uses p -> Function_uses p
+        | Dependency_id l -> Dependency_id (label l)
         | Field_of p -> Field_of p
         | Ctor_of (p, c) -> Ctor_of (p, c)
         | Error_tag -> Error_tag
@@ -2522,9 +2532,13 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                 if o.op_kind = Op_value then Some (Ast.fn_path home o.op_fn)
                 else None)
               td.type_ops
-        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
+        | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> [])
       r.prog
   in
+  let build_roots = List.filter_map (function
+      | Top_value f | Top_assert f -> Some (Ast.fn_path home f)
+      | _ -> None) r.prog in
+  let values = values @ build_roots in
   let is_value (f : fn_def) = List.mem (Ast.fn_path home f) values in
   (* a key that leads back to its own type *)
   List.iter
@@ -2537,7 +2551,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                 report env
                   (Infer_msg.key_loops o.op_fn.name.loc ~owner:td.type_name.name))
             td.type_ops
-      | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     r.prog;
   let so_far =
     { schemes = Hashtbl.create 16; tables = Hashtbl.create 16; withheld = [] }
@@ -2588,7 +2602,9 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
             r.calls)
        fns);
   check_keeps_rules env so_far r;
-  let values = value_order env r fns ~is_value ~found:so_far.tables in
+  let values = value_order env r fns
+      ~is_value:(fun f -> is_value f && f.owner <> None)
+      ~found:so_far.tables in
   List.iter
     (check_test_body env so_far ~bodies:(List.map (Path.make home) bodies))
     fns;
@@ -2708,7 +2724,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
       |> List.sort compare;
     types = List.map (fun (td : Iface.type_decl) ->
         Option.value (Hashtbl.find_opt env.types td.path) ~default:td) r.types;
-    values;
+    values = List.filter (fun p -> not (List.mem p build_roots)) values;
     nodes = Path.Map.of_list nodes;
     in_scope = List.sort compare env.in_scope;
     opaque_eq =

@@ -1381,7 +1381,9 @@ let qualified env sc ((i : import), (iface : Iface.t)) (f : ident) =
   | None, None ->
       report env f.loc ~help:"if it's defined there, mark it `pub`"
         (sprintf "`%s` has no public `%s`" iface.home f.name));
-  Global p
+  match Iface.find_value iface f.name with
+  | Some { scheme = { ty = Ty.Fun _; _ }; _ } | None -> Global p
+  | Some _ -> Global_value p
 
 (* The member [f] of the type [t], written `Stack.of`, or with the type's
    module in front, `stack.Stack.of`: the type is found through scope, and
@@ -1590,7 +1592,7 @@ let lookup env sc loc ~what x =
   | Some b -> Local b
   | None -> (
       match Hashtbl.find_opt env.values x with
-      | Some (Global p as name) ->
+      | Some ((Global p | Global_value p) as name) ->
           if Hashtbl.mem env.own_tests x && not sc.fn.test then
             test_item env loc ~home:p.home x;
           if p.home = env.home then check_private env loc ~key:x x;
@@ -2544,6 +2546,15 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
           ~help:(sprintf "call it directly: `%s(...)`" f.name)
           (sprintf "a function of `%s` calls another directly" t.tid.name);
         Var (item env sc ~node:(e.node, e.loc) t f)
+    | Var (Item ({ tmod = Some m; tid } as t, f))
+      when (match Env.find_opt m.name env.modules with
+          | Some (_, iface) -> (match Iface.find_value iface tid.name with
+              | Some { scheme = { ty = Ty.Fun _; _ }; _ } | None -> false
+              | Some _ -> true)
+          | None -> false) ->
+        let _ = t in
+        let value = qualified env sc (Env.find m.name env.modules) tid in
+        Field ({ kind = Var value; loc = tyname_loc t; node = fresh sc }, f)
     | Var (Item (t, f)) -> Var (item env sc ~node:(e.node, e.loc) t f)
     | Unop (op, a, n) -> Unop (op, go a, n)
     | Binop (op, a, b, n) ->
@@ -2662,6 +2673,10 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         | None ->
             not_installed env e.loc ~written:name.name ~called:(e.loc <> name.loc);
             Unit)
+    | Con ({ qual = None; name }, [])
+      when (match Hashtbl.find_opt env.values name.name with
+            | Some (Global_value _) -> true | _ -> false) ->
+        Var (lookup env sc name.loc ~what:"value" name.name)
     | Con (c, args) ->
         let c = ctor_ref env sc c in
         Con (c, List.map (fun (l, a) -> (l, go a)) args)
@@ -2690,7 +2705,19 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         Update
           { target; base; fields = List.map (fun (f, v) -> (f, go v)) fields }
     | Field ({ kind = Var (Bare m); _ }, f)
-      when Env.mem m env.modules && is_capital f.name -> (
+      when Env.mem m env.modules &&
+           Iface.find_value (snd (Env.find m env.modules)) f.name = None &&
+           (match Iface.find_type (snd (Env.find m env.modules)) f.name with
+            | Some { body = (Dep _ | Dep_alias _); _ } -> true | _ -> false) ->
+        let i, iface = Env.find m env.modules in
+        Hashtbl.replace env.used i.alias.name ();
+        Con ({ qual = Some { tref = Named (Path.make iface.home f.name);
+                             tloc = e.loc }; name = f }, [])
+    | Field ({ kind = Var (Bare m); _ }, f)
+      when Env.mem m env.modules && is_capital f.name
+           && (match Iface.find_value (snd (Env.find m env.modules)) f.name with
+               | Some { scheme = { ty = Ty.Fun _; _ }; _ } | None -> true
+               | Some _ -> false) -> (
         (* `kv.Kv(cfg)`, which the parser makes a call of `kv.Kv`: another
            module's service, installed only where a `with` or a wiring
            does ([installed]) *)
@@ -3505,7 +3532,7 @@ let no_opaque_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Opaque { rep = t; _ }; _ } as td) ->
           Hashtbl.replace reps td.type_name.name t
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
   (* the opaque type of this module that [t] is, if it's one *)
   let opaque (t : Resolved.ty) =
@@ -3540,7 +3567,7 @@ let no_opaque_cycles env (items : Resolved.program) =
             | None -> ()
           in
           follow [ start.name ] t
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 (* A named error set can include others, but never itself, by way of
@@ -3553,7 +3580,7 @@ let no_set_cycles env (items : Resolved.program) =
     (function
       | Type ({ type_body = Errors es; _ } as td) ->
           Hashtbl.replace sets td.type_name.name es
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
   (* the module's own sets [n] includes directly, in the order written *)
   let includes n =
@@ -3596,7 +3623,7 @@ let no_set_cycles env (items : Resolved.program) =
                 (sprintf "`%s` includes itself: %s" n
                    (String.concat " → " (n :: way)))
           | None -> ())
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 (* Whether the written type [t] mentions the type parameter [name]. *)
@@ -4687,6 +4714,7 @@ let no_kept_blocks env (items : Resolved.program) =
   List.iter
     (function
       | Fn f -> fn f
+      | Top_value f | Top_assert f -> fn ~value:true f
       | Type td ->
           let field place (fd : Resolved.field) = data place fd.field_ty in
           (match td.type_body with
@@ -4798,6 +4826,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
   in
   List.iter
     (function
+      | Top_value f when f.pub -> value f
       | Fn (f : Resolved.fn_def) when f.pub ->
           handler f;
           fn_ f
@@ -4853,7 +4882,7 @@ let no_leaks env ~private_ ~groups (items : Resolved.program) =
               no_private_errors env ~private_ es
                 ~set:(sprintf "`pub type %s` includes `%s`" t)
                 ~tag:(sprintf "`pub type %s`'s error `%s` mentions `%s`" t))
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items
 
 (* What isn't used is reported once: the whole import, or one of the types
@@ -4900,7 +4929,7 @@ let dot_callees ~home (items : Resolved.program) (m, known) =
     List.filter_map
       (function
         | Type (td : Resolved.type_def) -> Some td
-        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
+        | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       items
   in
   let method_ (td : Resolved.type_def) =
@@ -5640,7 +5669,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
       (function
         | Import (i : import) ->
             Some (i, List.find (fun (m : Iface.t) -> m.home = i.path) imports)
-        | Fn _ | Type _ | Testing _ | Wiring _ | Service _ -> None)
+        | Fn _ | Top_value _ | Top_assert _ | Type _ | Testing _ | Wiring _ | Service _ -> None)
       prog
   in
   let env =
@@ -5814,7 +5843,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                     (fun (o : Parsed.op) -> (o.op_fn.name.name, kind o))
                     td.type_ops,
                 fields )
-      | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     prog;
   let first_local = Hashtbl.create 16 in
   List.iter
@@ -5868,7 +5897,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
               Hashtbl.replace first_local name.name name.loc;
               Hashtbl.replace env.types name.name
                 (Path.make home name.name, List.length td.type_params))
-      | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     prog;
   (* the sum types in scope bare, and their by-name constructors, which a
      bare `Name { ... }` can mean ([braces_name]) *)
@@ -5973,7 +6002,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
   let fns =
     List.filter_map
       (function
-        | Fn (f : Parsed.fn_def) -> Some f
+        | Fn (f : Parsed.fn_def) | Top_value f | Top_assert f -> Some f
         | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       prog
   in
@@ -6016,10 +6045,13 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
           (sprintf "`%s` is already a function in the prelude" f.name.name);
       not_an_alias env f.name)
     fns;
+  let top_values = List.filter_map (function
+      | Top_value f -> Some f.name.name | _ -> None) prog in
   List.iter
     (fun (f : Parsed.fn_def) ->
+      let p = Path.make home f.name.name in
       Hashtbl.replace env.values f.name.name
-        (Global (Path.make home f.name.name));
+        (if List.mem f.name.name top_values then Global_value p else Global p);
       if f.test then Hashtbl.replace env.own_tests f.name.name ()
       else if not f.pub then Hashtbl.replace env.own_private f.name.name ())
     fns;
@@ -6030,9 +6062,13 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
            | Type td ->
                let td, calls = type_def env td in
                (Type td, calls)
-           | Fn f ->
+           | (Fn f | Top_value f | Top_assert f) as item ->
                let f', calls, dots = fn_def env f in
-               (Fn f', [ (Ast.fn_path home f', calls, dots) ])
+               let item = match item with
+                 | Top_value _ -> Top_value f'
+                 | Top_assert _ -> Top_assert f'
+                 | _ -> Fn f' in
+               (item, [ (Ast.fn_path home f', calls, dots) ])
            | Import i -> (Import i, [])
            | Testing _ | Wiring _ | Service _ -> (* left out above *) assert false)
          prog)
@@ -6042,7 +6078,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
     (function
       | Type (td : Resolved.type_def) when not td.type_pub ->
           Hashtbl.replace private_ td.type_name.name td.type_name.loc
-      | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
+      | Fn _ | Top_value _ | Top_assert _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
   List.iter
     (function
@@ -6071,7 +6107,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                 when intrinsic.body = Builtin ->
                   Iface.join intrinsic d
               | _ -> d)
-        | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
+        | Fn _ | Top_value _ | Top_assert _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       items
   in
   let cursor_types =
@@ -6165,7 +6201,7 @@ let written (r : t) ~(other : Path.t -> string option) =
   let bodies = Hashtbl.create 16 in
   List.iter
     (function
-      | Fn (f : Resolved.fn_def) -> Hashtbl.replace bodies f.name.name f.body
+      | Fn (f : Resolved.fn_def) | Top_value f | Top_assert f -> Hashtbl.replace bodies f.name.name f.body
       | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     r.prog;
   let is_link (p : Path.t) =

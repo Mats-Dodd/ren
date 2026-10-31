@@ -3775,6 +3775,8 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
       [
         (match field with
         | Some _ -> "a field default holds pure data, known while building"
+        | None when f.owner = None ->
+            "top-level values run while building and must be pure"
         | None ->
             "an associated value is made once, when the program starts, so it \
              can't use a dependency");
@@ -3782,10 +3784,13 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
     ~help:
       (match field with
       | Some field -> sprintf "use pure data, or require `%s` at construction" field
+      | None when f.owner = None ->
+          "the build's world comes with packages; use pure data while building"
       | None -> sprintf "make it an associated function, `fn %s() uses %s = ...`"
           f.name.name dep)
     (match field with
     | Some field -> sprintf "the default for `%s` must be pure, but uses `%s`" field dep
+    | None when f.owner = None -> sprintf "the build-time value `%s` uses `%s`" (Ast.fn_name f) dep
     | None -> sprintf "the associated value `%s` uses `%s`" (Ast.fn_name f) dep)
 
 (* ---- errors (errors.md) ---- *)

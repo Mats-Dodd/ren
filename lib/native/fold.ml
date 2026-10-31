@@ -49,7 +49,11 @@ let rec lay h (l : layout) : layout =
 let var h (v : var) = { v with layout = lay h v.layout }
 
 let atom h (a : atom) : atom =
-  match a with Var v -> Var (var h v) | Fn_ptr s -> Fn_ptr (h.name s) | a -> a
+  match a with
+  | Var v -> Var (var h v)
+  | Static_data (n,l) -> Static_data (n,lay h l)
+  | Fn_ptr s -> Fn_ptr (h.name s)
+  | a -> a
 
 let atoms h = List.map (atom h)
 
@@ -88,7 +92,7 @@ let rt h (r : rt) : rt =
     | Map_entries _ | Map_keys | Map_values | Hash_fixed | Array_sort _
     | Str_lower | Char_bound _ | Str_code | Str_of_code | Str_join | Panic_str
     | Str_find | Str_has _ | Str_upper | Line_col _
-    | Str_box | Str_unbox ) as r ->
+    | Str_box | Str_unbox | Desc_same ) as r ->
       r
 
 let kept h = List.map (fun (i, a) -> (i, atom h a))
@@ -312,6 +316,16 @@ let program (p : program) : program =
     fns;
     start = name p.start;
     values = List.map (fun (v : value) -> { v with vfn = name v.vfn }) p.values;
+    static_data = List.map (fun d ->
+      let sdkind = match d.sdkind with
+        | Static_string _ as k -> k
+        | Static_scalar x -> Static_scalar (atom h x)
+        | Static_struct xs -> Static_struct (atoms h xs)
+        | Static_object (tag,xs) -> Static_object (tag,atoms h xs)
+        | Static_array (l,xs) -> Static_array (lay h l,atoms h xs)
+        | Static_map m -> Static_map {m with key=lay h m.key; value=lay h m.value;
+            entries=List.map (fun (k,v) -> (atom h k,atom h v)) m.entries} in
+      {d with sdlayout=lay h d.sdlayout;sdkind}) p.static_data;
     handlers =
       List.map
         (fun (hd : handler) ->

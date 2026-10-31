@@ -1985,7 +1985,7 @@ and parse_postfix p =
      types, so neither its cursor, node counter nor diagnostics can escape. *)
   let type_args (e : expr) =
     match e.kind with
-    | Var _ | Field _ ->
+    | Var _ | Field _ | Con (_, []) ->
         let q = { p with sink = Diag.sink (); op_defaults = None; op_params = None } in
         let adjacent = e.loc.stop = (loc p).start in
         (try
@@ -1996,7 +1996,7 @@ and parse_postfix p =
              let boundary =
                match peek q with
                | NEWLINE | DEDENT | EOF | RPAREN | RBRACKET | RBRACE | COMMA
-               | THEN | ELSE | FATARROW -> true
+               | THEN | ELSE | FATARROW | DOT -> true
                | _ -> false
              in
              if not (Diag.has_errors q.sink)
@@ -2024,6 +2024,10 @@ and parse_postfix p =
                 "take it apart with a pattern, `let (a, b) = t`; if its parts \
                  want names, make it a record"
               "a tuple's parts have no names or numbers"
+        | USES ->
+            let f : ident = { name = "uses"; loc = loc p } in
+            advance p;
+            loop (mk (Field (e, f)) start p)
         | FAIL ->
             (* `call.fail(Down)`, in a handler `over any`, which Resolve
                says it's in *)
@@ -2199,15 +2203,9 @@ and parse_primary p =
           let v = node p (Var (Bare m.name)) m.loc in
           mk (Field (v, t.tid)) start p
       | _ when t.tmod <> None ->
-          Diag.error
-            (Loc.span start (last_loc p))
-            ~help:
-              (Printf.sprintf
-                 "write one of its constructors after it, like `%s.Name`, or a \
-                  record, `%s { ... }`"
-                 (show_tyname t) (show_tyname t))
-            (Printf.sprintf "`%s` is a type, so it can't be used as a value"
-               (show_tyname t))
+          let m = Option.get t.tmod in
+          let v = node p (Var (Bare m.name)) m.loc in
+          mk (Field (v, t.tid)) start p
       | LPAREN -> con_args p start { qual = None; name = t.tid }
       | _ -> mk (Con ({ qual = None; name = t.tid }, [])) start p)
   | IDENT name ->
@@ -3757,12 +3755,40 @@ let parse_service p ~pub =
     sloc = Loc.span start (last_loc p);
   }
 
+(* Build roots use the ordinary function tree for expression checking. Their
+   item kind survives resolution so lowering keeps them apart from runtime
+   functions and legacy associated values. *)
+let parse_build_root p ~pub ~assertion =
+  let start = loc p in
+  advance p;
+  let name =
+    if assertion then
+      { name = Printf.sprintf "$assert:%d:%d" start.start.line start.start.col;
+        loc = start }
+    else ident p
+  in
+  let ret =
+    if not assertion && peek p = COLON then (
+      advance p; Some (parse_ty p))
+    else None
+  in
+  if not assertion then expect p EQ;
+  let body = parse_body p in
+  let body = if assertion then node p (Assert body) (Loc.span start body.loc) else body in
+  { pub; fn_kind = Ordinary_fn; name; tparams = []; tneeds = []; params = []; ret;
+    errors = None; uses = None; body; owner = None; overload = 0;
+    test = false; loc = Loc.span start (last_loc p) }
+
 let parse_item ~prelude p =
   p.node <- 0;
   let pub = peek p = PUB in
   if pub then advance p;
   match peek p with
   | FN | IDENT "gen" -> Fn (parse_fn p ~pub)
+  | LET -> Top_value (parse_build_root p ~pub ~assertion:false)
+  | ASSERT when pub ->
+      Diag.error (loc p) ~help:"remove `pub`" "a top-level assertion cannot be public"
+  | ASSERT -> Top_assert (parse_build_root p ~pub:false ~assertion:true)
   | TYPE -> Type (parse_type ~prelude p ~pub)
   | DEP -> Type (parse_dep ~prelude p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)

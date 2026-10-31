@@ -3595,9 +3595,19 @@ static REN_INLINE int64_t ren_map_probe_bytes(ren_map *m, uint64_t h,
 static REN_INLINE int64_t ren_map_probe(ren_map *m, uint64_t h, ren_val k,
                                         const ren_desc *kd, const ren_tenv *env,
                                         const ren_walk *w, uint64_t *slot) {
+  bool sv = m->h.nfields & REN_MAP_KEY_SV;
+  /* Build-time maps keep ordered entries and no process-seeded hashes.
+     Their nonzero placeholder marks every entry live for the usual walks. */
+  if (m->h.nfields & REN_MAP_STATIC) {
+    for (int64_t i = 0; i < m->used; i++) {
+      ren_str tmp;
+      if (ren_key_eq(kd, env, ren_map_word(&m->entries[i * m->width], 1, sv, &tmp), k, w))
+        return i;
+    }
+    return -1;
+  }
   if (m->shift == 0)
     return -1;
-  bool sv = m->h.nfields & REN_MAP_KEY_SV;
   if (sv && (kd->kind == REN_D_STR || kd->kind == REN_D_BYTES))
     return ren_map_probe_bytes(m, h, ren_str_data(k.o), ren_str_len(k.o), slot);
   uint64_t mask = ((uint64_t)1 << m->shift) - 1;
@@ -3628,7 +3638,7 @@ static int64_t ren_map_find_in(ren_map *m, ren_val k, const ren_desc *kd,
 
 int64_t ren_map_find_sv(ren_obj *m, ren_sv k, ren_obj *kd, const ren_site *site) {
   ren_map *map = (ren_map *)m;
-  if (((ren_desc *)kd)->kind == REN_D_STR && (m->nfields & REN_MAP_KEY_SV)) {
+  if (!(m->nfields & REN_MAP_STATIC) && ((ren_desc *)kd)->kind == REN_D_STR && (m->nfields & REN_MAP_KEY_SV)) {
     ren_walk w = {site, "`hash` of a NaN", true, false};
     uint64_t slot;
     const char *p = ren_sv_data(k);
@@ -3656,10 +3666,10 @@ ren_obj *ren_map_value_box(ren_map *m, int64_t i) {
 
 /* A copy of [m] with room for [extra] entries more, its removed ones
    left out, each key and value counted again. */
-static ren_map *ren_map_copy(ren_map *m, int64_t extra) {
+static ren_map *ren_map_copy(ren_map *m, int64_t extra, const ren_desc *kd, const ren_walk *w) {
   ren_map *c = (ren_map *)ren_map_new(ren_map_is_set(m));
   c->h.objs = m->h.objs;
-  c->h.nfields = m->h.nfields;
+  c->h.nfields = m->h.nfields & ~REN_MAP_STATIC;
   c->width = m->width;
   int64_t cap = m->len + extra;
   c->cap = cap < 8 ? 8 : cap;
@@ -3678,17 +3688,24 @@ static ren_map *ren_map_copy(ren_map *m, int64_t extra) {
     to++;
   }
   c->len = c->used = to;
+  if (m->h.nfields & REN_MAP_STATIC) {
+    for (int64_t i = 0; i < c->used; i++) {
+      ren_str tmp;
+      ren_val *e = &c->entries[i * c->width];
+      e[0].i = (int64_t)ren_key_hash(kd, NULL, ren_map_key_at(c, e, &tmp), w);
+    }
+  }
   ren_map_reindex(c);
   return c;
 }
 
 /* [*cell], which is to change: itself if it's unique and [taking], and
    otherwise a copy, with room for one entry more, put in the cell. */
-static ren_map *ren_map_writable(ren_obj **cell, bool taking) {
+static ren_map *ren_map_writable(ren_obj **cell, bool taking, const ren_desc *kd, const ren_walk *w) {
   ren_obj *o = *cell;
   if (taking && ren_is_unique(o))
     return (ren_map *)o;
-  ren_map *c = ren_map_copy((ren_map *)o, 1);
+  ren_map *c = ren_map_copy((ren_map *)o, 1, kd, w);
   ren_drop(o);
   *cell = &c->h;
   return c;
@@ -3792,7 +3809,7 @@ static REN_INLINE void ren_map_set_in(ren_obj **cell, ren_sv k, bool ksv, ren_sv
     kw = ksv ? (ren_val){.o = ren_sv_view(&tmp, k)} : k.s[0];
     h = ren_key_hash((ren_desc *)kd, NULL, kw, &w);
   }
-  ren_map *m = ren_map_writable(cell, taking);
+  ren_map *m = ren_map_writable(cell, taking, (const ren_desc *)kd, &w);
   if (__builtin_expect(m->used == 0, 0))
     ren_map_layout(m, kd, vd);
   m->h.objs = ren_map_objs(kd, vd);
@@ -3834,7 +3851,7 @@ void ren_map_remove(ren_obj **cell, ren_val k, ren_obj *kd, bool taking,
   uint64_t h = ren_key_hash(d, NULL, k, &w), slot;
   if (ren_map_probe((ren_map *)*cell, h, k, d, NULL, &w, &slot) < 0)
     return;
-  ren_map *m = ren_map_writable(cell, taking);
+  ren_map *m = ren_map_writable(cell, taking, (const ren_desc *)kd, &w);
   int64_t e = ren_map_probe(m, h, k, d, NULL, &w, &slot);
   /* its slot is the one the probe found it at, marked removed */
   uint64_t mask = ((uint64_t)1 << m->shift) - 1;

@@ -29,7 +29,7 @@ let rec unplaced (e : Core.expr) : Core.expr =
   let go = unplaced in
   let kind : Core.kind =
     match e.kind with
-    | ( Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
+    | ( Function_uses _ | Frozen_default _ | Const _ | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
       | Global_value _ | Intrinsic _ | Break ) as k ->
         k
     | Source_view v -> Source_view { v with value = go v.value }

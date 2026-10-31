@@ -117,6 +117,7 @@ and dict =
    key's hash, which finds a key without looking at every one. Two keys
    with one hash share a bucket. table.ml has what's done with one. *)
 and table = {
+  frozen : bool;  (** static ordered entries; indexed only on mutation *)
   entries : (t * t) Ints.t;
   buckets : int list Hashes.t;
   next : int;
