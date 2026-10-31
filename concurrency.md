@@ -275,6 +275,15 @@ waits to take an outer actor. Families form a DAG by install order, so
 the waits can't close a cycle. That's decision 10's inner-to-outer rule,
 the one handlers already have, applied to families.
 
+**The rule covers families' waits, not every wait.** A channel's
+`recv` and an `until` end when some other task acts, not when an owner
+lets go, so they can close a cycle as they can in any language: an
+actor's operation waiting on `Q.recv()` while Q's producer waits to
+take that actor ([channels.md](channels.md#actor-integration-and-wait-dependencies)).
+No effect rule forbids it, since an actor that keeps a reader is
+legitimate. `sim` finds it: every task waiting is reported as a
+deadlock, with the seed that replays it.
+
 The rule replaces three of decision 18's:
 
 - **The rule for waiting for a slot while pinning, and its `Full`
@@ -392,8 +401,10 @@ In short, from [AUDIT.md](research/structured-actors/AUDIT.md):
 
 ## Open questions
 
-- **`Async.expand`'s name and shape,** and whether it dedupes or leaves
-  that to a `Seen` handler.
+- **`Async.expand`'s name.** Its shape is settled: it doesn't dedupe
+  (a crawler keeps a `Seen` handler), and its frontier is the call's
+  own stack of the children its blocks returned, depth first, so no
+  worker ever waits to enqueue ([channels.md](channels.md#bounds-and-recursive-work)).
 
 Settled since: `at` under `per_core` ships each operation to the key's home core, and moves the task for long blocks ([runtime.md](runtime.md)). Settled while writing this: `mailbox:` keeps its name and defaults to
 64 per key; the high-water report becomes a per-key queue depth in `sim`

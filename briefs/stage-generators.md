@@ -45,6 +45,8 @@ that says it waits for the runtime core.
   "Streams: calls that answer many times". A stream is a call that
   answers many times, and every test you write of a generator's end is
   a test of the tree: cancellation down, errors up, returned means done.
+- **channels.md**: the contracts under `produce`, `merge` and `expand`;
+  this stage keeps the ones in "From channels.md", below.
 - **research/streams/experiments/e2-prototype.md** and
   **e2/prototype.diff**: a working spike of rules 1 to 4 in the
   interpreter (one-shot fibers for effectful generators, a replay
@@ -108,7 +110,8 @@ that says it waits for the runtime core.
    **`Async.expand(roots, max:) fn(x) => children`**, in the
    interpreter, written in std over `scope` and the queue `produce`
    already uses. `merge`'s sources are separate arguments; a run-time
-   list of sources is data. `expand` doesn't dedupe.
+   list of sources is data. `expand` doesn't dedupe. Both follow
+   channels.md's contracts ("From channels.md", below).
 9. **Natively:**
    - a pure generator's frame as a value: a value cursor that copies
      as data;
@@ -234,6 +237,15 @@ what's finished, and write down exactly what's missing.
    - `merge` and `expand` under `sim` across seeds: cancellation goes
      down to every producer, the first failure wins, the call returns
      only when its tasks have ended, and a journal replays;
+   - channels.md's "Required composition cases" that part one can
+     reach: a consumer exiting while its producer is blocked on a full
+     queue; cancellation racing a send or a receive (exactly one
+     outcome commits, nothing consumed twice or lost); close racing
+     blocked senders and receivers; a producer failing with values
+     buffered; one `merge` source failing while others are blocked; a
+     named generator resumed after `break` and finalized at its
+     binding's scope end; and an `expand` whose every worker returns
+     children at once, which progresses and never waits to enqueue;
    - `Fs.line_reader` under `mem_fs`: resume after `break`, a copy,
      eviction under a small `max:`, `Closed` after the `with`.
 
@@ -285,6 +297,41 @@ what's finished, and write down exactly what's missing.
    - **Docs and tooling:** README's status and roadmap row, compiler.md,
      stdlib.md's "what's built" table, the grammar.
    Fix what blocks; list the rest with its severity.
+
+## From channels.md
+
+[channels.md](../channels.md) states the contracts the queues under
+`produce`, `merge` and `expand` keep. Its obligations for this stage:
+
+- **Admission has one commit point.** A send cancelled before it has no
+  effect; after it, the queue owns the value, and the combinator
+  releases what's never consumed. The same for a receive: cancelled
+  before it commits, it consumes nothing.
+- **Terminal state is kept apart from the buffer.** Ending, failing or
+  being cancelled never needs room in a full queue, and teardown never
+  needs the departed consumer to make room.
+- **`merge`'s failure order is `produce`'s:** the first producer failure
+  the scheduler records cancels the other producers; values already
+  admitted are consumed, then the source ends with that failure. A
+  sibling's send racing the cancel counts only if it committed. If the
+  consumer exits first, the remaining values are abandoned and the
+  producers awaited, not drained. No global order across sources is
+  promised.
+- **`expand`'s frontier** (decided; record it in compiler.md):
+  - a worker's block returns its children as a value, and the call
+    appends them to its frontier: appending isn't a wait, so no worker
+    ever blocks enqueueing children, and saturation can't deadlock;
+  - the frontier is a stack, depth first, so it holds about depth ×
+    branching items, not a whole level;
+  - it's done when nothing is running and the frontier is empty;
+  - its memory is the program's own, the arrays its blocks returned;
+    there's no `pending:` bound, and nothing is ever dropped.
+- **Name each bound for what it bounds:** `cap:` buffered values, `max:`
+  running workers, `mailbox:` queued calls per key.
+
+Where channels.md is a proposal beyond this (general channel close
+rules, selection, endpoint capabilities), it isn't this stage's: don't
+build it.
 
 ## The interpreter and native
 
@@ -362,6 +409,9 @@ Record these in the spec; don't reopen them.
 - **`merge` takes its sources as arguments** and runs a producer per
   source into one bounded queue; **`expand` doesn't dedupe** (a crawler
   keeps a `Seen` handler).
+- **`expand`'s frontier is the call's own stack of returned children,**
+  depth first, never a wait; **`merge` consumes what was admitted before
+  it reports the first failure** ("From channels.md").
 - **Resources are families;** proved on `Fs` here, the rest of std in
   stage 12.
 - **No comprehension syntax, no async iterator, no affine cursors, no
