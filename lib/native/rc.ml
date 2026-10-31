@@ -1502,7 +1502,13 @@ let find_takes fi (body : block) =
    Either is lent only if its own variable never changes. Borrow inference
    (borrow.ml, [consumed]) doesn't see these parts: a lent read that's
    kept is counted again where it's kept, as an owned read was, and
-   doesn't make what it's read from owned. *)
+   doesn't make what it's read from owned.
+
+   Of the checks below, [ssa x], [taken] and [settled] aren't what makes
+   a lent read sound; they're a second guard. Mem IR copies a `var` into
+   a `let` before it reads it, so what a read is of never changes anyway,
+   and Perceus counts a part again where its parent dies before it, a
+   take included. *)
 let lent_reads fns (f : fn) =
   let fi = analyze fns f in
   let ssa (v : var) = not (Ids.mem v.id fi.mutables || Ids.mem v.id fi.slots) in
