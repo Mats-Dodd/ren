@@ -35,7 +35,13 @@ A world dependency (L1 in [layers.md](layers.md)) ships a real implementation, a
 Ren borrows mature components where the work is decades of hardening. A borrowed component may compute, but it may not reach the world on its own: its I/O, clock, randomness and allocation are supplied by Ren, so simulation and replay still hold.
 
 **4. Stable things go in `std`. Moving things go in `std.x`.**
-`std` comes with a compatibility promise. A domain that changes faster than that promise can absorb (cloud APIs, Kafka clients, YAML edge cases, HTTP/3) goes in `std.x`, a staging area of ordinary packages, or stays out. `golang.org/x` and Effect's `unstable` modules are the models.
+`std` comes with a compatibility promise. A domain that changes faster than that promise can absorb (cloud APIs, Kafka clients, YAML edge cases, HTTP/3) goes in `std.x`, or stays out. `golang.org/x` and Effect's `unstable` modules are the models.
+
+How `std.x` is versioned (decided on 2026-10-30):
+
+- **It ships with the toolchain and shares its version.** There's nothing to pin apart, so no skew between `std` and `std.x`; `golang.org/x`'s separate versions are the mistake avoided, Effect v4's single version the model.
+- **Stability is per declaration.** Every `pub` item in std is `stable` or `experimental`; only experimental ones may change between releases. Using one warns, and `ren.toml` can make that an error for a package that promises stability. `std.x` is where the mostly experimental modules live, and an experimental item may also sit in a stable module, so `std.fs` can grow without a detour.
+- **Promotion keeps the declaration.** When `std.x.http2` becomes `std.http2`, its declarations move and the old path stays one release as a deprecated re-export. A copy is keyed by its declaration, not its path (module-build.md, "Incremental by construction"), so promotion rebuilds nothing.
 
 ---
 
