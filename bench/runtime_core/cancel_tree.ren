@@ -1,0 +1,16 @@
+import sim
+
+fn main() uses Console =
+  with sim.scheduler(1) in
+    with sim.clock() in
+      cancel_tree()
+
+fn cancel_tree() uses Console, Async, Clock =
+  print(attempt Async.timeout(Duration.ms(5)) fn() =>
+    Async.scope fn(inner) =>
+      inner.spawn fn() =>
+        Clock.sleep(Duration.seconds(60))
+        print("never: the inner task")
+      Clock.sleep(Duration.seconds(60))
+      print("never: the outer task"))
+  print("after")

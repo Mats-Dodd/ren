@@ -1,0 +1,11 @@
+import store.{Counter}
+import unrelated
+
+dep Counters = Actors<Str, Counter>
+
+fn main() uses Console, Async, Random =
+  print(unrelated.unrelated(0))
+  with actors(store.counter) as Counters in
+    Counters.at("a") fn() =>
+      Counter.add(1)
+      print(Counter.read())

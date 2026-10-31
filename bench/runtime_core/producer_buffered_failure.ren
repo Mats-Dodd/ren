@@ -1,0 +1,11 @@
+fn produce() ! Broken uses Send<Int> =
+  Send.send(1)
+  Send.send(2)
+  fail Broken
+
+fn consume() ! Broken uses Console, Async =
+  try Async.produce(cap: 2, fn() => try produce()) fn(items) =>
+    for x in try items
+      print(x)
+
+fn main() uses Console, Async = print(attempt consume())

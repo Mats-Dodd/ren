@@ -178,3 +178,15 @@
   (glob_files generators/*.sh)
   (glob_files generators/*.pending)
   generators/stages))
+
+; Step 0's runtime-core scaffolding. Native feature tests remain explicit
+; skips in runtime_core.t until c1..c6; the comparator and reference
+; fixtures run now.
+(cram
+ (applies_to runtime_core)
+ (deps
+  %{bin:ren}
+  runtime_core/conformance.py
+  (glob_files runtime_core/*.ren)
+  (glob_files runtime_core/edit/generic/*.ren)
+  (glob_files runtime_core/edit/family/*.ren)))

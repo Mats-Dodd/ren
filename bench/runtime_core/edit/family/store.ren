@@ -1,0 +1,8 @@
+pub dep Counter =
+  add: fn(n: Int)
+  read: fn() -> Int
+
+pub handler counter(key: Str) for Counter =
+  var value = 0
+  add(n) => value += n
+  read() => value

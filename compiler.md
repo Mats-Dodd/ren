@@ -14540,6 +14540,1005 @@ Choices the documents don't make, made here:
 | 4 | f3682f8 | `keys.index(s)`: to_mem.ml's `call` lowers it, in a release build, on an array literal of string literals or a `let` of one, as `index_match`, the string `match` step 3 hashes, and a `let` only hashed `index`es read isn't made (`only_indexed`); examples/just's recipe choice and line classification as `match`es on lists and strings, its tests unchanged; stdlib.md's `index`; the keyword kernel's `index` form, at the `match`'s speed (RESULTS.md) | step 5 |
 | 5 | 3da6198 | the review (above): bench/patterns' nested.ren and index_blocks.ren, every build; the README's status and roadmap row; "Where this stage may differ" completed | the DAG's further columns and a length switch; NEON measured; language.md's table |
 
+## Runtime core stage
+
+The plan for [briefs/stage-runtime-core.md](briefs/stage-runtime-core.md),
+part one: one core. **Step 0 specifies and measures; none of the new
+language, binary journal, core, frames or drivers is built by this
+step.** `runtime.md` fixes the boundary. The interpreter is the
+reference, including its order of scheduling points, tape draws,
+errors and cancellation. The native build must meet that reference,
+not change it to fit native code. Steps 1 to 6 turn on `c1` to `c6`, in
+order; step 7 makes the edit check a required gate. The test and
+measurement files say what has actually run.
+
+### The boundary and the files
+
+The core is C and does no I/O, reads no clock, creates no threads, and
+never walks a Ren value. Drivers, the host loop, setup and `finally`
+are Ren. The core runs program code only to resume a task's frame or
+start its dispatcher, or calls a leaf with an empty dependency and
+error row (`ren_carry` and `until`'s condition). A leaf cannot call a
+core verb. A verb needing setup or cleanup returns work to the caller's
+task; it must not run that work as a callback under a core lock.
+
+| File, under `lib/native/runtime/` | Owns |
+|---|---|
+| `ren_core.h` | the public call header, carry table, frame convention, opaque handles, verbs and nine host functions below |
+| `ren_core_internal.h` | private tasks, scopes, instance wait lists, slot state, family maps and ready queues |
+| `ren_core.c` | core lifetime, call slots, submit, cancel, reply and delivery |
+| `ren_sched.c` | the one-core `single` and `sim` policies, point dispatch, task word, park and wake, progress counter |
+| `ren_frames.c` | the one frame-stack implementation, overflow chunks, spare and trampoline |
+| `ren_instances.c` | take/release/retake, `until`, queue admission, dispatch and terminal state |
+| `ren_family.c` | descriptor-keyed maps, incarnations, pin reservations, eviction choice, drain and rule 3's backstop |
+| `ren_order.c` | binary order records, through the host's leaf `journal` hook |
+| existing `ren_rt.h`, `ren_rt.c` | the existing value representation, count and allocation implementation; the core includes or calls these, never copies them |
+
+These filenames describe the implementation split; they add no
+whole-program unit of compilation. Debug builds compile the core once
+as ordinary runtime units, keeping system headers out of generated
+`REN_UNIT` units. Release may include the same sources in its runtime
+translation unit. There is exactly one definition of each runtime
+symbol in either link. Ren drivers and the host loop belong in new std
+modules, not C driver units copied out of the experiment. Linux's first
+real driver is epoll presented as completion, not io_uring. The second
+OS driver and all multicore policies are outside this part.
+
+**One count, one allocator, one stack.** A task's owned reference uses
+`ren_obj`'s existing eight-byte header and the existing dup/drop entry
+points. The core may count its own tasks but cannot inspect or count
+body fields: `ren_carry.drop` is emitted language code. Runtime control
+allocations and frame chunks go through the existing allocation and
+free paths; there is no copied experimental heap or second free list.
+The task's current-heap pointer is installed on entry to that task and
+restored on leaving it. The frame-stack state is a field of the core's
+task, owned by `ren_frames.c`; generated code calls its bump/grow and
+retire operations. It is not also held in an independent `ren_rt.c`
+stack. This stack of suspended calls is distinct from the removed
+object-placement optimization called “Frames” in The runtime model.
+Single-core task/value counts remain local; host reply threads publish
+opaque replies to the inbox and never execute a Ren drop or allocate
+from a running task's heap.
+
+### The record and the carry table
+
+The C schema is runtime.md's, with these offsets asserted in the C
+harness. On disk every field is encoded explicitly, little-endian;
+never serialize a C struct or its padding.
+
+```c
+typedef struct ren_call_header {
+  uint64_t id;             /* 0: slot in high 32 bits, generation in low 32 */
+  uint8_t kind;            /* 8: Call=0, Post=1, Cancel=2, Reply=3 */
+  uint8_t state;           /* 9: Done=0, Cancelled=1, meaningful for Reply */
+  uint16_t flags;          /* 10: zero, reserved */
+  uint32_t to;             /* 12: 0 world; otherwise runtime family handle */
+  uint32_t task;           /* 16: runtime task id; 0 for no waiter */
+  uint32_t lane;           /* 20: 0 in this part */
+  uint32_t shape;          /* 24: link-filled carry slot, never in cached C */
+  uint32_t len;            /* 28: body's length in this carrier */
+} ren_call_header;         /* 32 B */
+
+typedef struct ren_carry {
+  uint32_t shape;
+  uint32_t size;
+  uint64_t shape_hash;
+  uint64_t (*hash)(const void *v);
+  bool (*eq)(const void *a, const void *b);
+  void (*drop)(void *v);
+  size_t (*encode)(const void *v, uint8_t *out, size_t cap);
+  bool (*decode)(const uint8_t *in, size_t len, void *out);
+} ren_carry;
+
+typedef struct ren_record {
+  ren_call_header h;
+  void *body;                      /* not part of the 32 B header */
+  const ren_carry *carry;          /* not serialized */
+} ren_record;
+typedef ren_record ren_reply_t;    /* C function and type names cannot collide */
+```
+
+`kind`, `state` and all wire tags above have fixed explicit values.
+A request's state is zero. A cancel carries the original id, no body
+and no new waiter. A post has no reply waiter; admission can still
+park its posting task. The operation is the body's sum tag. There is
+no operation-number field, defect kind, buffer-return kind or “stream
+reply”. An original call gets one reply even after cancellation.
+
+In memory `len` is `carry->size`; the body is the language value or
+its borrowed request representation. Serialized, `len` is the encoded
+byte count, and pointers do not cross the boundary. A borrowed `inout`
+buffer is a lease kept live through the original reply. `ACCEPTED`
+transfers the reply body to the core; `RELEASE` leaves its disposal to
+the driver. `ren_reply` never frees a rejected body's buffers itself.
+Generation zero is invalid. A slot begins at generation 1 and advances
+when delivery retires it; generation checks and state transitions are
+one CAS. Exhausting generation `UINT32_MAX` retires the slot permanently
+rather than permitting an old id to become live again after wrap.
+IDs are runtime data, not constants embedded in generated declarations.
+
+A compiler-emitted `ren_carry_<shape-hash>` is derived from `ren_desc`;
+the core sees only this function table. Hash and equality are the
+language's unseeded key operations. The C map may seed its buckets
+without changing the key's hash or any tape draw. `encode(v,NULL,0)`
+returns the required size; insufficient capacity returns that size
+without writing a partial value. `decode` must consume exactly `len`,
+construct a valid owned value on success, and leave no live partial
+value on failure. Drop takes that one owned value. The recorder, not
+the core, invokes encoding to make world content.
+
+Carry and dispatcher symbols are copies keyed by canonical shape hash,
+merged once at link. A dispatcher takes an opaque installed handler
+and a typed body, matches its operation tag in generated Ren code and
+starts that operation's frame. It has no program-wide operation index.
+The link unit fills each carry's small shape slot and registers the
+shape/name tables; all cached references are relocations to symbols.
+Hash collisions between distinct canonical shapes fail the link with
+the two names, rather than silently sharing a carry.
+
+### The core's C verbs
+
+These are signatures to implement, not additional public Ren
+primitives. Opaque `ren_core`, `ren_task`, `ren_scope`, `ren_instance`,
+`ren_queue`, `ren_family`, `ren_wait` and `ren_frame` are declared in
+`ren_core.h`. A `ren_site` is a declaration's local resume-site
+entry. `ren_owned` pairs the existing `ren_val` language
+slot with its emitted carry (whose input is the address of that slot),
+not a second value representation. Larger values and private closure
+payloads are boxed into that slot by the language. A private closure
+carry supplies drop but its encode/decode report unsupported; it is
+never journal content. The task supplies its current core;
+program code cannot hold a host core handle.
+
+Every possibly parking verb uses an explicit frame-owned `ren_wait`.
+It is initialized once, survives spurious wakes, and owns the result
+until consumed. `ren_action` is a small control result:
+`READY`, `WAIT`, `MAKE`, `FINISH`, `ABSENT`, `CLOSED`, `NO_ROOM`. `READY` means
+the verb's output is initialized, `WAIT` means retry/resume through the
+same waiter, and the others are described below. Cancellation is a
+task completion channel and never an ordinary error a Ren `attempt`
+can catch. A typed error result is an opaque language value in the
+waiter; C never tests its tag. The separate `ren_finish_kind` tells
+the core whether to propagate a first failure/cancel siblings, without
+examining that payload. The task's language entry adapter supplies the
+discriminator; cleanup receives the same discriminator alongside its
+opaque reason. Success/error/cancel cannot be inferred from a Ren tag.
+
+```c
+typedef struct { ren_val value; const ren_carry *carry; } ren_owned;
+typedef enum { REN_OK, REN_ERROR, REN_TASK_CANCELLED } ren_finish_kind;
+typedef enum { REN_READY, REN_WAIT, REN_MAKE, REN_FINISH, REN_ABSENT,
+               REN_CLOSED, REN_NO_ROOM } ren_action;
+
+/* A waiter is frame-owned; dispose only after withdrawal/completion. */
+void ren_wait_init(ren_wait *);
+void ren_wait_dispose(ren_task *, ren_wait *);
+
+/* Work tree. A scope/body outcome is language-owned opaque data. */
+ren_scope *ren_scope_open(ren_task *, uint32_t max, ren_site *);
+ren_action ren_spawn(ren_task *, ren_scope *, const ren_fdesc *,
+                     ren_owned captures, ren_wait *);
+ren_action ren_scope_wait(ren_task *, ren_scope *, ren_wait *);
+void ren_scope_cancel(ren_task *, ren_scope *);
+void ren_scope_close(ren_task *, ren_scope *);
+bool ren_cancelled(const ren_task *);
+void ren_task_finish(ren_task *, ren_finish_kind, ren_owned outcome);
+void ren_notify(ren_task *);              /* caller holds a reference */
+ren_action ren_park(ren_task *, ren_wait *);
+ren_action ren_point(ren_task *, ren_site *, uint32_t reason, ren_wait *);
+ren_action ren_yield(ren_task *, ren_site *, ren_wait *);
+ren_action ren_tick(ren_task *, ren_site *, ren_wait *);
+uint32_t ren_worker(ren_task *);           /* an observation, journaled */
+
+/* State. Leaf condition: no dependencies, errors, waits or core calls. */
+typedef bool (*ren_condition)(const void *state, const void *captures);
+ren_instance *ren_instance_open(ren_task *, ren_owned installed, bool exclusive,
+                                bool shared);
+ren_action ren_take(ren_task *, ren_instance *, ren_wait *);
+void ren_release(ren_task *, ren_instance *);
+ren_action ren_retake(ren_task *, ren_instance *, ren_wait *);
+ren_action ren_until(ren_task *, ren_instance *, ren_condition,
+                      const void *captures, ren_wait *);
+void ren_instance_close(ren_task *, ren_instance *);
+
+/* Owner queues, not application channels' value buffers. */
+ren_queue *ren_queue_open(ren_task *, uint32_t bound);
+ren_action ren_queue_push(ren_task *, ren_queue *, ren_record *, ren_wait *);
+bool ren_queue_next(ren_task *, ren_queue *, ren_record *out);
+void ren_queue_complete(ren_task *, ren_queue *, uint64_t id);
+ren_action ren_queue_drain(ren_task *, ren_queue *, ren_wait *);
+void ren_queue_cancel(ren_task *, ren_queue *);
+void ren_queue_close(ren_task *, ren_queue *);
+
+/* World: one outstanding world call per task. */
+ren_action ren_submit(ren_task *, ren_record *, ren_wait *);
+void ren_cancel_call(ren_task *, uint64_t id);
+void ren_panic(ren_task *, const uint8_t *where, size_t where_len,
+               const uint8_t *msg, size_t msg_len);
+```
+
+A spawn transfers owned captures only once it admits the new task; it
+waits while the scope is at `max`. The scope retains the owner's frame
+until the last child ends. Closing requires the body and all tasks to
+have ended. Scope errors select the interpreter's first error, cancel
+the siblings and join them; subsequent failures produce the same
+warnings. `ren_wait` holds an explicit completion kind and opaque owned result;
+replacing/releasing that result calls its carry drop. `scope_wait`
+cannot infer completion from an empty run queue.
+`ren_release` mid-operation preserves the dynamic operation-depth
+information so `retake` restores exactly what the interpreter holds.
+`until` registers the waiter and tests while holding the instance; the
+release path tests conditions under the same exclusion. No lost wake
+can occur between checking, letting go and parking.
+
+`single` gives the first satisfied `until` waiter priority, then the
+first queued caller. `sim` makes all eligible waiters/callers runnable
+and lets the tape choose among them and new arrivals, without granting
+the instance to several tasks. An admission commits the ownership of a
+payload exactly once: cancel before commit leaves it with the sender;
+after commit the queue consumes, executes or drops it. A later cancel
+cannot turn an accepted post into “not transferred”. Channel values
+and runtime envelopes need not share storage. Closure, failure and
+producer completion are terminal state independent of queue capacity.
+A drain waits for the executing operation as well as queued work;
+a generic channel's teardown does not wait for an abandoned buffer to
+be consumed. Applicable channels.md composition cases remain required.
+
+A family's data policy has `max`, `mailbox`, sample count and `chaos`;
+its map uses the key carry. `ren_dispatch` is a `ren_fdesc` for the
+generated dependency dispatcher. `ren_work` is a frame-owned result
+containing a reservation token, the opaque key/installed handler,
+setup or cleanup closure, and the ending discriminator plus opaque
+reason. C carries these without entering the closure. `ren_family_entry` contains a
+borrowed key, incarnation and use stamp; `ren_family_counts` contains
+live, made, evicted and high-water counters.
+
+```c
+typedef struct { uint32_t max, mailbox, sample; bool chaos; } ren_family_policy;
+typedef ren_fdesc ren_dispatch;
+typedef struct { uint64_t live, made, evicted, high_water; } ren_family_counts;
+
+ren_family *ren_family_open(ren_task *, const ren_carry *key,
+                            const ren_dispatch *, ren_owned maker,
+                            ren_family_policy, ren_site *);
+ren_action ren_family_pin(ren_task *, ren_family *, void *owned_key,
+                           ren_wait *, ren_work *out);
+/* Same pin, but never waits for capacity while holding a partial set. */
+ren_action ren_family_pin_try(ren_task *, ren_family *, void *owned_key,
+                               ren_wait *, ren_work *out);
+bool ren_family_fits(ren_task *, ren_family *, const void *const *keys,
+                      size_t count);
+ren_action ren_family_wait_room(ren_task *, ren_family *, ren_wait *);
+ren_action ren_family_install(ren_task *, ren_family *, uint64_t token,
+                               ren_owned installed, ren_owned finally);
+void ren_family_make_failed(ren_task *, ren_family *, uint64_t token,
+                             ren_finish_kind, ren_owned failure);
+void ren_family_unpin(ren_task *, ren_family *, uint64_t token, bool use);
+ren_action ren_family_post(ren_task *, ren_family *, void *owned_key,
+                            ren_record *, ren_wait *, ren_work *out);
+ren_action ren_family_visit(ren_task *, ren_family *, const void *key,
+                             ren_wait *, ren_work *out);
+ren_action ren_family_evict(ren_task *, ren_family *, const void *key,
+                             ren_wait *, ren_work *out);
+void ren_family_finished(ren_task *, ren_family *, uint64_t token);
+size_t ren_family_list(ren_task *, ren_family *, bool evictable_only,
+                       ren_family_entry *out, size_t cap);
+ren_family_counts ren_family_count(ren_task *, ren_family *);
+ren_action ren_family_close(ren_task *, ren_family *, bool cancelled,
+                             ren_wait *, ren_work *out);
+```
+
+Pin, try-pin and post take an **owned key representation**, prepared
+by typed language code (including dup where the caller retains it),
+not a borrow into a caller's frame. On the waiter's first invocation
+this ownership moves into its key slot; retries use that same slot and
+never transfer it twice. On insertion the core moves `key_carry.size`
+bytes into the map's allocated key slot; raw movement of an owned
+representation needs no value walk. On an existing-key hit it drops
+the now-unneeded duplicate through the key carry. No extra carry `dup`
+function is invented, and memcpy of a *borrowed* key never acquires
+ownership. `NO_ROOM` keeps the untransferred key in the waiter for retry
+or disposal. Visit, evict and `fits` are borrowed lookups that do not
+insert. Disposing a withdrawn/completed waiter drops any key/outcome
+it still owns through its carry; one with a pending world lease cannot
+be disposed until the original reply releases that lease.
+
+`MAKE` reserves an absent key: the calling task executes its maker,
+then installs or reports failure through the token. Concurrent pins
+wait for that reservation's outcome; none runs a duplicate maker.
+`FINISH` reserves an eviction or end: the calling task runs the
+returned `finally`, then calls `finished` and retries its pending pin,
+post or close. Cancellation of that task still resolves or withdraws
+its reservation during cleanup. Tokens include a generation; using a
+stale token is refused. `ABSENT` is a visit/evict miss, with no setup.
+`CLOSED` produces the interpreter's closed-family panic, at the Ren
+call site, not a new typed failure.
+
+The key's mailbox survives its instance's eviction; a key with mail
+or an executing call cannot be evicted. Close drains accepted mail,
+then returns finalizers in reverse creation order. Cancel drops queued
+mail, cancels running deliveries and then finalizes innermost families
+first. The core's dispatch of a queued call starts a frame on that
+family's owned task. A list is copied by the caller through language
+code for the key type; borrowed keys cannot outlive the operation that
+lists them.
+Time-based idle policy receives time as a world observation; no family
+verb reads a host clock.
+
+`at_all` is language code over pin: sort/deduplicate with the language's
+key order, reject more than `max` keys, and check that the entire set
+fits before starting. Use `pin_try`, which returns `NO_ROOM` rather
+than waiting for capacity, for every key. If setup/eviction lets another
+task run and a later key no longer fits, undo every acquired pin without
+a use stamp, then wait holding nothing and retry the entire set. On
+error/cancel also undo the partial set. `family_fits` counts busy keys
+outside the requested set against its full capacity; `wait_room`
+registers/rechecks under the family's admission lock. This is the
+reference's `hold` protocol, not ordinary sequential blocking pins:
+two disjoint sets could otherwise each hold one slot of a full family
+and wait forever for another. The successful held set is released in
+sorted acquisition order, as the reference does. Partial rollback releases in reverse acquisition
+order with `use=false`, preserving use stamps; successful exits use
+`use=true`. The carry stays runtime.md's seven operations; do not
+add comparison to it just for this combinator. The task's held-family
+stack includes install order and the `at_all` set. Every family entry checks rule 3:
+no reach to a held family or an inner one, except an `at` explicitly
+selecting a key in that held set. A miss panics with the interpreter's
+message, including through helpers. The check precedes setup, mailbox
+admission and waiting, not merely a possibly contended take.
+
+### The nine host functions and the model rules
+
+```c
+ren_core *ren_start(const ren_config *, const ren_fdesc *main,
+                     const ren_host *, void *ctx);
+void ren_thread_init(ren_core *, uint32_t worker, void *stack, size_t bytes);
+ren_run_result ren_run(ren_core *, uint32_t worker, uint32_t steps);
+bool ren_poll_call(ren_core *, uint32_t worker, ren_record *out);
+ren_reply_result ren_reply(ren_core *, const ren_reply_t *);
+void ren_stop(ren_core *);
+void ren_kill(ren_core *);
+void ren_free(ren_core *);
+uint64_t ren_progress(const ren_core *, uint32_t worker);
+```
+
+`ren_config` contains policy (`single` or `sim`), seed, step budget,
+slot/queue bounds, stack byte limit and opaque root arguments. Its
+worker count is one for this part, even when `sim.worker()` reports a
+virtual worker 0 or 1. `ren_run_result` is `RUNNING`, `IDLE`, `DONE`;
+`ren_reply_result` is `ACCEPTED` or `RELEASE`. The completion status
+and frame status have separate C enum names.
+
+`ren_host` supplies leaves with these signatures:
+`void wake(void *ctx,uint32_t worker)`,
+`bool answer_now(void *ctx,uint32_t worker,const ren_record *,ren_reply_t *)`,
+`void *pages(void *ctx,size_t bytes)` and
+`void journal(void *ctx,const uint8_t *,size_t len)`.
+The optional `pages` hook follows the earlier host ABI sketch: it may
+return NULL and grants monotonic pages which are never individually
+undone (for a growing hosted memory). It is unused by this native
+one-core part, as in the experiment. All native allocations and frees
+use the one existing `ren_rt` allocator; no teardown sentinel, separate
+page allocator or unpaired free is introduced. Null `answer_now` means queue the call. Wake is a
+sticky, idempotent permit: waking before the driver sleeps is enough.
+None of these hooks calls the core recursively. The default Ren host
+sets an 8 MiB native stack explicitly and passes its bounds at init.
+`progress` is the number of completed task resumptions, incremented
+monotonically; the Ren watchdog compares it over world clock samples.
+`ren_free` requires drivers quiescent and no possible future replier;
+`kill` does not make it sound to free a lent buffer still held by C.
+
+The op-slot protocol is SPEC §B with MODEL.md's corrections, not the
+experimental source as a template. Slots are `FREE`, `ISSUED`,
+`PULLED`, `CANCEL_UNPULLED`, `CANCEL_PULLED`, `REPLIED`. Inline replies
+use the same logical delivery and journal path as queued replies.
+A task word is `QUEUED`, `RUNNING`, `PARKED`, `DONE` plus `NOTIFIED`.
+Spurious wakes inspect the waiter and park again while its call is
+out. The eight rules are all required, including on a single core
+whose host has two concurrent repliers:
+
+1. A waker takes a task reference before making its condition true,
+   stores the condition/result, notifies, then drops the reference.
+   Delivery, the last child, instance handoff and `until` all do this.
+2. A retraction enqueues its `Cancelled` reply and wakes its worker.
+3. Stop sets cancellation and notifies every live task, including a
+   running one between its last check and park, as well as cancelling
+   outstanding slots. Walking only parked tasks is insufficient.
+4. Only delivery frees an op, including inline/retracted delivery;
+   cancel never frees it.
+5. Reply and cancel each compare generation with state in the same CAS.
+6. Park announces itself, then rechecks inbox, ready work and completion;
+   a publisher makes work visible before checking/waking the parker.
+7. A cancelled task waits for its original reply before it returns its
+   lent buffers. Only a reply without a waiter is released.
+8. A contended take rechecks under the wait-list lock, and handoff uses
+   the same lock.
+
+The C tests retain the model's named cases and mutants: CALL, FINALLY,
+RETRACT, RETRACT2, DUPS, INLINE, INST, PING, PINGY, STOPS and SPUR;
+missing references at all four wake sites, missing retraction wake,
+missing stop walk/parked-only stop, double-free P4, stale reply and
+stale cancel P3, notify-before-store, park-without-recheck,
+cancel-without-reply and take-without-recheck. Each rule-off build
+must fail its intended invariant, not merely exit unsuccessfully.
+ASan/UBSan check the harness and core, TSan exercises two reply threads.
+The FizzBee model is sequentially consistent and is not evidence that
+the implementation's atomics have correct memory orders.
+
+### Coloured functions, frames and points
+
+A plain function keeps today's direct C convention. A coloured copy
+has a named frame containing its arguments/evidence, state and only
+locals live across a possible wait, and a resume switch. Debug colours
+conservatively by inferred row; release colours per specialized copy
+and selected scheduler. Colour is an interface fact every caller
+records. Shared/exclusive is an instance bit in debug and an explicit
+copy-key component in release; it never leaks into an unrelated
+operation's generated code through a global table.
+
+```c
+typedef struct { uintptr_t status; uint64_t value; } ren_ret;
+typedef ren_ret (*ren_resume)(ren_task *, ren_frame *, char *sp, uint64_t in);
+struct ren_frame {
+  ren_resume resume;
+  ren_frame *parent;
+  uint32_t state, flags;
+  char *sp;
+};                                      /* 32 B on 64-bit targets */
+typedef struct ren_fdesc {
+  ren_resume enter;                      /* frame argument is the parent */
+  ren_resume resume;                     /* frame argument is this frame */
+} ren_fdesc;
+```
+
+Each function emits an entry adapter and a resume function with this
+same four-argument/two-word-result convention. The entry adapter bumps
+**its own** frame from `sp`, unpacks a borrowed argument packet from
+`in`, and enters the fresh body. Its frame size is a private constant.
+The packet need live only during entry; any retained arguments are
+moved/borrowed into the allocated frame before entry returns. Callers
+never use `sizeof(callee_frame)` or carry a callee frame size. This
+adapts X1's illustrative caller-bumps sketch to runtime.md's later
+callee-bumps incremental rule. A debug block/evidence entry points to
+`ren_fdesc`, and a plain adapter returns done with no frame bump.
+Release can inline the entry adapter without making its frame size an
+uncaptured dependency: inlining records its body/layout fact.
+
+`ren_ret` is a 16-byte C struct on the native 64-bit targets. Clang
+returns it in the platform ABI's two registers; tcc can implement the
+same C signature by a hidden result pointer. Accept and measure that
+cost, as X1 did; never emit a second tcc convention. `value` carries
+one language slot (float bits by bitcast, a scalar or a value pointer);
+a wider result is an owned language aggregate referenced by that slot.
+Done/pending are control status, while typed errors and cancellation
+retain their existing language/internal completion representation.
+
+Run immediate children as ordinary nested C calls with `sp` in a C
+local. Spill live locals and write `resume`, `parent`, state and saved
+`sp` on the pending path only. Only the innermost suspender stores the
+task's top frame. A completed child returns its value in the result,
+not through a task-global result cell. After a reply the trampoline
+resumes that innermost frame; done retires its frame/chunk and resumes
+the saved parent with the value, pending returns to the scheduler.
+There is no root re-poll, recursive continuation chain or `musttail`.
+Generation checks happen before identifying a frame for a reply; no
+external driver holds a bare frame pointer as a continuation.
+
+Frame slots are aligned for the existing language layouts. Release
+computes each nonrecursive suspending chain's bound, capped at 256 B
+inline; a recursive/unknown chain uses overflow. Debug uses a 256 B
+inline bound. Overflow chunks grow geometrically up to 64 KiB, or the
+size needed for one larger frame. Keep one emptied spare while running;
+release it when parking. A first-in-chunk flag handles retirement both
+on the immediate-return path and in the trampoline: X5 found that
+retiring only on resume leaks immediate-return chunks. Both stacks
+obey the same byte limit; exact recursion depth is not meaning. Pulled
+recursive generator stacks and all generator lowering remain the
+other stage's work.
+
+**Points are separate from colour.** The authoritative inventory is
+Sched.wait, Sched.point, instance sharing/take/release and tick in
+`lib/eval/sched.ml`, and the operation-entry predicate in eval.ml.
+Factor a common front-half point classification over Core calls and
+shared-exclusive instance metadata, used by the interpreter's entry
+path and native lowering. Do not replace the reference scheduler or
+add loops/backedge polls. It classifies: actual world waits, `until`,
+yield, tick, scope join, full-scope spawn, queue room, contended takes,
+shared-exclusive operation entry before the call, and shared-instance
+`release`/retake exactly where the reference does. An inline answer
+must not gain an actual-wait event; `sim`'s explicit entry point still
+exists wherever the interpreter has one.
+
+Lower a point once, before its side effect, with a saved “already
+passed” state so resumption never draws again. `sim` includes the
+current task in its ordered eligible queue, uses the reference's
+splitmix64 arithmetic and bounded-choice reduction, and advances
+virtual time only when no task can run. `single` keeps the reference's
+FIFO/yield/tick semantics. In particular, the brief's budgeted-yield
+description cannot replace today's interpreter yield with a no-op:
+that would change order. Random remains the separately seeded per-task
+stream; worker draws happen on first observation, not spawn.
+
+A resume-site entry is `(declaration symbol, local state, line delta,
+column)`. Local states are numbered within their declaration; line
+deltas are relative to its declaration start. The link/source unit
+supplies the declaration's file and current base line, so inserting a
+line above it changes no cached resume C. Both points and wait sites
+have these entries, with synthetic sites tied to their originating
+source call. A conformance mismatch reports the first call id, task,
+site, event and tape choice; comparing only final output cannot detect
+a shifted point set.
+
+Cancellation eagerly walks the task subtree. At the next point it
+prevents a new call, or cancels an already issued call and waits for
+that original reply. Cleanup masks the inherited flag, with one shared
+5-second cleanup deadline, armed by a Clock world call at the first
+wait. Nested cleanup cannot reset an expired deadline. A plain cleanup
+can overrun because no instruction is inserted into plain code. A
+panic follows the reference's termination/isolation behavior; the
+conflicting blanket “nothing unwinds” statement is noted below.
+
+### Binary journal
+
+This is the proposed binary container for step 2. It replaces the
+on-disk text format; text v3 remains a rendering, not the version of
+the binary container. The core writes order; the recorder writes
+**world content only**. Internal posts/`at` carry no replay content.
+The post-text compatibility conflict below is unresolved: do not claim
+that a standalone view can recover discarded arguments.
+
+All unsigned fixed-width fields are little-endian. Reserved fields
+are zero and unknown required tags fail with their byte offset. Lengths
+are checked for overflow and file bounds before allocation. There is
+no native address, native padding, wall-clock timestamp, host worker
+id, compiler build id or randomly assigned type id in a deterministic
+`sim` file. These would make equal runs or cross-build replay fail.
+
+| Binary header, in order | Encoding |
+|---|---|
+| magic | 8 bytes `RENJRNL` followed by zero |
+| container version, text view version | `u16 = 1`, `u16 = 3` |
+| flags, header bytes | `u32 = 0`, `u64`, including all tables |
+| seed, shape count, name count | `u64`, `u32`, `u32` |
+| program, dependency list | UTF-8 strings; list count then strings |
+| shapes | sorted by unsigned hash; each `shape:u32`, reserved `u32=0`, `hash:u64`, qualified type name, canonical shape bytes |
+| names | sorted by UTF-8 bytes; each `id:u32`, name; declarations/dependencies/operations/source labels, never runtime values |
+
+A string/byte sequence here is `u32 length` then exactly that many
+bytes; a list starts with `u32 count`. Each shape's serialized id is
+its one-based position in the sorted table, independent of link-slot
+number; zero means no body. The writer translates the link slot through
+the registered hash. The tables come from the linked serializable carried shapes
+before running, so the header never requires a seek or a second file.
+No runtime family keys are put in these tables. Ordinary task paths
+are reconstructed from TaskBirth order metadata, not a global symbol
+number assigned in cached code. A reader maps a hash
+to its build's carry, compares canonical shape bytes and reports an
+older `TypeName` before executing the first call if it changed. Matching
+names with different hashes produce a named version diagnostic; a
+missing dependency/shape names what the receiving build lacks.
+
+Each record starts with `stream:u8` (`Order=0`, `Content=1`),
+`tag:u8`, `flags:u16=0`, `payload_bytes:u32`, `sequence:u64`,
+`step:u64`, `call_id:u64`: 32 bytes. Sequence is global and strictly
+increasing from 1, assigned by the order writer as records commit,
+not by host-thread arrival. Step is the logical reference scheduler
+step; `call_id=0` for events without a call. Content uses the step of
+its associated event. Recording an inline completion takes the same
+logical path as an asynchronous one; arrival itself is not an order
+record. The physical merge order, including associated content, is
+fixed below so interpreter and native output have one byte order.
+
+| Order tag | Payload |
+|---|---|
+| 0 `Issue` | the 32 B call-header projection, with disk shape id (zero internally) and `len=0`; world bytes live in joined Content |
+| 1 `Pick` | reason `u32`, selected runtime task `u32`, eligible count `u32`, ordered eligible task ids `u32[]` |
+| 2 `Deliver` | original id is in prefix; state `u8`, reserved 3 zero bytes, destination task `u32` |
+| 3 `Cancel` | disposition `u32`: before-pull 0, sent 1, late 2 |
+| 4 `Release` | reason `u32`: stale 0, duplicate 1, killed 2 |
+| 5 `Post` | family `u32`, posting task `u32`, stable runtime key id `u64`, admission result `u32` |
+| 6 `FamilyOpen` | family `u32`, install-name id `u32`, max/mailbox/sample `u32` each, chaos `u32` |
+| 7 `FamilyMake` | family `u32`, key id `u64`, incarnation `u32`, making task `u32` |
+| 8 `FamilyEvict` | family `u32`, key id `u64`, incarnation `u32`, evicting task `u32`, choice draw `u64` |
+| 9 `Worker` | task `u32`, observed virtual worker `u32` |
+| 10 `Poll` | count `u32`, task ids `u32[]` in reference wake order |
+| 11 `TaskCancel` | task `u32` |
+| 12 `Warning` | opaque UTF-8 diagnostic bytes supplied by the language |
+| 13 `End` | outcome `u8` (exit 0/error 1/panic 2/kill 3), reserved 3 zero bytes, status `i32`, opaque language-provided ending text bytes |
+| 14 `TaskBirth` | task `u32`, parent `u32`, source-label name id `u32`, spawn ordinal `u32`, role `u8` (root 0/child 1/delivery 2), reserved 3 zeros; delivery additionally family `u32`, key id `u64`, incarnation `u32` |
+| 15 `Wait` | task `u32`, wait-reason `u32`, source declaration-name id `u32`, local site `u32`; prefix carries the pending world id, or zero for another wait |
+
+These numbers are container tags, not operation ids. Task/family/key
+ids are assigned by the same deterministic traversal/admission order
+as the reference; they are runtime observations, never emitted C
+constants. A key id denotes its mailbox over reincarnations. `TaskBirth` precedes
+any event using its id; root/task source labels and ordinals reproduce
+the reference's ordinary task paths. Delivery task names still require
+a key value, under the unresolved compatibility conflict below. The
+`Issue`, `Post` and delivery events share the original call id. Panic
+place/message and warnings are opaque diagnostics, not values the C
+core constructs or interprets. The family sampled-choice source is
+blocked by the reference discrepancy below.
+
+The Issue header is an order projection, not a second serialized copy
+of the body: its length is zero for all calls. Joining world content
+reconstructs the carrier header's encoded length from the content
+length, so the core never needs to encode a value to learn that size.
+
+Content tags are 0 `Call`, 1 `Reply`. Payload is `shape:u32`,
+`encoding:u8`, three reserved zeros, `bytes:u32`, then encoded bytes.
+Encoding 0 is complete derived `bin`; 1 is recorder redaction; 2 is
+recorder length/hash-only omission (`original_bytes:u64, hash:u64`).
+Replaying an omitted input that is needed reports the call and why it
+cannot be answered. A world `Issue` is followed immediately by its
+Call content; a world `Deliver` by its Reply content, including changed
+lent-buffer bytes in the operation's reply representation. Internal
+calls get neither. Recorder emission finishes before committing the
+next logical event, preserving byte equality independent of actual
+host completion order. The recorder alone applies budgets and Secret
+policy; they do not become core configuration.
+
+The shape table contains enough structure for `journal show` to print
+world content without a matching executable: qualified names, opaque
+representations, constructor/field names and ordered field shapes.
+For world calls a `Wait` event follows exactly the reference
+watcher's `j.waits` while that call is begun, rather than inferring
+waiting from interleaving or a later poll. This determines the v3
+opening ellipsis and separate result line; a reader may buffer through
+delivery to render them. In particular, Sched.point calls Sched.wait
+under sim, which invokes `j.waits`; its `pointed` bit suppresses tick
+bookkeeping, not journal waiting. Such a point can split a begun world
+call into two lines and must be recorded that way. Formatting of the recoverable
+content follows `Journal.write` exactly, including opaque values,
+byte quoting, omitted unit replies, two-line waits, polls, warnings
+and final newline. A source location is language-produced text, using
+the reference's path policy. File truncation, invalid tags, invalid
+lengths, duplicate issues/terminal events for one id, unknown hashes
+and trailing garbage fail with an offset and the associated call when available, never a host crash.
+Old text v1/v2 keep their existing refusal and help; a new binary
+version is refused with “record the run again with this ren”. Whether
+legacy text v3 remains readable is a compatibility choice for step 2,
+not permission to rewrite checked-in journal tests.
+
+**Derived `bin`, until stage 12.** formats.md fixes derivation and
+shape guarding but not individual bytes. This stage chooses the
+following canonical encoding, shared by OCaml and emitted carry code:
+
+| Value | Bytes |
+|---|---|
+| `Unit`, fieldless product | no bytes |
+| `Bool` | `u8`, exactly 0 or 1 |
+| `Int` | zigzag signed 64, then minimal unsigned LEB128 |
+| sized integer | declared-width two's-complement/unsigned little-endian bytes, checked on decode |
+| `Float`, `Float32` | IEEE binary64/binary32 little-endian bits; preserve signed zero; NaNs encode canonical quiet NaN `0x7ff8000000000000`/`0x7fc00000` respectively |
+| `Str`, `Bytes` | minimal unsigned LEB128 byte count, then UTF-8/raw bytes respectively |
+| tuple, record | fields in declaration order, each encoded by its shape; no names/padding |
+| sum, errors, `Option`, `Result` | minimal unsigned LEB128 constructor index in declaration order, then its fields; error-row alternatives in canonical qualified-name order |
+| array | minimal unsigned LEB128 element count, then elements |
+| map, set | count then entries/elements in the language's insertion/iteration order, preserving that observable order |
+| opaque | its declared `repr`, validated through `parse` on decode |
+
+Reject nonminimal varints, overflow, invalid UTF-8, invalid bool/tag,
+invalid opaque representations, duplicate map keys and trailing bytes.
+Decoded slices are ordinary owned values, never pointers into a freed
+journal buffer. Encode borrowed `inout` contents, not their address.
+Function values, evidence, views, raw pointers and scoped handles have
+no derived stored encoding. A world driver represents an OS resource by
+its data id, with its lease restored by that driver on replay.
+
+Canonical shape bytes describe the qualified declaration path, opaque
+representation identity, field/constructor names and order, storage
+widths, instantiated type arguments, errors and encoding version.
+The new portable fingerprint is FNV-1a-64 (offset basis
+`0xcbf29ce484222325`, prime `0x100000001b3`, wrapping unsigned
+64-bit arithmetic) over a length-prefixed structural schema. Each
+node begins with its kind byte, then its qualified instantiated path,
+then its storage width, ordered child count and children; names use the header
+string encoding, counts and widths are `u32`. Recursive edges are a
+reference node with their qualified instantiated path, never a
+traversal number. Kind tags are `Unit=0, Bool=1, Int=2, Signed=3, Unsigned=4,
+Float=5, Str=6, Bytes=7, Tuple=8, Record=9, Sum=10, Array=11,
+Map=12, Set=13, Opaque=14, Ref=15`. Storage width is zero where
+not applicable; a member is its name string followed by its node.
+Instantiation arguments are explicit ordered members before the
+declaration's fields, with names `@0`, `@1`, and so on. Canonical bytes
+begin with the eleven ASCII bytes `REN-SHAPE-1`. One shared compiler
+helper owns this schema before step 2. Do not hash printer output, memory addresses, traversal ids or
+C tags. This fingerprint recipe is a local choice requiring fixed
+cross-build golden vectors before use. Stage 12 may replace generated
+derivation with each shape's declared `bin` look; types without a look
+must retain these exact bytes. A declared look changes its encoding
+fingerprint and receives the same pre-call version check.
+
+### `trust`, foreign calls and blocking work
+
+The grammar extends existing items without moving their implementations:
+
+```text
+trusted_item  ::= ["pub"] "trust" (fn_item | handler_item
+                                  | foreign_fn | foreign_include | blocking_fn)
+trust_expr    ::= "trust" NEWLINE INDENT expression_block DEDENT
+foreign_fn    ::= "foreign" ordinary_fn_signature
+foreign_include ::= "foreign" "include" STRING
+blocking_fn   ::= "blocking" "fn" name "(" parameters ")" ["->" type]
+                  "=" expression_or_indented_block
+```
+
+`fn_item`/`handler_item` keep their existing rows, setup and clauses.
+Inside a lexical trust block the foreign/blocking forms may omit the
+prefix. A foreign declaration has no Ren body, default arguments,
+generic parameters, variadic arguments or inferred ABI types in this
+part; a C shim exposes a fixed typed function when needed. Its symbol
+is the declared name, behind a private generated wrapper in the
+include unit. Trusted functions/handlers and blocking bodies still
+have ordinary typed bodies, errors, exclusivity and capture checks.
+Trust is lexical, never inferred from a caller or propagated through
+an imported function. Calling a trusted wrapper is allowed from safe
+code: its implementation is the reviewed assertion boundary.
+`trust type`, dependency, wiring and test items are not added.
+
+Trust permits submitting the world call of its bottom handler,
+declaring/calling foreign code, and scoped raw-memory/ordered-atomic
+operations needed by a driver. It does not permit breaking the work
+tree, retaining instances, bypassing rows, discarding a completed
+result, keeping a borrowed buffer, or calling a host hook recursively.
+The distinction between the safe handler and its driver remains typed:
+a recorder or `over` handler above it sees the dependency operation.
+
+`Async.submit<D,R,E>(c: Call<D,R,E>) -> R ! E` uses the existing typed
+call representation, only for a world dependency, and preserves the
+operation's result/error correlation. A public stored `D.Call` remains
+data-only. A trusted borrowed submission needs an ephemeral request
+form for `inout`: it has the lifetime of its frame-owned lease, cannot
+be posted/stored, and has no general `bin` encoding until its recorder
+snapshot replaces the borrowed parts with data. This is a local
+implementation choice prompted by runtime.md's `Fs.Call.Read` example;
+the mismatch with the public data-only rule must be checked before
+step 1, not resolved by weakening public `D.Call`.
+
+The narrow proposed ABI surface is fixed-width scalars, `Unit`, raw
+borrowed `Foreign.Ptr<T>` and capture-free callbacks with an empty
+row. `Foreign.ptr(&buf)` makes a pointer tied to that lent buffer's
+call interval. These Foreign types/helpers are **new planned builtins**,
+not types implemented by today's compiler. They are allowed only in
+trust, cannot be stored in Ren data/handler state, returned to safe
+code, converted to a number or retained after the lease. A counted
+Ren value never crosses by ownership, and C has no API to the Ren heap.
+Foreign results are scalars/data written into a lent buffer, never a
+new owned pointer. Headers and their ABI wrappers compile in a
+separate C unit. C retaining a borrowed pointer, calling back after
+return or falsely claiming purity cannot be proved from a signature:
+these are trust assertions, explicitly documented and exposed by
+`ren why --unsafe`, not promises of a new whole-program C analyzer.
+
+A blocking function has an empty dependency row, data arguments and
+a replayable data result. Its whole Ren body, including immediate
+errno reads and multiple foreign calls, runs on one driver pool thread
+as one world call. Never split two calls relying on errno/thread-local
+state across different pool tasks. It is retractable while queued;
+a running C call retains its lent memory until its eventual reply.
+Cleanup deadline expiry cannot free that memory. The driver tracks an
+abandoned lease until release. Handles stay behind a driver's data id.
+A foreign function is pure by trust assertion when used in ordinary
+task code; OS calls are made by the world driver or a blocking body.
+Callbacks are capture-free plain function adapters in this part,
+checked for an empty closed dependency row and no waits; closures with
+environments require an explicit C context shim, not implicit capture.
+
+**Refusals.** At the offending construct, retain the ordinary source
+span and include the following help. These are new errors for this
+surface; ordinary name/type/row errors remain ordinary errors.
+
+| Error headline | Help |
+|---|---|
+| `Async.submit is only available inside trust` | `call a dependency whose trust handler submits the world call` |
+| `foreign fn is only available inside trust` | `declare it as trust foreign fn, and keep world effects in a driver` |
+| `foreign include is only available inside trust` | `write trust foreign include "header.h"` |
+| `blocking fn is only available inside trust` | `declare it as trust blocking fn, and call it through the driver` |
+| `this item cannot be marked trust` | `mark a function or handler trust, or use a trust block` |
+| `a foreign function has no Ren body` | `remove its body, or write a blocking fn to run a Ren body on the driver's pool` |
+| `a foreign function must have an empty dependency row` | `put world access in a dependency's driver; a foreign fn is a plain C call` |
+| `a callback into Ren must have an empty dependency row` | `handle its dependencies before passing it to C` |
+| `a blocking function must have an empty dependency row` | `pass data to the function and make its foreign calls inside one blocking body` |
+| `a blocking function must return replayable data` | `keep raw pointers and OS handles inside the driver, and return a data id` |
+| `foreign memory cannot escape its call` | `copy the data into a lent inout buffer before returning` |
+| `this type cannot cross the foreign ABI` | `pass scalars, raw borrowed pointers, or a callback with an empty row` |
+| `Async.submit needs a world dependency's Call value` | `submit the D.Call made by the world dependency's bottom handler` |
+| `a driver must have an empty dependency row` | `answer world calls with foreign calls; a driver cannot use a world dependency` |
+| `a foreign declaration needs an explicit fixed ABI signature` | `write each parameter and result type, and put generics or variadics behind a C shim` |
+| `a blocking function needs data arguments` | `pass owned data or a lent buffer; keep callbacks, instances and raw pointers in the driver` |
+| `this foreign callback captures local values` | `pass a capture-free function and an explicit borrowed context to a C shim` |
+| `raw foreign memory is only available inside trust` | `keep Foreign.Ptr and raw memory operations inside a trust function or block` |
+
+For example, `trust foreign fn bad(x: Array<Int>) -> Int` gets the ABI
+error, `trust blocking fn bad() -> fn() = fn() => ()` the replayable
+result error, and returning `Foreign.ptr(&buf)` from its lending call
+the escape error. Negative fixtures for the new Foreign types remain
+pending until that type surface exists; an unknown-type/parser error
+does not satisfy them. Callback and driver checks use inferred rows,
+including rows of indirect calls, not a scan for the `uses` token.
+
+### The edit test and conformance gates
+
+Two fixtures are planned to exercise declaration output rather than
+requiring a cache. The step 0 sources in
+`bench/runtime_core/edit/generic/` currently have `identity<T>` at
+`Int` and `Str` plus an unrelated module; those in `edit/family/`
+have a keyed counter, ordinary `at` and an unrelated module. They do
+not yet implement the declaration comparison. Extend the generic
+fixture with a coloured `roundtrip<T>`, an inlined helper and a
+non-inlined caller when frames land. Extend the family fixture with
+setup/`finally`, a post, a helper hiding an invalid inner-family reach
+and an unrelated family. Keep valid/run and invalid-rule-3 cases as
+separate entry files, so the refusal cannot hide output for the valid
+program.
+
+For each fixture save a manifest keyed by source declaration path and
+copy key, with exact bytes of each emitted C declaration and the
+hashed facts it read. Include function/entry/resume bodies, private
+frame definitions, local resume-site arrays, carry functions/table,
+dispatchers and ABI adapters. Shared literals and helper declarations
+belong to the declaration/copy that creates them, or their own
+content-addressed artifact. Compare exact declaration bytes, not
+whole translation-unit text, object addresses or compiler-selected
+machine-code layout. Do not normalize generated global ordinals into
+stable names after emission: that would hide the very failure tested.
+Only link manifests/relocations, source base-line tables and header
+slot tables are exempt as explicitly program-wide artifacts.
+
+Run these edits independently from the original tree:
+
+- Change a function body while preserving signature/colour: only it and
+  recorded inliners change. A callee frame growth cannot rewrite its
+  non-inlining caller, because the callee bumps its own frame.
+- Insert source lines above another declaration: its resume line deltas
+  and C stay byte-identical; only the link/source base changes.
+- Change a callee from plain to coloured: its colour fact changes,
+  rebuilding direct frame callers and any transitive callers whose
+  own colour changes, with an early cutoff where the fact is unchanged.
+- Add an unrelated generic call and an unrelated carried type: existing
+  carry/dispatcher symbols and local site ids stay identical; only
+  link-assigned slots can change.
+- Change the family key's layout or a dispatch body: rebuild only the
+  carry/dispatch copies and callers recording those changed facts;
+  leave the unrelated family and generic copy alone.
+- Make an instance shared in one caller: debug changes its data bit;
+  release changes only copies whose keys record that fact.
+
+The current specializer's discovery-order copy names and global size
+budget are two known violations, outside this stage's repair scope.
+They cannot be waived by deleting a check or marking an entire release
+fixture expected-fail. Isolate and report those two pre-existing
+categories with exact affected artifacts; require the new runtime
+artifacts and all remaining comparisons to pass. New unstable names,
+ids, callee-size coupling or global budgets are failures. The proposed
+full manifest comparison stays pending until native frames/families
+exist; step 0's pending fixture is not evidence that edit invariance
+already holds.
+
+`test/test_runtime_core.ml` uses `until "c1"` through `until "c6"`
+so later assertions are explicitly skipped. `bench/runtime_core.t`
+will exercise native debug/release, Mem Lint/Core Lint, clang
+ASan/UBSan, two-host-replier TSan and tcc. The current program/seed comparator accepts adapter commands and
+compares exit status, stdout/stderr and journal bytes; its synthetic
+self-tests exercise the comparator, not native conformance. The real
+interpreter/native sim adapters are missing. The completed harness
+must record both builds, compare panic location and binary journals,
+check replay both ways, and retain the first divergent call/site and
+seed as a failure artifact. Replay adapters and persistent failure
+artifacts are also pending. It never adjusts the point set or ignores
+records to make equality pass. Run the 11a programs, every services
+family test, rule 3 hidden through a helper, the model cases, late and
+duplicate replies, cancellation trees, shielded cleanup, and applicable
+channel composition cases. Retain lost-update seeds 4702 and 9904 as
+explicit regressions; a changed seed is evidence of disagreement.
+
+CI enables each gate only after that step's implementation is green;
+until then its pending status names the missing feature. From step 7,
+the edit manifest runs alongside THE CHECKS on both fixtures in both
+builds. No timing threshold goes into a scheduling/correctness test.
+Sequential benchmarks may not regress outside measured spread; step 4
+compares its nested round trip and parked bytes to X1/X5 rebuilt on
+this machine (10% bound or an explanation with measurements), not the
+other machine's nanoseconds. `bench/native/RESULTS.md` records machine,
+load, commands, interleaved samples, medians/spread and any failed or
+unavailable measurement. A skipped benchmark is not a baseline number.
+
+### Choices and blockers before implementation
+
+The exact C signatures, enum values, binary container framing, derived
+scalar bytes, pointer spelling, entry adapter and generation exhaustion
+policy above are local choices where the source documents give only
+sketches. They are Step 0 plans, with portable golden vectors and
+layout probes required in their implementing steps. There are four
+source disagreements that cannot be fixed by quietly changing the
+reference or broadening the boundary:
+
+- **Step 1, borrowed requests.** runtime.md's `Fs.Call.Read` example
+  has an `inout` buffer; formats.md's public `D.Call` requires no
+  `inout`, view or block operation. The proposed ephemeral trusted
+  request preserves public data-only calls, but needs its type/lifetime
+  design checked against the existing `Call<D,R,E>` before c1.
+- **Step 2, internal values in the text.** Today's `Journal.write` and v3 family
+  lines retain runtime keys and call arguments. runtime.md and
+  handlers.md explicitly remove internal call content, keeping only
+  order/id and showing arguments under trace. A standalone
+  `ren journal show` cannot recover discarded runtime arguments from
+  shape tables or build code. Consequently “today's text byte for
+  byte” for posted arguments, made/evicted key names, and delivery-task
+  paths containing keys, and “world content only” cannot both hold.
+  Numeric key ids and type tables do not reconstruct key values. This
+  affects world-call lines on delivery tasks as well as internal lines. Keep the settled content boundary; the owner must resolve the
+  view's compatibility promise before enabling c2. Do not add hidden
+  post content to the header or presentation records.
+- **Step 4, panic/isolation.** The brief and runtime.md say a panic
+  ends the program and nothing unwinds, but async.md and the reference
+  implement `Async.isolate` for eligible local panics and cleanup.
+  Preserve and test the reference; the owner must clarify whether the
+  blanket phrase excludes that existing contained case. Never remove
+  isolation behavior to simplify frames.
+- **Step 5, sampled choice.** runtime.md makes eviction the core's
+  journaled choice, drawn from the scheduler tape. Today's
+  `lib/eval/family.ml` passes samples to the library, and `actors`
+  draws from per-task `Random`. Moving those draws changes both
+  streams and known seeds. The allowed reference edits are submit and
+  binary journaling only. Record the conflict and stop before that
+  change; a native policy that silently draws differently cannot pass
+  the promised journals.
+
+The Foreign surface, arbitrary foreign evaluation, callback adapters,
+lease checks and driver pool do not exist in today's compiler. Its
+internal Mem `Ptr` is not a public raw pointer implementation. Those
+are substantial step 1 work, not already authorized shortcuts around
+its refusal tests. No later step is implemented by documenting it.
+
+### Step 0 measurements and validation
+
+The baseline at `12da2291` is recorded in
+[bench/native/RESULTS.md](bench/native/RESULTS.md#runtime-core-stage-step-0-baseline),
+with commands, raw samples and machine/load metadata. All 105 timed
+native runs (21 programs), 55 interpreter runs (11 workloads, each at
+1,000 seeds) and 70 X1/X5 runs passed. The rebuilt X1 register nested
+round trip is 27.79 ns (27.21–28.46); X5 static parked tasks use 248 B
+of live allocated blocks (240 B requested). These are before-stage
+references, not measurements of a new native runtime. The frame
+experiment's ASan/UBSan checks and X5 LeakSanitizer checks passed.
+
+The six new interpreter fixtures and six comparator self-tests passed;
+the 13 expect tests report their future c1–c6 assertions as skipped.
+No C protocol mutant or native runtime conformance result is claimed.
+No new driver ran: this session is Linux, and native epoll, sim and
+replay drivers remain unimplemented.
+
+Before this checkpoint commit, THE CHECKS all passed in the pinned clean
+shell: `dune build`; `dune test --force` with `REN_TCC` set; `make -C
+editors/tree-sitter-ren check` and generated-parser consistency; and
+`_build/default/bin/main.exe test` in bank, prices, just, ledger,
+crawler, refresh, server, transfer, docs, breaker and checkout (85
+example tests). Grammar checks covered 127 corpus cases, 226 highlight
+assertions and 2,072 differential programs with no grammar misses.
+No test failed or needed a retry. The optional NEON cross-test skipped
+because `aarch64-linux-gnu-gcc` is absent; no required check was omitted.
+`git diff --check` also passed.
+
+After rebasing onto the generators step-0 checkpoint `a889c21`, the
+same full checks passed again, including both stages' test registrations.
+The expanded differential suite checked 2,186 programs, 1,914
+compiler-valid, with zero grammar misses; no failures or retries.
+
+This is the brief's partial-step checkpoint, not completion of step 0.
+The contract conflicts below block a settled specification (high
+severity); the listed missing executable tests and adapters block its
+full test-first gate. Steps 1–7 have not started, and none of their
+“Done when” conditions is claimed. No runtime implementation was
+changed to evade a conflict or make the reference easier to match.
+
+### Progress log
+
+| step | commit | done | left |
+|---|---|---|---|
+| 0 (partial) | this commit | draft specification of boundary/files, record/carry/verb/host signatures, work-return reservations, frame convention/point parity, binary container/derived bin, trust grammar/diagnostics and edit gates; new comparator self-tests, interpreter fixtures, minimal edit fixture sources and skipped c1–c6 inventories; baseline files record only measurements actually run | owner decisions before a settled step 0: internal-key/post text/content conflict (runtime.md “What's journaled”, handlers.md “What an entry holds”, this document “Journal version 3”, lib/eval/journal.ml); sampled-choice stream conflict (runtime.md “The call record”, lib/eval/family.ml opening comment and actors' Random use); panic/isolate conflict (brief scope 5, runtime.md “How code meets the core”, async.md “A panic ends the program”, test/test_tasks.ml isolate cases); check ephemeral borrowed requests against public D.Call refusal (formats.md “Dependencies as data”, lib/sema/resolve.ml generation); executable C counterexample bodies/rule-removal flags, native sim/replay adapters, persistent failure artifacts, full edit fixture extensions and declaration comparator are missing; c1–c6 and step 7 unimplemented |
+
 ## The runtime model
 
 Every object the runtime makes is in one of four states, which its

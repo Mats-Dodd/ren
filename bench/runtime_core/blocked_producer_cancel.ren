@@ -1,0 +1,22 @@
+dep Cleanup =
+  note: fn()
+
+handler cleanup() for Cleanup uses Console =
+  finally(result) =>
+    print("producer stopped")
+    try result
+  note() => ()
+
+fn produce() uses Send<Int>, Console =
+  with cleanup() in
+    var i = 0
+    while true
+      Send.send(i)
+      i += 1
+
+fn main() uses Console, Async =
+  Async.produce(cap: 1, fn() => produce()) fn(items) =>
+    for x in items
+      print(x)
+      break
+  print("after")

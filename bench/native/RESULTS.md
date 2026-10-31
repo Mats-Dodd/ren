@@ -9,6 +9,141 @@ what the generated C or the `--stats` counts say causes it and what
 would fix it. The programs are in this folder ([README.md](README.md));
 [vision.md](../../vision.md) says what the bars are.
 
+## Runtime core stage: step 0 baseline
+
+Measured 2026-10-30 (America/Los_Angeles; raw timestamps are UTC), before
+runtime-core implementation, at `12da2291bbbeee241bbe17bfb501fcd834f617a0`.
+Machine `310e503d7935`: x86_64 KVM guest, Intel Xeon Platinum 8573C,
+5 visible vCPUs with a 4-CPU cgroup quota and 16 GiB memory limit,
+Linux 6.18.57. The repository's pinned Nix environment supplies Clang
+23.1.3 (`cc`, release `-O2`), OCaml 5.5.2, Dune 3.24.2 and glibc 2.44.
+The interpreter was copied before building the benchmarks; its SHA-256
+and the exact commands, outputs and load observations are in
+[runtime-core-baseline/](runtime-core-baseline/).
+
+Toolchain builds and focused tests finished before the timed runs;
+full checks were held until timing completed. Other agents continued
+light documentation work on the shared guest. Each mode runs one child
+process at a time and rotates its starting workload each round. Native
+programs and interpreter suites are each warmed once before timing. Reported spreads are observed least to most, not
+confidence intervals. These establish the reference for later paired
+before/after runs; this is not a measurement on the owner's M4 Max.
+
+Reproduce inside `devenv shell --clean` from the repository root:
+
+```sh
+python3 -I bench/native/runtime-core-baseline.py build /tmp/runtime-core-baseline
+python3 -I bench/native/runtime-core-baseline.py kernels /tmp/runtime-core-baseline --runs 5
+python3 -I bench/native/runtime-core-baseline.py examples /tmp/runtime-core-baseline --runs 5
+python3 -I bench/native/runtime-core-baseline.py frames /tmp/runtime-core-baseline --runs 7
+python3 -I bench/native/runtime-core-baseline.py summarize /tmp/runtime-core-baseline
+```
+
+**Sequential native programs.** All 21 `*/main.ren` programs, release,
+including the aggregate string, slice, dispatch and vector workloads,
+five runs each. Wall seconds, including process startup; all five
+outputs per program agree. One-minute load during timed runs was
+1.00–1.10. `keywords/main.ren` runs just one round, so its roughly
+5 ms includes substantial startup noise; the dedicated keyword
+measurements below remain the lookup benchmark.
+
+| program | median (s) | least–most (s) |
+|---|---:|---:|
+| binary-trees | 11.3331 | 11.0947–11.4962 |
+| blocks | 2.0204 | 1.9917–2.0777 |
+| bytes | 0.6729 | 0.6696–0.6933 |
+| cfold | 0.1612 | 0.1481–0.2213 |
+| deriv | 1.3550 | 1.2924–1.4780 |
+| dispatch | 0.7112 | 0.6936–0.7258 |
+| fannkuch | 3.3152 | 3.2955–3.5354 |
+| frames | 1.0420 | 1.0242–1.3317 |
+| handlers | 2.0370 | 1.9664–2.4101 |
+| inout | 3.3376 | 3.2098–3.3748 |
+| interp | 0.1250 | 0.1184–0.1337 |
+| keywords | 0.0052 | 0.0044–0.0073 |
+| maps | 1.4105 | 1.3817–1.7952 |
+| nbody | 2.9651 | 2.9482–3.0094 |
+| nested | 1.3266 | 1.3093–1.3722 |
+| nqueens | 1.0858 | 1.0544–1.1941 |
+| rbtree | 1.2645 | 1.2281–1.3616 |
+| slices | 3.5827 | 3.5551–3.7857 |
+| stack | 0.8380 | 0.8206–0.8786 |
+| strs | 5.8890 | 5.7445–6.2170 |
+| vec | 2.0507 | 2.0346–2.1299 |
+
+**Interpreter tasks and services.** Each command is `test --sim --seeds
+1000`, five runs after one warmup. Times include source loading,
+checking and running every selected test under its 1,000 seeds. The
+seven landed example suites and the four retained correct milestone
+variants all pass. Only the CLI's final elapsed-time suffix is removed
+when checking that their reported results agree; raw output keeps it.
+One-minute load was 0.95–1.00.
+
+| suite or selected milestone | tests | median (s) | least–most (s) |
+|---|---:|---:|---:|
+| 11a-cached | 1 | 0.1374 | 0.1306–0.1522 |
+| 11a-two-adds | 1 | 0.1191 | 0.1134–0.1298 |
+| breaker | 4 | 0.2772 | 0.2722–0.2839 |
+| crawler | 3 | 4.8385 | 4.7128–4.9462 |
+| docs | 4 | 10.0094 | 9.9425–10.1194 |
+| just | 21 | 3.5636 | 3.5259–3.5819 |
+| refresh | 4 | 0.3375 | 0.3316–0.3478 |
+| server | 4 | 0.8201 | 0.8066–0.8563 |
+| services-one-operation | 1 | 1.2107 | 1.1805–1.2204 |
+| services-without-chaos | 1 | 1.3430 | 1.3364–1.3606 |
+| transfer | 4 | 0.3307 | 0.3160–0.3369 |
+
+**X1, nested round trip.** Rebuilt the unchanged prototype and register
+convention with Clang `-O2` and pinned TinyCC `e23dabed` (`-O2`, which
+TinyCC accepts without optimization). Seven rotated rounds; each
+process reports the median of five internal repetitions, at 2,000,000
+round trips for Clang and 500,000 for TinyCC. Nanoseconds per nested
+round trip (two task switches), with the least and most of the seven
+reported medians; every repetition's value is in the raw output. X1's
+normal checks pass for all six variants, and its register and noinline
+ASan+UBSan checks pass. One-minute load was 1.00.
+
+| X1 build | median ns/round trip | least–most |
+|---|---:|---:|
+| base_clang | 30.39 | 29.62–30.97 |
+| reg_clang | 27.79 | 27.21–28.46 |
+| reg_noinl_clang | 37.88 | 37.01–38.39 |
+| reg_nochk_clang | 30.16 | 29.66–30.58 |
+| base_tcc | 103.22 | 100.69–107.77 |
+| reg_tcc | 110.02 | 107.21–115.00 |
+
+**X5, parked tasks.** Seven rotated rounds, a fresh Clang `-O2`
+process per policy, 100,000 parked tasks. The original experiment uses
+Mach and Apple's malloc metrics. [x5/linux.py](../../experiments/runtime-frames/x5/linux.py)
+generates a Linux copy outside the repository: `CLOCK_MONOTONIC`,
+`malloc_usable_size`, glibc `mallinfo2().uordblks` and `/proc/self/statm`
+RSS replace those observations. It also frees the original harness's
+bookkeeping arrays after all observations and task checks, fixing its
+process-exit leak without changing the measured interval or frame
+policies. The original `frames.c` is unchanged. All policies pass
+ASan+UBSan+LeakSanitizer at 5,000 tasks, and every measured run reports
+`check=ok` with task/chunk counts balanced.
+
+Bytes per parked task: usable live blocks sum only each task and its
+chunks, heap is the allocator's live-heap delta, RSS is its second
+resident observation's delta. Each cell gives the median and observed
+range. Linux RSS and heap are different measures from macOS footprint
+and malloc-zone bytes; RSS also includes page effects and lazy
+bookkeeping pages. One-minute load was 1.00.
+
+| policy | inline segment | requested task block | usable live blocks | heap delta | RSS delta |
+|---|---:|---:|---:|---:|---:|
+| today | 64 | 112 | 4224.0 (4224.0–4224.0) | 4240.0 (4240.0–4240.0) | 4256.0 (4256.0–4256.0) |
+| static | 192 | 240 | 248.0 (248.0–248.0) | 256.0 (256.0–256.0) | 272.0 (272.0–272.0) |
+| static_x | 192 | 240 | 248.0 (248.0–248.0) | 256.0 (256.0–256.0) | 272.0 (272.0–272.0) |
+| static_xk | 192 | 240 | 4352.0 (4352.0–4352.0) | 4368.0 (4368.0–4368.0) | 4384.0 (4384.0–4384.0) |
+
+The static chain uses a 192-byte inline segment and a 240-byte requested
+task block (248 usable bytes here). After a deep inline excursion,
+`static_x` frees its spare at park and keeps that same live-block total;
+`static_xk` keeps the spare and reaches 4,352 bytes. These are step 4's
+reference observations on this machine.
+
 ## Bytes stage, part two, step 4, part 2 (compiler.md, "Bytes stage, part two", "Step 4 (part 2), as built")
 
 The uncounted view, lent element reads, `lend_parts` again, and runs of

@@ -1,0 +1,13 @@
+import sync.{Chan}
+
+dep Values = Chan<Int>
+
+fn main() uses Console, Async =
+  with sync.channel(1) as Values in
+    Async.scope fn(s) =>
+      s.spawn fn() =>
+        Values.send(1)
+        Values.send(2)
+        Values.close()
+      for value in Values.items()
+        print(value)

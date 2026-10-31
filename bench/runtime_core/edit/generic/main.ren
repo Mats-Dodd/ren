@@ -1,0 +1,7 @@
+import worker
+import unrelated
+
+fn main() uses Console =
+  print(unrelated.unrelated(0))
+  print(worker.identity(42))
+  print(worker.identity("kept"))
