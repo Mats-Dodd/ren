@@ -186,12 +186,52 @@ pub dep Send<T> =
   installed `Send`; one implicit sink is the common case, and nothing
   names dependencies at the type level.
 
+## Observers: logs, spans and metrics
+
+Decided on 2026-10-30. Logging stays out of signatures by a general
+rule, not a privilege: any dependency may be declared one that only
+observes.
+
+```ren
+pub observe dep Trace =
+  event: fn(e: Event)
+  enter: fn(name: Str, fields: Fields)
+  exit: fn()
+```
+
+- **Its operations return `Unit`, and can't fail or wait,** checked by
+  the compiler. Nothing comes back, so nothing the program computes can
+  depend on it.
+- **So it isn't in `uses`,** and isn't part of an interface: a new
+  `log.debug` deep in a library rebuilds nothing above it
+  (module-build.md, "Incremental by construction"). Tools show it apart,
+  as the inferred `f.observes`.
+- **Its default handler drops everything,** so unwired code runs.
+- **Its handlers are ordinary.** Exporters, `log.to_console()`,
+  `log.to_file(p)`, `otlp.export(addr)`, are handlers with their own
+  `uses`, which show where `main` installs them. An exporter's failure
+  can't fail the program; it counts what it dropped.
+- **`log`, `trace` and metrics are plain std at L2,** and a user
+  declares their own the same way: audit events, a profiler, test
+  probes. Nothing is privileged but the rule, which is the language's.
+- **Reading isn't observing.** `trace.current()`, the span context a
+  protocol forwards across services, is an ordinary dependency,
+  `uses TraceContext`, declared by the few functions that need it.
+  Spans follow the tree, since the handler sees `enter` and `exit` in
+  scope order.
+- **`sim` and replay need nothing:** no observer can change a run, so a
+  replay regenerates its events, and a test asserts on them with a
+  handler that captures them.
+- **`dbg` is an observer,** whose default handler writes to standard
+  error in debug builds and drops in release, so it leaves the
+  privileges list.
+- **The cost, accepted:** a function that can't touch the world can
+  still emit events. It can write where its caller chose; it can't
+  learn or change anything.
+
 ## Still to decide
 
-- **What a log line or a span needs in its row.** The proposal: events
-  go to the runtime's trace stream, beside the journal, so `log.info`
-  needs no `uses`, and the only ways out are exporters, handlers
-  installed by `main` with their own `uses Net` or `uses Fs`.
+- Nothing in this map. Each layer's own designs are in their pages.
 
 ## Borrowed from
 

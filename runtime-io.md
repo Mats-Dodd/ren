@@ -373,9 +373,9 @@ pub dep Signal =
 - **The terminal beyond `is_terminal`, file watching, memory maps,
   UDP and `sendfile` from a file to a socket** come when a program needs
   them, each an operation added to its dependency, never a probe.
-- **Nothing reaches the world but these.** `dbg` is the one named
-  exception: it writes to standard error from anywhere, is compiled out
-  of release builds, and `ren test --ci` refuses it (decision 20).
+- **Nothing reaches the world but these.** Logs, spans, metrics and
+  `dbg` are observers ([layers.md](layers.md#observers-logs-spans-and-metrics)):
+  they reach the world only through exporters, handlers that use these.
 
 ---
 
