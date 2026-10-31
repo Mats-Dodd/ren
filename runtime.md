@@ -120,6 +120,10 @@ Two things that look alike, kept apart:
   shared, exclusive instance**, before the call: one a spawned task can
   reach, whose handler keeps state. That's where two tasks' order can be
   seen, and where `sim` finds a lost update between two operations.
+  Whether an instance is shared is a whole-program fact, so it's a bit
+  on the instance in a debug build and part of the copy's key in a
+  release one: an operation's code never depends on who spawned what
+  elsewhere.
 - **A colour is a calling convention:** whether a call can return
   pending in this build. **A function is coloured if it can wait in this
   build.** Release decides per specialization, since dispatch is static
@@ -187,6 +191,10 @@ registers. Under clang it cuts a nested round trip from 32 to 19 ns;
 under tcc it makes a single frame's switch about a third slower, which
 debug builds accept rather than emit two conventions.
 
+- **A callee bumps its own frame,** from the stack top it's given, so a
+  caller never depends on a callee's frame size. **A function's colour
+  is part of its interface,** a fact its callers record: one that starts
+  waiting rebuilds its callers' frames, and only theirs.
 - **The fast path is an ordinary call.** A callee runs at once and
   returns done or pending. If nothing waits, a driver answering inline
   included, the chain is nested C calls plus a bump per frame: about
@@ -217,7 +225,9 @@ debug builds accept rather than emit two conventions.
   landing pads.
 - **Depth** is one byte limit for native and frame stacks; the exact
   depth at which recursion overflows isn't meaning.
-- **A table maps each resume site to its source line,** part of the
+- **A table maps each resume site to its line within its
+  declaration,** and each declaration's base is set at link, so an edit
+  above a function leaves its cached code alone. It's part of the
   compiler's interface with the core, for backtraces (`ren bt`) and the
   profiler.
 
@@ -299,7 +309,14 @@ len     u32   the body's length
 ```
 
 Every field is one the core reads, except `shape`, which is the one
-hook between the two sides: whatever decodes a body keys on it. In
+hook between the two sides: whatever decodes a body keys on it. **It's
+named by content, not numbered by the build:** emitted code points at
+`ren_carry_<shape hash>`, and the small `shape` number is that struct's,
+filled in at link, so no cached unit holds a number the whole program
+assigned (module-build.md, "Incremental by construction"). A journal's
+header maps each `shape` it uses to its hash, so another build replays
+it through the hashes, and a type that changed fails the version check
+the wire uses. In
 memory the body is the value, with `inout` buffers lent as pointers;
 serialized, it's the `bin` look's bytes.
 
@@ -339,15 +356,34 @@ typedef struct ren_carry {
 ```
 
 Counting and marking a value shared before it crosses cores stay the
-language's, behind `drop` and before the push. There's no `show`: a
+language's, behind `drop` and before the push. **A `ren_carry`, and a
+dependency's dispatcher, are copies like any other,** keyed by the
+type's shape hash: two modules that carry `DocId` emit one symbol, kept
+once. **The dispatcher** turns a body into a call of its operation, the
+`call` clause's `match` on the tag, one per dependency, handed to the
+core with the key's `ren_carry` when a family opens; the core starts a
+frame with it, and still never reads a tag. There's no `show`: a
 stall report names a key by id, and a tool decodes it from the build's
 table, as `ren journal show` does.
 
 **Ren reaches the core only through verbs,** the three nouns', a
 family's, `submit` and `worker()`. **The core runs Ren only to continue
-the program,** resuming a frame, **or to ask a leaf about a value:** a
+the program,** resuming a frame or starting one with a dispatcher, **or
+to ask a leaf about a value:** a
 descriptor's functions and `until`'s condition, each with an empty row,
 never waiting and never calling the core.
+
+**A verb that needs program code run returns it to its caller.** A pin
+of a missing key returns "absent: make it", and the caller's task runs
+setup, which can fail and call the world, then installs what it made;
+an eviction returns the `finally` to run to the task whose pin needed
+the room. The core never starts Ren code of its own accord, only
+resumes or starts a frame for a task.
+
+**The core carries content, and never makes or reads it.** A driver's
+reply, a body, a panic's place and message (`ren_panic(where, msg)`)
+are bytes it moves into a queue or the journal, writing its own order
+fields around them.
 
 **Which sampled instance is evicted is the core's choice,** like which
 task runs next: journaled as order, drawn from the tape under `sim`. A
@@ -357,12 +393,16 @@ choosing function.
 
 ## What's journaled: time and order, and place only when it's read
 
-The journal is two streams joined by call id. **The core writes order,**
-through the host's `journal` hook, in small binary records: each choice
-it made, each delivery at its step, each cancel, release and post, and
-a family's opened, made and evicted. **Ren writes content:** the
-recorder, a handler `over any`, writes each call and its reply through
-its shape's `bin` look. A replay feeds the order to the scheduler, as
+The journal is two streams joined by call id: **the world's content,
+and everyone's order.** The core writes order, through the host's
+`journal` hook, in small binary records: each choice it made, each
+delivery at its step, each cancel, release and post, and a family's
+opened, made and evicted. **Ren writes content, for world calls only:**
+the recorder, a handler `over any`, writes each world call and its
+reply through its shape's `bin` look. A post or a shipped `at`
+operation is the program talking to itself, so a replay makes it again
+from the world's inputs, and only its order is kept; `--trace` shows
+its arguments for reading. A replay feeds the order to the scheduler, as
 `sim` feeds its tape, and the content to the replay driver. The binary
 journal is the one format on disk, and journal v3's text is a view of
 it, `ren journal show`, so the interpreter's journals and native ones

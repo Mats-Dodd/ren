@@ -382,6 +382,43 @@ The three rules decide how the compiler is laid out:
 - **Infer is bidirectional.** It checks an expression against an expected type whenever one is known, and it never defers a question until later. Exhaustiveness checking runs after Infer, because a constructor's type is only known once Infer has found it.
 - **Every pass is a function of explicit inputs:** one module or one call-graph group, plus the interfaces of its imports. The driver runs passes in dependency order. The content-addressed store sits in front of those same functions, without rewriting them.
 - **Identities are paths, and local IDs are numbered per function,** so editing one function never renumbers another.
+
+### Incremental by construction
+
+The compiler isn't incremental yet, and doesn't need to be. Every design
+is held to these rules now, so that a cache in front of its passes is a
+lookup, never a rewrite:
+
+1. **The unit is a declaration, or one specialized copy of it.** Never a
+   module.
+2. **A copy's key is what it's made from:** the declaration's own
+   content after the front half; its type arguments, by their shape
+   hashes; each block argument, by the lambda's path and its own key;
+   each handler, by its declaration's key; and the build's settings
+   (compiler version, target, flags).
+3. **A copy records the facts it read,** each with its hash: a callee's
+   signature and row, its colour, a type's layout, a body it inlined, a
+   dispatch it resolved. Its dependencies are those facts, not the
+   modules they live in.
+4. **Early cutoff.** A fact recomputed to the same hash rebuilds nothing
+   that read it. An edit inside a body that leaves its signature, colour
+   and layout alone rebuilds that function and what inlined it.
+5. **Nothing cached holds a number the whole program assigned.** Names,
+   ids and offsets come from a declaration's content and path; anything
+   program-wide is settled at link, as relocations are.
+6. **No global budgets.** Whether a copy is made or a call inlined
+   depends only on that copy's own inputs.
+7. **Whole-program facts are values in debug and keys in release.**
+   Whether an instance is shared is a bit on it in a debug build and
+   part of the copy's key in a release one, never a side table that
+   changes code elsewhere.
+
+**The edit test** holds the compiler to them before there's a cache:
+build, edit one declaration, build again, and compare the output
+declaration by declaration. Only the edited one, and the copies whose
+recorded facts changed, may differ. It needs per-declaration output, not
+a cache, and it's a gate from the runtime core stage on. Today's release
+specializer fails it in two known ways (compiler.md, "Specialization").
 - **The prelude is the first ordinary module.** Built-in types and functions are declared in it, with their implementations supplied by the compiler.
 
 ---

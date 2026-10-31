@@ -255,6 +255,17 @@ called:
   budget for the whole program: past it, a call falls back to what a
   debug build does, and the build says so (Native slice, "Step 9").
 
+**Two known breaks of module-build.md's "Incremental by construction",**
+kept until there's a cache, recorded so nothing new copies them:
+
+- **Copies are named in the order they're found** (specialize.ml,
+  `fresh_path`: `map$1`, `map$2`, from a first-in, first-out queue). An
+  edit that makes a copy early renumbers every one found after it, and
+  each of their callers. Rule 5 wants a copy named by its key.
+- **The size budget is the whole program's** (`budget`, `spent`), so
+  whether one function gets a copy depends on what every other spent.
+  Rule 6 wants a budget per copy, or per call site.
+
 Since native step 5, `ren build --release` does this (Native slice,
 "Step 5"): specialize.ml, from `$start`, over the linked program's Core,
 into Core that Core Lint checks and the interpreter runs, as `ren run
