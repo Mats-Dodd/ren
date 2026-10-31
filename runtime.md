@@ -52,8 +52,9 @@ through their verbs.
 
 - **A family is the three together:** a map from key to an instance and
   its queue, with make, pin, evict and list (decision 18). It's one of
-  the runtime's privileged handlers; which to evict and how many to
-  keep are a library's.
+  the runtime's privileged handlers, its map in the core; how many to
+  keep and how many to sample are a library's, and which sampled one
+  goes is the core's choice.
 - **Everything else is std,** written in Ren over these: `both`,
   `race`, `map`, `each`, `timeout`, `beside`, `background`, `produce`,
   `sync`'s channels and semaphores, `actors`, `striped`. `timeout` is a
@@ -318,6 +319,42 @@ serialized, it's the `bin` look's bytes.
 - **How a buffer is journaled,** inline, hashed or not at all, is the
   recorder's choice, beside its `Secret` rule, not the core's config.
 
+**The core's descriptor is a table of functions, not a type.** The
+language's own descriptor, `ren_desc`, describes a type's structure for
+generic code to walk; walking it means knowing Ren's values, so the core
+never does. Each type the core carries, a family's keys, call bodies
+and replies, gets a `ren_carry` the compiler emits from it:
+
+```c
+typedef struct ren_carry {
+  uint32_t shape;        // the type id, the header's `shape`
+  uint32_t size;         // bytes in memory
+  uint64_t shape_hash;   // the version check and the journal's header
+  uint64_t (*hash)(const void *v);           // the type's own, unseeded
+  bool     (*eq)(const void *a, const void *b);
+  void     (*drop)(void *v);
+  size_t   (*encode)(const void *v, uint8_t *out, size_t cap);  // bin
+  bool     (*decode)(const uint8_t *in, size_t len, void *out);
+} ren_carry;
+```
+
+Counting and marking a value shared before it crosses cores stay the
+language's, behind `drop` and before the push. There's no `show`: a
+stall report names a key by id, and a tool decodes it from the build's
+table, as `ren journal show` does.
+
+**Ren reaches the core only through verbs,** the three nouns', a
+family's, `submit` and `worker()`. **The core runs Ren only to continue
+the program,** resuming a frame, **or to ask a leaf about a value:** a
+descriptor's functions and `until`'s condition, each with an empty row,
+never waiting and never calling the core.
+
+**Which sampled instance is evicted is the core's choice,** like which
+task runs next: journaled as order, drawn from the tape under `sim`. A
+library sets the policy as data, `max:`, the sample's size and
+`chaos:`, and evicts a key itself with `evict(k)`; it doesn't write the
+choosing function.
+
 ## What's journaled: time and order, and place only when it's read
 
 The journal is two streams joined by call id. **The core writes order,**
@@ -401,8 +438,6 @@ names and signatures are the runtime core stage's:
 
 ## Open
 
-- The descriptor: what the compiler hands the core for each type it
-  carries (hash, equality, drop, size, the `bin` encoder).
 - A user-written scheduler: later, inside `trust`, against this page.
 - The core's wake, cancel and reply protocol: model-checked in
   research/runtime-core-model/, which found a use after free at every
