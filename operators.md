@@ -753,9 +753,9 @@ Named here so they aren't forgotten:
 
 - **Lazy iterators.** The collection methods make a new collection each
   time until they arrive.
-- **Interpolation and `Shell`,** with the rest of strings, in stage 12,
-  where `sql"..."` hands its parts to a library. Interpolation uses
-  `show`.
+- **Interpolation and `Shell`,** with the rest of strings, in stage 12.
+  Interpolation uses `show`; a library that wants the holes takes a
+  `t"..."` template ([strings.md](strings.md#templates)).
 - **Literal suffixes.** A literal's type stays read from its spelling,
   and a closed set of suffixes says the rest: `0.08d` for `Decimal`,
   a language number type beside `Int` and `Float` when it arrives

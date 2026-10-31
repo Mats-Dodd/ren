@@ -422,11 +422,11 @@ let cfg = try config.load<Cfg>()           // reads PORT, DB_URL, REGION
 Query parameters are bound, never spliced into the string:
 
 ```ren
-for row in Sql.query(sql"select * from users where plan = \{plan}")
+for user in DB.rows<User>(t"select * from users where plan = \{plan}")
   ...
 ```
 
-`sql"..."` needs interpolation a library can intercept, like tagged templates in JavaScript. Without it, every SQL library has either an injection risk or an awkward API, so it has to land before the first SQL library does (*proposed*, stage 12).
+`t"..."` is a template, not a string: the library sees the parts and the holes apart, binds each hole as a parameter, and checks the query against the schema while building, through a signature `let`. A `Str` where a template is expected is a type error, so a query can't be built by pasting strings. There's no `sql"..."` prefix; the library is an ordinary method that takes a template ([strings.md](strings.md#templates), decided; built in stage 12).
 
 ---
 
@@ -486,6 +486,5 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 - What does flottning need? Its dependencies decide what 1.0 has to ship.
 - Is `Alloc` inferred before stage 15 and enforced from it, or added to signatures all at once in stage 15? Inferring it early keeps `std`'s public signatures stable.
 - Is rule 3 a hard rule or a warning? We're leaning hard for `std`, with `trust` and non-simulatable flagging covering user FFI.
-- How does interpolation hand its parts to a library: `sql"..."` resolved through a member of the type, or something else?
 - Does `std.x` version separately from `std`, or move with the toolchain?
 - When does `websocket` move from `std.x` to `std`?

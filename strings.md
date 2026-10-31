@@ -349,8 +349,11 @@ Six rules:
 6. **`\{x=}` is `x=\{x}`,** in templates as in strings.
 
 **The site's identity.** `site.id` is one `Int` per literal, a cache key
-inside one process. It never crosses a journaled dependency call,
-because a rebuilt binary renumbers sites. Where a dependency needs a
+inside one process: the address of the site's static data, fixed at
+link, so no cached code holds a number the whole program assigned
+([module-build.md](module-build.md#incremental-by-construction), rule
+5). It never crosses a journaled dependency call, because another
+build puts its sites elsewhere. Where a dependency needs a
 key, a prepared statement or a log message id, the consumer passes
 `site.hash`, a hash of the parts.
 
