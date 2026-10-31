@@ -137,16 +137,31 @@ handler, or one no other task can reach, is neither, so a test's
   core: the stall watchdog names it, heavy pure work goes to `Async.map`,
   and `Async.yield()` checks for a cancel on every call and yields only
   when the budget is spent. The compiler inserts nothing.
-- **A shared take under `per_core` is served at the instance's home
-  core.** A shared, exclusive instance is a family of one key, so an
-  operation from another core is a `D.Call` pushed to its home's queue
-  and answered: the same queue as a post or a world call, with no lock
-  moving between cores, no spinning on the take, and no starving, since
-  the queue is first in, first out. With short contended holds on 8
-  workers it ran 2 to 2.7× a thread lock and 2.6 to 5.9× parking; with a
-  100 µs hold it kept other workers' work flowing where a thread lock
-  starved a waiter for 1.6 s (experiments/runtime-frames/, X3 and X3b).
-  Whether an uncontended take runs in place first is experiment X3c.
+- **A shared take under `per_core` runs in place when the instance is
+  free, and is served at its home core when it's held.** A shared,
+  exclusive instance is a family of one key with a home core. An
+  operation that finds it free takes it with one compare-and-swap and
+  runs on its own core. One that finds it held, or whose task still has
+  a call to it unanswered, is a `D.Call` pushed to the home's queue and
+  answered: the same queue as a post or a world call, first in, first
+  out, with no lock moving between cores. Three rules keep it sound:
+  - **Order:** a task with a call to the instance in flight ships its
+    next one too, so one task's calls are never reordered.
+  - **No starving:** when the home fails to take the instance it closes
+    the in-place path, so its queue waits at most one in-place
+    operation.
+  - **A short retry:** a take that finds one in-place holder retries for
+    up to 300 ns before shipping, which keeps the tail near a lock's.
+
+  Rare sharing costs what a thread lock does (0.2 to 0.3 µs a shared
+  operation, against 10 to 17 µs shipping every one); under contention
+  it ships, matching shipping's throughput, 5× a thread lock's; with a
+  100 µs hold other workers' work keeps flowing where a thread lock
+  starved a waiter for 1.6 s. Its one risk is a holder the OS takes off
+  its core, which stalls the instance for that operation; under heavy
+  machine load some contended runs fell to a quarter of shipping, and
+  keeping the instance at its home briefly after a failed take is the
+  knob for it (experiments/runtime-frames/, X3, X3b and X3c).
 - **The `per_core` scheduler drains its incoming queue at every
   scheduling point and runs tasks just resumed first,** which cuts a
   shipped operation's wait under light contention from 130 to 10 µs, and
@@ -318,10 +333,10 @@ names and signatures are the runtime core stage's:
 
 ## Open
 
-- Whether an uncontended shared take runs in place, shipping only under
-  contention: experiment X3c.
 - The core's own record layout, shared with the journal and the hosted
   wire: the runtime core stage.
 - A user-written scheduler: later, inside `trust`, against this page.
-- The core's wake, cancel and reply protocol, model-checked before it's
-  built (research/runtime-core-model/).
+- The core's wake, cancel and reply protocol: model-checked in
+  research/runtime-core-model/, which found a use after free at every
+  wake and a lost wake on a retracted call in SPEC §B, and gives eight
+  rules the core keeps. The runtime core stage builds to them.
