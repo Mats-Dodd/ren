@@ -9612,10 +9612,11 @@ Choices where strings.md, decision 17 and the brief are silent:
   `concat` move to `+` unchanged.
 - Step 2: an interpolated string whose hole is a `Str` uses it as it is,
   without `show` (the same value), and a string of one hole is that value.
-- Step 2: a hole whose value is of a type with a `show` of its own
-  doesn't build natively yet, since `show(x)` of one doesn't (the bytes
-  stage's step 3 refuses such a type at a walk); `ren run` shows it, and
-  `\{x.show()}` builds.
+- Step 2: a hole whose value is of a type variable whose instance has a
+  `show` of its own doesn't build natively, since `show(x)` of one
+  doesn't (the bytes stage's step 3 refuses such a type at a walk);
+  `ren run` shows it. A hole of such a type known where it's written
+  builds (step 6, below).
 - Step 3: a copy made by `_taking` gets room for twice the left side's
   length, not twice its owner's room: a loop that copies a shared string
   on every pass would otherwise double the room it asks for each time
@@ -9710,6 +9711,20 @@ Choices where strings.md, decision 17 and the brief are silent:
   by `\` loses its next line's indentation too; `t` isn't combined with
   any form, since templates aren't built; and `show` of a `Str` writes a
   `\r` or a `\0` as the byte, not as its escape.
+- Step 6: a hole whose type is known where it's written and has a `show`
+  of its own calls that `show`, as `x.show()` would (lower.ml,
+  `own_shown`), in `ren run` and natively alike, so it builds natively;
+  `show(x)` of the value walked its descriptor, which part one refuses
+  for such a type. A hole whose type is a type variable still goes
+  through the descriptor, and a native build still refuses it when the
+  instance has a `show` of its own (part one's refusal, generic code
+  calling a member through a descriptor), as it refuses an `Array` of
+  such values in a hole. Inside a type's own `show`, a hole of that type
+  is `show(x)` as before: the declared form in `ren run`, refused
+  natively. A hole of it in a function that `show` calls is the one
+  place a hole and `show(x)` differ: the hole calls `show` again, and
+  overflows the stack in every build, as `x.show()` there would, where
+  `show(x)` shows the declared form. strs/interp_show.ren is the test.
 
 ### Step 1, as built
 

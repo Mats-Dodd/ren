@@ -336,6 +336,25 @@ let is_named (a : expr) = match a.kind with Named _ -> true | _ -> false
 (* Whether [t] is the prelude's `Tags`. *)
 let is_tags (t : Ty.ty) = t = Con (Path.prelude "Tags", [])
 
+(* The scheme of [d]'s own `show`, if it shows its values through one
+   ([shows], below): a method that takes only its `self`, of the type with
+   its parameters in order, and gives a `Str` without failing or using a
+   dependency. *)
+let own_show (d : Iface.type_decl) =
+  let own = List.init (List.length d.params) (fun n -> Ty.Var n) in
+  match Iface.find_member d "show" with
+  | Some
+      {
+        okind = Method;
+        oscheme =
+          { ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses); _ } as s;
+        _;
+      }
+    when p = d.path && args = own && ret = Ty.str && errs.labels = []
+         && uses.labels = [] ->
+      Some s
+  | _ -> None
+
 (* Whether inference found [id] to be a `match` with `fail` arms, or a
    `fail` arm's pattern (Infer.found). *)
 let handles cx id = (node cx id).found = Some Handles
@@ -571,7 +590,12 @@ and expr_of cx (e : expr) : C.expr =
             | Lit t -> Some (mk (Str t) Ty.str e.loc)
             | Hole h ->
                 let x = expr cx h in
-                Some (if x.ty = Ty.str then x else shown cx x h.loc))
+                Some
+                  (if x.ty = Ty.str then x
+                   else
+                     match own_shown cx x h.loc with
+                     | Some s -> s
+                     | None -> shown cx x h.loc))
           ps
       in
       match parts with
@@ -1999,6 +2023,38 @@ and shown cx (x : C.expr) loc =
   let fty = Ty.apply a (Prelude.scheme Show).ty in
   let f = mk (Intrinsic (Show, a, descs cx a, [])) fty loc in
   mk (Call (f, [ C.Value x ], cx.ev)) Ty.str loc
+
+(* `x.show()`, if [x]'s type is known here and shows its values through
+   a `show` of its own: what `show(x)` calls, called directly, so a hole
+   needs no walk of the type's descriptor, which a native build can't do
+   for a type with a `show` of its own (to_mem.ml, [decl_id]). Not inside
+   that `show` itself, where `show(x)` shows `x` as it's declared
+   (Shown.own's [Inside]), which [shown] does. A type variable's value
+   goes through [shown]. *)
+and own_shown cx (x : C.expr) loc =
+  match x.ty with
+  | Con (p, targs) -> (
+      let m = Path.member p "show" in
+      match cx.types p with
+      | Some d when cx.self <> m -> (
+          match own_show d with
+          | Some s ->
+              let a : Ty.args =
+                { tys = targs; rows = [ Ty.closed; Ty.closed ] }
+              in
+              let dicts =
+                List.map (fun (n, req) -> dict cx req (List.nth targs n)) s.reqs
+              in
+              let callee : C.kind =
+                match Prelude.find m with
+                | Some i -> Intrinsic (i, a, descs cx a, dicts)
+                | None -> Global (m, a, descs cx a, dicts)
+              in
+              let f = mk callee (Ty.apply a s.ty) loc in
+              Some (mk (Call (f, [ C.Value x ], cx.ev)) Ty.str loc)
+          | None -> None)
+      | _ -> None)
+  | _ -> None
 
 (* [a + b], of two strings: `Str.add`, as the operator is. *)
 and str_add cx (a : C.expr) (b : C.expr) loc =
@@ -3525,17 +3581,8 @@ let made_for_requests (inferred : Infer.t) path (f : fn_def) =
 let shows (types : Iface.type_decl list) (fns : C.fn_def list) =
   List.filter_map
     (fun (d : Iface.type_decl) ->
-      let own = List.init (List.length d.params) (fun n -> Ty.Var n) in
-      match Iface.find_member d "show" with
-      | Some
-          {
-            okind = Method;
-            oscheme =
-              { ty = Fun ([ { ty = Con (p, args); _ } ], ret, errs, uses); _ };
-            _;
-          }
-        when p = d.path && args = own && ret = Ty.str && errs.labels = []
-             && uses.labels = [] ->
+      match own_show d with
+      | Some _ ->
           let m = Path.member d.path "show" in
           if List.exists (fun (f : C.fn_def) -> f.path = m) fns then
             Some (d.path, m)

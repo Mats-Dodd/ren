@@ -33,7 +33,7 @@ Step 2, the API; and appending, slices kept and their counts, which
 need step 2's `+=` and interpolation, and whose meaning steps 3 and 4
 don't change:
 
-  $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp; do spec strs/$f.ren; done
+  $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp interp_show; do spec strs/$f.ren; done
   strs/api.ren: as specified
   strs/api_cut_panic.ren: as specified
   strs/api_cut_start_panic.ren: as specified
@@ -42,6 +42,7 @@ don't change:
   strs/api_of_code_panic.ren: as specified
   strs/api_floor_panic.ren: as specified
   strs/interp.ren: as specified
+  strs/interp_show.ren: as specified
   $ for f in append append_count append_report slices_kept slices_count; do spec strs/$f.ren; done
   strs/append.ren: as specified
   strs/append_count.ren: as specified
@@ -112,7 +113,7 @@ line of what `ren build` said.
   strs/invalid_utf8.ren, release: the same, exit 0, objects live at exit 0
   strs/invalid_utf8.ren, tcc: the same, exit 0, objects live at exit 0
   strs/invalid_utf8.ren, ren run --release: the same
-  $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp; do native strs/$f.ren; done
+  $ for f in api api_cut_panic api_cut_start_panic api_code_panic api_code_empty_panic api_of_code_panic api_floor_panic interp interp_show; do native strs/$f.ren; done
   strs/api.ren, perceus: the same, exit 0, objects live at exit 0
   strs/api.ren, naive: the same, exit 0, objects live at exit 0
   ren specialized: 19 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
@@ -161,6 +162,12 @@ line of what `ren build` said.
   strs/interp.ren, release: the same, exit 0, objects live at exit 0
   strs/interp.ren, tcc: the same, exit 0, objects live at exit 0
   strs/interp.ren, ren run --release: the same
+  strs/interp_show.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/interp_show.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 10 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/interp_show.ren, release: the same, exit 0, objects live at exit 0
+  strs/interp_show.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/interp_show.ren, ren run --release: the same
   $ for f in append append_count append_report slices_kept slices_count; do native strs/$f.ren; done
   strs/append.ren, perceus: the same, exit 0, objects live at exit 0
   strs/append.ren, naive: the same, exit 0, objects live at exit 0

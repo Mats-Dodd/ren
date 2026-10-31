@@ -1,0 +1,40 @@
+// A hole whose type shows its values through a `show` of its own
+// (compiler.md, "Bytes stage, part two", "Where this stage may differ"):
+// the hole calls that `show`, as `x.show()` would, in every build. A
+// record's, a sum's, an opaque type's and a generic type's at a known
+// instance; one given a field, a call's result and a value used after;
+// and a hole inside a type's own `show`, of another such type.
+
+type Money = { cents: Int }
+  fn show(self) -> Str = "$\{self.cents / 100}.\{self.cents % 100}"
+
+type Light = | Red | Green
+  fn show(self) -> Str =
+    match self
+      Red => "stop"
+      Green => "go"
+
+type Name = opaque Str
+  fn of(s: Str) -> Name = s
+  fn show(self) -> Str = "<" + self + ">"
+
+type Boxed<T> = { item: T }
+  fn show(self) -> Str = "boxed \{self.item}"
+
+type Order = { what: Name, price: Money }
+  fn show(self) -> Str = "\{self.what} at \{self.price}"
+
+fn cost(n: Int) -> Money = Money { cents: n * 150 }
+
+fn main() uses Console =
+  let m = Money { cents: 1234 }
+  print("\{m}")
+  print("total: \{m}, again \{m.show()}")
+  print("\{Red} then \{Green}")
+  print("\{Name.of("ada")}")
+  print("\{Boxed { item: 7 }} and \{Boxed { item: "x" }}")
+  let o = Order { what: Name.of("tea"), price: cost(3) }
+  print("\{o}")
+  print("\{o.price}")
+  print("\{cost(2)}")
+  print(m.show())
