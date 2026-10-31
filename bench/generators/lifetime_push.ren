@@ -1,0 +1,25 @@
+gen fn rows(label: Str, n: Int) -> Int uses Console =
+  finally(r) =>
+    print((label, r))
+    try r
+  for i in 0..n
+    yield i
+
+fn early() -> Int uses Console =
+  for x in rows("return", 3)
+    return x + 7
+  99
+
+fn failed() ! ConsumerBad uses Console =
+  for x in rows("failure", 3)
+    fail ConsumerBad
+
+fn main() uses Console =
+  for x in rows("done", 2)
+    print(x)
+  for x in rows("break", 3)
+    print(x)
+    break
+  print(early())
+  print(attempt failed())
+  print(rows("take", 3).take(1).to_array())

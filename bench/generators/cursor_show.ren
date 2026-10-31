@@ -1,0 +1,23 @@
+gen fn values(secret: Int) -> Int ! Bad(secret: Int) =
+  yield secret
+  fail Bad(secret)
+
+gen fn one(secret: Int) -> Int =
+  yield secret
+
+fn main() uses Console =
+  var a = values(12345)
+  print(a)
+  let _ = attempt &a.next()
+  var copy = a
+  print(a)
+  let _ = attempt &a.next()
+  print(a)
+  print(copy)
+  let _ = attempt &copy.next()
+  print(copy)
+  var returned = one(67890)
+  print(returned)
+  let _ = &returned.next()
+  let _ = &returned.next()
+  print(returned)

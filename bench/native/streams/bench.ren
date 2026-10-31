@@ -1,0 +1,163 @@
+// Step 0: hand-written equivalents of streams.md's five Cost workloads.
+// No generator syntax is needed. Round-dependent state prevents identical
+// repeated calls from being replaced by one call and a multiplication.
+
+type Entry = { error: Bool, id: Int }
+pub type Tree =
+  | Leaf
+  | Node { value: Int, left: Tree, right: Tree }
+
+fn random(inout state: Int) -> Int =
+  state = state * 48271 % 2147483647
+  state
+
+pub fn log_input(n: Int) -> Bytes =
+  var out: Array<Int> = []
+  var state = 42
+  for _ in 0..n
+    let x = random(&state)
+    var id = random(&state) % 1_000_000_000
+    let len = 20 + random(&state) % 40
+    &out.push(if x % 20 == 0 then 69 else 73)
+    &out.push(32)
+    // Nine decimal digits, least significant first; parse reads that order.
+    for _ in 0..9
+      &out.push(48 + id % 10)
+      id = id / 10
+    &out.push(32)
+    for j in 0..len
+      &out.push(97 + (x + j) % 26)
+    &out.push(10)
+  Bytes.of(out)
+
+fn parse(b: Bytes) -> Entry =
+  var id = 0
+  for i in 2..11
+    id = id * 10 + b.at(i) - 48
+  Entry { error: b.at(0) == 69, id: id }
+
+pub fn map_select_take(b: Bytes, limit: Int, salt: Int) -> Int =
+  var at = 0
+  var count = 0
+  var sum = 0
+  while at < b.len() && count < limit
+    let tail = b[at..b.len()]
+    let end = at + tail.index("\n".bytes()).unwrap_or(tail.len())
+    let e = parse(b[at..end])
+    if e.error then
+      count += 1
+      sum += e.id.xor(salt)
+    at = end + 1
+  sum + count
+
+pub fn tree_input(lo: Int, hi: Int) -> Tree =
+  if lo >= hi then Leaf
+  else
+    let mid = (lo + hi) / 2
+    Node { value: (mid * 48271 + 7) % 2147483647,
+           left: tree_input(lo, mid), right: tree_input(mid + 1, hi) }
+
+fn walk(t: Tree, inout left: Int, salt: Int, inout sum: Int) =
+  if left > 0 then
+    match t
+      Leaf => ()
+      Node { value, left: a, right: b } =>
+        if value % 7 == 0 then
+          sum += value.xor(salt)
+          left -= 1
+        walk(a, &left, salt, &sum)
+        walk(b, &left, salt, &sum)
+
+pub fn tree_walk(t: Tree, limit: Int, salt: Int) -> Int =
+  var left = limit
+  var sum = 0
+  walk(t, &left, salt, &sum)
+  sum
+
+pub fn deltas_input(n: Int) -> Array<Int> =
+  var state = 99
+  var xs: Array<Int> = []
+  for _ in 0..n
+    &xs.push(if random(&state) % 16 == 0 then 1 else 0)
+  xs
+
+pub fn dedup_by(ds: Array<Int>, salt: Int) -> Int =
+  var tick = salt
+  var last = -1
+  var sum = 0
+  for d in ds
+    tick += d
+    let x = tick / 2
+    if x != last then
+      last = x
+      sum += x
+  sum
+
+pub fn zip_input(n: Int) -> Array<Int> =
+  var state = 5
+  var xs: Array<Int> = []
+  for _ in 0..n
+    let x = random(&state)
+    &xs.push(if x % 8 == 0 then -1 - x / 8 else x / 8)
+  xs
+
+pub fn zip(xs: Array<Int>, na: Int, salt: Int) -> Int =
+  var i = 0
+  var j = 0
+  var sum = 0
+  while i < na && j < xs.len()
+    while i < na && i % 3 == 0
+      i += 1
+    while j < xs.len() && xs[j] < 0
+      j += 1
+    if i < na && j < xs.len() then
+      sum += i.xor(xs[j]).xor(salt)
+      i += 1
+      j += 1
+  sum
+
+// Today's explicit pull block, with cursor state in the caller.
+fn selected_next(b: Bytes, inout at: Int, salt: Int) -> Option<Int> =
+  var result: Option<Int> = None
+  while at < b.len() && result == None
+    let tail = b[at..b.len()]
+    let end = at + tail.index("\n".bytes()).unwrap_or(tail.len())
+    let e = parse(b[at..end])
+    at = end + 1
+    if e.error then result = Some(e.id.xor(salt))
+  result
+
+fn total(src: fn() -> Option<Int>) -> Int =
+  var sum = 0
+  var running = true
+  while running
+    match try src()
+      Some(x) => sum += x + 1
+      None => running = false
+  sum
+
+pub fn passed(b: Bytes, salt: Int) -> Int =
+  var at = 0
+  total(fn() => selected_next(b, &at, salt))
+
+pub fn run(n: Int, rounds: Int) uses Console =
+  let b = log_input(n)
+  let t = tree_input(0, n)
+  let ds = deltas_input(n)
+  let xs = zip_input(n)
+  var a = 0
+  var c = 0
+  var d = 0
+  var e = 0
+  var f = 0
+  for r in 0..rounds
+    a += map_select_take(b, n / 25, r)
+    c += tree_walk(t, n / 8, r)
+    d += dedup_by(ds, r)
+    e += zip(xs, n * 21 / 16, r)
+    f += passed(b, r)
+  print(a)
+  print(c)
+  print(d)
+  print(e)
+  print(f)

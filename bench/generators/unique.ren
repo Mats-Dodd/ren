@@ -1,0 +1,14 @@
+gen fn change(inout xs: Array<Int>) -> Int =
+  &xs.push(1)
+  yield xs.len()
+  &xs.push(2)
+  yield xs.len()
+
+fn main() uses Console =
+  var xs = [0]
+  let g = change(&xs)
+  print(g())
+  let copy = xs
+  print(g())
+  print(copy)
+  print(xs)

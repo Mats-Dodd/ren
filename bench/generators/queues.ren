@@ -1,0 +1,78 @@
+import sync.{Chan}
+
+pub dep Audit =
+  start: fn(id: Int)
+  expect: fn(n: Int)
+  wait_ready: fn()
+  stop: fn(id: Int)
+  stopped: fn() -> Array<Int>
+
+pub handler audit() for Audit uses Async =
+  var begun: Array<Int> = []
+  var expected = 0
+  var ended: Array<Int> = []
+  start(id) => &begun.push(id)
+  expect(n) => expected = n
+  wait_ready() => Async.until fn() => begun.len() >= expected
+  stop(id) => &ended.push(id)
+  stopped() => ended
+
+pub dep Lifetime =
+  touch: fn()
+
+pub handler producer_lifetime() for Lifetime uses Audit =
+  finally(r) =>
+    Audit.stop(1)
+    try r
+  touch() => ()
+
+pub dep Events = Chan<Int>
+
+test "produce early exit waits for producer cleanup" =
+  with audit() in
+    Async.produce(cap: 1, fn() =>
+      with producer_lifetime() in
+        for i in 0..100
+          Send.send(i)) fn(items) =>
+      for x in items
+        Async.yield()
+        break
+    assert Audit.stopped() == [1]
+
+test "a producer failure follows every buffered value" =
+  var got: Array<Int> = []
+  let result = attempt Async.produce(cap: 3, fn() =>
+    Send.send(11)
+    Send.send(12)
+    fail BufferedBad) fn(items) =>
+    for x in try items
+      Async.yield()
+      &got.push(x)
+  assert got == [11, 12]
+  assert result == Err(BufferedBad)
+
+test "cancelling a receive leaves the later token unconsumed" =
+  with sync.channel(1) as Events in
+    Async.beside(fn() =>
+      let ignored = Events.recv()
+      ()) fn() => Async.yield()
+    Events.send(7)
+    Events.close()
+    assert Events.recv() == Some(7)
+    assert Events.recv() == None
+
+test "cancelling a send with a full queue preserves the admitted token" =
+  with sync.channel(1) as Events in
+    Events.send(1)
+    Async.beside(fn() => Events.send(2)) fn() => Async.yield()
+    Events.close()
+    assert Events.recv() == Some(1)
+    assert Events.recv() == None
+
+test "close wakes receivers and all observe the terminal state" =
+  with sync.channel(1) as Events in
+    let (a, (b, closed)) = Async.both(
+      fn() => Events.recv(),
+      fn() => Async.both(fn() => Events.recv(), fn() => Events.close()))
+    assert a == None
+    assert b == None

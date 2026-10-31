@@ -1,0 +1,7 @@
+fn main() =
+  let path = Path.of(Os.args()[0])
+  try Fs.write(path, "first\nsecond\nthird\n".bytes())
+  for line in try Fs.lines(path)
+    print(line)
+    break
+  print(try Fs.lines(path).take(2).to_array())

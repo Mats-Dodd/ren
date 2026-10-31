@@ -1,0 +1,6 @@
+Some("other")
+Some("error one")
+Some("error one")
+error two
+["old"]
+exit 0

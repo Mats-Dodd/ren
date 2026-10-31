@@ -1,0 +1,33 @@
+gen fn rows(label: Str) -> Int uses Console =
+  print(label + " BEGIN")
+  finally(r) =>
+    print((label, r))
+    try r
+  for i in 0..3
+    yield i
+
+fn named() uses Console =
+  let never = rows("never")
+  let g = rows("named")
+  for x in g
+    print(x)
+    break
+  print("between")
+  for x in g
+    print(x)
+    break
+  print("scope ends")
+
+fn returned() -> Int uses Console =
+  for x in rows("return")
+    return x
+  99
+
+fn main() uses Console =
+  for x in rows("done")
+    print(x)
+  for x in rows("break")
+    print(x)
+    break
+  named()
+  print(returned())

@@ -23,6 +23,10 @@ Each folder is one program:
 | `rust/main.rs` | the Rust twin: std only, no `unsafe`, no SIMD, one thread |
 | `go/main.go` | the Go twin, one goroutine |
 
+`streams` also times the libc `memchr` line splitter used in streams.md's
+Cost table. Its Rust FFI wrapper is a documented exception to the safe
+Rust convention, with a standard splitter measured separately.
+
 The twins take the size as their first argument and default to
 `main.ren`'s, and print exactly what the Ren prints.
 
@@ -46,6 +50,7 @@ The twins take the size as their first argument and default to
 | `maps` | 200,000 accounts, 20 rounds | 1,000, 2 | `Map` natively (compiler.md, "Bytes stage", step 3): records with a name kept in a `Map<Int, Account>` and a `Map<Str, Int>`, each round built, looked up, a third removed and iterated in insertion order; the Rust keeps std's `HashMap` of each key to its entry's place in a `Vec` in insertion order (indexmap's shape, no crate), the Go a `map` the same way |
 | `interp` | 25,600 evaluations, dispatch's `interp` at its size | 3 | **the data stage's milestone**: `dispatch`'s expression tree written ADT-first, `Expr` a sum type and `eval` a `match`; no twins of its own: dispatch's Rust, run `100 interp enum` (and `dyn`), is its, and build.sh builds none for it |
 | `slices` | 200,000 log lines, 100,000 objects and 4,000 pages, each parsed 20 times | 1,000 lines, 500 objects and 20 pages, twice | **decision 17**: research/slices.md's three parsers, each with slices, `b[i..j]`, and with offsets, its twin in the same file: log lines split into fields read and dropped, a JSON-ish tokenizer whose tokens keep slices, and pages parsed into records that keep them; the Rust holds `&[u8]`s, the Go `[]byte`s. `retain` keeps 1,000 small slices of each of eight 8 MiB buffers, and then their `copy()`s, which build.sh's `retain` kernels run |
+| `streams` | 1,000,000 items, 20 passes | 200, 2 | generator-stage hand-loop baseline: parse/select/take, recursive tree walk, user dedup_by, filtered zip, and a pull block passed to a function; Rust iterator and Go push/pull twins, with independent interleaved measurement scripts in streams/ |
 
 The first four are the Perceus set, ported from Koka's
 `test/bench/koka/*.kk` with the same algorithms and outputs. The next

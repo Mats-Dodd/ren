@@ -1,0 +1,7 @@
+gen fn down(n: Int) -> Int =
+  if n > 0 then yield from down(n - 1)
+  yield n
+
+fn main() uses Console =
+  var g = down(100001)
+  print(&g.next())

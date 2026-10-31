@@ -1,0 +1,2 @@
+exit 1
+error: panic: the stack overflowed: a function called itself too deeply

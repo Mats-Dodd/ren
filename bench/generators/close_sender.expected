@@ -1,0 +1,2 @@
+exit 1
+error: panic: a send on a closed channel

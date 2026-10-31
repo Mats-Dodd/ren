@@ -1,0 +1,32 @@
+// Sql is a Ren fake. Its scope must commit only after generator completion.
+dep Sql =
+  row: fn(i: Int) -> Int
+
+handler transaction() for Sql uses Console =
+  let begun = print("BEGIN")
+  finally(r) =>
+    match r
+      Ok(_) => print("COMMIT")
+      Err(_) => print("ROLLBACK")
+    try r
+  row(i) => i * 100
+
+gen fn orders() -> Int uses Console =
+  with transaction() in
+    for i in 0..3
+      yield Sql.row(i)
+
+fn export(confirm: Bool) uses Console =
+  let rows = orders()
+  for row in rows.take(1)
+    print(("preview", row))
+  if not confirm then return
+  for row in rows
+    print(("export", row))
+
+fn main() uses Console =
+  let never = orders()
+  print("decline")
+  export(false)
+  print("confirm")
+  export(true)

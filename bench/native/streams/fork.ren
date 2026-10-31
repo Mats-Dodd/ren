@@ -1,0 +1,24 @@
+// Today's explicit pure cursor. Copying the record forks it honestly.
+// replay=true models reconstruction at a saved position; this does not
+// measure a generator runtime yet.
+type Cursor = { at: Int, tick: Int }
+fn next(inout c: Cursor) -> Int =
+  c.tick = (c.tick * 48271 + c.at + 1) % 2147483647
+  c.at += 1
+  c.tick
+
+pub fn backtrack(n: Int, replay: Bool) -> Int =
+  var source = Cursor { at: 0, tick: 99 }
+  var sum = 0
+  for position in 0..n
+    var probe = source
+    if replay then
+      probe = Cursor { at: 0, tick: 99 }
+      for _ in 0..position
+        let _ = next(&probe)
+        ()
+    for _ in 0..4
+      sum += next(&probe)
+    let _ = next(&source)
+    ()
+  sum

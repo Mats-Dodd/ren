@@ -1,0 +1,5 @@
+gen fn values(secret: Int) -> Int =
+  yield secret
+
+fn same<T>(a: T, b: T) -> Bool = a == b
+fn main() uses Console = print(same(values(1), values(1)))

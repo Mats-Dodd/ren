@@ -1,0 +1,5 @@
+gen fn values(secret: Int) -> Int =
+  yield secret
+
+fn hash<T>(value: T) -> Int = value.hash()
+fn main() uses Console = print(hash(values(1)))

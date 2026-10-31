@@ -1,0 +1,21 @@
+dep Sql =
+  row: fn(i: Int) -> Int
+
+handler transaction() for Sql uses Console =
+  let begun = print("BEGIN")
+  finally(r) =>
+    match r
+      Ok(_) => print("COMMIT")
+      Err(_) => print("ROLLBACK")
+    try r
+  row(i) => i * 100
+
+gen fn orders() -> Int uses Console =
+  with transaction() in
+    for i in 0..3
+      yield Sql.row(i)
+
+fn main() uses Console =
+  print(orders().take(1).to_array())
+  for row in orders()
+    print(row)

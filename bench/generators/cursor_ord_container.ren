@@ -1,0 +1,4 @@
+gen fn values(secret: Int) -> Int =
+  yield secret
+
+fn main() uses Console = print([values(2), values(1)].sort())

@@ -162,3 +162,19 @@
   (glob_files patterns/*.ren)
   (glob_files patterns/*.expected)
   (glob_files native/keywords/*.ren)))
+
+; The generators stage's differential cases start as explicit targets,
+; then run in each build as g1 through g5 land.
+
+(cram
+ (applies_to generators)
+ (deps
+  (env_var PATH)
+  (env_var NIX_HARDENING_ENABLE)
+  %{bin:ren}
+  (env_var REN_TCC)
+  (glob_files generators/*.ren)
+  (glob_files generators/*.expected)
+  (glob_files generators/*.sh)
+  (glob_files generators/*.pending)
+  generators/stages))

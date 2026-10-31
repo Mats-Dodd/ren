@@ -1,0 +1,24 @@
+gen fn numbers(n: Int) -> Int =
+  for i in 0..n
+    yield i
+
+gen fn walk(n: Int) -> Int =
+  if n > 0 then yield from walk(n - 1)
+  yield n
+
+type Saved = { cursor: numbers.Cursor }
+
+fn main() uses Console =
+  var a = numbers(4)
+  print(&a.next())
+  let saved = Saved { cursor: a }
+  var b = saved.cursor
+  print(&b.next())
+  print(&b.next())
+  print(&a.next())
+  for x in walk(3)
+    print(x)
+  for x in &a
+    print(x)
+  print(&a.next())
+  print(&a.next())

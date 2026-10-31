@@ -1,0 +1,5 @@
+gen fn values(secret: Int) -> Int =
+  yield secret
+
+fn before<T>(a: T, b: T) -> Bool = a < b
+fn main() uses Console = print(before(values(1), values(2)))

@@ -1,0 +1,11 @@
+gen fn rows() -> Int uses Console =
+  print("first step")
+  yield 1
+
+fn consume(src: fn() -> Option<Int>) -> Int =
+  var total = 0
+  for x in src
+    total += x
+  total
+
+fn main() uses Console = print(consume(rows()))

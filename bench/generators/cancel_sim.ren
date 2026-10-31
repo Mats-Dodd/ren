@@ -1,0 +1,50 @@
+pub dep State =
+  ready: fn()
+  wait_started: fn()
+  park: fn()
+  ended: fn(cancelled: Bool)
+  results: fn() -> Array<Bool>
+
+pub handler state() for State uses Async =
+  var begun = false
+  var ends: Array<Bool> = []
+  ready() => begun = true
+  wait_started() => Async.until fn() => begun
+  park() => Async.until fn() => false
+  ended(cancelled) => &ends.push(cancelled)
+  results() => ends
+
+pub gen fn slow(mid_step: Bool) -> Int uses Async, State =
+  finally(r) =>
+    match r
+      Err(Cancelled) => State.ended(true)
+      _ => State.ended(false)
+    try r
+  yield 0
+  if mid_step then
+    State.ready()
+    State.park()
+  yield 1
+
+pub fn worker(named: Bool, mid_step: Bool) uses Async, State =
+  if named then
+    let g = slow(mid_step)
+    for x in g
+      if mid_step then ()
+      else
+        State.ready()
+        State.park()
+  else
+    for x in slow(mid_step)
+      if mid_step then ()
+      else
+        State.ready()
+        State.park()
+
+test "cancel temporary/named during body/step finalizes exactly once" =
+  for named in [false, true]
+    for mid_step in [false, true]
+      with state() in
+        Async.beside(fn() => worker(named, mid_step)) fn() =>
+          State.wait_started()
+        assert State.results() == [true]

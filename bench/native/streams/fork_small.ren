@@ -1,0 +1,4 @@
+import fork
+fn main() uses Console =
+  print(fork.backtrack(50, false))
+  print(fork.backtrack(50, true))

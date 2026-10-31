@@ -1,0 +1,16 @@
+fn main() =
+  let p = Path.of("log")
+  let q = Path.of("other")
+  let files = [File { path: p, data: "old\n--- boot ---\nerror one\nerror two\n".bytes() }, File { path: q, data: "other\n".bytes() }]
+  with mem_fs(files, max: 1) in
+    var r = Fs.line_reader(p)
+    for line in try &r
+      if line == "--- boot ---" then break
+    var copied = r
+    var other = Fs.line_reader(q)
+    print(try &other.next())
+    print(try &r.next())
+    print(try &copied.next())
+    for line in try &r
+      print(line)
+    print(try Fs.lines(p).take(1).to_array())

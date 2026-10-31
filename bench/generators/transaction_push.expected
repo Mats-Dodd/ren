@@ -1,0 +1,9 @@
+BEGIN
+ROLLBACK
+[0]
+BEGIN
+0
+100
+200
+COMMIT
+exit 0

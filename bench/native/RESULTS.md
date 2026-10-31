@@ -2257,3 +2257,169 @@ set but headers, where it's 1.6 ns slower (ranges 7.9 to 10.4 against
 6.8 to 8.5): the `Option` it makes and the `match` on it, which the
 direct `match` doesn't have. This run repeats step 3's within its
 spread.
+
+## Generators stage, step 0: current Ren hand loops (2026-10-30)
+
+These are **current Ren programs**, before `gen fn` and pipeline lowering,
+not the C-model predictions in streams.md. `streams/bench.ren` supplies
+all five Cost workloads: parsing log lines through map/select/take,
+a recursive preorder tree walk through select/take, sparse ticks mapped
+to halves and deduplicated, two filtered sources zipped and xor-summed,
+and a pull block passed to a user function. Each runs at 1,000,000 items
+and 20 passes; its round changes state or the checksum calculation so
+identical calls cannot be folded into one call. The fixture is smaller
+and simpler than E3's 100 MiB log and variable-branching tree; comparisons
+below are for this fixture on this machine, not a remeasurement of E3's
+published ratios. Native generator performance remains unmeasured.
+
+The Rust uses iterator adapters, a user Dedup struct, an explicit-stack
+walk and a boxed recursive walk. Its default log splitter uses libc
+`memchr`, as streams.md's Rust column does, in a small documented unsafe
+FFI wrapper; `rust-std` separately uses safe `split_terminator`. Input
+UTF-8 validation occurs during setup in both Rust log variants. Ren's
+`Bytes.index` also reaches libc `memchr`. The Go push forms range directly
+over their adapter chains; W5 passes its chain to `total`. Its pull forms
+use `iter.Pull`; `go-pull1` pulls the second zip source while ranging the
+first, and `go-pull2` pulls both. These forms keep the Cost columns'
+choices visible, including the expensive boxed and coroutine cases.
+
+Machine: Linux x86_64, kernel 6.18.57, Intel Xeon Platinum 8573C under
+KVM, five visible CPUs with a four-CPU cgroup quota, 16 GiB memory limit.
+Compiler baseline `12da2291bbbeee241bbe17bfb501fcd834f617a0`; Clang 23.1.3
+at Ren's release flags (`-O2`), rustc 1.99.0 (`-C opt-level=3
+-C codegen-units=1`), Go 1.27.3; OCaml 5.5.2 and Dune 3.24.2 built the
+compiler. One thread per kernel; Go's runtime/collector uses its default
+configuration. Full tests and other compilations were paused for the
+measurement. This is shared virtual hardware, with no hardware-counter
+or CPU-affinity claim.
+
+The table contains **11 interleaved rounds**, rotated and reversed.
+Each implementation is timed once with one pass and once with 20 in
+each round; its per-pass estimate is `(time20 - time1)/19`, with the
+median and min/max of those 11 paired estimates shown. Using one pass
+keeps input generation observably live in the subtraction control.
+This estimates the additional pass's cost while removing most input
+construction and destruction. The full 20-pass process median and spread
+are also shown; all one-pass samples are preserved in the JSON. Ratios
+use paired-estimate medians, relative to the Ren hand loop; a ratio is
+suppressed if any paired estimate is nonpositive. Wall time and allocation
+or GC variation can affect subtraction, so the spread is part of the
+result. No warm-up or outlier sample is removed.
+
+Two preliminary runs were discarded before the final 11-round run: one
+exposed an extra generic sink boundary in Go's direct push rows, and the
+next exposed setup/GC noise from repeatedly growing an unreserved Go
+log buffer (including a negative W5 paired estimate). The final twins
+reserve the log fixture's known maximum size, as E3 reserved its known
+target size. These are source/method corrections; all samples from the
+final run, including remaining noise, are retained.
+
+| Workload | Variant | Full process median ms (min–max) | Paired additional-pass median ms (min–max) | / Ren |
+|---|---|---:|---:|---:|
+| w1 | ren | 758.47 (739.61–843.91) | 16.970 (15.955–18.399) | 1.00 |
+| w1 | rust | 275.56 (265.20–295.07) | 8.595 (8.015–9.899) | 0.51 |
+| w1 | go-push | 326.24 (314.68–337.51) | 11.871 (11.467–12.651) | 0.70 |
+| w1 | rust-std | 518.62 (499.03–551.28) | 20.912 (19.847–22.963) | 1.23 |
+| w1 | go-pull | 466.75 (455.63–482.36) | 18.855 (17.987–19.735) | 1.11 |
+| w2 | ren | 142.22 (128.58–175.29) | 5.023 (3.782–5.644) | 1.00 |
+| w2 | rust-stack | 218.79 (204.34–245.56) | 6.954 (5.074–8.557) | 1.38 |
+| w2 | go-push | 184.26 (178.79–191.07) | 5.750 (5.387–6.155) | 1.14 |
+| w2 | rust-boxed | 1556.76 (1507.43–1582.71) | 74.279 (71.192–75.456) | 14.79 |
+| w2 | go-pull | 536.97 (524.70–596.63) | 23.211 (22.657–25.959) | 4.62 |
+| w3 | ren | 31.90 (28.20–36.08) | 1.104 (0.955–1.353) | 1.00 |
+| w3 | rust | 26.98 (24.81–33.26) | 0.946 (0.847–1.332) | 0.86 |
+| w3 | go-push | 33.67 (32.06–39.12) | 1.155 (0.979–1.556) | 1.05 |
+| w3 | go-pull | 173.95 (169.76–245.65) | 8.227 (7.907–11.839) | 7.45 |
+| w4 | ren | 87.49 (84.63–101.18) | 3.973 (3.851–4.745) | 1.00 |
+| w4 | rust | 51.85 (49.82–69.87) | 2.239 (2.093–3.035) | 0.56 |
+| w4 | go-pull1 | 1817.66 (1790.50–1955.40) | 90.418 (88.907–97.429) | 22.76 |
+| w4 | go-pull2 | 3515.95 (3474.89–3611.39) | 175.249 (172.907–180.392) | 44.11 |
+| w5 | ren | 1010.69 (988.12–1103.26) | 29.761 (27.743–30.809) | 1.00 |
+| w5 | rust | 319.89 (305.69–339.93) | 11.007 (9.836–12.520) | 0.37 |
+| w5 | go-push | 390.33 (377.37–402.80) | 14.955 (14.406–15.850) | 0.50 |
+| w5 | rust-std | 618.39 (607.96–658.01) | 25.810 (25.374–27.708) | 0.87 |
+
+All final paired estimates were positive. Rust's libc log splitter is
+about 2.4 times faster than its standard splitter on these inputs; the
+choice materially changes the log rows. The boxed tree walk is 14.79×
+the Ren hand loop, and Go's zip coroutine forms are 22.76× and 44.11×.
+These are measured implementation costs on this fixture; they do not
+establish native generator fusion or frame-copy costs. The wider W2/W3
+ranges also mean a future 10% generator claim needs fresh interleaved
+hand-loop/generator measurements, rather than comparison to these stored
+medians alone.
+
+A separate pure backtracking control copies today's explicit cursor
+record, or reconstructs it by replay before four speculative steps at
+each position. **Replay here is a model, not an implemented generator
+runtime.** The 11-round process measurements (rotated/reversed, every
+checksum compared between copy/replay) are:
+
+| Positions | Mode | Process median ms (min–max) |
+|---|---|---:|
+| 5000 | copy | 1.065 (0.967–1.725) |
+| 5000 | replay | 55.921 (54.409–59.617) |
+| 10000 | copy | 1.133 (1.040–1.379) |
+| 10000 | replay | 224.212 (218.855–232.726) |
+
+Doubling positions increases replay's median by 4.01×, exposing its
+quadratic reconstruction work. The copy control is dominated by process
+startup; its ~1 ms wall time is an upper bound, not a measurement of the
+cost of copying a native generator frame. Copy and replay agree at both
+sizes, and the interpreter's 50-position control agrees with native.
+
+The small input (200 items, two passes) agrees in the interpreter,
+native debug/release, ASan+UBSan release, tcc debug, and all Rust and Go
+variants. The separate fork control agrees in those four native builds
+and the interpreter too. Full-size native outputs agree with every timed
+twin, for both pass counts, and every sample is checked by the timing
+driver. The five 20-pass checksums are:
+
+```text
+399494187080160
+2654077366861184
+9761875200
+2349267531239758
+494872837717524
+```
+
+The standalone release C files, including the runtime, are recorded below.
+The program-only count starts at `/* ---- the program ---- */` (including
+that marker); it separates generated code from the common runtime prefix.
+Both counts are source bytes and newline counts, not object or text size.
+These are the 20-pass per-kernel entries preserved by build.py.
+
+| Entry | Standalone C bytes | Lines | Program C bytes | Lines |
+|---|---:|---:|---:|---:|
+| W1 map/select/take | 285,581 | 7,543 | 26,859 | 508 |
+| W2 recursive tree walk | 277,978 | 7,439 | 19,256 | 404 |
+| W3 user dedup_by | 273,747 | 7,357 | 15,025 | 322 |
+| W4 zip | 277,345 | 7,425 | 18,623 | 390 |
+| W5 passed pull block | 288,348 | 7,619 | 29,626 | 584 |
+| examples/just | unavailable | — | unavailable | — |
+
+`examples/just` was attempted with `ren build main.ren --release --emit-c`
+from its folder. It exits 1 with `the real Fs isn't in the native slice
+yet` and `help: run it with ren run main.ren`. No C is emitted; its empty
+redirected output is not a C-size baseline. This remains a native-stage
+limitation independent of generators.
+
+Reproduce from the repository root, in the toolchain shell:
+
+```sh
+dune build bin/main.exe
+python3 -I bench/native/streams/verify.py
+python3 -I bench/native/streams/build.py /tmp/ren-streams
+python3 -I bench/native/streams/measure.py /tmp/ren-streams bench/native/streams/results.json --runs 11
+python3 -I bench/native/streams/measure_fork.py /tmp/ren-streams bench/native/streams/fork-results.json 11
+wc -lc /tmp/ren-streams/w?.c
+(cd examples/just && ../../_build/default/bin/main.exe build main.ren --release --emit-c)
+```
+
+This session used `/workspace/.ren-tools/with-toolchain` before each
+command to enter the pinned Nix toolchain. `REN` selects another compiler.
+The build keeps all generated `.ren` entries and emitted `.c` files
+outside the checkout, while [streams/results.json](streams/results.json)
+keeps every timing sample, checksum, command, source hash, compiler
+version and machine metadata. The independent backtracking samples and
+commands are in [streams/fork-results.json](streams/fork-results.json).

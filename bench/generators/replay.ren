@@ -1,0 +1,19 @@
+import sim
+
+gen fn source(base: Int) -> Int uses Async, Console =
+  finally(r) =>
+    print((base, r))
+    try r
+  for i in 0..3
+    Async.yield()
+    yield base + i
+
+fn main() uses Console =
+  with sim.scheduler(17) in
+    Async.merge(source(10), source(20), cap: 1) fn(items) =>
+      for x in items
+        print(x)
+        if x == 11 then break
+    Async.expand([1], max: 2) fn(n) =>
+      print(n)
+      if n < 3 then [n + 1] else []

@@ -14690,3 +14690,600 @@ frees 150, the unbuilt parts estimated. That's about Koka's runtime
 plus Lean's regions, made safe: Lean's compacted regions are `unsafe`,
 and an arena's seal and rules replace that. Its count states are Lean's
 three plus one.
+
+## Generators stage
+
+Stage 11c, part one, follows [briefs/stage-generators.md](briefs/stage-generators.md),
+[streams.md](streams.md) and [concurrency.md](concurrency.md). A stream is
+a call that answers many times. Its binding's scope owns its frame;
+generators introduce no scheduler, task kind, stored closure or resource
+ownership rule. The interpreter defines the meaning; native push and
+pure-frame lowering must preserve it.
+
+**Status: step 0 specification.** The decisions below describe work to
+build, not features that this section's addition implements. Existing
+`for` over a cursor or pull block, pull arguments, `produce`, `map_pull`,
+the scheduler's bounded buffer and families are built. `gen fn`, its
+frames, pipelines, `merge`, `expand` and the two `Fs` forms are not yet
+built. Each step's actual result belongs in the progress log below. No
+g1--g5 gate is enabled merely by writing this specification.
+
+### The AST and Core
+
+Add a function-kind field, ordinary or generator, to `Ast.fn_def`, with
+ordinary as the value at existing construction sites. A generator's
+written `-> T` is its **item type**, not its call's return type. Add
+`Yield of expr`, `Yield_from of expr` and `Return of expr option` to the
+expression tree. Keep the source locations of `gen`, `yield`, `from`
+and their operands. `yield from try child()` keeps its `Try` operand;
+the parser must not insert a hidden parameter into the written call.
+The generator body finishes with `Unit`; its `return` has no value.
+Ordinary `return e` returns the enclosing function's result. Resolve
+records the target function and rejects a return that crosses a literal
+block. This is additive control-flow work: today neither AST nor Core
+has `Return`, so a skipped return test is an outstanding g1 requirement.
+
+**Choose explicit typed Core generator operations.** Retain a generator
+body definition, its item type, parameters, inferred step errors and
+dependencies, classification and source origin. Core operations create
+its frame, yield an item, delegate a source, step a frame and close it.
+Their final constructor names are implementation details. Frame creation
+names a checked generator definition and supplies explicit arguments,
+type descriptors, dictionaries and evidence; it does not accept an
+arbitrary closure to store. Block arguments remain caller-owned code,
+allowed only in a scope-owned block frame. A pure cursor holds data
+arguments, never evidence or a block. `Return` names its function target.
+
+A new streams module beside Lower composes **pipelines** into ordinary
+Core locals, `Lambda`, `Call`, `While`, `If`, `Handle` and `Finally`.
+There is no Core node for each stage. Inference records the chosen
+source protocol, stage identity, item types, rows and capture accesses;
+Lower consumes those facts rather than resolving a method again. Core
+Lint checks the ordinary composition as today, and gains cases for the
+generator operations: item and argument types agree; creation's result
+matches its finalized classification; only a generator body can yield;
+no nested block or cleanup can yield for its parent; a pure frame has
+only data; frame operations name their owner and carry the right rows.
+Native passes must handle these constructors explicitly, including a
+diagnostic where a lowering is intentionally deferred. No lint is skipped.
+
+This differs from E2's parse-tree rewrite deliberately. A rewrite before
+inference cannot know a receiver's protocol or an inferred `uses` row.
+Rewriting after inference and treating invented nodes as already checked
+would miss capture and escape checks. Explicit generator facts and Core
+operations avoid both shortcuts and a second whole-module resolve/infer
+pipeline. They add cases to shared passes without moving or restructuring
+those passes. E2's ordinary-loop composition remains useful evidence,
+not code to paste or permission to classify from spelling.
+
+### Classification after inference
+
+Record a generator signature separately from its ordinary callable type:
+item type, data/block parameter kinds, actual inferred body `uses` and
+error rows, and whether a `with` or `inout` place can remain live across
+a yield. Classification is **value** exactly when its parameters are
+data, its solved dependency row is closed and empty, no `with` is open
+at a yield, and it has no `inout` parameter or held external place.
+An unknown/open dependency row is not proof of purity and gives block
+kind. Errors do not make it block kind. A declared row that is empty is
+not sufficient; a private generator that omits `uses` and calls `print`
+has inferred `Console` and is a block. An explicit declaration still
+gets the ordinary declared-row checks; it never hides an actual use.
+
+There is no written empty `uses` list today, and this stage adds no new
+spelling for one. A **public** function without `uses` has a declared
+empty row (`Infer_declared.declared_uses` returns `Some []`), whereas a
+private function without it has an inferred row. The declared-empty
+positive test is a pure `pub gen fn` without `uses`; a public one calling
+`print` must get the ordinary undeclared-`Console` error. An internal
+resolved-AST probe may also supply `Some { deps = []; dtail = None; ... }`
+to pin an explicitly present empty row. None of these tests can pass by
+having a parser reject an invented `uses ()` spelling first.
+
+Classification must follow row solving for the whole strongly connected
+component, before schemes are generalized or canonicalized. This needs
+an additive generator-finish phase in `Solve.solve`, after `rows_due`
+and `Own_rows`, before `Later` and `Declared`; a callback after the
+existing solver returns is not sufficient. Publish classification with
+the module interface, so imported calls use the same answer. A pure
+generator `walk<T>` synthesizes `walk.Cursor<T>`, a nominal type under
+the function's path, and its `next(inout self) -> Option<Node<T>>` with
+the generator's error row. This is a type namespace generated for that
+function, not an erased `Cursor<T>`, and its layout stays private.
+
+Use a synthesized private nominal path plus source-name metadata for
+`walk.Cursor` and its `next`; do not restructure `Path.t` to add an
+arbitrary nested member namespace. The interface's generated-type lookup
+maps that surface name to the private path, including imported generic
+generators and their step error rows.
+
+**Generated-cursor operations, a choice where streams.md is silent.**
+`walk.Cursor` supports data copying, storage and `next`; that does not
+imply `eq`, `hash` or `ord`. Those three requirements are unavailable
+on generated cursors in part one, including through containers and
+generic calls. No policy changes for existing user or library cursor
+types. Native live locals and the interpreter's replay inputs are
+different representations of the same position, so deriving operations
+directly from those representations would make the two builds disagree.
+Do not accidentally give generated types `eq` through the current
+`Infer_reqs.decl_lacks` default for `Builtin` types. Their interface
+records the refusal, and delayed requirement checks see it too.
+
+`show` gives a stable opaque display containing only the source
+generator's name and that cursor copy's logical state:
+`walk.Cursor(<unstarted>)`, `walk.Cursor(<suspended>)`,
+`walk.Cursor(<returned>)`, `walk.Cursor(<failed>)` or
+`walk.Cursor(<cancelled>)`. It never steps a cursor, prints arguments,
+live locals, yielded values or errors, exposes a continuation address,
+or reads the shared replay cache's position/state as the logical state.
+It has no requirement on item or argument types. Display and refusal
+must agree in the interpreter and every supported native build. This
+is a specification choice, not an implemented capability; g1 tests pin
+interpreter behavior and g4 adds the cross-build agreement.
+
+Inside a recursive group, a generator call initially carries a pending
+result-kind constraint tied to its signature. `for`, `yield from` and
+pull arguments can constrain its item and step rows without choosing
+value or block. Once the row solves, discharge the constraint to the
+nominal cursor or `fn() -> Option<T>` and validate every deferred
+block-sensitive use, including storage, return, generic substitution,
+`var`, chosen `let`, pull coercion and dependency capture. Never publish
+a pending kind, choose a provisional data cursor as the answer, or
+report escape errors before the kind is known. A dependency reachable
+through a recursive helper must make the generator block kind too.
+This requires additive inference constraints and validation after rows settle;
+the existing single-pass `check_body` does not already provide it.
+
+Register projected item, error and dependency constraints on the first
+body traversal, in time for the solver's existing `Join`, inclusion,
+installation and row phases. `Solve.solve` snapshots `env.pending` once
+at entry and clears it: a later callback cannot call `infer_expr` or
+append `Include`, `Install` or `Required` and assume completed phases
+will process them. The finish phase discharges only the pre-registered
+generator shape/equality obligations after classification, with no new
+body inference or row constraints. Pending provenance must follow type
+aliases through ordinary callers in the same SCC: `fn relay() = g()`
+cannot lose it and then guess a method or iteration shape from a `TVar`.
+
+Use an early generator-projection hook immediately after `Join`: ordinary
+same-SCC aliases now point to their pending generator result, so the
+recorded source constraints can connect receiver/item/error/use proxies
+and next/pull/for metadata before `Install`, `Include` and marker checks.
+Arguments and bodies were already inferred on the initial traversal.
+The later finish phase must not discover a new effect row; every step
+and body row must have been projected by this early hook.
+
+Requirements need dedicated handling too. `Infer_reqs.decide` currently
+runs **before** `rows_due` and `Own_rows`; its equality/hash/order checks
+cannot treat a pending generator as an unconstrained type variable and
+forget to revisit it. Defer affected `Compared`/`Required` obligations
+and their required-type propagation to the generator-finish phase, then
+check them against the concrete cursor or block before `Later`, declared
+signature checking and generalization. Requirements inside a container
+of pending cursors must be included. No unresolved shape, equality or
+requirement obligation may survive into canonical output. This is
+specific additional solver work, not a claim that one late callback
+already makes the existing inference pipeline sound.
+
+Track which requirement checks were deferred or completed, so the late
+phase propagates newly learned requirements without duplicating existing
+diagnostics. The two hooks are generator-specific additions to the
+existing ordering, not a generic second inference pass.
+
+This pending result needs a generator-specific item/row projection and
+deferred shape checks, not just a type variable replaced in canonical
+output: `for`, pull coercion and member inference branch on shapes while
+bodies are checked. A factory call itself runs no body, so its immediate
+error row is empty; its argument evaluations still have ordinary errors.
+The producer's inferred uses determine classification and evidence capture
+at binding, and its errors belong to `next`/the pull block. Merely making
+a failing generator must not require `try` or run its failure. Core keeps
+the producer body with a `Unit` result and creates the callable block at
+the caller through frame metadata; it must not introduce an ordinary Core
+function returning a block, which would bypass the block escape rules.
+
+A pipeline composed over a generator's own data is local code inside
+that frame and does not by itself spoil value classification. It must
+be reconstructible with the copied data, with no capture of another
+frame or instance. Internal `with` scopes that finish before every
+yield need not be retained; an open one makes the generator a block.
+Dependencies of a block frame resolve where the frame is **created**,
+as for a written block, not under whatever handler happens to step it.
+Arguments that are data are evaluated once at creation and captured as
+values; a block's captured places are read at each step. `inout` is
+allowed on a block-kind generator; it is not an additional blanket ban.
+
+### Chains chosen by type
+
+Use the existing cursor lookup (`Infer_expr.cursor_of`, `cursor` and
+`pull_arg`) as the protocol: a type with a valid
+`next(inout self) -> Option<T>`, including user cursor types and generated
+value cursors. Its `next` may use dependencies and fail. A pull block,
+including a let-bound pipeline or block-kind generator, is also a lazy
+receiver. `Array`, `Map` and `Set` retain their eager vocabulary.
+An unrelated user type with `map` and no `next` keeps its own method.
+An unresolved receiver is inferred or constrained first; its spelling,
+an argument count, or a name such as `cursor` is never evidence.
+
+On a cursor type, reserve the complete default set from streams.md:
+`map`, `select`, `reject`, `take_while`, `drop_while`, `flat_map`,
+`with_index`, `scan`, `dedup_by`, `take`, `drop`, `batch`, `batch_while`,
+`windows`, `zip`, `merge_by`, `sum`, `reduce`, `count`, `any`, `all`,
+`find`, `first`, `min`, `max`, `to_array`. Detect declarations of those
+members after the type's `next` is known, independent of declaration
+order. `next` itself is the user-supplied protocol member. User stages
+join with `|>`; `merge_by`, `scan` and `dedup_by` are `gen fn` stages
+written in Ren, adapted to this same vocabulary. No new user trait or
+method-resolution priority hides a conflicting declaration.
+
+A temporary cursor is used as itself; a named data place must be `&r`,
+including fields and indices. `&r.map(f)` attaches `&` to the **head**,
+never to the pipeline's result. A block never takes `&` and is stepped
+as `p()`. Collections passed to a pull parameter are snapshots, as in
+`for`; the existing `fn() -> Option<T>` pull parameter remains the one
+form. Broaden `pulls`/`block_subject` to recognize calls that give blocks;
+today `pulls` explicitly assumes no call does. A leading `.` continues
+the prior expression only when indented further; lexer/layout changes
+must leave string literal handling to the bytes stage.
+
+Record captures in inference's stream facts, then make the existing
+block/Excl walkers consume them as if the composed literal block had
+been written. A local pipeline's accesses last one step; a pipeline
+passed to a call holds its captures for that call. Two `&r` heads passed
+to ordinary block parameters of one call are allowed: the blocks run
+one at a time and rule A prevents nesting. Passing one concurrently or
+beside a direct conflicting `&r` follows the ordinary rejection rules.
+Stepping the source between a local pipeline's steps is legal. Lookahead
+already pulled by `take_while`, `windows` or `zip` is lost after `break`;
+`ren review` warns for stored readers and `&` heads, not a compile error.
+
+Every generated binder carries its source origin and role. Hover says
+`steps r`, `steps errors`, `pushed`, or the reason for pulling, such as
+`pulled: zip` or `pulled: passed to consume`. Errors name the source,
+stage and source line, for example “`next` can fail with `BadLine`, from
+the `map` on line 12”. Neither diagnostics nor hover expose `$frame`,
+stage counters, synthesized callback names or generated binder ids.
+
+### Frames, cleanup and ends once
+
+In the interpreter, a new module beside eval.ml owns one-shot OCaml 5
+fibers for block frames and replay cursors for value frames, through
+eval callbacks. `Value.sched` is extensible, so it can hold their runtime
+representations without editing `VStr`, `VBytes` or the scheduler. A
+generator runs on the consumer's task; its yield effect is not a task
+spawn or a scheduler yield. Dependency effects continue to the existing
+scheduler. A suspended continuation is resumed or discontinued exactly
+once, and a running frame rejects re-entry.
+
+A replay cursor keeps the checked pure definition, copied data arguments,
+its position and its own terminal state. A one-entry continuation cache
+is only a performance aid: copies can share a cache, not mutable logical
+position or terminal state. A cache miss replays from the beginning to
+that copy's position; cache invalidation cannot change either copy's
+answer. Replay must keep the original depth checks and failures. Repeated
+fork-and-rewind is quadratic in the interpreter; measure a backtracking
+case and say so. Snapshotting pure frames is later.
+
+**Pure-cursor ownership, a choice where the spec is silent about copies.**
+A pure frame may have a `finally` that panics or diverges on abandonment;
+an empty `uses` row is not proof that closing it is unobservable. Give
+each source-owned cursor copy a generator-specific cleanup token owned
+by its receiving binding's lexical scope, or by the statement for a
+temporary. Copying owned data recursively forks its cursor leaves,
+including inside generic, opaque and collection values. A fork preserves
+the logical suspension state and reached cleanup even when that copy is
+never stepped again. Anonymous expression/function results are adopted
+once by their receiving owner, not copied again at every implementation
+temporary. A named source retained by a return is copied into the caller's
+owner before the callee closes its original at local scope exit.
+
+Read parameters borrow their input's tokens and introduce no extra
+finalization; an optimization that borrows a physical buffer instead of
+copying it cannot alter the source-level forks or cleanup. An `inout`
+parameter carries the original root's owner capability through helpers,
+including a root that is an empty `Array<T>` or `Map<K, T>`: later
+insertion of cursor-containing data must register copies with that root's
+owner, not the helper's scope. Handler state uses the instance's owning
+`with` lifetime, not the operation caller's scope. These tokens and
+capabilities are compiler metadata, never fields a program can inspect,
+store separately or mistake for ownership of a file or dependency.
+
+Distinguish **advancement** from **replacement**. A step updates the same
+token's latest state; it does not create another abandoned copy of every
+prior position. Explicit assignment, replacement or deletion retires
+displaced cursor tokens to their original owner's cleanup list, retaining
+their last state until that lexical scope ends. Scope exit closes both
+current and retired tokens in reverse registration order, once each.
+No reference-count drop, container removal or helper return closes them
+early. A data copy has independent tokens; closing one cannot cancel
+another. For replay cursors, close reconstructs the saved suspension and
+discontinues it when needed; no live continuation cache is required, and
+the shared cache never owns finalization. Pure cleanup panic/divergence
+must be preserved in both builds, including copies and retired frames.
+
+This needs real generator machinery: a scoped token registry, recursive
+clone/retire operations through descriptors for cursor-containing types,
+and owner propagation across generic `inout` calls. Structurally
+cleanup-free types take the ordinary data fast path; that proof must
+include nested/delegated frames and data leaves, not just an empty
+dependency row. Preserve source ownership boundaries and the distinction
+between step advancement and replacement **before Lower erases place
+updates into ordinary `Assign`**. Add generator-specific Core metadata or
+nodes for those operations; ordinary `Core.var`/`Ref`/`Assign` do not
+currently carry enough information. This is a g1 obligation and a
+specified implementation route, not machinery this document implements
+or proves correct. It imposes no affine restriction on data copies and
+changes no ownership rule for types without generator cleanup.
+
+Both representations distinguish `Unstarted`, `Running`, `Suspended`,
+`Returned`, `Failed(e)` and `Cancelled`; do not collapse terminal cases
+to E2's `Over`. Before delivering a terminal result, unwind reached
+`finally`s exactly once and retain the terminal answer. Later steps on
+`Returned` give `None`, on `Failed(e)` fail with the same `e`, and on
+`Cancelled` panic (“a cancelled generator can't be stepped”). Closing
+an unstarted frame marks it cancelled without executing its body or any
+cleanup. A later step has the cancelled-task-before-start behavior, not
+an apparent clean end. Closing an ended frame is a no-op. Copies of a
+value cursor retain independent state; closing one must not cancel
+another copy through the replay cache.
+
+`finally(r)` sees `Ok` for the generator's own return, `Err(e)` for its
+failure, and `Err(Cancelled)` for abandonment or task cancellation.
+It sees cancellation when the consumer fails too: that failure belongs
+to the consumer. Cleanup is shielded with the existing deadline, and
+abandonment discards its result. A contained panic closes the generator
+as cancellation, then continues the original panic. Cleanup is reached
+only after execution passes its statement; a yield before a `finally`
+has not installed that cleanup yet. If ordinary cleanup itself fails
+on a non-cancel exit, use the existing `finally` error policy and retain
+the resulting failure for later steps; keep the body outcome supplied
+to cleanup separately. The streams table does not discuss this extra
+failure path; it is not permission to lose a cleanup error or rerun it.
+
+Lower wraps the remainder of a named binding's lexical block in Core
+`Finally(rest, close(frame))`, as scope-end.diff demonstrated. A temporary
+is enclosed at its statement, and multiple frames nest in reverse
+creation order. `break` over a named generator leaves it resumable;
+leaving its binding's scope cancels it. A temporary broken out of closes
+before the next statement. No reference-count drop runs cleanup. A
+generator's own `finally` uses Core's outcome-aware `Covered` machinery,
+not just an untyped close. Add the contained-panic path to `Finally`
+and `Covered`; current eval.ml handles `Failed`, `Broke` and cancellation
+in the former, but not the panic that `ending` already handles.
+`Return` must travel through these nodes, including write-backs, before
+its function catches it. Do not implement it as a jump around cleanup.
+
+Natively, a pure frame is value data: a resume tag, live locals, position
+and terminal outcome, with ordinary ownership/RC for fields and honest
+copying. A recursive delegated pull uses one consumer-owned growable
+stack of frames; enter a child's first step inline and never box each
+child. Pushed recursive calls and this stack use the same logical call
+depth limit and panic site as ordinary recursion, independent of C stack
+availability. Mem Lint must validate live fields, copy/drop paths and
+terminal-error payloads. Every place held across a yield invalidates
+hoisted uniqueness: check again on resume before its next mutation.
+
+A fresh `gen fn` head consumed by a `for` or built-in sink is pushed
+through built-in one-input stages: its yield executes the composed body,
+and a control value carries continue, consumer break and return through
+ordinary unwind. This includes a dependency-using generator: no generator
+suspension frame is needed. A named frame that must resume after a break
+cannot be replaced by a fresh pushed invocation. `zip`, a user-function
+consumer, manual stepping and stages that require pull preserve frames.
+Pulling pure generators and built-in stages is part one. Pulling a
+dependency-using generator needs a suspended task frame and is refused
+by `ren build` until the runtime core; `produce`, `map_pull`, `merge` and
+`expand` remain interpreter-only on the same boundary. Fusion through
+an arbitrary user `gen fn` stage stays later.
+
+### The combinators and resource boundary
+
+`Async.merge(a, b, ..., cap: 16) fn(items) => body` takes separate pull
+arguments, one producer per source, into one bounded queue. A run-time
+array contains data sources, never blocks. Its call owns the producers,
+cancels and awaits them before returning, and releases abandoned values.
+The first producer failure **recorded by the scheduler** wins and cancels
+siblings; accepted values precede that failure unless the consumer exits
+first. A racing send counts only if admission committed. Failure and
+completion live outside the buffer, never in a sentinel requiring space.
+Source order within a producer is kept; no global order is promised.
+`cap:` bounds buffered values, including neither executing producers nor
+their in-flight items. Preserve the existing first-failure policy when
+consumer and producer failures race, and record/replay the same winner.
+
+`Async.expand(roots, max: 64) fn(x) => children` runs at most `max`
+workers; it does not deduplicate. Its call owns a stack frontier of
+returned child arrays and positions in them, visiting children depth
+first (push in reverse if using a flat stack). On completion a worker
+returns its children **as a value**, and appending to the frontier does
+not wait or acquire a bounded queue slot. Thus all workers may return
+children at once without waiting for one another to drain anything.
+Completion means no running worker **and** an empty frontier. Retained
+frontier memory is the program's returned arrays, about depth times
+branching for a depth-first traversal, with concurrent workers retaining
+additional branches; `max` is not a total-memory bound. There is no
+`pending:` parameter, silent dropping, deduplication or unbounded worker
+creation. First failure cancels and awaits siblings before return.
+
+Both combinators are Ren std over the existing scope and queue interfaces;
+do not edit sched.ml, family.ml, actors, striped or sim. The current
+`Sched.stream`/`put`/`take`/`end_stream` interface is built for one
+producer and is interpreter-private, not itself a callable std queue.
+Step 3 must demonstrate composition through an existing Ren-visible
+channel/queue or an additive bridge outside sched.ml, with one commit
+point per send/receive and terminal state separate from storage. If its
+required multi-producer lifecycle cannot be expressed without changing
+the protected scheduler, record that concrete missing interface and stop
+that step. A hidden host implementation of `merge` is not “std over
+scope and queue”. This is an integration risk, not evidence that g1
+requires a scheduler restructure.
+
+Step 5 proves resource families only on `Fs`. `Fs.line_reader(p)` is
+data containing id, incarnation, path and byte offset; it uses `pread`,
+so a copy reads from the copied offset. The `Fs` family's `max:` caps
+open files. Eviction closes an entry and a reader can reopen its path;
+ending the owning `with` invalidates its incarnation and gives typed
+`Closed`. Distinguish those cases; eviction is not the end of the
+owning family. `Fs.lines(p)` is the use-here generator with a `finally`;
+the family's end closes leftovers. No separate resource owner or drop
+rule is added. `Db`, `Net`, time operators and byte framing stay at their
+brief's boundaries.
+
+Visible reader escape from a `with` must still be rejected. Consequently
+the `Closed`-after-`with` behavior needs a g5 internal stale-reader probe,
+or an existing path where a helper hides the lifetime and the run-time
+guard applies; a source-level program that visibly returns the reader
+is the compile-error test, not evidence that typed `Closed` was exercised.
+Step 0 records the run-time probe as pending until the family-backed
+reader exists.
+
+### Errors and help
+
+These are targets for the new diagnostic tests, including their help;
+source rendering and caret placement follow existing diagnostics. The
+first eight entries are streams.md's errors and variants. Existing block
+and exclusivity errors still apply, with generated origins substituted.
+
+| Trigger | Error and help |
+|---|---|
+| Store a dependency-using generator | “`rows(q)` uses `Db`, so its stream lives in this scope”; “a block, which can't be stored”; note “a generator that uses a dependency runs in its caller's frame”; help “to keep a position, keep a reader, which is data: `Db.rows(q)`”. |
+| Return that generator | The same message with “returned” instead of “stored”, and the same reader help. |
+| Store/return a pipeline over data | “a pipeline is a block, which can't be stored/returned”; help “to keep a position, wrap the producer in a pure `gen fn`”. |
+| Named data cursor head without `&` | “a pipeline steps a named cursor in place”; label “`r` is a cursor”; help “`&r.select(bad)`”. A bare named cursor in `for` or a pull argument gets the corresponding `&r` fix. |
+| Choose a pipeline with `if` or `match` | “`let` binds one pipeline written right there”; help “choose inside one stage: `&r.select(fn(x) => all || p(x))`”, adapted to the source. |
+| Yield in a literal block | “`yield` inside a block”; note “the generator would stop here with the timeout's scope open in its consumer”; help “time the step where it's consumed, or put the producer on a task: `Async.produce(cap: 1, fn() => ...)`”. Apply to `yield from` too. |
+| Fallible step without `try` | “`next` can fail, and nothing handles it”; label its error and origin, e.g. “it can fail with `DbDown`, from `Db.rows`”, or “`BadLine`, from the `map` on line 12”; help “`for row in try Db.rows(q)`”, adapted to the source. |
+| Reader escapes its dependency's `with` | “`Sql.Rows` can't leave the `with` that installs `Sql`”; help “consume the reader inside this `with`, or return the data it read”. Hidden escapes retain the existing run-time guard. |
+| Vocabulary misspelling | `.filter(` suggests `.select(`; `.skip(` suggests `.drop(`; `.skip_while(` suggests `.drop_while(`; `.chunks(` suggests `.batch(`, only on a recognized stream receiver. |
+| Reserved stage declaration on a cursor | “`map` is a stream stage on a type with `next`”; help “rename this member, or write a stage as a `gen fn` and join it with `|>`”. Name the member written. |
+| Yield outside a generator | “`yield` is only allowed in a `gen fn`”; help “mark this function `gen fn`, or return a value”. Do not interpret `Async.yield()` as this syntax. |
+| Yield in a `finally` | “`yield` isn't allowed in a `finally`”; help “yield from the generator body before cleanup”. A nested generator has its own yield owner. |
+| Yield the wrong item type | “this generator yields `T`, but this `yield` gives `U`”; help “yield a `T`, or change the generator's item type”. |
+| Non-pull operand of `yield from` | “`yield from` takes what `for` takes”; help “give it a cursor, collection or `fn() -> Option<T>` block”. Named cursor help adds `&`. Delegation's item type must match. |
+| Fallible delegation without `try` | “this `yield from` can fail, and nothing handles it”; name the child/stage error; help “`yield from try child(..)`”. |
+| Value returned from a generator | “a generator returns no value; it yields items”; help “use `yield value` to give an item, or `return` to end the generator”. |
+| Return across a literal block | “`return` can't leave this block”; help “return the block's value and make the decision in its caller”. |
+| Mutable or aliased block frame | Existing “a block can't be bound with `var`” and one-definition errors; help “use `let` for this generator/pipeline”. `&p` on a block says “a block never takes `&`”; help “step `p()` or pass `p`”. |
+| Race an outside pipeline step | “a pipeline isn't one operation and can't be raced”; help “time a reader's step: `Async.timeout(d) fn() => &r.next()`, or put the producer on a task with `Async.produce`”. Keep the existing operation-safety checks and cancelled-frame panic as the hidden-case backstop. |
+| Captured place conflicts or concurrent step | Existing block exclusivity/rules A--D errors name the original source and capture; help copies the read value or moves the change after the call, as for a written block. No additional ban on two ordinary `&r` heads. |
+| Compare a generated value cursor | “`walk.Cursor` has no equality”; help “compare the yielded data, or collect both cursors with `to_array()` and compare the arrays”. The collected item type still needs `eq`. |
+| Hash or order a generated cursor, directly or through a generic/container | “`walk.Cursor` has no hashing/ordering”, naming the required operation; help “use the yielded data or a key you choose for it”. Container and generic diagnostics retain their ordinary requirement provenance. |
+| Native pull needs suspension | “pulling this generator uses `Db` and waits for the runtime core”; help “consume a fresh generator directly with `for` or a built-in sink to push it, or use `ren run`”. Include the pull reason (`zip`, passed pipeline, or manual stepping). |
+| Native task combinator | Existing runtime-core boundary error, naming `Async.produce`, `map_pull`, `merge` or `expand`; help “use `ren run`; native tasks wait for the runtime core”. |
+
+Ordinary public-signature and type-inference rules apply to the item
+annotation; do not introduce E2's extra ban on inferred private item
+types. Positive bounds (`cap`, `max`, batch/window sizes) use existing
+constant checks where available and ordinary run-time panics otherwise;
+they are not an excuse for a new stream-only compile-time mechanism.
+Panic tests additionally pin cancelled stepping, reentrant stepping and
+the recursive call depth limit. Typed `Closed` is a run-time error,
+not a compilation refusal.
+
+### Steps and validation
+
+The order is fixed: g1 front end and interpreter without chains; g2
+type-directed pipelines and default set; g3 interpreter `merge`/`expand`
+and a thousand simulation seeds plus replay; g4 native push/pure pull,
+Mem Lint and sanitizers; g5 `Fs` families and the programs; then review.
+New tests go in new files. `test/test_generators.ml` uses `until "g1"`
+through `until "g5"` for future targets; landing a gate removes only its
+own `until`s. `bench/generators.t` stages interpreter/native comparisons;
+unsupported native task frames remain explicit refusals, never a skipped
+claim of cross-build agreement. Test every terminal answer again, every
+cleanup exit on named and temporary frames, unstarted bodies, capture
+and copy cases, errors with help, recursion limits, queue composition,
+resource eviction/escape, and both programs required by the brief.
+
+Step 0 adds five hand-loop workloads under `bench/native/streams`, with
+Rust and Go twins following the measured stream shapes, then measures
+on the named local machine. Report interleaved runs, medians and spread,
+checksums and reproduction commands in `bench/native/RESULTS.md`; do not
+present the M4 C models as Ren measurements. Capture emitted C sizes for
+all five and the just before generator lowering, repeat after g4, and
+measure replay backtracking. g4 compares the same-machine before/after
+numbers and the spec's ratios, explaining any gap with measurements.
+
+Before **every commit**, `dune build`, `REN_TCC=... dune test --force`,
+the tree-sitter check and all eight example test commands from THE CHECKS
+must pass. Rebase before each push, preserving adjacent stages' changes;
+rerun checks for the tree that is committed. No check result is implied
+by this specification. Each completed green step is committed and pushed
+before the next one; if a step cannot be completed soundly, keep main
+green, commit the finished work and identify the exact missing piece.
+
+### Progress log
+
+- **2026-10-31 UTC, step 0 specification:** read the brief, all of streams.md,
+  the concurrency tree/ends-once contracts, channel transfer/frontier
+  contracts, the relevant foundations/compiler/async sections, E2's
+  prototype and scope-end diffs, and E3/E4's cost/composition evidence.
+  Inspected current AST, SCC inference, cursor/pull lowering, Excl,
+  Core, eval cleanup, extensible values and buffer interfaces. Added
+  this section only; generator implementation and gates are pending.
+  Decisions: typed Core generator operations plus ordinary pipeline
+  composition; result kind after SCC row solving; no spelling-based
+  recognition; independent terminal state on copies; `expand`'s returned
+  child arrays form a non-waiting depth-first frontier; two ordinary
+  `&r` heads remain allowed. The cleanup-error case keeps ordinary
+  `finally` error policy and caches its effective result, with the body
+  reason retained separately. Where streams.md is silent, generated value
+  cursors have no `eq`/`hash`/`ord`; `show` displays only the source name
+  and that copy's logical terminal/suspension state. This avoids deriving
+  unequal semantics from replay inputs versus native live locals; data
+  copying and storage do not promise comparability. Existing cursor
+  types are unaffected, and implementation/tests are pending g1/g4.
+  Also settled pure-frame ownership: owned copies recursively fork cursor
+  leaves, anonymous results adopt once, reads borrow and `inout` retains
+  the receiving root's owner (including empty generic containers).
+  Advancement updates a token; replacement/removal retires it until its
+  owner's lexical end. Returned forks are installed before local cleanup;
+  handler-state tokens belong to the instance's `with`. Replay caches
+  never own finalization. Scoped tokens, descriptor operations and source
+  ownership metadata before Lower are additional g1 work, not built facts.
+- **Engineering work required before g1 can claim completion:** add
+  projected item/error/use constraints on the first traversal, pending
+  generator kinds and the solver finish phase with delayed shape/equality
+  and requirement validation/propagation,
+  preserve inferred generator facts in interfaces, broaden the current
+  no-call-gives-a-block assumptions, add `Return` across passes, and
+  close the contained-panic holes in both Core cleanup paths. These are
+  changes intended to fit the brief's additive boundary; their sound
+  solver integration is not built or proved by this specification.
+  Inspection has not proved a need to move or restructure shared files.
+  If implementation proves
+  otherwise, stop and record the exact dependency here instead of
+  weakening row inference, escape checks or lint.
+- **Later integration risk:** g3 must expose the existing queue contract
+  to Ren std without editing the protected scheduler. Its single-producer
+  host buffer is not proof of a multi-producer std implementation. Verify
+  the admission/receive races and completion interface before promising
+  `merge`; record an actual missing interface if it blocks that step.
+- **2026-10-30, step 0 tests and baseline:** added the executable staged
+  sources in `test/test_generators.ml` and `bench/generators/`, and compiled
+  internal contract assertions with explicit missing-adapter skips in
+  `test/test_generator_contracts.ml` and the queue contract. A disabled
+  source must keep its recorded diagnostic and exit status; it is not a
+  passing generator implementation. Existing queue composition cases pass
+  across 1,000 simulation seeds. The remaining adapter, tooling and native
+  observation work is listed in `bench/generators/README.md`.
+  Added the five hand-loop workloads, Rust iterator and Go push/pull twins,
+  reproduction scripts and raw samples under `bench/native/streams`.
+  Small checksums agree in the interpreter, native debug/release,
+  ASan/UBSan and TinyCC, and with the twins. Eleven interleaved rounds give
+  Ren's additional-pass medians of 16.970, 5.023, 1.104, 3.973 and 29.761 ms;
+  the table, spread, twins, machine, flags and commands are in
+  `bench/native/RESULTS.md`. The separate replay-copy model takes about
+  four times as long at twice the positions; it is not a measurement of
+  implemented generator frames. The five emitted-C baselines are recorded
+  there; `examples/just` has no C-size baseline because native compilation
+  refuses real `Fs`. There is no after measurement yet.
+- **Step 0 commit/check status:** THE CHECKS passed: `dune build`,
+  `dune test --force` with the pinned `REN_TCC`, tree-sitter's `make check`,
+  and `ren test` in bank, prices, just, ledger, crawler, refresh, server
+  and transfer. The full forced suite passed without a flake rerun.
+  The optional NEON cross-test skipped because `aarch64-linux-gnu-gcc`
+  is absent; its scalar and OCaml checks passed. This commit,
+  `Generators stage, step 0: spec, staged tests and measured baselines`,
+  contains the specification, staged tests and measured baseline together.
+  No g1--g5 gate is enabled, and steps 1--6 have not started.

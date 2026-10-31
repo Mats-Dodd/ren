@@ -1,0 +1,9 @@
+import sync.{Chan}
+
+dep Events = Chan<Int>
+
+fn main() uses Async =
+  with sync.channel(1) as Events in
+    Events.send(1)
+    let _ = Async.both(fn() => Events.send(2), fn() => Events.close())
+    ()

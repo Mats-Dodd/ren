@@ -1,0 +1,12 @@
+0
+1
+("done", Ok(()))
+0
+("break", Err(Cancelled))
+("return", Err(Cancelled))
+7
+("failure", Err(Cancelled))
+Err(ConsumerBad)
+("take", Err(Cancelled))
+[0]
+exit 0
