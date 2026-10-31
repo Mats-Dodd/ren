@@ -170,6 +170,213 @@ TLS sits above `Net` as a handler. The library under it must be sans-IO, taking 
 
 On Linux, once the handshake is done, the session keys can be handed to the kernel (kTLS). The kernel then encrypts and decrypts, and `Net.chunks` keeps its zero-copy path. Under `sim.net`, real TLS runs with a seeded random number generator and the simulated clock, so expired certificates, clock skew and failed handshakes replay exactly.
 
+## Part 4: The world's interfaces
+
+These are L1 of [layers.md](layers.md): the operations every
+implementation of a world dependency provides, real, in-memory and
+simulated, and every driver answers. Each is shaped like the system
+call under it. Everything a program usually calls, `Fs.read_all`,
+`Proc.run`, `print`, is a function over them, written once inside the
+`dep` (layers.md, rule 1), and called the same way.
+
+> **Status:** decided on 2026-10-30 as the shapes; names, argument
+> details and error variants are refined by the runtime core stage,
+> which builds the drivers, and recorded in compiler.md. Today's
+> operations keep working as functions of the same name and meaning, so
+> no call site changes.
+
+### What every world dependency shares
+
+- **Handles are keys in a family.** A `File`, `Conn`, `Listener`, `Child`
+  or `Pipe` is data: an id and its incarnation, copied freely. What it
+  names lives in the dependency's family ([concurrency.md](concurrency.md),
+  "Resources are families"): the open files' cap is `max:`, a handle
+  whose resource was closed or evicted fails with `Closed`, and the
+  family's end closes what's left, so no program leaks one and there's
+  no close rule. `close` is still an operation, to let go early.
+- **Buffers are lent or leased** (Part 1): `read_at(f, at, &buf)` lends
+  `buf` until the call returns and gives the count; a leased chunk comes
+  from the runtime's pool and goes back when its count reaches zero.
+- **Counts can be short.** `write_at` and `send` give how much they
+  wrote, as the system does; `Fs.write_all` and friends loop. A count of
+  0 from a read is the end.
+- **Every operation that waits can be cancelled,** and returns only once
+  the kernel lets go (Part 1). A cancelled read had no effect. A
+  cancelled write may have happened in part: its reply says how much,
+  the journal records it, and `sim` explores both.
+- **One error set each,** with the system's reasons as variants and
+  `Failed(reason: Str)` for the rest, so a caller matches what it can
+  handle and passes on the rest.
+- **What `sim` models is part of the contract,** and the conformance
+  suite checks that every implementation allows it: listed under each.
+
+### `Fs`
+
+```ren
+pub dep Fs =
+  open: fn(p: Path, mode: Mode) -> File ! FsError        // read, write, create, truncate, exclusive, append
+  read_at: fn(f: File, at: Int, buf: &Bytes) -> Int ! FsError
+  write_at: fn(f: File, at: Int, b: Bytes) -> Int ! FsError
+  sync: fn(f: File, data_only: Bool = false) ! FsError
+  set_len: fn(f: File, n: Int) ! FsError
+  copy_range: fn(from: File, at: Int, to: File, to_at: Int, n: Int) -> Int ! FsError
+  lock: fn(f: File, exclusive: Bool, wait: Bool = true) -> Bool ! FsError
+  close: fn(f: File)
+  stat: fn(p: Path) -> Stat ! FsError                     // size, kind, modified
+  list: fn(dir: Path) -> Array<Entry> ! FsError           // names and kinds
+  make_dir: fn(p: Path) ! FsError
+  rename: fn(from: Path, to: Path) ! FsError              // replaces `to` atomically
+  remove: fn(p: Path) ! FsError
+  sync_dir: fn(dir: Path) ! FsError                       // makes a rename or a create durable
+```
+
+- **Functions over it:** `read_all` (today's `read`), `read_str`,
+  `write_all`, `write` (today's: create or replace), `write_atomic` (a
+  temporary file, `sync`, `rename`, `sync_dir`), `exists`, `lines`,
+  `line_reader`, `walk`, `copy`.
+- **`copy_range` is the fast path,** `copy_file_range` or a clone,
+  called explicitly by `copy`; an implementation without one reads and
+  writes.
+- **`lock` and `sync_dir`** are what a storage engine needs: one writer
+  per directory, and a rename that survives a crash.
+- **`sim.fs` models:** a write torn at sector size; unsynced writes lost
+  at a crash, in any subset and order; a `sync` that lies, when asked
+  to; a rename that's atomic, and one lost before its `sync_dir`; a full
+  disk; read and write errors on chosen ranges; latency.
+
+### `Net`
+
+```ren
+pub dep Net =
+  listen: fn(addr: Addr) -> Listener ! NetError
+  accept: fn(l: Listener) -> Conn ! NetError
+  connect: fn(addr: Addr) -> Conn ! NetError
+  recv: fn(c: Conn, buf: &Bytes) -> Int ! NetError        // 0: the peer closed
+  recv_chunk: fn(c: Conn) -> Bytes ! NetError             // leased from the pool
+  send: fn(c: Conn, b: Bytes) -> Int ! NetError
+  shutdown: fn(c: Conn) ! NetError                        // done sending; still receiving
+  close: fn(c: Conn)
+  close_listener: fn(l: Listener)
+  local: fn(l: Listener) -> Addr
+  peer: fn(c: Conn) -> Addr
+  set_no_delay: fn(c: Conn, on: Bool) ! NetError
+  resolve: fn(host: Str) -> Array<Addr> ! NetError        // the system's resolver, for now
+```
+
+- **`Addr`** is `Tcp { host, port }` or `Unix(path)`. UDP's `bind`,
+  `send_to` and `recv_from` come with `dns`, which needs them, and
+  `resolve` then moves to `std.dns` over them, so the resolver is Ren's
+  and replays.
+- **Functions over it:** `read` and `write` (today's), `write_all`,
+  `connections(l)` (the cursor `Async.each` takes), framing and buffered
+  reading in L2. `accept_until` goes: `Async.race` of an `accept` with
+  `Signal.wait` says the same.
+- **`sim.net` models:** latency and bandwidth per link; a partition, one
+  way or both; a reset; a half-open connection; a peer that reads
+  slowly or never; a refused connect; a full backlog; short sends and
+  receives of any length.
+
+### `Clock`
+
+```ren
+pub dep Clock =
+  now: fn() -> Time                    // the wall clock
+  instant: fn() -> Instant             // monotonic
+  sleep_until: fn(i: Instant)
+```
+
+- **Functions over it:** `sleep(d)`, deadlines, and every timer:
+  `Async.timeout` is a `race` against `sleep_until` (runtime.md).
+- **`sim.clock` models:** virtual time that moves only when every task
+  waits; a wall clock that jumps, forward or back, while `instant` keeps
+  going.
+
+### `Random`
+
+```ren
+pub dep Random =
+  fill: fn(buf: &Bytes)                // the system's secure generator
+```
+
+- **Functions over it:** `int(below)` (today's), `float`, `shuffle`,
+  `choose`, ids. A handler over `Random` that buffers is L2's, for code
+  that draws often.
+- **`sim` answers it from the seed,** so a run replays, and property
+  tests shrink the choices ([testing.md](testing.md)).
+
+### `Console`
+
+```ren
+pub dep Console =
+  write_out: fn(b: Bytes)
+  write_err: fn(b: Bytes)
+  read_in: fn(buf: &Bytes) -> Int      // 0: the end of input
+  is_terminal: fn(s: Stream) -> Bool   // In, Out or Err
+```
+
+- **Functions over it:** `print` and `Console.write` (a line to
+  standard output), `Console.error`, `read_line`, `lines()` over
+  standard input. A terminal's raw mode and size come with a `cli`
+  that needs them.
+- **`sim` and tests** capture output and script input.
+
+### `Os`
+
+```ren
+pub dep Os =
+  args: fn() -> Array<Str>
+  env: fn(name: Str) -> Option<Str>
+  cwd: fn() -> Path
+  exit: fn(code: Int) -> Never
+```
+
+- **`exit` ends the program the way a stop does:** it cancels the whole
+  tree, runs every `finally` under the cleanup deadline, and then exits
+  with `code`. Go's `os.Exit`, which skips deferred cleanup, is the
+  mistake it avoids. A crash is `panic`, not an exit.
+
+### `Proc`
+
+```ren
+pub dep Proc =
+  spawn: fn(cmd: Str, args: Array<Str>, io: Stdio, env: Env = Inherit,
+            dir: Option<Path> = None, kill: Kill = Tree) -> Child ! ProcError
+  read: fn(p: Pipe, buf: &Bytes) -> Int ! ProcError       // 0: the end
+  write: fn(p: Pipe, b: Bytes) -> Int ! ProcError
+  close_pipe: fn(p: Pipe)
+  wait: fn(c: Child) -> Exit                              // a code, or the signal that ended it
+  kill: fn(c: Child, s: Sig)
+```
+
+- **`Stdio`** says, for standard input, output and error each, `Inherit`,
+  `Pipe` (the child's handle carries it), `Null` or a `File`.
+- **Functions over it:** `run` (today's: inherit, wait, the exit code),
+  `output` (capture standard output and error), `pipeline`. A cancelled
+  wait kills as `kill` says, SIGTERM then SIGKILL after the cleanup
+  deadline, as today.
+- **`sim.proc` models:** scripted programs, their output and exit codes,
+  slow ones, and ones that ignore SIGTERM.
+
+### `Signal`
+
+```ren
+pub dep Signal =
+  wait: fn(set: Array<Sig>) -> Sig     // until one of them arrives
+```
+
+- **Functions over it:** `Signal.on(term) fn() => ...`, a graceful stop
+  as a `race` of the server with `wait([term, interrupt])`.
+- **`sim` draws when a signal arrives** from its tape.
+
+### What isn't here
+
+- **The terminal beyond `is_terminal`, file watching, memory maps,
+  UDP and `sendfile` from a file to a socket** come when a program needs
+  them, each an operation added to its dependency, never a probe.
+- **Nothing reaches the world but these.** `dbg` is the one named
+  exception: it writes to standard error from anywhere, is compiled out
+  of release builds, and `ren test --ci` refuses it (decision 20).
+
 ---
 
 ## Roadmap

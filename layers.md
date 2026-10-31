@@ -88,6 +88,8 @@ pub dep Fs =
   driver is small, `sim` models what the system really does (a write
   that's torn, a sync that lies, a crash between the write and the
   rename), and a conformance suite covers the whole contract.
+- **Every L1 dependency's operations** are specified in
+  [runtime-io.md](runtime-io.md#part-4-the-worlds-interfaces).
 - **`Proc`** is `spawn`, `wait` and `kill`, with pipes; today's `run`,
   which collects what the program printed, is a function over them.
   **`Net`** is `listen`, `accept`, `connect`, `recv`, `send` and
