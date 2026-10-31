@@ -1,0 +1,947 @@
+---
+# The runtime core's protocol (runtime.md; runtime SYNTHESIS §2.2, §2.5-2.7;
+# runtime-frames SYNTHESIS §1-2, §5; native-lang SPEC §B), before it's built.
+#
+# Threads: NW workers, each running the driver loop of SPEC §C.1 around
+# ren_run (§B.4); the world (the kernel), which completes pulled calls; a
+# stopper (ren_stop); and an environment that may notify a parked task once
+# (a spurious resume, which SPEC §B.5 allows).
+#
+# Every step is one atomic action and one shared-memory operation of the C
+# (or a short run of them that nothing else can observe in between). The
+# model is sequentially consistent: it checks the protocol, not the memory
+# orderings that implement it.
+#
+# Tasks run small programs (PROGS) in one scope owned by the root task R:
+#   ["call"]        a world call: a scheduling point, then wait for the reply
+#   ["callcancel"]  issue a call and cancel it in the same step (t_cancel (b))
+#   ["cancel"]      the scope's eager cancel walk (flags, cancels pending calls)
+#   ["finally"] ... ["endfinally"]   masks the cancel flag
+#   ["take"] ["release"]             the shared instance I (CAS, park, handoff)
+#   ["give", u] ["await_turn"]       W2's ping-pong through ren_notify
+#   ["yield"]       ren_tick's budget is spent: YIELD (to the injector)
+# R spawns every child, then waits for the scope to end.
+options:
+  max_actions: 2000
+  crash_on_yield: false
+deadlock_detection: true
+liveness: "false"     # run.sh turns it on for the termination runs
+---
+
+# ---- knobs (override with --preinit-hook) ------------------------------------
+NW = 2                  # workers
+S = 2                   # op slots per worker (a task's next call reuses a slot)
+STEPS = 0               # ren_run's step budget (0: none, so ren_run never returns RUNNING)
+PROGS = {"T1": [["call"], ["finally"], ["call"], ["endfinally"]],
+         "T2": [["take"], ["cancel"], ["release"]]}
+REPLY = "driver"        # who calls ren_reply: the home "driver" thread, or "any" thread
+ANSWER_NOW = False      # the driver may answer a call inline
+DUP = False             # the world sends one duplicate (late) reply for a replied id
+STOP = False            # ren_stop may be called once, at any time
+STOP_WALK = False       # SPEC's ren_stop only cancels the slots; "notify": it also ren_notifies every
+                        # live task; "parked": it wakes only the tasks parked at that moment
+SPURIOUS = False        # an outside notify of one parked task, once
+WALK_NOTIFIES = True    # the cancel walk notifies each child it flags
+INIT_TURN = "T1"        # W2: whose turn it is first
+PEER_REFS = True        # W2's shared state holds a reference to each player until the root ends
+
+# protocol choices: the design as written is the default; run.sh flips them
+ORDER = "spec"          # deliver: "spec" stores the reply, frees, then notifies (SPEC §B.5);
+                        # "notify_first" notifies, then stores
+REF = False             # fix: whoever publishes a wake holds a task reference until its notify is done.
+                        # True for every wake site, or a list of them: "deliver", "scope", "handoff", "give"
+RETRACT_WAKE = True     # a retraction wakes its worker (C and Zig; SPEC's pseudocode and Rust don't)
+PARK_RECHECK = True     # try_park re-checks the queues after announcing itself
+GEN_CHECK = True        # ren_reply and cancel_slot check the generation (P3 removes it)
+P4 = False              # the cancel path frees the op too (P4)
+WAIT_REPLY = True       # a cancelled task waits for its reply (§2.2); False: it leaves at once
+INST_RECHECK = True     # a taker re-checks the instance under the wait-queue lock before parking
+
+COVER = []              # exists-checks expected in this run (see the end)
+
+# ---- helpers ---------------------------------------------------------------------
+atomic func addv(k):
+    if not (k in viol):
+        viol.append(k)
+
+atomic func cov(k):
+    if k in COVER and not (k in seen):
+        seen.append(k)
+
+atomic func ref_on(site):
+    if REF == True:
+        return True
+    if REF == False:
+        return False
+    return site in REF
+
+atomic func touch(t):
+    if tasks[t]["freed"]:
+        addv("uaf_task")
+
+atomic func drop(t):
+    tasks[t]["refs"] = tasks[t]["refs"] - 1
+    if tasks[t]["refs"] == 0 and tasks[t]["sched"] == "D":
+        if tasks[t]["freed"]:
+            addv("double_free")
+        tasks[t]["freed"] = True
+
+# ren_notify, B.2: fetch_or(NOTIFIED); the one notifier that saw PARKED queues it.
+# Returns True when the caller must run wake_one.
+atomic func notify(w, t):
+    touch(t)
+    if tasks[t]["freed"]:
+        return False
+    old = tasks[t]["sched"]
+    oldnf = tasks[t]["nf"]
+    tasks[t]["nf"] = True
+    if old == "P" and not oldnf:
+        tasks[t]["sched"] = "Q"
+        tasks[t]["nf"] = False
+        workers[w]["dq"].append(t)
+        return True
+    return False
+
+# B.6 wake_one, after publishing stealable work: fence(SC); if idle == 0 return;
+# else wake one parked worker, w itself last
+atomic func wake_one(w):
+    if idle <= 0:
+        return
+    vs = [(w + i) % NW for i in range(1, NW + 1) if workers[(w + i) % NW]["parked"] == 1]
+    if len(vs) > 0:
+        workers[vs[0]]["parked"] = 0
+        idle = idle - 1
+        workers[vs[0]]["permit"] = 1
+
+# B.6 wake_worker: after making work visible to v (inbox, remote)
+atomic func wake_worker(v):
+    if workers[v]["parked"] == 1:
+        workers[v]["parked"] = 0
+        idle = idle - 1
+        workers[v]["permit"] = 1
+
+atomic func wake_all():
+    for v in range(NW):
+        wake_worker(v)
+
+# cancel_slot, B.5: shared by the cancel walk, a self-cancel and ren_stop
+atomic func cancel_slot(gs, g):
+    s = slots[gs]
+    if s["gen"] != g:
+        if GEN_CHECK:
+            return "late"
+        if s["st"] == "ISSUED" or s["st"] == "PULLED":
+            addv("stale_cancel_hit")
+    if s["st"] == "ISSUED":
+        s["st"] = "CU"
+        cov("retract")
+        return "retract"
+    if s["st"] == "PULLED":
+        s["st"] = "CP"
+        home = gs // S
+        workers[home]["remote"].append(gs * 100 + s["gen"])
+        wake_worker(home)
+        cov("cancelsent")
+        return "sent"
+    return "late"
+
+# ren_reply, B.4 (up to the push; the caller wakes the home worker)
+atomic func ren_reply(id, rs):
+    gs = id // 100
+    g = id % 100
+    s = slots[gs]
+    if GEN_CHECK and s["gen"] != g:
+        cov("stale_released")
+        return "REL"
+    if s["st"] == "PULLED" or s["st"] == "CP":
+        if s["gen"] != g:
+            addv("stale_accepted")
+        if s["st"] == "CP":
+            cov("reply_after_cancel")
+        o = ops[s["op"]]
+        if o["freed"]:
+            addv("uaf_op")
+        o["hc"] = (s["st"] == "CP")
+        o["rs"] = rs
+        s["st"] = "REPLIED"
+        t = o["task"]
+        if tasks[t]["freed"] or tasks[t]["pend"] != s["op"]:
+            addv("accepted_unwaited")
+        workers[o["home"]]["inbox"].append(s["op"])
+        return "ACC"
+    if s["st"] == "REPLIED" or s["st"] == "FREE":
+        cov("dup_released")
+    return "REL"
+
+atomic func free_op(id):
+    if ops[id]["freed"]:
+        addv("double_free")
+    ops[id]["freed"] = True
+
+# deliver's store: the reply into the task's await, then the slot and op are freed
+atomic func deliver_store(w, id):
+    o = ops[id]
+    if o["freed"]:
+        addv("uaf_op")
+    t = o["task"]
+    touch(t)
+    o["dl"] = o["dl"] + 1
+    if o["dl"] > 1:
+        addv("double_delivery")
+    tasks[t]["aw"] = o["rs"]
+    gs = id // 100
+    slots[gs]["gen"] = slots[gs]["gen"] + 1
+    slots[gs]["st"] = "FREE"
+    slots[gs]["op"] = None
+    workers[w]["free"].append(gs - w * S)
+    if o["hc"] and P4:
+        free_op(id)          # on_cancel_done frees it ...
+    free_op(id)              # ... and deliver frees it again
+
+atomic func kid_ready(t):
+    # the condition a parked task waits for has come true
+    tk = tasks[t]
+    if tk["wait"] == "call":
+        return tk["aw"] != None
+    if tk["wait"] == "turn":
+        return turn == t
+    if tk["wait"] == "inst":
+        return inst["held"] == t
+    if tk["wait"] == "join":
+        return scope["count"] == 0
+    return False
+
+atomic func prog(t):
+    if t == "R":
+        p = [["spawn", k] for k in KIDS]
+        p.append(["join"])
+        return p
+    return PROGS[t]
+
+# ---- one task step, run by worker w: returns "go", "park", "done" or "yield" ----
+atomic func task_step(w, t):
+    tk = tasks[t]
+    p = prog(t)
+    pc = tk["pc"]
+    if pc >= len(p):
+        if t == "R":
+            tk["ended"] = tk["ended"] + 1
+            for k in peers:
+                drop(k)
+            return "done"
+        if tk["sub"] == 0:
+            # the scope's end: leave it; the last child out wakes the owner
+            scope["kids"].remove(t)
+            scope["count"] = scope["count"] - 1
+            tk["ended"] = tk["ended"] + 1
+            if tk["ended"] > 1:
+                addv("ends_twice")
+            if scope["count"] == 0 and scope["waiter"] != None:
+                tk["nx"] = scope["waiter"]
+                scope["waiter"] = None
+                r = ref_on("scope")
+                if r:
+                    tasks[tk["nx"]]["refs"] = tasks[tk["nx"]]["refs"] + 1
+                tk["sub"] = 1
+                return "go"
+            return "done"
+        nx = tk["nx"]
+        pushed = notify(w, nx)
+        r = ref_on("scope")
+        if r:
+            drop(nx)
+        if pushed:
+            wake_one(w)
+        return "done"
+    ins = p[pc]
+    k = ins[0]
+    if tk["err"] and not tk["mask"] and not (k in ["finally", "endfinally", "release"]):
+        tk["pc"] = pc + 1          # an error skips the rest, up to a finally
+        tk["sub"] = 0
+        return "go"
+    if k == "spawn":
+        c = ins[1]
+        tasks[c]["sched"] = "Q"
+        workers[w]["dq"].append(c)
+        live = live + 1
+        scope["count"] = scope["count"] + 1
+        scope["kids"].append(c)
+        tk["pc"] = pc + 1
+        wake_one(w)
+        return "go"
+    if k == "join":
+        if scope["count"] == 0:
+            tk["pc"] = pc + 1
+            tk["wait"] = None
+            return "go"
+        scope["waiter"] = t
+        tk["wait"] = "join"
+        return "park"
+    if k == "finally":
+        tk["mask"] = True
+        tk["pc"] = pc + 1
+        return "go"
+    if k == "endfinally":
+        tk["mask"] = False
+        tk["pc"] = pc + 1
+        return "go"
+    if k == "call" or k == "callcancel":
+        if tk["sub"] == 0:
+            # the scheduling point: checked before a call starts, never after
+            if (tk["flag"] and not tk["mask"]) or stopping:
+                cov("precheck")
+                if not tk["mask"]:
+                    tk["err"] = True
+                tk["pc"] = pc + 1
+                return "go"
+            if len(workers[w]["free"]) == 0:
+                return "yield"
+            ls = workers[w]["free"].pop()
+            gs = w * S + ls
+            g = slots[gs]["gen"]
+            id = gs * 100 + g
+            ops[id] = {"task": t, "home": w, "rs": "", "hc": False, "freed": False, "dl": 0}
+            inline = False
+            if ANSWER_NOW and k == "call":
+                inline = oneof [True, False]
+            if inline:
+                # answer_now: same delivery path, no slot published
+                slots[gs]["gen"] = g + 1
+                workers[w]["free"].append(ls)
+                free_op(id)
+                cov("inline")
+                tk["pc"] = pc + 1
+                return "go"
+            slots[gs]["op"] = id
+            slots[gs]["st"] = "ISSUED"
+            workers[w]["outbox"].append(id)
+            tk["pend"] = id
+            tk["aw"] = None
+            tk["sub"] = 1
+            return "go"
+        if tk["sub"] == 1:
+            # ren_world's tail: fence(SC); if stopping, cancel it (Dekker with ren_stop)
+            id = tk["pend"]
+            if stopping:
+                cancel_slot(id // 100, id % 100)
+            if k == "callcancel":
+                cancel_slot(id // 100, id % 100)
+            tk["sub"] = 2
+            tk["wait"] = "call"
+            return "park"
+        # resumed: aw.state == 0 means a spurious wake
+        if tk["aw"] == None:
+            if (not WAIT_REPLY) and tk["flag"] and not tk["mask"]:
+                tk["pend"] = None          # the old rule: leave now, the reply is released later
+                tk["err"] = True
+                tk["wait"] = None
+                tk["pc"] = pc + 1
+                tk["sub"] = 0
+                return "go"
+            cov("spurious_resume")
+            return "park"
+        if tk["aw"] == "C" and not tk["mask"]:
+            tk["err"] = True
+        tk["pend"] = None
+        tk["aw"] = None
+        tk["wait"] = None
+        tk["pc"] = pc + 1
+        tk["sub"] = 0
+        return "go"
+    if k == "cancel":
+        # the eager walk, one child per step, under the scope's lock
+        if tk["sub"] == 0:
+            if tk["wi"] >= len(KIDS):
+                tk["pc"] = pc + 1
+                tk["wi"] = 0
+                return "go"
+            c = KIDS[tk["wi"]]
+            tk["wid"] = None
+            if c in scope["kids"]:
+                ck = tasks[c]
+                ck["flag"] = True
+                if (not ck["mask"]) and ck["pend"] != None and ck["aw"] == None:
+                    tk["wid"] = ck["pend"]
+                tk["sub"] = 1
+                if WALK_NOTIFIES and c != t:
+                    pushed = notify(w, c)
+                    if pushed:
+                        wake_one(w)
+                return "go"
+            tk["wi"] = tk["wi"] + 1
+            return "go"
+        # outside the lock: cancel the call it saw, by id
+        if tk["wid"] != None:
+            cancel_slot(tk["wid"] // 100, tk["wid"] % 100)
+        tk["wid"] = None
+        tk["wi"] = tk["wi"] + 1
+        tk["sub"] = 0
+        return "go"
+    if k == "take":
+        if tk["sub"] == 0:
+            if inst["held"] == None:            # the CAS
+                inst["held"] = t
+                tk["holds"] = True
+                tk["pc"] = pc + 1
+                return "go"
+            tk["sub"] = 1                       # contended: (spin, then) the slow path
+            return "go"
+        if tk["sub"] == 1:
+            # under the wait-queue lock: set HAS_WAITERS unless it was freed meanwhile
+            if INST_RECHECK and inst["held"] == None:
+                inst["held"] = t
+                tk["holds"] = True
+                tk["pc"] = pc + 1
+                tk["sub"] = 0
+                return "go"
+            inst["w"] = True
+            inst["q"].append(t)
+            tk["sub"] = 2
+            tk["wait"] = "inst"
+            cov("inst_park")
+            return "park"
+        if inst["held"] == t:                   # handed off to us
+            tk["holds"] = True
+            tk["wait"] = None
+            tk["pc"] = pc + 1
+            tk["sub"] = 0
+            return "go"
+        return "park"
+    if k == "release":
+        if tk["sub"] == 0:
+            tk["holds"] = False
+            if not inst["w"]:                   # fast path: CAS HELD -> FREE
+                inst["held"] = None
+                tk["pc"] = pc + 1
+                return "go"
+            nx = inst["q"].pop(0)               # under the lock: hand off to the first waiter
+            inst["held"] = nx
+            if len(inst["q"]) == 0:
+                inst["w"] = False
+            r = ref_on("handoff")
+            if r:
+                tasks[nx]["refs"] = tasks[nx]["refs"] + 1
+            tk["nx"] = nx
+            tk["sub"] = 1
+            cov("handoff")
+            return "go"
+        nx = tk["nx"]
+        pushed = notify(w, nx)
+        r = ref_on("handoff")
+        if r:
+            drop(nx)
+        tk["pc"] = pc + 1
+        tk["sub"] = 0
+        if pushed:
+            wake_one(w)
+        return "go"
+    if k == "give":
+        u = ins[1]
+        if tk["sub"] == 0:
+            r = ref_on("give")
+            if r:
+                tasks[u]["refs"] = tasks[u]["refs"] + 1
+            turn = u
+            tk["sub"] = 1
+            return "go"
+        pushed = notify(w, u)
+        r = ref_on("give")
+        if r:
+            drop(u)
+        tk["pc"] = pc + 1
+        tk["sub"] = 0
+        if pushed:
+            wake_one(w)
+        return "go"
+    if k == "yield":                             # ren_tick's budget ran out: YIELD to the injector
+        if tk["sub"] == 0:
+            tk["sub"] = 1
+            return "yield"
+        tk["sub"] = 0
+        tk["pc"] = pc + 1
+        return "go"
+    if k == "await_turn":                        # an until(): a scheduling point, so cancellable
+        if (tk["flag"] or stopping) and not tk["mask"]:
+            tk["err"] = True
+            tk["wait"] = None
+            tk["pc"] = pc + 1
+            return "go"
+        if turn == t:
+            tk["wait"] = None
+            tk["pc"] = pc + 1
+            return "go"
+        tk["wait"] = "turn"
+        return "park"
+    return "go"
+
+# ---- one worker step (SPEC §C.1's loop around §B.4's ren_run) ------------------------
+atomic func inflight(w):
+    return len([c for c in world if c["home"] == w])
+
+atomic func enabled(w):
+    W = workers[w]
+    if W["pc"] == "exit":
+        return False
+    if W["pc"] == "wait":
+        if W["ret"] == "RUN":
+            return True
+        if W["permit"] == 1 or len(W["cq"]) > 0:
+            return True
+        n = inflight(w)
+        if W["ret"] == "FIN" and n == 0:
+            return True
+        return False
+    return True
+
+atomic func any_work(w):
+    if len(workers[w]["inbox"]) > 0 or len(inj) > 0 or done:
+        return True
+    for v in range(NW):
+        if len(workers[v]["dq"]) > 0:
+            return True
+    return False
+
+atomic func run_task(w, t):
+    touch(t)
+    if tasks[t]["sched"] == "D":
+        addv("ran_done")
+    tasks[t]["sched"] = "R"                    # xchg(RUNNING) clears NOTIFIED
+    tasks[t]["nf"] = False
+    workers[w]["cur"] = t
+    if STEPS > 0:
+        workers[w]["n"] = workers[w]["n"] + 1
+    exec_task(w)
+
+# One step of the current task; a task's end and a yield are handled in the
+# same step (nothing else can see the difference). A park is not: a notify may
+# land between the task's decision and the cas(RUNNING -> PARKED).
+atomic func exec_task(w):
+    W = workers[w]
+    t = W["cur"]
+    r = task_step(w, t)
+    if r == "park":
+        W["pc"] = "apark"
+    elif r == "done":
+        W["cur"] = None
+        tasks[t]["sched"] = "D"
+        tasks[t]["nf"] = False
+        drop(t)                                # the core's reference
+        live = live - 1
+        if live == 0:
+            done = True
+            wake_all()
+        W["pc"] = "pick"
+    elif r == "yield":
+        W["cur"] = None
+        tasks[t]["sched"] = "Q"
+        inj.append(t)
+        wake_one(w)
+        W["pc"] = "pick"
+    else:
+        W["pc"] = "exec"
+
+atomic func to_pick_or_deliver(w):
+    W = workers[w]
+    if len(W["inbox"]) > 0:
+        W["dlv"] = W["inbox"].pop(0)
+        W["pc"] = "dlv1"
+    else:
+        W["pc"] = "pick"
+
+atomic func step(w):
+    W = workers[w]
+    pc = W["pc"]
+    if pc == "run":
+        if done:
+            W["ret"] = "FIN"
+            W["pc"] = "poll"
+            return
+        if W["parked"] == 1:                   # xchg(parked, 0)
+            W["parked"] = 0
+            idle = idle - 1
+        W["n"] = 0
+        to_pick_or_deliver(w)                  # drain_inbox
+    elif pc == "dlv1":
+        id = W["dlv"]
+        t = ops[id]["task"]
+        W["dt"] = t
+        W["pc"] = "dlv2"
+        r = ref_on("deliver")
+        if ORDER == "spec":
+            if r:
+                tasks[t]["refs"] = tasks[t]["refs"] + 1
+            deliver_store(w, id)               # st(aw.state, REL); free the slot and the op
+        else:
+            pushed = notify(w, t)
+            if pushed:
+                wake_one(w)
+    elif pc == "dlv2":
+        t = W["dt"]
+        if ORDER == "spec":
+            pushed = notify(w, t)              # the window: t may be done and freed by now
+            r = ref_on("deliver")
+            if r:
+                drop(t)
+            if pushed:
+                wake_one(w)
+        else:
+            deliver_store(w, W["dlv"])
+        W["dlv"] = None
+        W["dt"] = None
+        to_pick_or_deliver(w)
+    elif pc == "pick":
+        if done:
+            W["ret"] = "FIN"
+            W["pc"] = "poll"
+            return
+        if STEPS > 0 and W["n"] >= STEPS:
+            W["ret"] = "RUN"
+            W["pc"] = "poll"
+            return
+        t = None
+        if len(W["dq"]) > 0:
+            t = W["dq"].pop()                  # owner takes the bottom
+        elif len(inj) > 0:
+            t = inj.pop(0)
+        else:
+            vs = [v for v in range(NW) if v != w and len(workers[v]["dq"]) > 0]
+            if len(vs) > 0:
+                t = workers[vs[0]]["dq"].pop(0)    # a thief takes the top
+        if t != None:
+            run_task(w, t)
+        elif len(W["inbox"]) > 0:
+            to_pick_or_deliver(w)
+        else:
+            W["pc"] = "park1"
+    elif pc == "park1":                        # try_park: st(parked, 1, SC); xadd(idle, 1, SC)
+        W["parked"] = 1
+        idle = idle + 1
+        W["pc"] = "park"
+    elif pc == "exec":
+        exec_task(w)
+    elif pc == "apark":
+        t = W["cur"]
+        W["cur"] = None
+        W["pc"] = "pick"
+        if tasks[t]["nf"]:                     # cas(RUNNING -> PARKED) failed: a notify came
+            tasks[t]["sched"] = "Q"
+            tasks[t]["nf"] = False
+            W["dq"].append(t)
+            wake_one(w)
+        else:
+            tasks[t]["sched"] = "P"
+    elif pc == "park":                         # fence(SC); re-check every queue
+        work = any_work(w)
+        if PARK_RECHECK and work:
+            if W["parked"] == 1:
+                W["parked"] = 0
+                idle = idle - 1
+            W["pc"] = "pick"
+        else:
+            W["ret"] = "FIN" if done else "IDLE"
+            W["pc"] = "poll"
+    elif pc == "poll":                         # ren_poll_call, until it returns false
+        if len(W["remote"]) > 0:
+            id = W["remote"].pop(0)
+            for c in world:
+                if c["id"] == id:
+                    c["creq"] = True
+        elif len(W["outbox"]) > 0:
+            id = W["outbox"].pop(0)
+            gs = id // 100
+            if slots[gs]["st"] == "ISSUED":
+                slots[gs]["st"] = "PULLED"
+                world.append({"id": id, "home": w, "creq": False})
+            else:
+                # CANCEL_UNPULLED: retract, with no round trip
+                slots[gs]["st"] = "REPLIED"
+                ops[id]["hc"] = True
+                ops[id]["rs"] = "C"
+                W["inbox"].append(id)
+                cov("retracted")
+                if RETRACT_WAKE:
+                    wake_worker(w)
+        elif W["ret"] == "RUN":
+            W["pc"] = "reap"                   # wait(timeout 0)
+        else:
+            W["pc"] = "wait"
+    elif pc == "wait":
+        n = inflight(w)
+        if W["ret"] == "FIN" and n == 0 and len(W["cq"]) == 0:
+            W["pc"] = "exit"
+            return
+        W["permit"] = 0
+        W["pc"] = "reap"
+    elif pc == "reap":                         # the driver's completions, through ren_reply
+        if len(W["cq"]) > 0:
+            c = W["cq"].pop(0)
+            r = ren_reply(c["id"], c["rs"])
+            if r == "ACC":
+                wake_worker(w)
+        else:
+            W["pc"] = "run"
+
+# ---- state ------------------------------------------------------------------------
+atomic action Init:
+    KIDS = [k for k in PROGS]
+    tasks = {}
+    for t in ["R"] + KIDS:
+        tasks[t] = {"sched": "-", "nf": False, "refs": 1, "freed": False, "pc": 0, "sub": 0,
+                    "pend": None, "aw": None, "flag": False, "mask": False, "err": False,
+                    "wait": None, "holds": False, "ended": 0, "wi": 0, "wid": None, "nx": None}
+    tasks["R"]["sched"] = "Q"
+    peers = []                  # tasks W2's shared state holds a reference to
+    if PEER_REFS:
+        for k in KIDS:
+            for ins in PROGS[k]:
+                if ins[0] == "give" and not (ins[1] in peers):
+                    peers.append(ins[1])
+        for k in peers:
+            tasks[k]["refs"] = tasks[k]["refs"] + 1
+    inj = ["R"]                 # ren_start pushes the root to the injector
+    live = 1
+    done = False
+    idle = 0
+    workers = []
+    for w in range(NW):
+        workers.append({"pc": "run", "ret": "", "n": 0, "parked": 0, "permit": 0,
+                        "dq": [], "inbox": [], "remote": [], "outbox": [], "cq": [],
+                        "free": [S - 1 - i for i in range(S)], "dlv": None, "dt": None,
+                        "cur": None})
+    slots = [{"gen": 1, "st": "FREE", "op": None} for i in range(NW * S)]
+    ops = {}
+    world = []                  # pulled calls the world holds: {id, home, creq}
+    replied = []                # ids the world has answered (for DUP)
+    dups = 1 if DUP else 0
+    wpc = None                  # REPLY == "any": the home worker the world must still wake
+    stopping = False
+    spc = "" if STOP else "off"
+    spur = 1 if SPURIOUS else 0
+    scope = {"count": 0, "waiter": None, "kids": []}
+    inst = {"held": None, "w": False, "q": []}
+    turn = INIT_TURN
+    viol = []
+    seen = []
+
+# ---- actions ------------------------------------------------------------------------
+atomic fair action W0:
+    e = enabled(0)
+    require e
+    step(0)
+
+atomic fair action W1:
+    require NW > 1
+    e = enabled(1)
+    require e
+    step(1)
+
+atomic func reply_from_world(id, rs, home):
+    if REPLY == "driver":
+        workers[home]["cq"].append({"id": id, "rs": rs})
+    else:
+        r = ren_reply(id, rs)
+        if r == "ACC":
+            wpc = home
+
+# The world completes a pulled call: Done, or Cancelled if a cancel reached it
+# (the original's reply is the final one; the cancel's own reply is ignored).
+atomic fair action World:
+    require wpc == None
+    c = oneof world
+    rs = "D"
+    if c["creq"]:
+        rs = oneof ["D", "C"]
+    world.remove(c)
+    replied.append(c["id"])
+    reply_from_world(c["id"], rs, c["home"])
+
+# REPLY == "any": ren_reply's last step, wake_worker(home), from the world's thread
+atomic fair action WorldWake:
+    require wpc != None
+    wake_worker(wpc)
+    wpc = None
+
+# A late duplicate of a reply already given (a multishot leftover, a driver bug).
+atomic action Dup:
+    require dups > 0 and wpc == None
+    id = oneof replied
+    home = (id // 100) // S
+    require workers[home]["pc"] != "exit"
+    dups = 0
+    reply_from_world(id, "D", home)
+
+# ren_stop: xchg(stopping); fence; cancel every slot; wake_all
+atomic action Stop:
+    require spc == ""
+    stopping = True
+    spc = "walk"
+
+atomic fair action StopWalk:
+    require spc == "walk"
+    for gs in range(NW * S):
+        if slots[gs]["st"] != "FREE":
+            cancel_slot(gs, slots[gs]["gen"])
+    if STOP_WALK == "notify":
+        # cancel the whole tree, as a cancel walk does: ren_notify every live task,
+        # so one that is about to park sees NOTIFIED and runs again
+        for t in tasks:
+            tk = tasks[t]
+            if tk["sched"] != "-" and tk["sched"] != "D" and not tk["freed"]:
+                oldnf = tk["nf"]
+                tk["nf"] = True
+                if tk["sched"] == "P" and not oldnf:
+                    tk["sched"] = "Q"
+                    tk["nf"] = False
+                    inj.append(t)
+    elif STOP_WALK == "parked":
+        # only wake the tasks that are parked right now
+        for t in tasks:
+            if tasks[t]["sched"] == "P" and not tasks[t]["freed"]:
+                tasks[t]["sched"] = "Q"
+                inj.append(t)
+    spc = "wake"
+
+atomic fair action StopWake:
+    require spc == "wake"
+    wake_all()
+    spc = "done"
+
+# Some other ren_notify reaches a parked task (it holds a reference while it does).
+atomic action Spurious:
+    require spur > 0
+    t = oneof [x for x in tasks if tasks[x]["sched"] == "P" and not tasks[x]["freed"]]
+    spur = 0
+    tasks[t]["sched"] = "Q"
+    tasks[t]["nf"] = False
+    inj.append(t)
+    woke = False
+    for v in range(NW):
+        if workers[v]["parked"] == 1 and not woke:
+            workers[v]["parked"] = 0
+            idle = idle - 1
+            workers[v]["permit"] = 1
+            woke = True
+    cov("spurious")
+
+atomic action Finished:
+    require all([workers[w]["pc"] == "exit" for w in range(NW)])
+    pass
+
+# ---- properties ------------------------------------------------------------------
+always assertion NoUseAfterFree:
+    return not ("uaf_task" in viol) and not ("uaf_op" in viol)
+
+always assertion NoDoubleFree:
+    return not ("double_free" in viol)
+
+always assertion StaleReplyNeverAccepted:
+    return not ("stale_accepted" in viol)
+
+always assertion StaleCancelNeverHits:
+    return not ("stale_cancel_hit" in viol)
+
+always assertion AcceptedOnlyWithWaiter:
+    # a reply nobody waits for is RELEASEd, never ACCEPTED
+    return not ("accepted_unwaited" in viol)
+
+always assertion CancelledTaskWaitsForReply:
+    # a call that's still with the driver (or replied, not yet delivered) has its task waiting on it
+    for gs in range(NW * S):
+        s = slots[gs]
+        if s["st"] != "FREE":
+            t = ops[s["op"]]["task"]
+            if tasks[t]["freed"] or tasks[t]["pend"] != s["op"]:
+                return False
+    return True
+
+always assertion EndsOnce:
+    if "double_delivery" in viol or "ran_done" in viol or "ends_twice" in viol:
+        return False
+    for t in tasks:
+        if tasks[t]["ended"] > 1:
+            return False
+    return True
+
+always assertion ScopeEndsAfterItsTasks:
+    if tasks["R"]["pc"] >= len(KIDS) + 1:
+        for k in KIDS:
+            if tasks[k]["ended"] != 1:
+                return False
+    return True
+
+always assertion InstanceHeldByOne:
+    hs = [t for t in tasks if tasks[t]["holds"]]
+    if len(hs) > 1:
+        return False
+    if len(hs) == 1 and inst["held"] != hs[0]:
+        return False
+    return True
+
+always assertion NoLostWaiter:
+    return inst["held"] != None or len(inst["q"]) == 0
+
+# Every worker asleep for good (parked, no permit, no completion to reap) while
+# work is queued, a delivery waits in an inbox, a call or cancel waits to be
+# pulled, or a parked task's condition already holds.
+always assertion NoLostWake:
+    if wpc != None or spc == "walk" or spc == "wake":
+        return True
+    for w in range(NW):
+        W = workers[w]
+        if W["pc"] == "exit":
+            continue
+        if not (W["pc"] == "wait" and W["ret"] == "IDLE" and W["permit"] == 0 and len(W["cq"]) == 0):
+            return True
+    if len(inj) > 0:
+        return False
+    for w in range(NW):
+        W = workers[w]
+        if len(W["dq"]) > 0 or len(W["inbox"]) > 0 or len(W["outbox"]) > 0 or len(W["remote"]) > 0:
+            return False
+    for t in tasks:
+        if tasks[t]["sched"] == "P" and not tasks[t]["freed"]:
+            rdy = kid_ready(t)
+            if rdy:
+                return False
+    return True
+
+# ---- coverage: the run reaches the interesting state (switched on by COVER) ----------
+exists assertion Cover_cancelsent:
+    return not ("cancelsent" in COVER) or ("cancelsent" in seen)
+
+exists assertion Cover_dup_released:
+    return not ("dup_released" in COVER) or ("dup_released" in seen)
+
+exists assertion Cover_handoff:
+    return not ("handoff" in COVER) or ("handoff" in seen)
+
+exists assertion Cover_inline:
+    return not ("inline" in COVER) or ("inline" in seen)
+
+exists assertion Cover_inst_park:
+    return not ("inst_park" in COVER) or ("inst_park" in seen)
+
+exists assertion Cover_precheck:
+    return not ("precheck" in COVER) or ("precheck" in seen)
+
+exists assertion Cover_reply_after_cancel:
+    return not ("reply_after_cancel" in COVER) or ("reply_after_cancel" in seen)
+
+exists assertion Cover_retract:
+    return not ("retract" in COVER) or ("retract" in seen)
+
+exists assertion Cover_retracted:
+    return not ("retracted" in COVER) or ("retracted" in seen)
+
+exists assertion Cover_spurious:
+    return not ("spurious" in COVER) or ("spurious" in seen)
+
+exists assertion Cover_spurious_resume:
+    return not ("spurious_resume" in COVER) or ("spurious_resume" in seen)
+
+exists assertion Cover_stale_released:
+    return not ("stale_released" in COVER) or ("stale_released" in seen)
+
+# ---- liveness: everything drains and every worker's loop exits -------------------------
+eventually always assertion AllExit:
+    return all([workers[w]["pc"] == "exit" for w in range(NW)])
