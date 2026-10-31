@@ -1132,10 +1132,13 @@ let rec static_desc cx loc ~template (t : Ty.ty) : int =
             | Record_decl _ -> true
             | Sum_decl cs -> List.exists (fun (_, _, ts) -> ts <> []) cs
             (* an opaque type's is what it's represented as, which the
-               runtime finds from its template ([ren_counted_in]) *)
+               runtime finds from its template ([ren_counted_in]):
+               counted if it holds an object, a release build's `Str`
+               (two words, its root counted) and a small record of one
+               too, whose word is a counted box *)
             | Rep_decl _ ->
                 (not template)
-                && is_object (with_words cx 0 (fun () -> layout cx loc t)))
+                && Mem.counted (with_words cx 0 (fun () -> layout cx loc t)))
         | _ -> false
       in
       let n = List.length cx.desc_list in

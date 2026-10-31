@@ -9651,14 +9651,22 @@ Choices where strings.md, decision 17 and the brief are silent:
   part of a value that isn't one fits too, and a slice or a view of an
   ordinary value is made with no test and never allocates. A slice of
   a large owner that ends past 4 GiB pays where the spec's wouldn't.
-- Step 4 (part 3): the escape's object is a slice object made for it,
-  even for the whole of an owner, never the owner itself (but where
-  `ren_sv_peek` is given an owner past the edge, which a release build
-  doesn't make), so a view of an escape that is itself one has an object
-  to be held by: `ren_sv_view_escape` makes it a slice object of its
-  own, which the escape's object holds until it's freed (ren_rt.c,
-  `ren_kids`). It's 32 bytes a view past the edge, kept as long as the
-  escape it's of.
+- Step 4 (part 3): the escape is marked in the *offset* field
+  (`UINT32_MAX`, its length field 0), not the length field as the brief
+  and "The 4 GiB escape" say, so a check of an index or a room against
+  the length field alone fails for the escape and sends it to the cold
+  path: `b.at(i)` and layer 3's reads and writes cost no test more. No
+  ordinary value's offset is `UINT32_MAX`, since its bytes end before
+  2^32 - 1.
+- Step 4 (part 3): the escape's object is always a slice object, even
+  for the whole of an owner, so a view of an escape that is itself one
+  has an object to be held by: `ren_sv_view_escape` makes it a slice
+  object of its own, which the escape's object holds until it's freed
+  (ren_rt.c, `ren_kids`). It's 32 bytes a view past the edge, kept as
+  long as the escape it's of. `ren_sv_peek` (a type's `key` given a
+  word it borrows) of an owner past the edge, which a release build
+  never makes a word of, gives it a slice object the owner holds, so
+  both live until the program ends: the escape's one leak.
 - Step 4 (part 3): an escape appends and is written in place when its
   object and its owner are each held once (`ren_sv_escape_unique`), as
   an owner is; A's rule (an owner only) would copy every append past

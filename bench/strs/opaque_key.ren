@@ -1,0 +1,18 @@
+// A map keyed by an `opaque Str` whose keys are strings made at run
+// time (the soundness review's k7): a release build's descriptor of
+// `Name` must say it's counted, as its word is a string's box and its two
+// words hold a counted root, or the map never drops its keys and they're
+// alive at the end.
+
+pub type Name = opaque Str
+  pub fn of(s: Str) -> Name = s
+  pub fn key(self) -> Str = self.ascii_lower()
+
+fn fresh(s: Str) -> Str = s + ""
+
+fn main() uses Console =
+  var m: Map<Name, Int> = Map.empty
+  &m.set(Name.of(fresh("bob")), 1)
+  &m.set(Name.of(fresh("Alice")), 1)
+  &m.set(Name.of(fresh("ALICE")), 1)
+  print(m.len())

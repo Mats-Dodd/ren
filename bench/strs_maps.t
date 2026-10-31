@@ -2,7 +2,10 @@ Step 4's third part (compiler.md, "Bytes stage, part two", "Step 4
 (part 3), as built"): maps and sets whose keys or values are `Str` or
 `Bytes`, which a release build's entries keep as two words, unboxed,
 read by generic code too, and a map's value lent where the map doesn't
-change (strs/maps.ren). As strs.t checks its programs: what `ren run`
+change (strs/maps.ren); and maps and generic code of an `opaque Str`
+with its own `key`, whose descriptor must say it's counted
+(strs/opaque_key.ren, strs/opaque_key_generic.ren, from the soundness
+review). As strs.t checks its programs: what `ren run`
 prints is as specified, and every native build prints the same under the
 sanitizers, with no object alive at the end.
 
@@ -18,8 +21,10 @@ sanitizers, with no object alive at the end.
   >    rm -f spec.out spec.err)
   > }
 
-  $ spec strs/maps.ren
+  $ for f in maps opaque_key opaque_key_generic; do spec strs/$f.ren; done
   strs/maps.ren: as specified
+  strs/opaque_key.ren: as specified
+  strs/opaque_key_generic.ren: as specified
 
   $ export ASAN_OPTIONS=detect_stack_use_after_return=0:detect_leaks=0
   $ native() {
@@ -60,3 +65,32 @@ sanitizers, with no object alive at the end.
   strs/maps.ren, release: the same, exit 0, objects live at exit 0
   strs/maps.ren, tcc: the same, exit 0, objects live at exit 0
   strs/maps.ren, ren run --release: the same
+  $ native strs/opaque_key.ren
+  strs/opaque_key.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/opaque_key.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 4 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/opaque_key.ren, release: the same, exit 0, objects live at exit 0
+  strs/opaque_key.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/opaque_key.ren, ren run --release: the same
+  $ native strs/opaque_key_generic.ren
+  strs/opaque_key_generic.ren, perceus: the same, exit 0, objects live at exit 0
+  strs/opaque_key_generic.ren, naive: the same, exit 0, objects live at exit 0
+  ren specialized: 7 copies, 0 blocks lifted, 0 handlers known, 0 calls past the size budget
+  strs/opaque_key_generic.ren, release: the same, exit 0, objects live at exit 0
+  strs/opaque_key_generic.ren, tcc: the same, exit 0, objects live at exit 0
+  strs/opaque_key_generic.ren, ren run --release: the same
+
+Generic code kept generic (no specializing, REN_SPEC_BUDGET=0), in a
+release build under the sanitizers, counts a `Name` through its
+descriptor:
+
+  $ (cd strs && for f in opaque_key opaque_key_generic; do
+  >   REN_SPEC_BUDGET=0 REN_CC=cc REN_CFLAGS='-fsanitize=address,undefined' ren build --release --stats $f.ren -o ./native.bin > build.err 2>&1 &&
+  >   { ./native.bin > native.out 2> native.err; echo "exit $?" >> native.out; } &&
+  >   if cmp -s native.out $f.expected
+  >   then echo "$f.ren, release, budget 0: as specified, $(grep -o 'objects live at exit [0-9]*' native.err)"
+  >   else echo "$f.ren, release, budget 0: different"; diff native.out $f.expected
+  >   fi
+  > done; rm -f native.bin native.out native.err build.err)
+  opaque_key.ren, release, budget 0: as specified, objects live at exit 0
+  opaque_key_generic.ren, release, budget 0: as specified, objects live at exit 0

@@ -1,0 +1,31 @@
+// An `opaque Str` with its own `key` in a map, a set and generic code
+// (the soundness review's k6): generic code counts a `Name` through its
+// descriptor, which must say it's counted, or what it keeps is freed
+// under it. strs_maps.t builds it with REN_SPEC_BUDGET=0 too, so the
+// generic code stays generic.
+
+pub type Name = opaque Str
+  pub fn of(s: Str) -> Name = s
+  pub fn key(self) -> Str = self.ascii_lower()
+  pub fn text(self) -> Str = self
+
+fn fresh(s: Str) -> Str = s + ""
+
+fn keep<T>(x: T, n: Int) -> Array<T> =
+  var out: Array<T> = []
+  for _ in 0..n
+    &out.push(x)
+  out
+
+fn main() uses Console =
+  var m: Map<Name, Int> = Map.empty
+  &m.set(Name.of(fresh("Ann")), 1)
+  &m.set(Name.of(fresh("ann")), 2)
+  print(m.len())
+  let s = Set.of([Name.of(fresh("x")), Name.of(fresh("X")), Name.of(fresh("y"))])
+  print(s.len())
+  let many = keep(Name.of(fresh("kept")), 3)
+  print(many.len())
+  print(many[2].text())
+  let ks = m.keys()
+  print(ks[0].text())

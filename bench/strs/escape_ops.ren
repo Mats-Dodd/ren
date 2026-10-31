@@ -3,8 +3,8 @@
 // views of one that are themselves past it, only read, returned, kept in
 // an array and in a map's keys after what they're views of is gone;
 // `==`, hashing, sorting, layer 3's reads and `Str.from_utf8` of one.
-// It needs about 4 GiB natively and 8 in `ren run`, whose `+=` copies, so
-// bench/strs_big.t runs it only with REN_BIG_TESTS=1.
+// It needs about 4 GiB natively and up to 12 GB in `ren run`, whose `+=`
+// copies, so bench/strs_big.t runs it only with REN_BIG_TESTS=1.
 
 // a view of a borrowed parameter, returned
 fn tail(b: Bytes, from: Int) -> Bytes = b[from..b.len()]
