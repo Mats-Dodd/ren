@@ -316,6 +316,53 @@ pub fn decode<T>(text: Str, s: Settings = DEFAULT) -> T ! Error
   appears only as the encoded side of its `parse`, so no library can
   see its representation or build one that breaks its rule.
 
+### `Value`, the dynamic view
+
+**`Value` is an ordinary sum type.** What's dynamic about decoding is
+the step from data to a `T`, which can fail, and that step is the
+doors'. Nothing else is privileged: no `Any`, no downcast, no
+reflection.
+
+```ren
+pub type Value =
+  | Bool(Bool) | Int(Int) | Float(Float) | Text(Str) | Bytes(Bytes)
+  | Decimal(Decimal)
+  | List(Array<Value>)
+  | Map(Array<(Value, Value)>)          // a Map's entries, in order
+  | Fields(Array<(Str, Value)>)         // a record, in the shape's order
+  | Case(tag: Value, fields: Value)     // a sum's case
+  | None                                // an Option present and empty
+```
+
+- **Its leaves are Ren's scalars, not a medium's.** There's no `null`:
+  absence is decided at the door. `Fields` and `Map` are apart; which a
+  json object is depends on the shape the library was given.
+- **It's public in std's `shape` module, not the prelude.** `import
+  shape` marks a module that works with the dynamic view, which is
+  format libraries and tools that walk shapes.
+- **Its door is the identity:** `build<Value>(v)` is `v`, so
+  `json.decode<Value>(text)` is every medium's untyped decode, and
+  `json.encode(v)` writes one back. Each medium documents its mapping
+  with no shape: for json, an object is a `Map` with `Text` keys,
+  `null` is `None`, and a number is an `Int` when it's whole, else a
+  `Decimal`, read from its text.
+- **A medium's exact bytes are its `Raw`,** not a dynamic type of its
+  own: a field typed `json.Raw` keeps its sub-document unparsed, byte
+  for byte, at no cost, to forward or decode later
+  (`json.decode<Webhook>(raw)`); a record's bag of fields it doesn't
+  model is `extra: Map<Str, json.Raw>`. Go's `json.RawMessage` and
+  serde's `RawValue`. So a program never needs a `json.Doc`: `Value` is
+  the tree for exploring and converting between media, and `Raw` is the
+  medium, exactly.
+- **What an untyped decode loses is the medium's own scalars:** a TOML
+  datetime is `Text`, and a `Time` only when a shape asks through
+  `Time`'s `parse`. A tool that needs the medium exactly takes its
+  `Raw` or its library's parser.
+- **Release builds make no `Value` tree** ([How the walk
+  compiles](#how-the-walk-compiles)); debug builds run it as written.
+  The doors are copies keyed by the type's shape hash and the look
+  set's ([module-build.md](module-build.md#incremental-by-construction)).
+
 ### Looks as values, checked while building
 
 - **`Look` is a value type.** `formats: [Time.unix, Order.v1]` is an
@@ -776,10 +823,6 @@ anything here.
   operation's errors and no others. The checker needs a type for "the
   reply of `op`" that a handler can pass along but not invent, except
   through a check, as `mock` does.
-- **What `Value`, the dynamic view, looks like.** It's the one dynamic
-  type in Ren, and it should stay inside libraries. Does it need to be
-  public for format authors, or can it be a module they import
-  explicitly?
 - **Is `f.uses` the inferred set or the declared one?** For a pub
   function they're the same. For a private one, the inferred set is what's
   true.

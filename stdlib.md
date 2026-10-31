@@ -404,6 +404,10 @@ type Signup = { email: Email, name: Str, plan: Plan = Free }
 let s = try json.decode<Signup>(body)      // checks Email, fills in the default plan
 ```
 
+Data with no type is a `Value`, `json.decode<Value>(body)`, the tree
+every medium decodes to; a sub-document kept exactly, to forward or
+decode later, is a field typed `json.Raw` ([shapes.md](shapes.md#value-the-dynamic-view)).
+
 Retrying is a call, which says how many times and which errors it retries:
 
 ```ren
