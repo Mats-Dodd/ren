@@ -476,6 +476,82 @@ keeps an `Array<UInt8>` as bytes, an `Array<Int32>` as 4-byte elements
 and so on, and packs a record's sized fields into shared words, as it
 packs `Bool`s (compiler.md, "Sized storage").
 
+## Layouts
+
+> **Status:** decided on 2026-10-30; not built.
+
+A `layout` is a record whose bytes are the program's, not the
+compiler's: its fields sit in the order written, at the sizes written,
+with nothing moved. It's for data whose bytes someone else fixed: a
+page header or a log record on disk, a frame header on the wire, a
+kernel's struct, a C library's. A sized integer is how a place keeps a
+number; a layout is how a record keeps its places.
+
+```ren
+type RecHeader = layout(little) { len: UInt32, crc: UInt32, seq: UInt64 }
+assert RecHeader.size == 16
+
+fn append(w: &Wal, recs: Array<Bytes>) ! FsError uses Fs =
+  var buf = Bytes.with_capacity(...)
+  for r in recs
+    w.seq = w.seq + 1
+    buf.put(RecHeader { len: r.len(), crc: crc32c(r), seq: w.seq })
+    &buf.append(r)
+  Fs.write_all_at(w.file, w.end, buf)
+  Fs.sync(w.file, data_only: true)
+  w.end = w.end + buf.len()
+
+fn recover(page: Bytes) -> Int =             // where the last good record ends
+  var at = 0
+  loop
+    let h = RecHeader.read(&page, at) else break          // short: a torn tail
+    let body = page.slice(at + 16, h.len) else break
+    if crc32c(body) != h.crc then break                    // garbage: a torn write
+    at = at + 16 + h.len
+  at
+```
+
+- **Its fields** are sized integers, `Int` (all 64 bits of a pattern:
+  an id, a hash, a kernel's `user_data`), `Float` and `Float32`, fixed
+  arrays, `[UInt8; 16]`, other layouts, `Ptr`, `Atomic<T>`
+  ([runtime.md](runtime.md#atomics-and-the-freestanding-tier)), and a
+  last field `rest: Bytes`, everything after. A count kept in one field
+  and used to read another is the program's, so a layout never grows
+  into a schema language.
+- **Byte order** is the layout's, `layout(little)`, `layout(big)` or
+  `layout(native)`, and a field may say its own, `UInt32be`. Reading a
+  field swaps where the order isn't the machine's; either way it gives
+  an `Int`, as any sized place does, and storing checks that it fits.
+- **`size` and `align` are build-time facts,** checked by `assert`.
+- **A layout is a value and a view.** `T.read(&b, at)` copies one out
+  of bytes and `b.put(x)` or `b.put_at(at, x)` writes one in: for a
+  header, a copy of a few bytes is the cheap, simple thing.
+  `T.view(&b, at)` and `T.view_mut(&b, at)` borrow the bytes in place,
+  for a page or a ring, under the `&` rules, so the bytes can't grow
+  or move while a view is held.
+- **Every bit pattern is a value,** so reading a layout from any bytes
+  needs no `Unsafe`. `read` and `view` check the length once, and a
+  `UInt64` field holding a pattern above an `Int`'s largest makes them
+  fail as a short buffer does, rather than panic. A sum's tag is an
+  integer field the program matches, so a bad tag is a case it
+  handles. Torn or corrupt bytes give wrong numbers that a checksum
+  rejects, never undefined behaviour: a storage engine's recovery,
+  under `sim.fs`'s worst crash, is checked Ren with no `Unsafe` in it.
+  Only a layout with a `Ptr` field needs `Unsafe` to read, view or
+  build.
+- **Reads may be unaligned:** disk and wire data often are, and the
+  compiler emits unaligned loads, which x86 and ARM64 do at full speed,
+  and aligned ones where it can prove the offset.
+- **A layout has a shape** ([shapes.md](shapes.md)), so it shows, has
+  `==` and goes through json like any record, for `ren journal show`
+  and debugging. A shape says what data means; a layout says where its
+  bytes sit. They don't merge.
+- **A format's next version** is another layout and a version field
+  the program matches on: policy, the library's (decision 20, rule 5).
+- **Ring arithmetic:** a 32-bit counter's difference that isn't stored
+  wraps at 64 bits, so `UInt32.wrap(tail -% head)` says the 32-bit
+  answer.
+
 ## The pipe, `|>`
 
 `x |> f(a)` is `f(x, a)`, and `x |> f` is `f(x)`, checked exactly as that

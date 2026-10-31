@@ -1306,6 +1306,14 @@ builds abstractions out of them. Every feature is placed by five rules:
    library reads.
    - **std is compiled with the language users have:** no feature is
      enabled for std alone (Rust's nightly std is the mistake avoided).
+   - **The freestanding tier** is code whose row is empty or only
+     `Unsafe`, which the runtime is written in, so it can be Ren
+     (decided Oct 30). It adds four primitives, each one hosted code
+     wants too: `layout` and `Ptr`, any place type at a `Ptr` under
+     `Unsafe`, `Atomic<T>` as a place in raw memory, and functions
+     exported with C's convention
+     ([runtime.md](runtime.md#atomics-and-the-freestanding-tier),
+     [operators.md](operators.md#layouts)).
    - **The build refuses a program its driver can't answer:** one that
      reaches `Fs`, built for a target whose driver has no files, fails
      at build time, naming the dependency.

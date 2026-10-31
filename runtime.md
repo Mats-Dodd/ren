@@ -440,6 +440,113 @@ Both work because of structured actors: what crosses a place is a
 `D.Call`, which is data with no block in it, and a task never outlives
 its call, so no frame needs to follow work anywhere.
 
+## Atomics and the freestanding tier
+
+> **Status:** decided on 2026-10-30; not built. This is what lets the
+> runtime, and later the whole native side, be written in Ren: after
+> 1.0 the compiler and the runtime are both rewritten in Ren, and this
+> tier is what the runtime is written in.
+
+**The runtime can't use itself.** The scheduler can't be written with
+`Async`, nor the family with `Instances`. So it's written in Ren's
+**freestanding tier**: code whose row is empty or only `Unsafe`. That's
+not a mode or a dialect; it's a row, inferred, and a package asserts
+it as std asserts its layers:
+
+```ren
+assert runtime.take.uses <= [Unsafe]
+```
+
+- **No suspending:** with no `Async` in its row, code has no colour and
+  no frame that can wait.
+- **No implicit allocation:** with no `Alloc`, it allocates nothing;
+  the runtime passes its arenas as plain values, as Zig passes an
+  allocator. At the bottom capabilities are values; above, they're
+  dependencies.
+- **A panic aborts,** after a raw write to standard error: there's no
+  tree to unwind into, since this code is the tree.
+- **No assembly:** frames are stackless (a callee bumps its own frame),
+  so switching tasks is a call, never a stack switch.
+- **Go's runtime is the contrast:** Go in a dialect whose rules,
+  `//go:nosplit`, `//go:nowritebarrier`, are pragmas nobody checks.
+  Ren's are rows, so breaking one is a build error.
+
+**Four primitives, beyond the language as it is.** Each is a language
+primitive open to every library (decision 20, rule 2), and each passes
+one test: hosted code wants it too. A fifth that only the runtime would
+use is the sign to restructure the runtime, not grow the language.
+
+| Primitive | The runtime's use | Hosted code's |
+|---|---|---|
+| `layout` and `Ptr` ([operators.md](operators.md#layouts)) | the call record's header, an io_uring entry | disk records, wire headers, C structs, mostly with no `Unsafe` |
+| any place type at a `Ptr`, under `Unsafe` | the kernel's ring head and tail, at offsets it gives at run time | binding a C library |
+| `Atomic<T>` | the deque, the pending bit, rings between cores | a driver's own ring (layers.md, L1) |
+| a function exported with C's convention | a thread's entry, a signal handler | plugins, callbacks into C |
+
+### Atomics are a place, in raw memory
+
+Hosted Ren shares no mutable memory: state is in handlers and families,
+and each `per_core` heap is one thread's. So an atomic is never needed
+for Ren's own data. It's for **memory shared with someone else:**
+another core's runtime, the kernel (io_uring's rings), another process
+(a shared-memory ring, a lock table in a shared file), a device.
+
+`Atomic<T>`, over a sized integer, `Int` or `Ptr`, is therefore a place
+type, as `UInt32` is, and lives only in raw memory: a layout's field, or
+a place viewed at a `Ptr`. There's no `Atomic.new(0)` in ordinary code.
+
+```ren
+type Sqe = layout(native) {
+  opcode: UInt8, flags: UInt8, ioprio: UInt16, fd: Int32,
+  off: UInt64, addr: Ptr, len: UInt32, op_flags: UInt32,
+  user_data: Int, buf_index: UInt16, personality: UInt16,
+  splice_fd_in: Int32, _pad: [Int; 2],
+}
+assert Sqe.size == 64
+
+fn submit(sq: &Sq, e: Sqe) -> Bool uses Unsafe =
+  let tail = sq.tail.load(Relaxed)         // sq.tail: Unsafe.at<Atomic<UInt32>>(base.offset(off.tail))
+  let head = sq.head.load(Acquire)         // the kernel advances it
+  if UInt32.wrap(tail -% head) == sq.entries then return false
+  let i = tail.bit_and(sq.mask)
+  Unsafe.view_mut<Sqe>(sq.sqes.offset(i * 64)).put(e)
+  sq.array[i] = i
+  sq.tail.store(tail +% 1, Release)        // wraps at 32, by the store rule
+  true
+```
+
+- **The orderings are C11's:** `Relaxed`, `Acquire`, `Release`,
+  `AcqRel`, `SeqCst`, and `fence(o)`. Ren emits C, so it takes C's
+  memory model rather than inventing one. Operations: `load`, `store`,
+  `swap`, `cas`, and `add`, `sub`, `bit_and`, `bit_or`, `xor` that
+  return the old value.
+- **`Unsafe` shows exactly where it's dangerous:** `Sqe` has a `Ptr`,
+  the address the kernel will write to, so building one needs it.
+- **Checked under `sim`:** the compiler knows every atomic, so a build
+  for testing turns each into a scheduling point, threads interleaved
+  at every load and `cas`, a relaxed load allowed a stale value, from
+  the tape. The runtime's own concurrency is then tested by
+  `ren test --seeds N`, as loom and GenMC do, but over code already
+  written, and the take's FizzBee specs become checks on the real code.
+
+### Threads are the host's
+
+As today (The host ABI), the runtime never makes a thread. A host
+written in freestanding Ren makes them with a `foreign fn` call of
+`pthread_create`, on an exported entry, and shares nothing between them
+but atomics and raw memory. Ordinary values never cross threads, since
+each heap is one core's, so there's no `Thread` type, no `Send` or
+`Sync`, and no data race outside `Unsafe`.
+
+### Before that, as runtime structure
+
+- **Leased buffers take an alignment,** `align: 4096`, for O_DIRECT and
+  registered io_uring buffers ([runtime-io.md](runtime-io.md#buffers-lent-or-leased)).
+- **A cache doesn't do I/O when it evicts.** Eviction is the core's
+  choice, made inside another call's take, so a page cache marks dirty
+  pages not `evictable` and a background flusher writes them and marks
+  them clean; std's `cache` shows the pattern.
+
 ## The host ABI
 
 The host drives the core through nine functions, sketched in

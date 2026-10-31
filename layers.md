@@ -59,6 +59,12 @@ value passed by hand can't promise.
 instance family, `Mem`, `Alloc` and the journal. With the drivers'
 door, they're the only privileged code (decision 20, rule 2).
 
+**Under L0 is the runtime, written in L0's freestanding tier:** code
+whose row is empty or only `Unsafe`, with four primitives every library
+gets too (`layout`, places at a `Ptr`, `Atomic<T>`, C exports;
+[runtime.md](runtime.md#atomics-and-the-freestanding-tier)). The
+language is enough to write what answers it.
+
 ## Four rules
 
 ### 1. A dependency's operations are the smallest set its implementations must provide

@@ -48,7 +48,7 @@ let n = try Fs.read(file, &buf)            // the kernel has exclusive access to
 
 `&` already means nobody else can observe `buf` during the call, and value semantics mean there's no alias to it anywhere. That's exactly what a completion API needs.
 
-**Leased.** The runtime hands out a buffer from a pool it registered with the kernel ahead of time:
+**Leased.** The runtime hands out a buffer from a pool it registered with the kernel ahead of time, aligned as the pool says (`align: 4096` for O_DIRECT and registered buffers):
 
 ```ren
 for chunk in Net.chunks(conn)              // chunk: Bytes from the pool

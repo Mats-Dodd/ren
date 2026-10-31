@@ -378,7 +378,7 @@ Each type costs an interface, written semantics, in-memory and simulated impleme
 | MySQL, Redis clients | std.x | useful, not universal |
 | Kafka, NATS, cloud SDKs | out | vendor churn; they implement the infrastructure types instead |
 
-**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL), all std. There's no mutex: handler state replaces it. What's built, in the interpreter:
+**Concurrency and resilience:** `Async` ([async.md](async.md)), `xs.par_map` for pure work, `channel`, `select`, a semaphore, a rate limiter, `schedule`, `retry`, `cache` (LRU and TTL; a cache whose entries must be written back keeps dirty ones not `evictable` and flushes them in the background, never in eviction, [runtime.md](runtime.md#atomics-and-the-freestanding-tier)), all std. There's no mutex: handler state replaces it. What's built, in the interpreter:
 
 | Where | What |
 |---|---|
