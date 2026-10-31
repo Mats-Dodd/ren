@@ -153,14 +153,41 @@ At every layer, with the tools std uses:
 Nothing at L2 and above needs `trust`. The privilege is L0's, closed and
 listed, which is why the list stays small.
 
+## The writer
+
+Decided on 2026-10-30. Reading has cursors; writing is a dependency,
+the one `produce` already installs:
+
+```ren
+pub dep Send<T> =
+  send: fn(x: T)
+  flush: fn()                    // a no-op unless something buffers
+```
+
+- **A sink is a dependency.** `fn render(doc) uses Send<Bytes>` writes;
+  its caller says where: `with Fs.writer(f) { render(doc) }`,
+  `Net.writer(c)`, `Console.out()`. A generator's `yield` and a writer
+  are the same thing. (streams.md's undeclared `Writer` is this.)
+- **Wrapping is `over`:** `with gzip() over Fs.writer(f) { ... }`;
+  `buffered(64k)` gathers small writes; a hash is a stateful handler
+  that passes bytes on and keeps a digest. Go's `io.Writer` composition,
+  with nothing new in the language, and by rule 3 a recorder or `sim`
+  at the bottom sees every write.
+- **Ending is the handler's scope end.** Leaving the `with` flushes,
+  closes and runs the handler's `finally` (gzip's trailer), so there's
+  no `close()` to forget. `flush` is for protocols that need bytes on
+  the wire mid-stream.
+- **Short writes are the bottom's business.** `Fs.writer` loops
+  `write_at`, `Net.writer` loops `send`, so `send` takes everything.
+- **A sink's error is its handler's.** A full disk or a reset socket
+  fails the `with`, cancelling the writer like a failing sibling, so
+  `send` has no error and `render` never names the medium's.
+- **Two sinks at once take a writer as a value,** a handle to an
+  installed `Send`; one implicit sink is the common case, and nothing
+  names dependencies at the type level.
+
 ## Still to decide
 
-- **The writer.** Reading has cursors; writing has nothing yet
-  (streams.md uses a `Writer` it never declares). The proposal: the
-  sink is a dependency, `Send<T>`, which `produce` already installs, and
-  wrapping is `over`: gzip is `handler gzip() over Send<Bytes>`, a hash
-  a stateful handler of `Send<Bytes>`. Go's `io.Writer` composition,
-  with nothing new in the language.
 - **What a log line or a span needs in its row.** The proposal: events
   go to the runtime's trace stream, beside the journal, so `log.info`
   needs no `uses`, and the only ways out are exporters, handlers
