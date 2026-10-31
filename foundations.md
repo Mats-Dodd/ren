@@ -1340,6 +1340,10 @@ invisibly. A language feature that only one library uses is a sign the
 line is in the wrong place: make the primitive general, or move the
 feature out.
 
+**std is built in layers** on these primitives, each using only the ones
+below, and a user plugs in at any of them with the same tools
+([layers.md](layers.md)).
+
 For example, formats ([formats.md](formats.md)): bytes are the one
 medium the language owns. `Bytes` is a language type, and a view's
 promise, checked once and then each field a load, is a type rule only

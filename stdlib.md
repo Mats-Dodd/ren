@@ -23,11 +23,13 @@ This doc covers what ships with Ren: which modules are in the standard library, 
 
 ## Four rules
 
+std is built in layers on a few language primitives, each using only the ones below, with a dependency's operations the smallest set its implementations provide ([layers.md](layers.md)).
+
 **1. The standard library owns the shared types.**
 Go's `net/http.Handler`, `io.Reader` and `database/sql` are why Go libraries fit together without adapters. Breadth matters less than getting the types everyone passes between libraries right: `Bytes`, `Time`, `Instant`, `Duration`, `Decimal`, `Request`, `Response`, `Sql`, `Blob`, and the log event.
 
-**2. Every dependency has three implementations and one conformance suite.**
-A dependency in `std` ships a real implementation, an in-memory one, and a simulated one that fails in every way its contract allows. One test suite runs against all three, and against any vendor's implementation. This is what makes the README's testing and simulation story true for everyone, not only for code in `std`.
+**2. Fake the bottom; everything above is real.**
+A world dependency (L1 in [layers.md](layers.md)) ships a real implementation, an in-memory one, and a simulated one that fails in every way its contract allows, with one conformance suite that runs against all three and any vendor's, in the dependency's own module from its first release. A dependency above it runs as ordinary code over the world, so it's simulated by what's below; it may ship an in-memory fake for speed, and owes a conformance suite when others implement it. This is what makes the README's testing and simulation story true for everyone, not only for code in `std`.
 
 **3. Borrow the computation, own the effects.**
 Ren borrows mature components where the work is decades of hardening. A borrowed component may compute, but it may not reach the world on its own: its I/O, clock, randomness and allocation are supplied by Ren, so simulation and replay still hold.
