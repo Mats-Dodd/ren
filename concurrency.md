@@ -392,11 +392,10 @@ In short, from [AUDIT.md](research/structured-actors/AUDIT.md):
 
 ## Open questions
 
-- **How does `at` run under `per_core`?** The runtime experiments.
 - **`Async.expand`'s name and shape,** and whether it dedupes or leaves
   that to a `Seen` handler.
 
-Settled while writing this: `mailbox:` keeps its name and defaults to
+Settled since: `at` under `per_core` ships each operation to the key's home core, and moves the task for long blocks ([runtime.md](runtime.md)). Settled while writing this: `mailbox:` keeps its name and defaults to
 64 per key; the high-water report becomes a per-key queue depth in `sim`
 and debug builds; `at_all` is in v1.
 
