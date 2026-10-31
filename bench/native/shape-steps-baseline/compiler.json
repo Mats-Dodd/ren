@@ -1,0 +1,10 @@
+{
+  "commit": "cced5a2f7a9d818227e581746bdeab8a1b667a1e",
+  "original_eval_sha256": "9635ce00634ae0545c26385ac1ae1cbc60995e9966c7475b84fa89a4dcfa64bf",
+  "instrumented_eval_sha256": "a7519ededfc4b36bdcbd1dfb05b5b4bf88b797edcc04a8841c56ec41263ae23a",
+  "charge": "one per eval dispatch; tail If/Let/Seq/Match and eligible tail Call charge directly; fallback charges in eval",
+  "versions": {
+    "ocamlc": "5.5.2",
+    "dune": "3.24.2"
+  }
+}

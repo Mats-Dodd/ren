@@ -1,0 +1,237 @@
+// Stage 12a's hand-written baseline. The benchmark corpus uses ASCII
+// strings without escapes, non-negative whole numbers and Web/Store.
+// This is deliberately a decoder for Order, not a general JSON library.
+type OrderId = opaque Int
+  pub fn of(n: Int) -> OrderId = n
+  pub fn number(self) -> Int = self
+  pub fn parse(n: Int) -> OrderId = n
+  pub fn repr(self) -> Int = self
+
+type CustomerId = opaque Int
+  pub fn of(n: Int) -> CustomerId = n
+  pub fn number(self) -> Int = self
+  pub fn parse(n: Int) -> CustomerId = n
+  pub fn repr(self) -> Int = self
+
+type Money = opaque Int
+  pub fn of(n: Int) -> Money = n
+  pub fn cents(self) -> Int = self
+
+type Source =
+  | Web
+  | Store
+  pub fn parse(s: Str) -> Source ! InvalidSource =
+    match s
+      "Web" => Web
+      "Store" => Store
+      _ => fail InvalidSource
+  pub fn repr(self) -> Str =
+    match self
+      Web => "Web"
+      Store => "Store"
+
+type Line = { sku: Int, qty: Int, price: Money }
+type Audit = { revision: Int }
+type Order = {
+  id: OrderId, customer: CustomerId, lines: Array<Line>, total: Money,
+  placed: Time, note: Option<Str>, source: Source, audit: Audit,
+}
+
+type Token = { kind: Int, text: Str }
+
+// Keep assertions as Bool checks: the pre-stage native slice has no
+// diagnostic lowering for equality assertions over parser expressions.
+fn ensure(ok: Bool) = assert ok
+
+fn tokens(text: Str) -> Array<Token> =
+  var out: Array<Token> = []
+  let b = text.bytes()
+  var i = 0
+  while i < b.len()
+    let c = b.at(i)
+    if c == 32 || c == 10 || c == 13 || c == 9 then i += 1
+    else if c == 34 then
+      let start = i + 1
+      i += 1
+      while i < b.len() && b.at(i) != 34
+        ensure(b.at(i) != 92)
+        i += 1
+      ensure(i < b.len())
+      &out.push(Token { kind: 1, text: text[start..i] })
+      i += 1
+    else if c >= 48 && c <= 57 then
+      let start = i
+      while i < b.len() && b.at(i) >= 48 && b.at(i) <= 57
+        i += 1
+      &out.push(Token { kind: 2, text: text[start..i] })
+    else if c == 110 then
+      let is_null = text[i..i + 4] == "null"
+      ensure(is_null)
+      &out.push(Token { kind: 3, text: "null" })
+      i += 4
+    else
+      ensure(c == 123 || c == 125 || c == 91 || c == 93 || c == 58 || c == 44)
+      &out.push(Token { kind: c, text: text[i..i + 1] })
+      i += 1
+  out
+
+fn expect(ts: Array<Token>, inout at: Int, kind: Int) =
+  ensure(ts[at].kind == kind)
+  at += 1
+
+fn number(ts: Array<Token>, inout at: Int) -> Int =
+  ensure(ts[at].kind == 2)
+  var n = 0
+  let b = ts[at].text.bytes()
+  for i in 0..b.len()
+    n = n * 10 + b.at(i) - 48
+  at += 1
+  n
+
+fn string(ts: Array<Token>, inout at: Int) -> Str =
+  ensure(ts[at].kind == 1)
+  let s = ts[at].text
+  at += 1
+  s
+
+fn line(ts: Array<Token>, inout at: Int) -> Line =
+  expect(ts, &at, 123)
+  var sku = 0
+  var qty = 0
+  var price = 0
+  var seen = 0
+  while ts[at].kind != 125
+    let key = string(ts, &at)
+    expect(ts, &at, 58)
+    match key
+      "sku" =>
+        sku = number(ts, &at)
+        seen += 1
+      "qty" =>
+        qty = number(ts, &at)
+        seen += 1
+      "price" =>
+        price = number(ts, &at)
+        seen += 1
+      _ => ensure(false)
+    if ts[at].kind != 125 then expect(ts, &at, 44)
+  expect(ts, &at, 125)
+  ensure(seen == 3)
+  Line { sku, qty, price: Money.of(price) }
+
+fn decode(text: Str) -> Order =
+  let ts = tokens(text)
+  var at = 0
+  expect(ts, &at, 123)
+  var id = 0
+  var customer = 0
+  var total = 0
+  var placed = 0
+  var lines: Array<Line> = []
+  var note: Option<Str> = None
+  var source = Web
+  var revision = 0
+  var seen = 0
+  while ts[at].kind != 125
+    let key = string(ts, &at)
+    expect(ts, &at, 58)
+    match key
+      "kind" =>
+        let is_order = string(ts, &at) == "order"
+        ensure(is_order)
+      "id" => id = number(ts, &at)
+      "customerId" => customer = number(ts, &at)
+      "total" => total = number(ts, &at)
+      "placedAt" => placed = number(ts, &at)
+      "lines" =>
+        expect(ts, &at, 91)
+        while ts[at].kind != 93
+          &lines.push(line(ts, &at))
+          if ts[at].kind != 93 then expect(ts, &at, 44)
+        expect(ts, &at, 93)
+      "note" =>
+        if ts[at].kind == 3 then at += 1
+        else note = Some(string(ts, &at))
+      "source" =>
+        match string(ts, &at)
+          "Web" => source = Web
+          "Store" => source = Store
+          _ => ensure(false)
+      "audit" =>
+        expect(ts, &at, 123)
+        let is_revision = string(ts, &at) == "revision"
+        ensure(is_revision)
+        expect(ts, &at, 58)
+        revision = number(ts, &at)
+        expect(ts, &at, 125)
+      _ => ensure(false)
+    seen += 1
+    if ts[at].kind != 125 then expect(ts, &at, 44)
+  expect(ts, &at, 125)
+  ensure(at == ts.len() && seen == 9)
+  Order { id: OrderId.of(id), customer: CustomerId.of(customer), lines,
+    total: Money.of(total), placed: Time.epoch + Duration.seconds(placed), note,
+    source, audit: Audit { revision } }
+
+fn encode(o: Order) -> Str =
+  var out = "{\"kind\":\"order\",\"id\":" + show(o.id.number()) + ",\"customerId\":" + show(o.customer.number()) + ",\"total\":" + show(o.total.cents()) + ",\"placedAt\":" + show(((o.placed - Time.epoch).in_ms() / 1000)) + ",\"lines\":["
+  for i in 0..o.lines.len()
+    if i > 0 then out += ","
+    let l = o.lines[i]
+    out += "{\"sku\":" + show(l.sku) + ",\"qty\":" + show(l.qty) + ",\"price\":" + show(l.price.cents()) + "}"
+  out += "],\"note\":"
+  match o.note
+    None => out += "null"
+    Some(s) => out += "\"" + s + "\""
+  out += ",\"source\":\""
+  out += o.source.repr()
+  out + "\",\"audit\":{\"revision\":" + show(o.audit.revision) + "}}"
+
+fn input(i: Int) -> Str =
+  let note = if i % 2 == 0 then "null" else "\"deliver\""
+  let source = if i % 2 == 0 then "Web" else "Store"
+  "{\"kind\":\"order\",\"id\":" + show(i + 1) + ",\"customerId\":" + show(i % 97) + ",\"total\":2598,\"placedAt\":1700000000,\"lines\":[{\"sku\":42,\"qty\":2,\"price\":1299}],\"note\":" + note + ",\"source\":\"" + source + "\",\"audit\":{\"revision\":1}}"
+
+pub fn run(n: Int, rounds: Int) uses Console =
+  var inputs: Array<Str> = []
+  for i in 0..n
+    &inputs.push(input(i))
+  var sum = 0
+  for _ in 0..rounds
+    for text in inputs
+      let o = decode(text)
+      let output = encode(o)
+      let same = output == text
+      ensure(same)
+      sum += o.id.number() + o.customer.number() + o.total.cents() + o.lines[0].qty + o.audit.revision + output.byte_len()
+  print(sum)
+
+fn score(o: Order) -> Int =
+  let note = match o.note
+    None => 0
+    Some(s) => s.byte_len()
+  let source = match o.source
+    Web => 1
+    Store => 2
+  o.id.number() + o.customer.number() + o.total.cents() + ((o.placed - Time.epoch).in_ms() / 1000) + o.lines[0].sku + o.lines[0].qty + o.lines[0].price.cents() + o.audit.revision + note + source
+
+pub fn decode_run(n: Int, rounds: Int) uses Console =
+  var inputs: Array<Str> = []
+  for i in 0..n
+    &inputs.push(input(i))
+  var sum = 0
+  for _ in 0..rounds
+    for text in inputs
+      sum += score(decode(text))
+  print(sum)
+
+pub fn encode_run(n: Int, rounds: Int) uses Console =
+  var orders: Array<Order> = []
+  for i in 0..n
+    &orders.push(decode(input(i)))
+  var sum = 0
+  for _ in 0..rounds
+    for o in orders
+      let text = encode(o)
+      sum += text.byte_len() + text.bytes().at(text.byte_len() - 2)
+  print(sum)

@@ -200,3 +200,15 @@
   (glob_files runtime_core/*.ren)
   (glob_files runtime_core/edit/generic/*.ren)
   (glob_files runtime_core/edit/family/*.ren)))
+
+; Stage 12a's differential targets remain explicit skips until s1..s8.
+(cram
+ (applies_to shapes)
+ (deps
+  %{bin:ren}
+  (env_var PATH)
+  (env_var REN_TCC)
+  (env_var NIX_HARDENING_ENABLE)
+  ../test/test_shapes.ml
+  shapes/check.py
+  shapes/stages))

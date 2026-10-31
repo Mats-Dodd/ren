@@ -1,0 +1,27 @@
+{
+  "reason": "A concurrent local dune build overlapped a measured round. The entire paired round is excluded, independently of observed timings.",
+  "reported_build_command": "/workspace/.ren-tools/run-shell 'dune build'",
+  "actual_artifact_times_utc": [
+    "2026-10-31T04:04:30.858Z",
+    "2026-10-31T04:04:31.038Z"
+  ],
+  "conservative_exclusion_interval_utc": [
+    "2026-10-31T04:04:20Z",
+    "2026-10-31T04:05:07Z"
+  ],
+  "excluded_primary_rounds": [
+    0
+  ],
+  "accepted_primary_rounds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "replacement_rounds": [
+    0
+  ],
+  "replacement_command": "python3 -I bench/native/json/baseline.py measure /tmp/ren-stage12a --runs 1 --warmups 0 --results /tmp/ren-stage12a/replacement"
+}

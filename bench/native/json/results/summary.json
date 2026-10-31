@@ -1,0 +1,494 @@
+{
+  "selection": {
+    "accepted_rounds": [
+      {
+        "source": "bench/native/json/results/initial",
+        "round": 1
+      },
+      {
+        "source": "bench/native/json/results/initial",
+        "round": 2
+      },
+      {
+        "source": "bench/native/json/results/initial",
+        "round": 3
+      },
+      {
+        "source": "bench/native/json/results/initial",
+        "round": 4
+      },
+      {
+        "source": "bench/native/json/results/initial",
+        "round": 5
+      },
+      {
+        "source": "bench/native/json/results/initial",
+        "round": 6
+      },
+      {
+        "source": "bench/native/json/results/replacement",
+        "round": 0
+      }
+    ],
+    "excluded_primary_rounds": [
+      0
+    ]
+  },
+  "timings": {
+    "examples/docs/build": {
+      "median_seconds": 0.10868067199999132,
+      "min_seconds": 0.10390070400012519,
+      "max_seconds": 0.1224101770001198
+    },
+    "examples/docs/check": {
+      "median_seconds": 0.08560990599994511,
+      "min_seconds": 0.07929654600002323,
+      "max_seconds": 0.10607209899990266
+    },
+    "examples/just/build": {
+      "median_seconds": 0.10505478900017806,
+      "min_seconds": 0.09981841699982397,
+      "max_seconds": 0.1143844010000521
+    },
+    "examples/just/check": {
+      "median_seconds": 0.08528356600004372,
+      "min_seconds": 0.08096778499998436,
+      "max_seconds": 0.11233186499998737
+    },
+    "examples/server/build": {
+      "median_seconds": 0.10867815500000688,
+      "min_seconds": 0.09038977499994871,
+      "max_seconds": 0.12181422600019687
+    },
+    "examples/server/check": {
+      "median_seconds": 0.07732440999984647,
+      "min_seconds": 0.07093904199996359,
+      "max_seconds": 0.08344081199993525
+    },
+    "json/decode/go/1": {
+      "median_seconds": 0.04823808800006191,
+      "min_seconds": 0.045063286000186054,
+      "max_seconds": 0.052647305999926175
+    },
+    "json/decode/go/20": {
+      "median_seconds": 0.7921660879999308,
+      "min_seconds": 0.7199759540001196,
+      "max_seconds": 0.8281716369999685
+    },
+    "json/decode/ren/1": {
+      "median_seconds": 0.015245707000076436,
+      "min_seconds": 0.013491412000007585,
+      "max_seconds": 0.01580215900003168
+    },
+    "json/decode/ren/20": {
+      "median_seconds": 0.20951439300006314,
+      "min_seconds": 0.19808165900008134,
+      "max_seconds": 0.21154508399990846
+    },
+    "json/decode/rust/1": {
+      "median_seconds": 0.009028695999859337,
+      "min_seconds": 0.007453082999973049,
+      "max_seconds": 0.009932490999972288
+    },
+    "json/decode/rust/20": {
+      "median_seconds": 0.07898772299995471,
+      "min_seconds": 0.0770960490001471,
+      "max_seconds": 0.08256440700006351
+    },
+    "json/encode/go/1": {
+      "median_seconds": 0.056051889999935156,
+      "min_seconds": 0.051971465000178796,
+      "max_seconds": 0.06910066599994025
+    },
+    "json/encode/go/20": {
+      "median_seconds": 0.17838103400004002,
+      "min_seconds": 0.16878790999999183,
+      "max_seconds": 0.1855663569999706
+    },
+    "json/encode/ren/1": {
+      "median_seconds": 0.017848174999926414,
+      "min_seconds": 0.016986974000019472,
+      "max_seconds": 0.020358713000177886
+    },
+    "json/encode/ren/20": {
+      "median_seconds": 0.07021649900002558,
+      "min_seconds": 0.06869852599993465,
+      "max_seconds": 0.07620484499989288
+    },
+    "json/encode/rust/1": {
+      "median_seconds": 0.012347328000032576,
+      "min_seconds": 0.011324191000085193,
+      "max_seconds": 0.013111721000086618
+    },
+    "json/encode/rust/20": {
+      "median_seconds": 0.059582023000075424,
+      "min_seconds": 0.0567490609998913,
+      "max_seconds": 0.06257621600002494
+    },
+    "json/roundtrip/go/1": {
+      "median_seconds": 0.056966700999964814,
+      "min_seconds": 0.05455496099989432,
+      "max_seconds": 0.058791802000087046
+    },
+    "json/roundtrip/go/20": {
+      "median_seconds": 0.9345464059999813,
+      "min_seconds": 0.9015134830001443,
+      "max_seconds": 0.9962812859998849
+    },
+    "json/roundtrip/ren/1": {
+      "median_seconds": 0.016570620000038616,
+      "min_seconds": 0.01540836300000592,
+      "max_seconds": 0.019401385000037408
+    },
+    "json/roundtrip/ren/20": {
+      "median_seconds": 0.24980131600000277,
+      "min_seconds": 0.24046375900002204,
+      "max_seconds": 0.26406177800004116
+    },
+    "json/roundtrip/rust/1": {
+      "median_seconds": 0.011026791999938723,
+      "min_seconds": 0.010500585000045248,
+      "max_seconds": 0.01192308800000319
+    },
+    "json/roundtrip/rust/20": {
+      "median_seconds": 0.13575794100006533,
+      "min_seconds": 0.1302856399997836,
+      "max_seconds": 0.14880463500003316
+    },
+    "sequential/binary-trees-ren": {
+      "median_seconds": 11.574018355000135,
+      "min_seconds": 11.062164180000082,
+      "max_seconds": 11.882706181999993
+    },
+    "sequential/blocks-ren": {
+      "median_seconds": 1.988027283999827,
+      "min_seconds": 1.9041011049998815,
+      "max_seconds": 2.0395707820000553
+    },
+    "sequential/bytes-ren": {
+      "median_seconds": 0.6740868740000678,
+      "min_seconds": 0.6355697680000958,
+      "max_seconds": 0.6873905110001033
+    },
+    "sequential/cfold-ren": {
+      "median_seconds": 0.1666516259999753,
+      "min_seconds": 0.13864623000017673,
+      "max_seconds": 0.3021082719999413
+    },
+    "sequential/deriv-ren": {
+      "median_seconds": 1.4468820429999596,
+      "min_seconds": 1.2955019099999845,
+      "max_seconds": 2.6901299200001176
+    },
+    "sequential/dispatch-ren": {
+      "median_seconds": 0.6969401419999031,
+      "min_seconds": 0.6637689439999122,
+      "max_seconds": 1.193866878000108
+    },
+    "sequential/fannkuch-ren": {
+      "median_seconds": 3.3534141469999668,
+      "min_seconds": 3.1667646299999888,
+      "max_seconds": 4.496545467000033
+    },
+    "sequential/frames-ren": {
+      "median_seconds": 1.1842840890001298,
+      "min_seconds": 1.1353022139999212,
+      "max_seconds": 1.344462829000122
+    },
+    "sequential/handlers-ren": {
+      "median_seconds": 1.949624440999969,
+      "min_seconds": 1.8474643370000194,
+      "max_seconds": 2.3077758150000136
+    },
+    "sequential/inout-ren": {
+      "median_seconds": 3.154139942000029,
+      "min_seconds": 2.918435052999939,
+      "max_seconds": 3.33946782299995
+    },
+    "sequential/interp-ren": {
+      "median_seconds": 0.11190484700000525,
+      "min_seconds": 0.10179127799995058,
+      "max_seconds": 0.12315027799991185
+    },
+    "sequential/keywords-ren": {
+      "median_seconds": 0.005007868999882703,
+      "min_seconds": 0.003624736999995548,
+      "max_seconds": 0.007922872999870378
+    },
+    "sequential/maps-ren": {
+      "median_seconds": 1.3083626549998826,
+      "min_seconds": 1.2596563950000927,
+      "max_seconds": 1.8616136509999706
+    },
+    "sequential/nbody-ren": {
+      "median_seconds": 2.9056361309999374,
+      "min_seconds": 2.775702471000045,
+      "max_seconds": 3.108869939999977
+    },
+    "sequential/nested-ren": {
+      "median_seconds": 1.2824355690001994,
+      "min_seconds": 1.2238586479999185,
+      "max_seconds": 1.3629450429998542
+    },
+    "sequential/nqueens-ren": {
+      "median_seconds": 1.1032686170001398,
+      "min_seconds": 1.0481604999999945,
+      "max_seconds": 1.3165407980000055
+    },
+    "sequential/rbtree-ren": {
+      "median_seconds": 1.4251199059999635,
+      "min_seconds": 1.3394717620000165,
+      "max_seconds": 1.532487910999862
+    },
+    "sequential/slices-ren": {
+      "median_seconds": 3.5707968700000947,
+      "min_seconds": 3.3566105719999086,
+      "max_seconds": 4.1206897140000365
+    },
+    "sequential/stack-ren": {
+      "median_seconds": 0.8425207159998536,
+      "min_seconds": 0.8032412279999335,
+      "max_seconds": 0.9519966100001511
+    },
+    "sequential/streams-ren": {
+      "median_seconds": 2.303859397999986,
+      "min_seconds": 1.993020644000012,
+      "max_seconds": 2.7537227609998354
+    },
+    "sequential/strs-ren": {
+      "median_seconds": 5.9811725239999305,
+      "min_seconds": 5.488820266000062,
+      "max_seconds": 6.142794095999989
+    },
+    "sequential/vec-ren": {
+      "median_seconds": 2.023959469999909,
+      "min_seconds": 1.956860282999969,
+      "max_seconds": 2.0662406469998587
+    },
+    "templates/html-plan/0": {
+      "median_seconds": 0.0018507740001041384,
+      "min_seconds": 0.001457109000057244,
+      "max_seconds": 0.004989684999827659
+    },
+    "templates/html-plan/10000000": {
+      "median_seconds": 0.9203121639998244,
+      "min_seconds": 0.8961227650002002,
+      "max_seconds": 0.9303910379999252
+    },
+    "templates/html-rust/0": {
+      "median_seconds": 0.0014710469999954512,
+      "min_seconds": 0.0014076219999878958,
+      "max_seconds": 0.0016427409998414078
+    },
+    "templates/html-rust/10000000": {
+      "median_seconds": 1.5898279150001144,
+      "min_seconds": 1.550294521000069,
+      "max_seconds": 1.6692649149999852
+    },
+    "templates/html-today/0": {
+      "median_seconds": 0.001646273000005749,
+      "min_seconds": 0.0014068069999666477,
+      "max_seconds": 0.0018372560000443627
+    },
+    "templates/html-today/10000000": {
+      "median_seconds": 2.937588332000132,
+      "min_seconds": 2.8915113979999205,
+      "max_seconds": 3.0658992930000295
+    },
+    "templates/log-passed-site/0": {
+      "median_seconds": 0.0014945350001198676,
+      "min_seconds": 0.00143332399989049,
+      "max_seconds": 0.002065889000050447
+    },
+    "templates/log-passed-site/10000000": {
+      "median_seconds": 0.18757700300011493,
+      "min_seconds": 0.18220623800016256,
+      "max_seconds": 0.19147803399982877
+    },
+    "templates/log-rust/0": {
+      "median_seconds": 0.0015674379999381927,
+      "min_seconds": 0.001396925999870291,
+      "max_seconds": 0.0017891719999170164
+    },
+    "templates/log-rust/10000000": {
+      "median_seconds": 0.7618563539999741,
+      "min_seconds": 0.744068255000002,
+      "max_seconds": 0.9226409650000278
+    },
+    "templates/log-today-snp/0": {
+      "median_seconds": 0.0015205189999960567,
+      "min_seconds": 0.0014133289998881082,
+      "max_seconds": 0.0017395620000115741
+    },
+    "templates/log-today-snp/10000000": {
+      "median_seconds": 1.4207193449999522,
+      "min_seconds": 1.3889344670001265,
+      "max_seconds": 1.4730226369999855
+    },
+    "templates/log-walk/0": {
+      "median_seconds": 0.0015168459999586048,
+      "min_seconds": 0.0014111039999988861,
+      "max_seconds": 0.0029543980001562886
+    },
+    "templates/log-walk/10000000": {
+      "median_seconds": 0.43709935900005803,
+      "min_seconds": 0.41617664999989756,
+      "max_seconds": 0.4438595130000067
+    }
+  },
+  "paired": {
+    "json/decode/ren": {
+      "median_ns_per_operation": 1022.7804526302383,
+      "min_ns_per_operation": 963.4058684205708,
+      "max_ns_per_operation": 1030.225921051983
+    },
+    "json/decode/rust": {
+      "median_ns_per_operation": 369.65824736901266,
+      "min_ns_per_operation": 355.8796526321155,
+      "max_ns_per_operation": 395.322757895213
+    },
+    "json/decode/go": {
+      "median_ns_per_operation": 3905.515347368668,
+      "min_ns_per_operation": 3547.424878947344,
+      "max_ns_per_operation": 4081.707005263381
+    },
+    "json/encode/ren": {
+      "median_ns_per_operation": 273.671310525826,
+      "min_ns_per_operation": 262.4093999991984,
+      "max_ns_per_operation": 310.83085789424854
+    },
+    "json/encode/rust": {
+      "median_ns_per_operation": 247.94151578900806,
+      "min_ns_per_operation": 233.10447368322983,
+      "max_ns_per_operation": 264.36256842101244
+    },
+    "json/encode/go": {
+      "median_ns_per_operation": 633.384226317072,
+      "min_ns_per_operation": 583.2627368423155,
+      "max_ns_per_operation": 681.6550894738707
+    },
+    "json/roundtrip/ren": {
+      "median_ns_per_operation": 1227.5462894733305,
+      "min_ns_per_operation": 1184.5020842106112,
+      "max_ns_per_operation": 1295.0973842108444
+    },
+    "json/roundtrip/rust": {
+      "median_ns_per_operation": 657.2534105268795,
+      "min_ns_per_operation": 627.6781473676047,
+      "max_ns_per_operation": 727.9160526315153
+    },
+    "json/roundtrip/go": {
+      "median_ns_per_operation": 4630.246589473292,
+      "min_ns_per_operation": 4457.676431580263,
+      "max_ns_per_operation": 4953.019742103941
+    },
+    "templates/log-today-snp": {
+      "median_ns_per_operation": 141.92435029999615,
+      "min_ns_per_operation": 138.74139480001304,
+      "max_ns_per_operation": 147.1283074999974
+    },
+    "templates/log-passed-site": {
+      "median_ns_per_operation": 18.60897639999166,
+      "min_ns_per_operation": 18.01403490001121,
+      "max_ns_per_operation": 18.988640199995643
+    },
+    "templates/log-walk": {
+      "median_ns_per_operation": 43.568825500005914,
+      "min_ns_per_operation": 41.4686434000032,
+      "max_ns_per_operation": 44.23682030001146
+    },
+    "templates/html-today": {
+      "median_ns_per_operation": 293.61815250001655,
+      "min_ns_per_operation": 288.9674141999876,
+      "max_ns_per_operation": 306.43427560000873
+    },
+    "templates/html-plan": {
+      "median_ns_per_operation": 91.53224789999967,
+      "min_ns_per_operation": 89.46656560001429,
+      "max_ns_per_operation": 92.8540263999821
+    },
+    "templates/log-rust": {
+      "median_ns_per_operation": 76.02889160000359,
+      "min_ns_per_operation": 74.24012980000043,
+      "max_ns_per_operation": 92.12121480002224
+    },
+    "templates/html-rust": {
+      "median_ns_per_operation": 158.84202930001265,
+      "min_ns_per_operation": 154.86883460000627,
+      "max_ns_per_operation": 166.77821660000518
+    }
+  },
+  "outputs": {
+    "json/decode/ren/1": "17000089954604",
+    "sequential/vec-ren": "579312500000\n773437500000\n749250\n749250\n-51151\n501506\n126008",
+    "sequential/strs-ren": "6017934\n1030229,33370,454650,5230169\n90223326\n132499,6942817208\n22493516\n1000000,9613929871\n115319977\n1996,250015232526,10981597\n93672103\n1000000,40119,19800724,400101\n286164\n5000,516467\n286164\n5000,516467\n468513\n5000,663513\n468513\n5000,663513\n1048576\n1,1048576\n1048576\n1,1048576\n1048576\n1,1048576",
+    "sequential/streams-ren": "399494187080160\n2654077366861184\n9761875200\n2349267531239758\n494872837717524",
+    "sequential/stack-ren": "124999944\n683332477\n199999825\n724999873",
+    "sequential/slices-ren": "9493927\n575768520\n575768520\n11854933\n11002345040\n11002345040\n16384000\n46328080\n46328080",
+    "sequential/rbtree-ren": "420000",
+    "sequential/nqueens-ren": "73712",
+    "sequential/nested-ren": "252339\n237453\n31512",
+    "sequential/nbody-ren": "-0.169075164\n-0.169059907",
+    "sequential/maps-ren": "200000\n-1270048621110030540",
+    "sequential/keywords-ren": "944362",
+    "sequential/interp-ren": "-326745600",
+    "sequential/inout-ren": "62192086",
+    "sequential/handlers-ren": "2999999997\n2999999997",
+    "sequential/frames-ren": "27493441\n-6387510856362095500",
+    "sequential/fannkuch-ren": "556355\nPfannkuchen(11) = 51",
+    "sequential/dispatch-ren": "11640768141400\n12268850857000\n5374129174600\n1869233459700\n1357329203200\n3304517000\n-326745600",
+    "sequential/deriv-ren": "1 count: 6\n2 count: 22\n3 count: 90\n4 count: 420\n5 count: 2202\n6 count: 12886\n7 count: 83648\n8 count: 598592\n9 count: 4697200\n10 count: 40230090\ndone",
+    "sequential/cfold-ren": "3447966\n3447966",
+    "sequential/bytes-ren": "77356951\n3205885746\n1489004154",
+    "sequential/blocks-ren": "map 75050000 75050000\nreduce 74925000000 74925000000\neach 74925000000 74925000000\nfold 74925000000 74925000000\nattempt 299999999 299999999",
+    "sequential/binary-trees-ren": "stretch tree of depth 22\t check: 8388607\n2097152\t trees of depth 4\t check: 65011712\n524288\t trees of depth 6\t check: 66584576\n131072\t trees of depth 8\t check: 66977792\n32768\t trees of depth 10\t check: 67076096\n8192\t trees of depth 12\t check: 67100672\n2048\t trees of depth 14\t check: 67106816\n512\t trees of depth 16\t check: 67108352\n128\t trees of depth 18\t check: 67108736\n32\t trees of depth 20\t check: 67108832\nlong lived tree of depth 21\t check: 4194303",
+    "examples/server/check": "",
+    "examples/docs/check": "",
+    "examples/just/check": "",
+    "templates/html-rust/10000000": "1366388588",
+    "templates/html-rust/0": "0",
+    "templates/html-plan/10000000": "1366388588",
+    "templates/html-plan/0": "0",
+    "templates/html-today/10000000": "1366388588",
+    "templates/html-today/0": "0",
+    "templates/log-rust/10000000": "444462400",
+    "templates/log-rust/0": "0",
+    "templates/log-walk/10000000": "444462400",
+    "templates/log-walk/0": "0",
+    "templates/log-passed-site/10000000": "444462400",
+    "templates/log-passed-site/0": "0",
+    "templates/log-today-snp/10000000": "444462400",
+    "templates/log-today-snp/0": "0",
+    "json/roundtrip/go/20": "1564349180",
+    "json/roundtrip/rust/20": "1564349180",
+    "json/roundtrip/ren/20": "1564349180",
+    "json/encode/go/20": "59457100",
+    "json/encode/rust/20": "59457100",
+    "json/encode/ren/20": "59457100",
+    "json/decode/go/20": "340001799092080",
+    "json/decode/rust/20": "340001799092080",
+    "json/decode/ren/20": "340001799092080",
+    "json/roundtrip/go/1": "78217459",
+    "json/roundtrip/rust/1": "78217459",
+    "json/roundtrip/ren/1": "78217459",
+    "json/encode/go/1": "2972855",
+    "json/encode/rust/1": "2972855",
+    "json/encode/ren/1": "2972855",
+    "json/decode/go/1": "17000089954604",
+    "json/decode/rust/1": "17000089954604"
+  },
+  "unavailable_builds": {
+    "examples/server/build": {
+      "returncode": 1,
+      "diagnostic": "error: the real `Clock` isn't in the native slice yet\n   \u250c\u2500 main.ren:45:8\n45 \u2502 pub fn main() ! NetError uses Net, Clock, Console, Async =\n   \u2502        ^^^^ `ren build` can't compile this yet\n   help: run it with `ren run main.ren`"
+    },
+    "examples/docs/build": {
+      "returncode": 1,
+      "diagnostic": "error: `Actors.at` uses the keyed instance family, which isn't native yet\n    \u250c\u2500 main.ren:168:21\n168 \u2502   let version = try Docs.at(DocId(name)) fn() =>\n    \u2502                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    help: run it with `ren run`"
+    },
+    "examples/just/build": {
+      "returncode": 1,
+      "diagnostic": "error: the real `Fs` isn't in the native slice yet\n   \u250c\u2500 main.ren:14:8\n14 \u2502 pub fn main() ! FsError | InvalidUtf8(at: Int, incomplete: Bool) | BadLine(number: Int) | DuplicateRecipe(name: Str) | NoRecipes | UnknownRecipe(name: Str) | Cycle(name: Str) | RecipeFailed(name: Str, code: Int) | ProcError uses Fs, Os, Proc, Console, Async =\n   \u2502        ^^^^ `ren build` can't compile this yet\n   help: run it with `ren run main.ren`"
+    }
+  }
+}

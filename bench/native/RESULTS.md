@@ -2713,3 +2713,176 @@ outside the checkout, while [streams/results.json](streams/results.json)
 keeps every timing sample, checksum, command, source hash, compiler
 version and machine metadata. The independent backtracking samples and
 commands are in [streams/fork-results.json](streams/fork-results.json).
+
+## Stage 12a: pre-shapes baseline
+
+The stage starts from main `cced5a2`. The Order workload and independent
+measurement commands are in [json/README.md](json/README.md). Its manual
+Ren tokenizer and string-key decoder use the same typed corpus as the
+serde_json and encoding/json twins. JSON decode, encode, and checked
+round-trip are separate kernels; paired one-pass runs remove setup cost.
+The C/Rust log-line and HTML-row references are rebuilt from the sources
+reviewed in research/templates/verify.md, with zero-operation controls.
+SQL is outside this stage.
+
+### Build-time evaluation-step calibration
+
+On this shared Linux x86-64 machine, seven rotated, interleaved pairs of
+interpreter loop runs measured 64.129 million evaluation steps per second
+(median; 59.911–65.347 million across pairs). The full run took 1.095292 s
+median (1.073738–1.183472); control took 0.081712 s median
+(0.077341–0.098528). The full run counts exactly 65,000,059 steps. The
+fixed proposed build-time default is **64,100,000 steps per top-level value
+or signature-let site**. Host one-minute load moved from 1.593 to 1.501.
+The budget is a deterministic counter; these wall times only select its
+initial default.
+
+[The calibration and feasibility report](../shapes-feasibility.md) names
+the machine, compiler, counting rule and commands. Raw compiler metadata,
+seven paired samples, pilot and feasibility probe output are retained in
+[shape-steps-baseline](shape-steps-baseline/). The instrumented compiler
+and loop sources were built outside the checkout; the production evaluator
+is unchanged in this baseline step.
+
+### Native example builds unavailable at the baseline
+
+`ren check main.ren` succeeds in just, docs and server. Their native
+release builds fail before compilation, so **no native build-time baseline
+exists for these three examples** at this revision:
+
+| Example | Existing native refusal | Location |
+|---|---|---|
+| just | the real Fs isn't in the native slice yet | main.ren:14 |
+| docs | Actors.at uses the keyed instance family, which isn't native yet | main.ren:168 |
+| server | the real Clock isn't in the native slice yet | main.ren:45 |
+
+Reproduce inside each example directory with
+`ren build main.ren --release -o /tmp/ren-stage12a-example`. The measurement
+harness records exit 1 and the complete diagnostic; elapsed refusal time is
+not a successful build-time measurement. These are runtime capabilities
+outside stage 12a's ownership. Step 0's requested successful native example
+build-time baseline remains blocked on them.
+
+### Measured baseline: seven accepted paired rounds
+
+Measured on 2026-10-30 (America/Los_Angeles), Intel Xeon Platinum 8573C,
+Linux 6.18.57 x86-64, node `5c9b45aa54f3`, with a four-CPU cgroup quota.
+The toolchain was OCaml 5.5.2, Clang 23.1.3, Rust/Cargo 1.99.0 and
+Go 1.26.10. Ren uses `--release`; the C template reference uses
+`-O2 -ffp-contract=off`; its Rust twin uses opt-level 3 and one codegen
+unit. The JSON Cargo release profile also uses one codegen unit, with
+serde 1.0.229 and serde_json 1.0.154 pinned by Cargo.lock.
+
+One warmup round preceded seven rotated, interleaved measured rounds.
+A concurrent local `dune build` overlapped original round 0: that entire
+paired round was discarded and replaced by a clean round, leaving seven
+accepted complete rounds. The original samples remain intact for audit.
+Accepted samples' one-minute host load ranged from 0.885 to 1.271.
+All other local builds and tests were held during timing. This is a
+shared cloud machine; spreads are observations, not confidence intervals.
+
+[The reported summary](json/results/summary.json) and
+[raw-sample selection](json/results/README.md) retain commands, exact
+source/compiler hashes, load and exit status. The decoder, encoder and
+round-trip checksums agree across Ren, Rust and Go on every run. These
+numbers establish a baseline; no stage 12a language implementation has
+been measured against it yet.
+
+#### Order JSON, nanoseconds per order
+
+10,000 distinct orders, twenty passes minus a paired one-pass run,
+divided by 190,000 orders. Values are median (min–max) of seven paired
+samples. Corpus construction and process startup are controlled by the
+subtraction. The encoder's control also includes constructing its typed
+orders outside the measured pass loop.
+
+| Kernel | Hand-written Ren | Rust serde_json | Go encoding/json |
+|---|---:|---:|---:|
+| decode | 1022.8 (963.4–1030.2) | 369.7 (355.9–395.3) | 3905.5 (3547.4–4081.7) |
+| encode | 273.7 (262.4–310.8) | 247.9 (233.1–264.4) | 633.4 (583.3–681.7) |
+| roundtrip | 1227.5 (1184.5–1295.1) | 657.3 (627.7–727.9) | 4630.2 (4457.7–4953.0) |
+
+The future 1.5× derived-decoder gate is against the hand-written Ren
+decoder: on this baseline its median ceiling would be 1534.2 ns/order.
+There is no derived decoder, unfolding result or visitor-fallback result
+in this baseline step, so the gate is **unmeasured**.
+
+#### Template references, nanoseconds per operation
+
+Ten million operations minus the paired zero-operation process. Every
+C variant hashes the same flushed output bytes in a separate correctness
+build (`-DCHECK -fwrapv`, 1,000 operations). Timed builds omit hashing.
+C and Rust agree on the timing run's checksums as well.
+
+| Reference | ns/op median (min–max) | / Rust write! |
+|---|---:|---:|
+| log: current interpolation (`log-today-snp`) | 141.9 (138.7–147.1) | 1.867 |
+| log: per-site C (`log-passed-site`) | 18.6 (18.0–19.0) | 0.245 |
+| log: unspecialized C walk (`log-walk`) | 43.6 (41.5–44.2) | 0.573 |
+| log: Rust write! (`log-rust`) | 76.0 (74.2–92.1) | 1.000 |
+| HTML: current interpolation (`html-today`) | 293.6 (289.0–306.4) | 1.848 |
+| HTML: per-site C (`html-plan`) | 91.5 (89.5–92.9) | 0.576 |
+| HTML: Rust write! (`html-rust`) | 158.8 (154.9–166.8) | 1.000 |
+
+The per-site log/Rust ratio is 0.245, versus verify.md's 0.39; the HTML
+ratio is 0.576, versus 0.63. Both directions reproduce; their nanoseconds
+are from different hardware and cannot be compared as a speedup. The
+historical variant label `log-today-snp` now calls the current runtime's
+integer digit formatter, which replaced snprintf in the earlier bytes
+stage. Its ratio is 1.867; verify.md's fast-show-int row was 1.99, while
+its old snprintf row was 3.29. None of that prior runtime improvement is
+credited to this stage. The C reference explicitly reuses its buffer;
+these numbers do not claim that current Ren templates exist or allocate
+nothing.
+
+#### Example check costs, milliseconds per process
+
+| Example | ren check median (min–max) | Native build |
+|---|---:|---|
+| just | 85.284 (80.968–112.332) | unavailable: native refusal above |
+| docs | 85.610 (79.297–106.072) | unavailable: native refusal above |
+| server | 77.324 (70.939–83.441) | unavailable: native refusal above |
+
+#### Existing sequential kernels, seconds per full process
+
+Each unchanged main.ren workload is built with the same pre-stage compiler.
+These are the before measurements for the later regression gate, rather
+than an assertion that a later compiler passes it.
+
+| Program | Median seconds (min–max) |
+|---|---:|
+| binary-trees | 11.574018 (11.062164–11.882706) |
+| blocks | 1.988027 (1.904101–2.039571) |
+| bytes | 0.674087 (0.635570–0.687391) |
+| cfold | 0.166652 (0.138646–0.302108) |
+| deriv | 1.446882 (1.295502–2.690130) |
+| dispatch | 0.696940 (0.663769–1.193867) |
+| fannkuch | 3.353414 (3.166765–4.496545) |
+| frames | 1.184284 (1.135302–1.344463) |
+| handlers | 1.949624 (1.847464–2.307776) |
+| inout | 3.154140 (2.918435–3.339468) |
+| interp | 0.111905 (0.101791–0.123150) |
+| keywords | 0.005008 (0.003625–0.007923) |
+| maps | 1.308363 (1.259656–1.861614) |
+| nbody | 2.905636 (2.775702–3.108870) |
+| nested | 1.282436 (1.223859–1.362945) |
+| nqueens | 1.103269 (1.048160–1.316541) |
+| rbtree | 1.425120 (1.339472–1.532488) |
+| slices | 3.570797 (3.356611–4.120690) |
+| stack | 0.842521 (0.803241–0.951997) |
+| streams | 2.303859 (1.993021–2.753723) |
+| strs | 5.981173 (5.488820–6.142794) |
+| vec | 2.023959 (1.956860–2.066241) |
+
+Reproduce the build and a fresh complete baseline in the toolchain shell:
+
+```sh
+python3 -I bench/native/json/baseline.py build /tmp/ren-stage12a
+python3 -I bench/native/json/baseline.py measure /tmp/ren-stage12a --runs 7
+```
+
+The audited run's clean replacement command and the deterministic summary
+reconstruction are recorded in json/results/exclusion.json and its README.
+Keep the baseline directory intact and use a separate output directory for
+an after measurement. The just/docs/server native build-time requirement
+remains unavailable for the exact runtime refusals recorded above.

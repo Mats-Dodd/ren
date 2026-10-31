@@ -60,7 +60,12 @@ for dir in "$here"/*/; do
   esac
   # `interp` has no twins of its own: dispatch's are its (measure.sh)
   [ -d "$dir/rust" ] || continue
-  rustc -C opt-level=3 -C codegen-units=1 -o "$out/$name-rust" "$dir/rust/main.rs"
+  if [ "$name" = json ]; then
+    cargo build --locked --release --manifest-path "$dir/rust/Cargo.toml" --target-dir "$out/json-cargo"
+    cp "$out/json-cargo/release/ren-stage12a-json-baseline" "$out/json-rust"
+  else
+    rustc -C opt-level=3 -C codegen-units=1 -o "$out/$name-rust" "$dir/rust/main.rs"
+  fi
   # one file, built outside any module, so no go.mod is needed
   (cd "$dir/go" && go build -o "$out/$name-go" main.go)
 done

@@ -27,6 +27,11 @@ Each folder is one program:
 Cost table. Its Rust FFI wrapper is a documented exception to the safe
 Rust convention, with a standard splitter measured separately.
 
+`json` is stage 12a's hand-written Order decoder/encoder baseline. Its Rust
+twin uses serde and serde_json, an explicit exception to the std-only
+convention. Its independent harness also rebuilds the log-line and HTML-row
+template prototypes; see [json/README.md](json/README.md).
+
 The twins take the size as their first argument and default to
 `main.ren`'s, and print exactly what the Ren prints.
 

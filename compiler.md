@@ -17048,3 +17048,690 @@ green, commit the finished work and identify the exact missing piece.
   `Generators stage, step 0: spec, staged tests and measured baselines`,
   contains the specification, staged tests and measured baseline together.
   No g1--g5 gate is enabled, and steps 1--6 have not started.
+
+## Stage 12a
+
+This is the implementation plan for briefs/stage-12a.md, against main
+`cced5a2`. The sources of meaning are shapes.md, formats.md's looks,
+strings.md's templates and module-build.md's prelude. A plan below is
+not a claim that its feature has landed. Step 0 is incomplete until its
+calibration, executable tests and measured baselines have all run; s1–s8
+stay disabled until their implementing step passes THE CHECKS.
+
+The interpreter remains the reference. Build time runs in that same
+interpreter for check, run, test and build, before either native strategy.
+12a introduces no network, database, build-world access, Alloc inference,
+Decimal, Secret, layout implementation or generated property tests.
+D.Call, its refinement and operations(h) remain the services stage's.
+
+### Grammar and trees
+
+Add cases to the existing syntax, resolution, inference and lowering
+passes, retaining existing cases and their organization:
+
+```text
+item          += [pub] let NAME [: Type] = expr
+              | assert expr
+              | [pub] format NAME for Type [, reads | , writes] = look
+function       = existing-signature (NEWLINE INDENT let NAME = expr)* = body
+call-head     += existing-name < Type (, Type)* >
+record-field   = NAME : Type [= expr]
+look           = Type via (expr [, expr]) [, reads | , writes]
+               | NEWLINE INDENT record-line+
+               | NEWLINE INDENT sum-line+
+record-line    = NAME | NAME : look-path | NAME = NAME [: look-path]
+               | (NAME | STRING) = constant | ..
+sum-line       = | CASE [as constant] [: look-path] [nested-record-lines]
+               | | ..
+template       = t STRING | t RAW-STRING | t MULTILINE-STRING
+```
+
+`format`, `via`, `reads`, `writes` are contextual identifiers, recognized
+only in these item/line positions. Existing values called `format` or
+`via` remain names. `as` retains its existing pattern meaning elsewhere.
+The template prefix must touch its delimiter; `t "x"` remains two tokens.
+`t` applies to every text literal delimiter, including arbitrary raw
+hash counts and raw multiline delimiters. `tb` and `bt` are refused;
+byte literals continue to forbid holes. Layout-looking lines are
+recognized for a useful "layouts aren't built yet" error, not accepted
+as looks. Mixed layout/look lines name both locations.
+
+Explicit type arguments are a postfix node on a callable name/member,
+not a comparison operator. Look ahead without committing: only accept a
+complete, nonempty type-argument list followed by `(`, or at the end of
+a qualified function value use; a comparison expression never becomes
+a type application through name resolution. At a standalone ambiguous
+`f<T>` prefer type application only when `<` touches `f`; parentheses
+can make the comparison explicit. `f<Int>(x)`, `json.decode<Order>(s)`
+and nested `f<Array<Int>>(x)` work; `a < b > c` retains the existing
+chained-comparison diagnostic. Keep tests for `<`, `>`, `<=`, `>=` and
+parenthesized comparisons next to the generic-call tests. Arity is
+checked against the declaration and written arguments seed inference,
+which still checks inferred requirements and all value arguments.
+
+The AST gains a type-application expression with the written type list
+and its span, top-level value/assert items, signature bindings, field
+default expressions, format items with direction and scalar/record/sum
+bodies, and a template expression with literal parts and holes. Preserve
+comments immediately preceding a field/case as documentation. Resolve
+keeps qualified look identity and field source identity separately from
+the look's external name. Typed defaults travel with field interfaces;
+they are checked in the declaration's lexical scope, pure, data and
+build-time evaluable, once per instantiated type. They cannot read an
+instance's fields. Constructors and record literals fill only omitted
+fields; explicit arguments evaluate left to right before missing defaults.
+Record updates keep all fields of their base; patterns' `..` does not
+compute defaults. Missing fields without defaults retain today's error.
+
+Tree-sitter gains matching nodes for each new construct, with a generic
+call/comparison conflict resolved by the same postfix boundary, corpus
+cases for every delimiter and contextual-word use, and highlights for
+format names, fields, types and template holes. Zed uses that generated
+grammar and queries: template parts are strings, holes remain Ren, and
+signature lets retain local-binding highlighting. No syntax is declared
+finished by changing only the OCaml parser.
+
+`parse` is a reserved associated function `fn parse(x: X) -> T ! E`;
+`repr` a reserved method `fn repr(self) -> X`. They have one explicit
+parameter, pure rows, complete signatures, and public visibility on a
+public type. If both exist their X agrees. `repr` alone supports writing;
+`parse` alone supports reading. Conversion effects cannot be hidden by a
+wider declared row. Native code calls these ordinary functions; their
+presence alone does not change show/key/equality.
+
+### Build-time values
+
+Collect value and assert declarations across the already acyclic module
+import graph after names and types are known. Walk each initializer's
+resolved calls and referenced values, transitively through callees, to
+record value dependencies. Strongly connected value components are
+errors, including self references hidden by a helper. Report a concrete
+qualified-name cycle with source locations; ties in topological order
+use declaration path and source order. Each assert is an anonymous root
+with its own source identity; retain its operands for a failed assertion.
+Do not use native specialization to determine what is constant.
+
+A build evaluator has a fresh budget per root or signature binding site;
+all recursive and helper calls share it. Count entering each evaluated
+Core expression, including tail calls and loop iterations; skipped
+branches cost nothing. Increment before dispatch and refuse the first
+step greater than the limit, reporting both the count and limit. Runtime
+evaluation has no build budget. The fixed default is **64,100,000
+steps**. On this machine, seven interleaved zero-control/run pairs over
+5,000,000 loop iterations counted exactly 65,000,059 steps each (59 for
+the control). The net median rate was 64,129,137 steps/second, with a
+59,910,944–65,347,377 range; the full runs took 1.0737–1.1835 seconds.
+bench/native/shape-steps.py reproduces the temporary instrumentation,
+without changing the compiler sources. Its raw records and machine/load
+metadata accompany the baseline in bench/native/RESULTS.md. This fixes
+a number of steps, never a wall-clock timeout; timing is calibration
+evidence, not language semantics.
+
+No dependency is installed during build evaluation, including Console,
+Fs and Git. Check the actual inferred dependency reach before execution,
+and enforce the empty-evidence boundary during evaluation too. `try`
+failing, assertion failure and panic become build diagnostics at the
+root/call with the original failing location and error; they never turn
+into executable initialization. Recursively reject data containing a
+block, installed scoped evidence, template, view or scoped handle. A
+handler description whose state is data is allowed, including a router
+of handler descriptions: serialize its stable declaration identity and
+data state, and natively emit a static descriptor relocation plus that
+state. An installed handler frame is never captured. A function address
+in a router is not stored data: use an enum or data handler description.
+
+Keep typed constant data in Core, distinct from runtime construction.
+The build evaluator serializes its result into that tree without OCaml
+addresses or descriptors tied to a process. Core Lint checks data types,
+field order and absence of scoped values. Mem lowering emits immutable
+static owners/arrays/products/sums and relocations, with the same
+uncounted ownership rule as literals; retaining and releasing them do
+nothing, and mutation uses the ordinary copy-on-write path. No start
+function computes a top-level value. Add native C inspection and
+allocation-counter tests, including nested arrays and sharing.
+
+Map and Set constants retain ordered entries, never the interpreter's
+hash buckets or seed. Use an immutable static-entry representation with
+linear lookup until a mutation copies into a runtime-seeded ordinary
+table. Equality, iteration and hashing must use exactly today's key
+semantics and insertion order. This is a local representation choice,
+requiring interpreter/debug/release and Mem Lint tests before enabling
+s2; it avoids both embedded random seeds and startup rehashing. It is
+not permission to alter the runtime core's files without coordination.
+
+`f.uses` is a data set of qualified dependency identities and instantiated
+arguments, with deterministic ordering, `includes` and subset `<=`. Its
+public inferred type is `shape.Uses`, an opaque `Array<shape.DepId>`,
+with `DepId = { name: Str, args: Array<Shape> }`. A dependency name in
+an expected DepId position denotes its declaration identity, not a
+handler; `<=` accepts an Array<DepId> on the right, so the documented
+`f.uses <= [Sql, Clock]` needs no new collection literal. Constructors
+for Uses stay private; `includes(dep: DepId) -> Bool` is public.
+Compute it from the inferred reach graph, including transitively called
+private functions, not a private declaration's allowed upper bound.
+Keep predecessor call edges for diagnostics. A failed architecture assert
+prints the offending dependency and shortest reach path (ties by source
+order), e.g. handle_request → render → load_template → Fs.read, and help
+to pass the input in or revise the rule. Alloc remains absent in 12a.
+
+### Signature bindings and templates
+
+A signature binding reads literals, top-level constants, closed type
+shapes and template sites, plus results of preceding signature bindings.
+It may read the constant projection of an actual argument; it cannot
+inspect runtime holes or runtime input. Evaluate bindings in written
+order at the call. Each site's failure names the call and binding.
+A result becomes a hidden argument pointing to static typed data in
+debug, with one callee body; release can key a copy on its contents.
+Unused runtime arguments still evaluate in the established order.
+
+The two special refusals are semantic, not optimization failures: a
+binding depending on the caller's unresolved type parameter says to move
+the checked call to a concrete type or pass the consumer's prepared
+plan; a template forwarded by a wrapper into such a binding says to
+accept the consumer's data type instead. Ordinary direct forwarding to a
+consumer that has no site-dependent binding remains possible. A runtime
+settings argument says to bind settings with a top-level let; bounds
+belong in the runtime `limits:` argument. A signature binding uses no
+world dependencies in 12a, even though later packages can grant some.
+
+The literal's type is `Template<H>`, H an ordered heterogeneous hole
+tuple, including the zero-hole case. Holes evaluate eagerly left to
+right exactly once, preserving their static types. Its site contains
+cooked `parts: Array<Str>`, `raw_parts: Array<Str>`,
+`holes: Array<Hole>` with `Hole { source: Str, shape: Shape }`,
+`id: Int` and `hash: Int`. Keep source byte spans privately for reporting
+consumer-plan offsets. There are holes+1 parts. Raw parts preserve the
+literal's content spelling before escape decoding; multiline indentation
+is removed consistently from both representations. `\{x=}` contributes
+`x=` to the preceding part and retains x as the hole source.
+
+`site.id` is the link-fixed address of static site data, never a traversal
+ordinal; interpreter ids need only be distinct within its process.
+`site.hash` is FNV-1a-64, using the runtime table's offset basis and
+prime, over the fourteen ASCII bytes `REN-TEMPLATE-1`, then a `u32`
+little-endian part count, then each cooked part as its `u32` little-endian
+UTF-8 byte length followed by those bytes. Hash arithmetic wraps at 64
+bits; expose the bit pattern as signed Int. Neither source path/address,
+hole source/type nor dynamic values contribute. This settles the
+previously unspecified byte recipe. Fixed vectors: parts `["value ", ""]`
+give `-4753601207794907562` (`0xbe07d0e31d844656`); `["a\n", "z"]` gives
+`4011749346734791143`; `["é", ""]` gives `9120157815504581253`; the empty
+template's one part `[""]` gives `-8245200967992839256`. Raw delimiters
+producing those same cooked parts have those same hashes. Keep these
+vectors identical in the interpreter and every native strategy.
+
+`site()` and `holes()` expose their respective halves, and `render()`
+uses ordinary show for each hole to produce Str. There is no implicit
+Str/template conversion. Apply the block escape checker transitively:
+no storage in collections/records/handler state/top-level data, no return,
+no selection by if/match, no capture that outlives the consumer call.
+A local let and downward argument are allowed. Native lowering is two
+words: pointer to the immutable site and pointer to the caller's typed
+hole tuple. The tuple is stack storage at every arity, not an allocated
+array. Any descriptor vectors are static or existing hidden arguments.
+A heap allocation performed by a hole expression or render is its own
+work; template construction itself must allocate zero in both builds.
+
+### Shapes and doors
+
+The public module `shape` is ordinary std source, with the compiler
+supplying declaration facts and rule-preserving doors. The following
+completes shapes.md's ellipsis; constructors' scalar names are qualified
+when needed to avoid confusing value and type names. No Decimal case
+exists until 12b.
+
+```ren
+pub type Value =
+  | Bool(Bool) | Int(Int) | Float(Float) | Text(Str) | Bytes(Bytes)
+  | List(Array<Value>) | Map(Array<(Value, Value)>)
+  | Fields(Array<(Str, Value)>) | Case(tag: Value, fields: Value) | None
+pub type Field = { name: Str, of: Str, exact: Bool, shape: Shape,
+                   default: Option<Value>, doc: Str }
+pub type Case = { name: Str, tag: Value, holes: Array<Str>,
+                  fields: Array<Field>, positional: Bool, doc: Str }
+pub type Shape =
+  | Unit | Bool | Int | Float | Str | Bytes
+  | Signed(bits: Int) | Unsigned(bits: Int) | Float32
+  | Tuple(Array<Shape>) | Array(Shape) | Map(key: Shape, value: Shape)
+  | Set(Shape) | Option(Shape)
+  | Record { name: Str, fields: Array<Field>, doc: Str }
+  | Sum { name: Str, cases: Array<Case>, doc: Str }
+  | Ref(name: Str) | Const(value: Value) | Text
+  | Dependency { name: Str, operations: Array<DepOperation>, doc: Str }
+pub type DepOperation = { name: Str, params: Array<Field>, result: Shape,
+                       errors: Array<Case>, doc: Str }
+pub type Problem = ! Missing(at: Str, field: Str) | Unknown(at: Str)
+  | Mismatch(at: Str, expected: Str, found: Str)
+  | Invalid(at: Str, why: Str) | NoCase(at: Str, tag: Str)
+  | TooDeep(at: Str, limit: Int) | TooLarge(at: Str, what: Str, limit: Int)
+pub type LookError = ! Duplicate(type_name: Str, looks: Array<Str>)
+  | Opaque(at: Str, type_name: Str) | NoRepr(at: Str, type_name: Str)
+  | Direction(at: Str, look: Str) | Cycle(path: Array<Str>)
+pub type Limits = { bytes: Int = 16.mib, depth: Int = 64,
+                    items: Int = 1_000_000, str_bytes: Int = 1.mib }
+pub fn through<T>(looks: Array<Look>) -> Shape ! LookError
+pub fn build<T>(v: Value, looks: Array<Look> = []) -> T ! Problem
+pub fn view<T>(v: T, looks: Array<Look> = []) -> Value ! Problem
+pub fn build_all<T>(v: Value, looks: Array<Look> = [])
+  -> Result<T, ! Problems(items: Array<Result<Unit, ! Problem>>)>
+```
+
+The `build_all` surface is a local choice for collecting problems while
+respecting Ren's existing rule that errors are values only inside Result.
+Its items are Err(problem), in traversal order; no bare error is stored
+in an array. The internal generated door has a first/all mode and both
+public functions use it. A missing repr is checked for writing at view's
+call, with its complete field path; through and build do not reject a
+readable parse-only type merely because it cannot be written.
+
+Raw T.shape derives structural facts without exposing an opaque type's
+representation outside its module. A blocked opaque node is an internal
+fact and cannot be manufactured or pattern-matched by a user library;
+through either resolves it through a look/parse or returns Opaque. Ref
+names are fully qualified instantiated paths, not traversal numbers.
+Function-bearing types have no decodable shape. A named error set's
+shape is used inside Result's Err side; it creates no first-class error.
+`D.shape` uses existing dependency operation descriptors, including
+parameter names/defaults, result and error cases; it creates no D.Reply
+or D.Error declaration. Debug code reads descriptors it already receives,
+with no specialization on either a type or a template site.
+
+Field.doc and Case.doc are consecutive `//` lines directly above the
+field/case, joined with newlines after removing one optional space;
+a blank line separates documentation. Preserve them through interfaces.
+A bare field retains its declaration doc, and a renamed field retains
+that doc with its original `of`, a qualified Type.field. Constants have
+no original field and use `of: ""`. cli prints those docs for help.
+
+A Look is an immutable record identity keyed by (declaring module path,
+target instantiated type, local name), exposed as equality-comparable
+Look data without stored closures. Debug references a static descriptor;
+its named read/write functions are ordinary direct-call arms generated
+by lowering. Release folds the descriptor inside the copy. Public access
+uses the type's member namespace but preserves the declaring path, so
+import order cannot number or rename a look.
+
+The walk is deterministic and records its reasons for explain/freezing:
+
+1. At a node, use the field's explicit look if present.
+2. Otherwise choose the caller's look for this type; reject duplicates
+   even when they occur in different nested settings fields.
+3. Otherwise use parse's input/repr's output side. A Str input is Text.
+4. Otherwise expose accessible structure, visiting fields/cases in
+   declaration order and look lines in their written order. Expand `..`
+   in declaration order at its position, never sorted by external name.
+5. Record renames with exact=true only when the look writes that name;
+   a bare field and fields from `..` remain subject to library casing.
+   Carry constants as Const and defaults from the type.
+6. Walk each conversion's encoded side again. A repeated conversion
+   edge on the active chain is Cycle; a recursive structural edge is
+   Ref, not a conversion cycle. Memoize by (type, ordered look set,
+   direction, field pin) without global traversal identities.
+
+Lower requests doors per (type, look set, direction); reuse the runtime
+core's canonical shape bytes/hash for the type component, and hash the
+ordered, qualified look paths and content for the other. Generated
+functions perform conversions and preserve opaque constructors; the
+library never gets raw representation access or invokes conversions
+itself. Fill absence at the door: default first, then Option None,
+otherwise Missing; a supplied None for a non-Option is Mismatch, not a
+request for its default. A missing constant is Missing, a different one
+Invalid. Traverse expected fields first in shape order, then report
+unknown input names in input order; this fixes first/all behavior across
+all strategies. Bounds produce paths without retaining rejected input.
+`build<Value>(v)` and view<Value> are identities, without recursive
+revalidation of Value as a typed record.
+
+### Libraries and bytes
+
+These are proposed Ren signatures for std source in std_lib.ml, not
+compiler-recognized medium names:
+
+```ren
+// std/json
+pub fn settings(keys: Casing = Unchanged, formats: Array<Look> = [],
+  unknown: Unknown = Strict, none: NonePolicy = Omit,
+  tag: Tag = Internal("type")) -> Settings
+pub fn decode<T>(text: Str, s: Settings = DEFAULT,
+  limits: shape.Limits = shape.Limits {}) -> T ! Error
+pub fn encode<T>(v: T, s: Settings = DEFAULT,
+  limits: shape.Limits = shape.Limits {}) -> Str ! Error
+pub type Raw = opaque Str
+// std/cli
+pub fn spec<T>(positional: Array<Str> = [], short: Array<(Str, Str)> = [],
+  formats: Array<Look> = []) -> Spec ! SpecError
+pub fn parse<T>(args: Array<Str>, s: Spec = DEFAULT,
+  limits: shape.Limits = shape.Limits {}) -> T ! Error
+pub fn help(s: Spec) -> Str
+// std/bin: for one build's processes/caches, never persistent disk formats
+pub fn encode<T>(v: T) -> Bytes ! shape.Problem
+pub fn decode<T>(b: Bytes, limits: shape.Limits = shape.Limits {})
+  -> T ! Error
+```
+
+The encode signatures are deliberately fallible: formats.md permits a
+via write function to fail and requires its error to reach the caller as
+Invalid. The snippets showing bare json.encode/bin.encode omit try;
+12a resolves that API underspecification by requiring try/handling at
+fallible encode calls, rather than converting declared errors to panics.
+Nonfinite Float output retains its separately specified panic.
+
+Settings/Spec are plain data. Casing is a closed sum of built-in casing
+policies, not a stored callback. The implementation must name all cases
+before enabling s5. Error includes shape.Problem plus Syntax(at: Int,
+why: Str) for json/bin, or Usage(why: Str) for cli; SpecError reports a
+field/flag and fix. Raw construction validates one complete json value,
+retains its exact UTF-8 bytes, and encode copies them unchanged. Decoding
+unknown record input into `extra: Map<Str, json.Raw>` retains individual
+subdocuments in input order. Decode<Value> maps object to Map(Text keys),
+null to None and whole numbers to range-checked Int. Fractional numbers
+fail Invalid explaining Decimal arrives in 12b; a typed Float accepts them.
+
+json uses signature bindings to validate settings against through<T>.
+Strict unknown names and first problem are defaults; Ignore relaxes one
+call. Casing changes only non-exact record names, never map keys or tags;
+collisions after casing name both sources. Missing and null have the
+shapes.md table's distinct treatment. None is omitted only for record
+fields unless none: Null; list positions remain null. Nested Option is
+refused with the suggested Patch<T> = Keep | Clear | Set(T). Internal
+sum tags default to type; Adjacent names tag/payload fields. Named fields
+sit beside the tag, a sole record payload merges, other payload is under
+value, fieldless cases have only a tag. Tags must be Str and cannot
+collide with payload names. Tag-not-first rescans once in release.
+Int is exact range-checked decimal text, Float shortest round-trip;
+nonfinite output panics with its path. Bytes uses padded base64; ship
+base64url/hex looks and Int.str. Map keys accept Str, decimal Int,
+fieldless sum names or parse(Str)/repr Str, otherwise suggest
+Array<(K,V)>.
+
+cli is always strict, uses kebab-case non-exact flag names, supports
+--flag=value, --flag value, Boolean switches, explicitly configured
+short flags and positionals, and sums as subcommands. Fieldless sums
+are case-name choices; parse(Str) leaves go through the same door.
+Unknown flags include did-you-mean (edit-distance ties in declaration
+order); a configured unknown positional/short field fails the spec's
+build-time check. Nested commands retain their nesting; no sum-case
+splicing. Help uses field/case docs. A D.Call gets the same behavior as
+any sum, using services' existing generated fields.
+
+bin takes no settings or looks. The single byte specification is
+"Runtime core stage / Binary journal / Derived bin, until stage 12"
+above, including repr on every type that has it, not just opaque types.
+Do not create a second encoder schema or hash helper. Require shared
+golden vectors for Unit, bool, signed zigzag boundaries, every sized
+width, floats/NaN/signed zero, UTF-8 and raw bytes, products, sums and
+errors, Option/Result, arrays/maps/sets (including duplicates refused),
+opaque parse validation, recursive Ref, malformed/nonminimal/truncated
+inputs and trailing bytes. Each vector runs through journal carry and
+std/bin once the carry exists. At cced5a2 the runtime core is only a
+partial step-0 checkpoint: its promised canonical helper and executable
+vectors are not in lib yet. Integration is pending; do not claim byte
+parity from a copied table or quietly take ownership of their encoder.
+
+### Prelude inventory and imports
+
+This table inventories prelude.ml at cced5a2. Methods, associated values,
+constructors and error tags move in visibility with their owning row;
+qualified declaration paths and physical definitions stay in prelude.ml.
+The migration changes scopes, not where runtime code looks declarations
+up. Every move gets an unimported-name diagnostic with its exact import.
+
+| Existing names | Visible after step 6 |
+|---|---|
+| Int, Float, Bool, Unit, Str, Bytes, Duration; Int8, Int16, Int32, UInt8, UInt16, UInt32, UInt64, Float32 | stays: literal/storage types |
+| Option, Some, None, Result, Ok, Err, Array, Map, Set | stays: constructs and collections |
+| Async, Send, Scope, Background, Outbox, Inbox, Call, Tags, Console, print, show; Alloc, Unsafe | stays: language/runtime surface; show is the existing derived operation |
+| Template and Look (new) | stays: literal and language look values; Shape/Value/Problem stay in shape |
+| Time, Instant, Clock, TestClock, test_clock; frozen_clock, real_clock | std/clock; private handlers remain private; Clock.frozen remains a member |
+| Random, TestRandom, test_random; real_random | std/random |
+| Net, Addr, Listener, Conn, Signal, NetError; real_net | std/net |
+| Fs, File, FsError, mem_fs; real_fs | std/fs |
+| Os, test_os; real_os | std/os |
+| Proc, Kill, ProcError, Command, Exit, TestProc, test_proc; real_proc | std/proc |
+| Instances, Family, Pinned, InstanceCounts, Stamped, Actors, actors, striped, By, Fold, Evict | std/actors |
+| retry | std/retry |
+| Path | std/path: a library opaque path, not a literal type |
+| ByteCursor, FormatError and their error tags | std/bytes: layer-3 library cursor/errors |
+| Chars | std/str: Str.chars still has its stable declared result path |
+| Zip, Zip3 | std/collections: Array.zip retains its declared result path |
+| Operation, operations | std/shape (the existing operation summary; full dependency facts use DepOperation); no recreation of services' reflection |
+| TestConsole, test_console | stays for now: Console's language test support |
+| lib_panic, family_kept (the two public implementation helpers) | std/runtime: public general primitives stay available to user libraries there |
+| dbg, assert | stays: compiler-recognized debugging/assertion constructs |
+
+No existing private implementation helper becomes publicly importable:
+MapInto, FsOutcome, ProcOutcome, NetOutcome, Isolated, Journal,
+fs_checked, proc_checked, net_checked, nowhere, stripes_refused,
+article, stripes_made, stripe, folded, at_least_one, victim, sample,
+oldest, shake, ascii_space, show_unsigned, short, room, recorder,
+replaying and sends retain their existing owner/access. Intrinsics marked
+World/Test/Journal/Value/Internal by Prelude.caller stay restricted;
+ordinary imports never grant access to seeded_next, unsafe_cast, task,
+family, journal or driver intrinsics. The builtin tuple paths (arity
+1–8), compiler-generated ranges and internal descriptor types retain
+their unspellable paths. Existing sim and sync imports remain aliases
+with their existing behavior; their source checks against the full
+prelude, while user scope sees only this table.
+
+Step 6 may add import lines to existing tests/examples/std sources and
+change expected diagnostic line numbers, nothing else. Script compares
+old/new expectations after stripping line numbers and fails if another
+byte differs. Explicit imported aliases must not duplicate declarations
+or change handler identity. User error help says `import std/clock`, etc.,
+including supporting types/handlers in that module.
+
+### Release copies, explain and freezing
+
+Extend specialization keys with canonical typed constant arguments,
+including closed shapes, ordered look sets and signature-binding results.
+Name new copies by a digest of declaration path/content and this key,
+never fresh_path discovery order. Distinct callers of the same key share
+one copy. Sorting key serialization removes hash-table iteration order;
+there is no new program-wide budget. Retain the two existing specializer
+violations documented in "Specialization" as pre-existing scope limits;
+new copy naming/budgets must not repeat them.
+
+After the constant key, measure before adding unfolding. Unfold a library
+match only when its discriminant/field projection is a known Shape or
+Value constructor; preserve order of failing conversions, bounds and
+other runtime expressions. Recursive Ref becomes a recursive function
+keyed by the same facts, never unlimited compile-time expansion. If this
+misses the 1.5× gate, implement the specified compiler-generated visitor
+per (T, looks) with ordinary leaf callbacks as blocks and measure both.
+Debug never specializes; run --release uses the same optimized Core as
+native release, checked by Core Lint. All native variants pass Mem Lint,
+ASan/UBSan and tcc before s7 is enabled.
+
+`ren explain V for T` searches Look values recursively in the top-level
+value V, evaluates the language walk and prints the table in shapes.md,
+with each field's original/external name, encoded type, chosen look and
+step. It never interprets json.Settings or a library's casing. Unknown V,
+non-top-level V, unknown T and a walk failure receive ordinary name/type
+errors with help. Keep tracing data beside the walk plan, not in output
+values or program-wide ids.
+
+`formats.lock` is UTF-8 canonical JSON with `version: 1` and a map keyed
+by qualified top-level value path. Each entry holds canonical value data,
+ordered encoded shape hashes/bytes for every evaluated walk over its
+looks, qualified look names, and a map from reached via/parse/repr
+function paths to IR hashes. Order object keys by UTF-8 bytes. Write via a
+temporary file and atomic rename; an unknown version asks for a compiler
+that understands it, rather than ignoring it.
+
+Fingerprint the value and exact canonical entry bytes. Function IR uses
+Core's printed form, stripping source locations and normalizing bound
+local names per function; keep qualified referenced declaration names,
+types, literals and operation order. Include the canonical typed contents
+of every build-time constant referenced by that IR, transitively, rather
+than hashing only its path; changing a conversion's constant must change
+its meaning fingerprint too. Hash every reached conversion and its
+transitive callees, folding recursive strongly connected components
+as sorted members/edges so recursion terminates. This is new work, not an
+existing content cache. Do not hash unrelated json/cli/bin implementation
+code: library syntax changes remain std compatibility policy. On every
+build compare all lock entries reached by the package. A difference says
+"`KEYS_V1` is frozen, and `Time.from_unix` changed", or names the changed
+field/look/value, with help to preserve the old contract or intentionally
+run `ren formats freeze KEYS_V1` after reviewing it. Renaming a look is
+a change even if its wire shape is identical. A no-change re-freeze is
+byte-identical, and no build silently updates the lock.
+
+### Diagnostics and help
+
+Use the existing renderer/spans. Language errors do not name a medium;
+library signature checks can. This is the planned compile-error catalog:
+
+| Refusal | Help |
+|---|---|
+| explicit type-argument arity/type/requirement mismatch | show the declared parameters and inferred requirement; pass the required type arguments |
+| malformed generic call or chained comparison | close the type list before `(`, or parenthesize the intended comparison |
+| field default uses runtime data, a block or a dependency | use pure data known while building, or require the field at construction |
+| parse/repr signature, visibility, purity or encoded-type mismatch | show the required X -> T ! E / T -> X signatures and the mismatched X |
+| top-level dependency cycle | print the cycle; remove a cyclic reference |
+| build-step limit exceeded | name value/site, steps and limit; bound the computation (ren.toml is not available yet) |
+| build-time dependency reach | name dependency and reach path; the build's world comes with packages; pass pure data |
+| top-level try/assert/panic failure | show error or compared values and origin; correct the initializer/assertion |
+| stored top-level block/template/scoped value | store a data description; render/prepare a template before keeping it |
+| inferred-uses assertion failed | print reach path; pass the input in or revise the rule |
+| signature binding reads a runtime value | bind settings with a top-level let; pass runtime bounds as limits: |
+| signature binding depends on caller type parameter | call at a concrete type or pass the consumer's prepared plan |
+| forwarded template into a site check | make the wrapper accept the consumer's own prepared data type |
+| Str used as Template, or implicit Template -> Str | write t before the literal; use render() for text |
+| template return/storage/conditional/escaping capture | pass it downward, or convert to the consumer's data |
+| layout line, or mixed look/layout lines | layouts aren't built yet; separate names/conversions from byte placement |
+| method/look name collision | rename the look or method; one type member has one meaning |
+| two looks of one name/type imported | "rename one of them, e.g. format unix_seconds for Time in wire" |
+| record field omitted without default/Option | "carry customer, add .., give it a default in Order, or mark the look writes" |
+| duplicate external name, including .. expansion | rename/remove one output line; name both sources |
+| lowercase right side is not a field | name an existing field; suggest the closest declaration name |
+| invalid/effectful via | show X -> T ! E and T -> X [! E]; "a look's functions are pure"; pass data rather than reach Clock |
+| conversion chain returns to its start | print the chain; remove a cyclic conversion |
+| missing sum case without a rest-of-cases line | "add a tag for Refunded, or use the rest-of-cases line" |
+| case has both a named look and nested lines | choose a named look or inline reshaping |
+| different tag types | use one typed constant type for every tag |
+| duplicate readable tag | choose distinct tags, or use a writes-only look |
+| tag hole names no case field | "did you mean \\{key}?" with closest actual field |
+| opaque structural look | "format v1 for Money = Int via (Money.from_cents, fn(m) => m.cents())" |
+| private look access / public look uses private function | use a public look/function, or keep the look private |
+| reads used to write / writes used to read | choose a look supporting this direction |
+| duplicate caller looks / opaque node / missing repr | name path and looks; choose one look, provide parse/repr or name a suitable look |
+| Layout where Look expected | "a layout is read with PageHeader.disk.view(bytes)" (once layouts exist) |
+| json casing/tag/payload/key/nested-Option unsupported | rename the colliding field, use Str tags/text keys, Array<(K,V)> or Patch<T> as applicable |
+| cli unsupported leaf/misspelled positional/short field | give parse(s: Str) or a Str via look; suggest an existing field |
+| frozen fingerprint mismatch | name first changed fact and explain intentional re-freezing |
+| removed prelude name | write that row's exact import, e.g. import std/clock |
+
+Existing D.Call data refusals are retained, not new 12a behavior. Runtime
+Problem failures are data errors, not new compiler errors, except when a
+top-level/signature try exposes them while building. Unknown flags and
+bad input retain no rejected secret input in Problem.
+
+### Validation and progress log
+
+New tests belong in test/test_shapes.ml and bench/shapes.t; every future
+assertion is gated until s1–s8. A skipped test is an inventory, never a
+passing feature. Include the full brief's positive/negative matrix,
+especially comparisons beside type applications, record defaults with
+updates/patterns, static maps, private inferred uses, all six template
+rules and all literal forms, every look declaration refusal, exact walk
+order, opaque conversions, first/all absence paths, recursive Ref,
+json.Raw/Value, sums/casing/strictness, cli/D.Call, shared bin vectors,
+prelude import helps, key-stable copy names and frozen conversion bodies.
+
+Before **every** commit run dune build; dune test --force with REN_TCC
+from tools/tcc.sh; make -C editors/tree-sitter-ren check; and main.exe test
+inside bank, prices, just, ledger, crawler, refresh, server, transfer,
+docs, breaker and checkout. Rebase before every push, rerun affected
+checks if upstream changed, keep other stages' work on conflicts, and
+push each green checkpoint on main. Runtime core's edit gate is not yet
+implemented/enabled at this baseline; add this stage's json fixture
+when that gate lands. Never weaken a test for a green checkpoint.
+
+The step-0 measurement record belongs in bench/native/RESULTS.md and its
+raw artifacts. Require fresh interpreter/native agreement before timing
+Order's handwritten Ren json decoder and serde_json/encoding-json twins,
+log-line and HTML kernels rebuilt from research/templates/verify.md,
+check/build costs for just/docs/server and the sequential kernel baseline.
+Interleave runs and record host/load, commands, median and spread. No
+performance gate is satisfied by research's numbers from another host.
+
+| Step | Commit | Built | Missing / gate |
+|---|---|---|---|
+| 0, partial checkpoint | this commit | grammar/AST, build evaluation/static data, signature/template rules, shape/door/library surfaces, prelude inventory, specialization/freezing plan and diagnostic catalog; fixed 64,100,000-step default with seven measured pairs; original feasibility probes rerun with preserved diagnostics; gated semantic/native fixtures and handwritten json/template/sequential baseline sources | required successful native build-time baselines for examples/just, docs and server cannot run: existing native refusals for real Fs, keyed Actors.at and real Clock respectively, owned by runtime core; available measurements and passing final checks are recorded below; production canonical helper/journal vectors not implemented upstream |
+| 1–8 | not started | none claimed | all implementing steps and their Done when conditions |
+| 9 | not started | boundary reviewed in this plan | soundness/performance/tooling review of the implementation, status-line edits only at that step |
+
+Step 0 cannot be marked complete while the brief's required native
+example build-time baselines are unavailable. `ren check` succeeds for
+all three, but `ren build --release` refuses the existing capabilities
+listed in bench/native/RESULTS.md. Their failed-build elapsed times are
+recorded separately and cannot stand in for successful build costs.
+The brief assigns these runtime implementations to the other stage;
+this checkpoint does not change them. Under the ordered-step rule,
+steps 1–9 remain unstarted until this baseline gate can be completed.
+This is the brief's partial-step checkpoint, not an implementation of
+shape machinery or satisfaction of any s1–s8 Done when condition.
+
+The pre-implementation review also found an existing test whose
+`Point.parse(s: Str) -> Int ! Bad` conflicts with the reserved parse
+signature. The owner explicitly authorized renaming just that fixture
+method and its expected signature to `parse_int` (two lines in
+test/test_ops.ml) when the reserved rule lands. That exception has not
+been applied in this step-0 checkpoint; it does not authorize other
+existing-test rewrites.
+
+Available step-0 baseline results are in
+[bench/native/RESULTS.md](bench/native/RESULTS.md#stage-12a-pre-shapes-baseline):
+seven accepted complete paired rounds (420 samples), with the original
+contaminated round retained and replaced in full. Handwritten Ren/Rust/Go
+JSON decode medians are 1022.8/369.7/3905.5 ns per order; encode and checked
+round-trip are separate measured kernels. The per-site C template
+references are 18.6 ns for a log line and 91.5 ns for an HTML row, alongside
+76.0/158.8 ns Rust references. All 22 existing sequential workloads have
+before medians/spreads; check costs for just/docs/server are measured.
+There is no after measurement, derived decoder, unfolding or visitor
+fallback yet, so neither the 1.5× gate nor a regression gate is claimed.
+
+The new test inventory has 60 explicitly skipped s1–s8 groups, 42 shared
+runtime source/oracle pairs, 23 binary vector families and eight malformed
+binary fixtures. Enabled baseline smoke tests exercise today's interpreter
+and native release decoder. Future fixtures remain targets until their
+owning implementation step validates and enables them.
+
+The first complete verification pass exposed one pre-existing Clang 23
+portability failure: shared-root retain grouping emitted `if (p == p)`,
+whose warning changed bench/build.t's transcript. An independently
+prepared fix and focused regression verified equal, mixed and distinct
+alias counts, with balanced ownership checked by Mem Lint. The original
+fixture also built with `-Werror=tautological-compare`.
+
+Before pushing, main advanced from cced5a2 to 1263426, including runtime
+core checkpoint 3ef7886 and its equivalent emitter fix. The rebase keeps
+that upstream implementation; this checkpoint adds the focused regression
+without changing production compiler code. The full checks are rerun on
+the combined tree. Upstream now supplies executable protocol/adaptor/edit
+harnesses, but the production native adapter, declaration emitter and
+canonical shape/bin helper remain unimplemented; the declaration edit
+fixtures are not yet a production compiler gate.
+
+Final validation on main 1263426 plus this checkpoint passed: `dune build`;
+`dune test --force` with `REN_TCC` set; `make -C editors/tree-sitter-ren check`
+and generated-parser consistency; and the eleven example suites in THE
+CHECKS (85 tests). Grammar coverage was 127 corpus cases, 226 highlight
+assertions, and 2,270 differential programs, with zero compiler-valid
+programs missed by the grammar. The focused alias-count regression and
+JSON interpreter/native smoke checks passed. Only the optional NEON
+cross-test skipped because its cross-compiler is unavailable. No required
+check was omitted; the production declaration-edit gate remains pending
+its emitter, as upstream documents.
+
+The earlier stale-source check was interrupted after a captured pre-fix
+benchmark failed; the complete pre-rebase run exposed the Clang warning
+above, and a later run was interrupted to integrate the new upstream
+commits. No expected output was promoted. The final complete run passed
+without a timing-flake retry. The one contaminated benchmark round is
+excluded and replaced in full, with raw evidence retained. Step 0 remains
+partial for the native example build costs; steps 1–9 and their Done when
+conditions remain unfulfilled. The 1.5× gate, unfolding/fallback, and after
+measurements are not claimed.

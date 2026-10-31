@@ -1,0 +1,2 @@
+import bench
+fn main() uses Console = bench.run(10000, 20)

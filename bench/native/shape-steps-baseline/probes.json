@@ -1,0 +1,306 @@
+{
+  "commit": "cced5a2f7a9d818227e581746bdeab8a1b667a1e",
+  "compiler_sha256": "265492539047c04c8a5706db642c3ff77d9815e6d0294378c9b03dac1e71f910",
+  "probes": [
+    {
+      "file": "research/looks/feas/a_default.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/a_default.ren"
+      ],
+      "status": 0,
+      "stdout": "hi\n",
+      "stderr": "",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/a_default.ren"
+        ],
+        "status": 0,
+        "stdout": "hi\n",
+        "stderr": ""
+      }
+    },
+    {
+      "file": "research/looks/feas/b_format.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/b_format.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `format`\n  \u250c\u2500 /workspace/ren/research/looks/feas/b_format.ren:2:1\n2 \u2502 format unix for Time = Int via (Time.from_unix, fn(t) => t.secs)\n  \u2502 ^^^^^^\n  help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/b_format.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `format`\n  \u250c\u2500 /tmp/ren-shape-steps/companions/b_format.ren:2:1\n2 \u2502 format unix for Time = Int via (Time.from_unix, fn(t) => t.secs)\n  \u2502 ^^^^^^\n  help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/c_let.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/c_let.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `let`\n  \u250c\u2500 /workspace/ren/research/looks/feas/c_let.ren:1:1\n1 \u2502 let LIMIT = 3 + 4\n  \u2502 ^^^\n  help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)\n\nerror: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `let`\n  \u250c\u2500 /workspace/ren/research/looks/feas/c_let.ren:2:1\n2 \u2502 let NAMES = [\"a\", \"b\"]\n  \u2502 ^^^\n  help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/c_let.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `let`\n  \u250c\u2500 /tmp/ren-shape-steps/companions/c_let.ren:1:1\n1 \u2502 let LIMIT = 3 + 4\n  \u2502 ^^^\n  help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)\n\nerror: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `let`\n  \u250c\u2500 /tmp/ren-shape-steps/companions/c_let.ren:2:1\n2 \u2502 let NAMES = [\"a\", \"b\"]\n  \u2502 ^^^\n  help: only imports, function, type, dependency and handler definitions, tests and groups can appear at the top level (for now)\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/d_shape.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/d_shape.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: `P` has no member named `shape`\n  \u250c\u2500 /workspace/ren/research/looks/feas/d_shape.ren:3:13\n3 \u2502   let s = P.shape\n  \u2502             ^^^^^\n  help: declare it under `type P`\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/d_shape.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: `P` has no member named `shape`\n  \u250c\u2500 /tmp/ren-shape-steps/companions/d_shape.ren:3:13\n3 \u2502   let s = P.shape\n  \u2502             ^^^^^\n  help: declare it under `type P`\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/e_generic.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/e_generic.ren"
+      ],
+      "status": 0,
+      "stdout": "hi\n",
+      "stderr": "",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/e_generic.ren"
+        ],
+        "status": 0,
+        "stdout": "hi\n",
+        "stderr": ""
+      }
+    },
+    {
+      "file": "research/looks/feas/f_blockop.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/f_blockop.ren"
+      ],
+      "status": 0,
+      "stdout": "hi\n",
+      "stderr": "",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/f_blockop.ren"
+        ],
+        "status": 0,
+        "stdout": "hi\n",
+        "stderr": ""
+      }
+    },
+    {
+      "file": "research/looks/feas/g_assoc.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/g_assoc.ren"
+      ],
+      "status": 0,
+      "stdout": "x\n",
+      "stderr": "",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/g_assoc.ren"
+        ],
+        "status": 0,
+        "stdout": "x\n",
+        "stderr": ""
+      }
+    },
+    {
+      "file": "research/looks/feas/h_fielddef.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/h_fielddef.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: expected `,` or `}`, found `=`\n  \u250c\u2500 /workspace/ren/research/looks/feas/h_fielddef.ren:1:19\n1 \u2502 type R = { a: Int = 3, b: Str }\n  \u2502                   ^\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/h_fielddef.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: expected `,` or `}`, found `=`\n  \u250c\u2500 /tmp/ren-shape-steps/companions/h_fielddef.ren:1:19\n1 \u2502 type R = { a: Int = 3, b: Str }\n  \u2502                   ^\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/i_named.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/i_named.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: `Keys.get` can fail, and nothing handles it\n  \u250c\u2500 /workspace/ren/research/looks/feas/i_named.ren:7:11\n7 \u2502     print(Keys.get(key: \"a\").show())\n  \u2502           ^^^^^^^^^^^^^^^^^^\n  \u2502           -------- it can fail with `NotFound(Str)`\n  help: pass the errors on with `try`, or handle them with `match`\n\nerror: `key` isn't passed by name\n  \u250c\u2500 /workspace/ren/research/looks/feas/i_named.ren:7:20\n7 \u2502     print(Keys.get(key: \"a\").show())\n  \u2502                    ^^^\n  help: a name goes only before a parameter of `Tags`: write `\"a\"`\n\nerror: `Int` has no method named `show`\n  \u250c\u2500 /workspace/ren/research/looks/feas/i_named.ren:7:30\n7 \u2502     print(Keys.get(key: \"a\").show())\n  \u2502                              ^^^^\n  help: its methods: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`, `shl`, `shr`\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row",
+          "handle Keys.get's declared error with try"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/i_named.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: `key` isn't passed by name\n  \u250c\u2500 /tmp/ren-shape-steps/companions/i_named.ren:7:25\n7 \u2502     print((try Keys.get(key: \"a\")).show())\n  \u2502                         ^^^\n  help: a name goes only before a parameter of `Tags`: write `\"a\"`\n\nerror: `Int` has no method named `show`\n  \u250c\u2500 /tmp/ren-shape-steps/companions/i_named.ren:7:36\n7 \u2502     print((try Keys.get(key: \"a\")).show())\n  \u2502                                    ^^^^\n  help: its methods: `add`, `sub`, `mul`, `div`, `rem`, `neg`, `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_neg`, `xor`, `bit_and`, `bit_or`, `shl`, `shr`\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/j_depparam.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/j_depparam.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: comparisons can't be chained\n  \u250c\u2500 /workspace/ren/research/looks/feas/j_depparam.ren:5:21\n5 \u2502   print(name_of<Keys>())\n  \u2502                     ^\n  help: split it into two comparisons\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/j_depparam.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: comparisons can't be chained\n  \u250c\u2500 /tmp/ren-shape-steps/companions/j_depparam.ren:5:21\n5 \u2502   print(name_of<Keys>())\n  \u2502                     ^\n  help: split it into two comparisons\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/k_tyapp.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/k_tyapp.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: comparisons can't be chained\n  \u250c\u2500 /workspace/ren/research/looks/feas/k_tyapp.ren:3:20\n3 \u2502   print(size_of<Int>([1]).show())\n  \u2502                    ^\n  help: split it into two comparisons\n",
+      "companion": {
+        "corrections": [
+          "declare main's Console row"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/k_tyapp.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: comparisons can't be chained\n  \u250c\u2500 /tmp/ren-shape-steps/companions/k_tyapp.ren:3:20\n3 \u2502   print(size_of<Int>([1]).show())\n  \u2502                    ^\n  help: split it into two comparisons\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/v1.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/v1.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: `Str` has no `len`: bytes, or characters?\n  \u250c\u2500 /workspace/ren/research/looks/feas/v1.ren:4:19\n4 \u2502   get(key) => key.len()\n  \u2502                   ^^^\n  help: bytes: `key.byte_len()`; code points: `key.chars().count()`;\n        what a reader sees as characters: `unicode.graphemes(key).count()`\n  help: `key.is_empty()` asks whether it has any\n\nerror: `key` isn't passed by name\n  \u250c\u2500 /workspace/ren/research/looks/feas/v1.ren:6:32\n6 \u2502   with mem() in print(Keys.get(key: \"abc\"))\n  \u2502                                ^^^\n  help: a name goes only before a parameter of `Tags`: write `\"abc\"`\n",
+      "companion": {
+        "corrections": [
+          "use Str.byte_len instead of obsolete Str.len"
+        ],
+        "command": [
+          "/workspace/ren/_build/default/bin/main.exe",
+          "run",
+          "/tmp/ren-shape-steps/companions/v1.ren"
+        ],
+        "status": 1,
+        "stdout": "",
+        "stderr": "error: `key` isn't passed by name\n  \u250c\u2500 /tmp/ren-shape-steps/companions/v1.ren:6:32\n6 \u2502   with mem() in print(Keys.get(key: \"abc\"))\n  \u2502                                ^^^\n  help: a name goes only before a parameter of `Tags`: write `\"abc\"`\n"
+      }
+    },
+    {
+      "file": "research/looks/feas/v2.ren",
+      "command": [
+        "/workspace/ren/_build/default/bin/main.exe",
+        "run",
+        "/workspace/ren/research/looks/feas/v2.ren"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "error: comparisons can't be chained\n  \u250c\u2500 /workspace/ren/research/looks/feas/v2.ren:3:15\n3 \u2502   print(id<Int>(3))\n  \u2502               ^\n  help: split it into two comparisons\n"
+    }
+  ]
+}
