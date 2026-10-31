@@ -1244,7 +1244,6 @@ $ ren replay --traces last-hour/ --against ./new-build --diff
 
 - Which dependencies are traced per call by default, and which only in aggregate (`Clock`, `Alloc`)?
 - Does the journal designed in [handlers.md](handlers.md#the-journal) serve simulation and moving a request mid-flight as well as replay?
-- How is `call` typed in a handler written for any dependency ([shapes.md](shapes.md#open-questions))?
 
 Answered since: how much `comptime` reflection needs is [shapes.md](shapes.md), and handler ordering is written with `over` ([handlers.md](handlers.md)).
 

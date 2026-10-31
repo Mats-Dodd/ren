@@ -98,9 +98,13 @@ error: this assert failed while building
 - **Top-level values can't depend on each other in a cycle.** The order
   they're computed in is worked out from what they use, as `with` sorts
   its items.
-- **Building has a limit, as everything does.** A top-level value that
-  runs for longer than the build's budget is an error that says where it
-  was, rather than a build that never finishes.
+- **Building has a limit, as everything does,** counted in evaluation
+  steps, not time, so a build's success never depends on the machine's
+  load and its cache key stays complete. A top-level value or a
+  signature `let` past it is an error naming the value, its steps and
+  the limit. The default is generous, about a second of interpreted
+  work for each; a package raises it in `ren.toml`, beside its other
+  build settings, and the limit is part of the cache key.
 - **A top-level value holds data, never a block** (foundations.md). A
   table of routes holds an enum to `match` on, or handlers' descriptions,
   which are data.
@@ -488,6 +492,9 @@ error: `handle_request` uses `Fs`, which this module says it never does
   = help: pass the template in, or drop the rule if it no longer holds
 ```
 
+- **`f.uses` is the inferred set,** what's true, for private functions
+  as for public ones, whose signatures are exact anyway. A private
+  function's declared `uses` stays an upper bound the compiler checks.
 - "The request path never touches the disk." "The ledger never
   allocates," once `Alloc` exists (stage 15). "This module never uses the
   network."
@@ -818,12 +825,9 @@ anything here.
 
 ## Open questions
 
-- **How `call` is typed.** Inside `call`, a reply belongs to whichever
-  operation was called, and so do its errors. `try r` should pass on that
-  operation's errors and no others. The checker needs a type for "the
-  reply of `op`" that a handler can pass along but not invent, except
-  through a check, as `mock` does.
-- **Is `f.uses` the inferred set or the declared one?** For a pub
-  function they're the same. For a private one, the inferred set is what's
-  true.
-- **What's the build's time budget,** and can a module raise it?
+Settled: **how `call` is typed** (the services stage: `D.Call<R ! E>`
+carries which operations a call may be of, and a `match` in `call(c)`
+gives each case its operation's result type; writing `Doc.Call<R ! E>`
+of a dependency's own calls is still refused, language.md); **`f.uses`**
+is the inferred set; **the build's budget** is counted in steps and
+raised in `ren.toml`.

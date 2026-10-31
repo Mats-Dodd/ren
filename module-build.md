@@ -237,16 +237,18 @@ Data stays open: plain records and sum types, with pure methods and constructors
 
 ### A small, fixed prelude
 
-The prelude is an ordinary module that every module imports implicitly.
+The prelude is an ordinary module that every module imports implicitly. **It holds what the language itself names, and nothing else:** the type of a literal, what a construct turns into, and the dependencies the language's own rules mention.
 
-| Kind | Always available |
-|---|---|
-| Types | `Int` `Bool` `Str` `Unit` `Option` `Result` `Array` `Map` `Set` |
-| Constructors | `Some` `None` `Ok` `Err` |
-| Dependencies | `Clock` `Random` `Console` `Net` `Alloc` `Async` `Unsafe` |
-| Functions | `print` `dbg` `assert` |
+| Kind | Always available | Why |
+|---|---|---|
+| Literal types | `Int` `Float` `Bool` `Str` `Bytes` `Decimal` `Template` `Duration` `Unit` | a literal is one: `0.08d`, `t"..."`, `30.s` |
+| What constructs turn into | `Option` `Result` `Array`, ranges | `try`, `[a, b]`, `0..n` |
+| Collections | `Map` `Set` | derived `==`, `hash` and order are the language's |
+| Constructors | `Some` `None` `Ok` `Err` | |
+| Dependencies | `Async` `Alloc` `Unsafe` `Console` | spawning, allocation, `trust`, and `print` |
+| Functions | `print` `dbg` `assert` | |
 
-Everything else in the standard library is imported like any other module: `import std/json` gives you `json.decode`.
+The world's dependencies aren't in it: `Clock`, `Random`, `Net`, `Fs`, `Os` and `Proc` are imported, `import std/net`, so where the world enters a module shows at its imports. Everything else in the standard library is imported like any other module: `import std/json` gives you `json.decode`. (Decided 2026-10-30; the prelude moves to this in stage 12.)
 
 **`print` uses `Console`.** It's an ordinary function, `Console.write(show(x))`, so calling it from code that doesn't declare `Console` is an error. Otherwise any pure function could quietly reach the outside world, and simulation and replay would stop being trustworthy.
 
@@ -457,4 +459,3 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 
 - **What's the boundary bigger than a file?** Inside a package, a `pub` item is visible to every module, and so is a helper shared by two of them. The answer will come with a workspace design, packages small and cheap enough to use as walls inside a program, as Rust's crates are. Until then there's no `internal/`, no export list and no re-exports (`pub import`).
 - How do vendored dependencies get updated? Probably `ren deps update json --from <git url>`.
-- Where does the boundary between the prelude and `std` sit? `Map` and `Set` are in the prelude, but `json` isn't. The test should be what nearly every module needs.

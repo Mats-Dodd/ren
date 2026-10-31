@@ -190,7 +190,7 @@ log.info("done", took: Clock.instant() - started)   // Instant - Instant → Dur
 let bad = Clock.now() - started                      // error: Time - Instant
 ```
 
-`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with operators since stage 9a: `Duration.ms(100)`, `t + d`, and `t - u` for the `Duration` between two. Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
+`sim.clock` controls both, and can make `now` jump (an NTP correction) while `instant` keeps advancing steadily. `Time`, `Instant` and `Duration` are in the prelude (stage 7), with operators since stage 9a; from stage 12 only `Duration` stays, since `30.s` is a literal, and `Time` and `Instant` move with `Clock` to `std/clock` ([module-build.md](module-build.md#a-small-fixed-prelude)): `Duration.ms(100)`, `t + d`, and `t - u` for the `Duration` between two. Formatting, parsing and time zones are in the `time` module, with the time zone database built in and pinned for determinism.
 
 ### `Decimal`
 
@@ -438,6 +438,8 @@ for user in DB.rows<User>(t"select * from users where plan = \{plan}")
 
 Zig replaces a borrowed component when keeping it blocks a goal (cross-compilation, compile speed), not for purity. LLVM stays for optimization because nothing is blocked there. Ren adds a requirement of its own, rule 3: borrowed code computes, and Ren supplies its effects.
 
+**Rule 3 is hard, and checked at link.** Borrowed C has two doors: a `foreign fn`, pure by assertion, and a `blocking fn`, a world call the driver runs, journaled and answered by a replay ([runtime.md](runtime.md#drivers-are-ren)). So the one way to break simulation is a `foreign fn` whose C reaches the world on its own, and linking refuses it: an object behind a `foreign fn` may not import a symbol that reaches the world (`read`, `write`, `socket`, `clock_gettime`, `getrandom`, `pthread_create`, or an allocator other than Ren's). The error names the symbol and the function, with the help to make it a `blocking fn` or supply the effect from Ren. The same check runs on every package, std or not.
+
 | Borrowable: its effects can be supplied | Not borrowable as it is |
 |---|---|
 | SQLite: its VFS layer and allocator are pluggable, so `sim.fs` can inject torn writes into SQLite itself | most database client libraries, which open their own sockets |
@@ -488,7 +490,6 @@ Stage numbers match the [README roadmap](README.md#roadmap).
 ## Open questions
 
 - What does flottning need? Its dependencies decide what 1.0 has to ship.
-- Is `Alloc` inferred before stage 15 and enforced from it, or added to signatures all at once in stage 15? Inferring it early keeps `std`'s public signatures stable.
-- Is rule 3 a hard rule or a warning? We're leaning hard for `std`, with `trust` and non-simulatable flagging covering user FFI.
-- Does `std.x` version separately from `std`, or move with the toolchain?
-- When does `websocket` move from `std.x` to `std`?
+- Does `std.x` version separately from `std`? Leaning: std moves with the toolchain, each `std.x` package is versioned on its own (breaking while 0.x), and one is promoted at a toolchain release after a release cycle with no breaking change and a conformance suite, which is also when `websocket` moves. Not gaveled.
+
+Settled: **rule 3 is hard**, checked at link (Part 6). **`Alloc` is inferred from stage 12,** conservatively, and written in public signatures from then, so they're stable when stage 15 proves it: a function that turns out not to allocate loses `Alloc` from its row, which never breaks a caller. Whether a package checks `Alloc` is set in its `ren.toml`; an unchecked package writes no `Alloc`, and each of its functions counts as allocating to its callers. std checks it.
