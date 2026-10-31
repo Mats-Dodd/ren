@@ -169,6 +169,8 @@
 
 ((call_expression function: (identifier) @function)
   (#not-eq? @function "next"))
+; a callable specialized at written types, including a standalone value
+(type_application_expression function: (identifier) @function)
 (method_call_expression name: (identifier) @function.method)
 (item_expression name: (identifier) @function)
 ; a chain's step, a function from elsewhere (language.md §8)

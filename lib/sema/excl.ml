@@ -258,6 +258,7 @@ let is_method cx (f : expr) =
    function whose own signature uses a dependency. A block it's given
    that uses one is a dependency call where the block calls it. *)
 let dep_call cx (f : expr) =
+  let f = call_head f in
   let uses p =
     match Hashtbl.find_opt cx.schemes p with
     | Some { Ty.ty = Fun (_, _, _, uses); _ } -> uses.labels <> []
@@ -283,6 +284,7 @@ let rank : Ty.block_mode -> int = function
    and the place among its parameters of the call's first argument: 1
    for a method, whose receiver is `self`. *)
 let callee_of nodes schemes (f : expr) =
+  let f = call_head f in
   let known p = if Hashtbl.mem schemes p then Some p else None in
   match f.kind with
   | Var (Global p) -> Option.map (fun p -> (p, 0)) (known p)
@@ -719,7 +721,7 @@ let rule_b cx (b : binder) (loc : Loc.t) ~own ~(wanted : Ty.block_mode) ~callee
         (* the block's type as its parameter writes it *)
         let pr =
           Ty.printer ~names:cx.names
-            { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+            { ty = t; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
         in
         Ty.show pr (Fun (ps, r, Ty.closed, u))
     | _ -> "fn(...)"
@@ -812,6 +814,7 @@ let rec first_dep cx (e : expr) =
   let here =
     match e.kind with
     | Call (f, _) when dep_call cx f -> (
+        let f = call_head f in
         match f.kind with
         | Var (Dep_op (p, _)) -> named p
         | Var (Next_op (p, _)) -> named p
@@ -1044,7 +1047,9 @@ let rec walk cx (e : expr) =
           if not (is_block cx e) then
             instant cx (access p Read (Used (hoist cx e)))
       | None -> List.iter (walk cx) (children e))
-  | Ref { kind = Call (({ kind = Field _; _ } as f), args); _ } ->
+  | Type_apply (f, _) -> walk cx f
+  | Ref { kind = Call (f, args); _ }
+    when (match (call_head f).kind with Field _ -> true | _ -> false) ->
       call cx e f args ~changed:true
   | Ref _ -> (* mut.ml reported it *) ()
   | Call (f, args) -> call cx e f args ~changed:false
@@ -1241,7 +1246,7 @@ and call ?(released = false) ?(step = false) cx (e : expr) (f : expr) args ~chan
   | Some (call, f, args, changed, _) ->
       ignore (factory_frame cx call f args ~changed)
   | None ->
-  let f = unlabel f in
+  let f = call_head f in
   let state_writes why loc =
     match cx.state with
     | Some vars ->

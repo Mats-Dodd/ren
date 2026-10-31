@@ -64,6 +64,9 @@ and label = { name : string; payload : ty list }
    it's only checked where the function is used. All are sorted. *)
 type scheme = {
   ty : ty;
+  tparams : int option list;
+      (** declaration order mapped to canonical variables; unused parameters
+          occupy a [None] slot *)
   names : (int * string) list;
   reqs : (int * string) list;
   row_reqs : (int * string) list;

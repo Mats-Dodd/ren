@@ -1673,7 +1673,8 @@ pub test fn replay(file: Str) -> Clock & Console & Fs & Net & Os & Proc & Random
 (* [Ty.Var n] is the scheme's [n]th type variable and [Some n] in a row its
    [n]th row variable, numbered by first appearance (ty.ml). *)
 let scheme_of ?(reqs = []) ty : Ty.scheme =
-  Ty.canonical { ty; names = []; reqs; row_reqs = []; modes = []; defaults = [] }
+  let tparams = List.mapi (fun n _ -> Some n) (Ty.own_args ty).tys in
+  Ty.canonical { ty; names = []; reqs; row_reqs = []; tparams; modes = []; defaults = [] }
 
 let open_row n : Ty.row = { labels = []; tail = Some n }
 let bytes = Ty.Con (Path.prelude "Bytes", [])

@@ -1028,6 +1028,7 @@ let to_scheme st t : Ty.scheme =
     names = canon_names c;
     reqs = canon_reqs c;
     row_reqs = canon_row_reqs c;
+    tparams = [];
     modes = [];
     defaults = [];
   }
@@ -1280,7 +1281,7 @@ let printer ?(show_tail = fun _ -> false) ~names (st : state) =
   in
   (* the scheme's names start empty: [to_ty] adds them as they're found *)
   let scheme : Ty.scheme =
-    { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+    { ty = Error; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
   in
   { canon = c; ty_printer = Ty.printer ~show_tail:numbered ~names scheme }
 

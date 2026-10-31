@@ -95,6 +95,9 @@ and label = { name : string; payload : ty list }
    it as `..e has eq`. *)
 type scheme = {
   ty : ty;
+  tparams : int option list;
+      (** declared type parameters in source order; [None] is unused in
+          the signature, so contributes no canonical type variable *)
   names : (int * string) list;
   reqs : (int * string) list;
   row_reqs : (int * string) list;
@@ -656,6 +659,7 @@ let canonical (s : scheme) =
   in
   {
     ty;
+    tparams = List.map (fun n -> Option.bind n (fun n -> List.assoc_opt n !tys)) s.tparams;
     names = renumber tys s.names;
     reqs = renumber tys s.reqs;
     row_reqs = renumber rows s.row_reqs;

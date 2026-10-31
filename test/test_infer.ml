@@ -1803,7 +1803,7 @@ let%expect_test "instantiate gives its fresh variables in variable order" =
               row [] 2 );
         names = [];
         reqs = [];
-        row_reqs = [];
+        row_reqs = []; tparams = [];
         modes = [];
         defaults = [];
       }

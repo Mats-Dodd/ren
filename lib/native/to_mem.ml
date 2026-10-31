@@ -279,7 +279,7 @@ let rec subst args (t : Ty.ty) : Ty.ty =
 let ty_name (t : Ty.ty) =
   Ty.show
     (Ty.printer ~names:Path.full
-       { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+       { ty = t; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
     t
 
 (* A [Struct]'s type, by its number. *)

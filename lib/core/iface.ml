@@ -22,10 +22,15 @@
    Int = 16)`; and an operation's parameters' defaults, [fdefaults], by
    their place and name, as a function's scheme keeps them (compiler.md,
    "Services stage", "The grammar"). *)
+type field_default = Value_default of Path.t | Function_default of Path.t
+
 type field = {
   fname : string;
   fty : Ty.ty;
   fdefault : Ast.literal option;
+  fdefault_member : field_default option;
+      (** declaration-scoped expression default; its member scheme owns its
+          canonical generic argument order *)
   fdefaults : (int * string * Ast.literal) list;
 }
 
@@ -586,6 +591,7 @@ let signature ?(closed = false) ~sets (f : Ast.Resolved.fn_def) : Ty.scheme =
     {
       ty = Fun (ps, ret, errs, deps);
       names = List.mapi (fun i (t : Ast.ident) -> (i, t.name)) f.tparams;
+      tparams = List.mapi (fun i _ -> Some i) f.tparams;
       reqs = [];
       row_reqs = [];
       modes = modes_of f.params;
@@ -599,6 +605,11 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       fname = f.field_name.name;
       fty = of_written ~sets f.field_ty;
       fdefault = Option.map (fun (l, _, _) -> l) f.field_default;
+      fdefault_member = Option.map
+          (fun name ->
+            let p = Path.member (Path.make home td.type_name.name) name in
+            if td.type_params = [] then Value_default p else Function_default p)
+          f.field_default_member;
       fdefaults = List.map (fun (i, n, (l, _, _)) -> (i, n, l)) f.op_defaults;
     }
   in
@@ -633,7 +644,7 @@ let of_type_def ~home ~sets (td : Ast.Resolved.type_def) =
       | Op_value, _ when f.ret = None ->
           (* a public one without a type is an error, which inference
              reports with the type it finds *)
-          (Value, { Ty.ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+          (Value, { Ty.ty = Error; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
       | Op_value, _ -> (
           (* a function of no parameters, whose result is the value *)
           match signature ~sets f with
@@ -694,7 +705,7 @@ let generator_type (g : Ty.generator) =
       oscheme = Ty.canonical
         { ty = Fun ([ { mode = Inout; ty = cursor } ], Ty.option g.item,
                     g.errors, Ty.closed);
-          names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
+          tparams = []; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
     }
   in
   {

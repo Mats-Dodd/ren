@@ -268,11 +268,24 @@ if "--freeze-only" in sys.argv:
     sys.exit(0)
 
 differential("s1", "front_end", '''fn id<T>(x: T) -> T = x
-type Cfg = { port: Int = 8080 }
+fn port() -> Int = 8000 + 80
+type Source = Web | Local
+type Cfg = { port: Int = port(), source: Source = Web }
+type Id = opaque { n: Int }
+  fn parse(n: Int) -> Id ! Negative =
+    if n < 0 then fail Negative
+    Id { n }
+  fn repr(self) -> Int = self.n
 fn main() uses Console =
   let cfg: Cfg = {}
-  print(id<Int>(cfg.port))
-''', "8080\n")
+  let value = try Id.parse(id<Int>(cfg.port))
+  print(value.repr())
+  print(attempt Id.parse(-1))
+  let copy = { ..cfg, source: Local }
+  let { port, .. } = copy
+  print(port)
+  print(copy.source)
+''', "8080\nErr(Negative)\n8080\nLocal\n")
 differential("s2", "static_data", '''let CRC_TABLE = [0, 1, 3, 2]
 assert CRC_TABLE.len() == 4
 fn main() uses Console = print(CRC_TABLE)

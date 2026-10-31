@@ -2417,7 +2417,7 @@ and shown_ty (t : Ty.ty) =
   Ty.show
     (Ty.printer
        ~names:(fun (p : Path.t) -> p.name)
-       { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+       { ty = t; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
     t
 
 (* The real `Net`'s intrinsics (net.ml), each a wait of the task, as
@@ -3007,7 +3007,7 @@ and answered cx (j : Journal.t) (tr : Ty.ty) (e : Journal.call) =
     Ty.show
       (Ty.printer
          ~names:(fun (p : Path.t) -> p.name)
-         { ty = tr; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+         { ty = tr; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
       tr
   in
   match e.gave with

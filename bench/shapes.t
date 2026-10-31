@@ -4,7 +4,7 @@ modes), release, sanitizers, tcc and `ren run --release`. Missing tools
 fail an enabled case. See shapes/README.md for the remaining coverage.
 
   $ python3 shapes/check.py
-  front_end: until s1
+  front_end: interpreter, release run, sanitizers and tcc agree
   static_data: until s2
   template: until s3
   json: until s7

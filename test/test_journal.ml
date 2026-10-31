@@ -541,7 +541,7 @@ let%expect_test "Core Lint refuses the world reached from anywhere else" =
       ev = Core.evidence 2;
       tys = [];
       dicts = [];
-      scheme = { ty = Ty.unit; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
+      scheme = { ty = Ty.unit; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] };
       body;
       test;
       loc;

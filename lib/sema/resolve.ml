@@ -2553,6 +2553,18 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
         let c = go c in
         let t = go t in
         If (c, t, Option.map go f)
+    | Type_apply (f, ts) ->
+        Type_apply
+          (go f, List.map (ty env ~params:sc.tparams ~rows:(Body sc.rows) ~arg:true) ts)
+    | Call (({ kind = Type_apply (f, ts); _ } as applied), args) ->
+        (* Resolve the underlying call through the ordinary path, including
+           service parameters and dependency members, then keep its types. *)
+        let call = go { e with kind = Call (f, args) } in
+        (match call.kind with
+        | Call (f, args) ->
+            let ts = List.map (ty env ~params:sc.tparams ~rows:(Body sc.rows) ~arg:true) ts in
+            Call ({ kind = Type_apply (f, ts); loc = applied.loc; node = applied.node }, args)
+        | kind -> kind)
     | Call (f, args) when next_callee env sc f <> None ->
         (* an operation of the implementation under this handler *)
         let op = Option.get (next_callee env sc f) in
@@ -3982,7 +3994,8 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
    A member with a reserved name is what a type does with an operator,
    `add` for `+`, an associated value, `zero`, its `key`, which says what
    equal means and so how its values are hashed and ordered, or its
-   `show` (operators.md). Each is decided once, from its signature, so
+   `show` (operators.md). `parse` and `repr` describe reading and writing
+   it (shapes.md). Each is decided once, from its signature, so
    the signature is written in full: what an operator takes and gives,
    and that it doesn't fail or use a dependency, since `a + b` has no
    `try` in front (infer_top.ml checks its body keeps to that). On a
@@ -4035,6 +4048,8 @@ let reserved env (td : Parsed.type_def) =
         | "neg" -> sprintf "pub fn neg(self) -> %s = ..." own
         | "key" -> "fn key(self) -> K = ..."
         | "show" -> "pub fn show(self) -> Str = ..."
+        | "parse" -> sprintf "pub fn parse(x: X) -> %s ! E = ..." own
+        | "repr" -> "pub fn repr(self) -> X = ..."
         | "zero" | "one" -> sprintf "pub let %s: %s = ..." name own
         | _ -> sprintf "pub fn %s(self, b: %s) -> %s = ..." name own own
       in
@@ -4045,6 +4060,8 @@ let reserved env (td : Parsed.type_def) =
              (match name with
              | "key" -> "what equal means"
              | "show" -> "how a value is shown"
+             | "parse" -> "reading a value"
+             | "repr" -> "writing a value"
              | "zero" | "one" -> "an associated value"
              | _ -> sprintf "`%s`" (operator_symbol name))
              why)
@@ -4078,6 +4095,22 @@ let reserved env (td : Parsed.type_def) =
                name)
       | _ when List.mem name binary_operators -> method_with 1
       | "neg" | "key" | "show" -> method_with 0
+      | "repr" ->
+          if f.tparams <> [] then
+            wrong "its encoded type can't have member type parameters"
+          else method_with 0
+      | "parse" -> (
+          match (o.op_kind, f.params) with
+          | Op_value, _ -> wrong "it's an associated function"
+          | Op_fn, [ p ] when p.pname.name <> "self" ->
+              if f.tparams <> [] then
+                wrong "its encoded type can't have member type parameters"
+              else if p.pmode = Inout then wrong "it can't change what it's given"
+              else if p.pty = None || not (written_ret ()) then
+                wrong "its signature is written in full"
+              else if f.uses <> None then
+                wrong "it's pure and can't use a dependency"
+          | Op_fn, _ -> wrong "it takes one argument, without `self`")
       | "zero" | "one" -> (
           match (o.op_kind, f.ret) with
           | Op_fn, _ -> wrong "it's a value, written with `let`"
@@ -4103,7 +4136,9 @@ let reserved env (td : Parsed.type_def) =
       (* a public type's are public *)
       if
         td.type_pub && (not f.pub)
-        && List.mem name ("neg" :: "show" :: "zero" :: "one" :: binary_operators)
+        && List.mem name
+             ("neg" :: "show" :: "parse" :: "repr" :: "zero" :: "one"
+            :: binary_operators)
       then
         report env at
           ~help:
@@ -4114,6 +4149,7 @@ let reserved env (td : Parsed.type_def) =
               sprintf "it says what `%s` does in every module that uses `%s`"
                 (match name with
                 | "show" -> "show"
+                | "parse" | "repr" -> name
                 | "zero" | "one" -> tname ^ "." ^ name
                 | _ -> operator_symbol name)
                 tname;
@@ -4124,7 +4160,8 @@ let reserved env (td : Parsed.type_def) =
 (* What a reserved member's type is, where [reserved] can't tell from
    what's written: a type's own `show` makes a [Str], since it's how a
    value of it is shown wherever one is, and its `zero` and `one` are
-   values of it (operators.md). *)
+   values of it (operators.md). A conversion's `parse` makes the owning
+   type with its own parameters, never a different instantiation. *)
 let reserved_types env (td : Resolved.type_def) =
   let own = Path.make env.home td.type_name.name in
   let written =
@@ -4146,6 +4183,16 @@ let reserved_types env (td : Resolved.type_def) =
       | "show", Op_fn, Some _ ->
           report env f.name.loc ~help:"write `pub fn show(self) -> Str = ...`"
             "`show` is reserved for how a value is shown, so it makes a `Str`"
+      | "parse", Op_fn, Some ret ->
+          let own_ty =
+            Ty.Con (own, List.mapi (fun i _ -> Ty.Var i) td.type_params)
+          in
+          if Iface.of_written ~sets:(sets env []) ret <> own_ty then
+            report env f.name.loc
+              ~help:(sprintf "write `pub fn parse(x: X) -> %s ! E = ...`" written)
+              (sprintf
+                 "`parse` is reserved for reading a value, so it makes a `%s`"
+                 written)
       | ("zero" | "one"), Op_value, Some (TyName ({ tref = Named p; _ }, _))
         when p = own ->
           ()
@@ -4214,6 +4261,7 @@ let type_def env (td : Parsed.type_def) :
       field_name = f.field_name;
       field_ty;
       field_default = f.field_default;
+      field_default_member = f.field_default_member;
       op_defaults;
       op_params = f.op_params;
     }
@@ -4598,6 +4646,7 @@ let no_kept_blocks env (items : Resolved.program) =
       | Let _ | Let_pattern _ | Expr _ | Finally _ -> ()
     in
     (match e.kind with
+    | Type_apply (_, ts) -> List.iter (data In_type_arg) ts
     | Lambda (ps, _) ->
         List.iter (fun (p : Resolved.param) -> Option.iter inner p.pty) ps
     | Block (stmts, _) | Handler { state = stmts; _ } -> List.iter stmt stmts
@@ -4631,7 +4680,7 @@ let no_kept_blocks env (items : Resolved.program) =
       (fun (u : _ Ast.uses) ->
         List.iter (fun (d : _ Ast.dep_ref) -> List.iter (family_in `Dep_arg) d.dargs) u.deps)
       f.uses;
-    Option.iter (data (if value then In_value f.name.name else Returned)) f.ret;
+    Option.iter (data (if value || String.starts_with ~prefix:"$default:" f.name.name then In_value f.name.name else Returned)) f.ret;
     Option.iter errors f.errors;
     expr f.body
   in
@@ -5370,6 +5419,7 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
                        None,
                        m.loc );
                  field_default = None;
+                 field_default_member = None;
                  (* a parameter's default is the operation's, as a
                     dependency's operation writes one *)
                  op_defaults =
@@ -5552,6 +5602,7 @@ let call_types env (prog : Parsed.program) =
                     field_name = { name; loc };
                     field_ty = t;
                     field_default = None;
+                 field_default_member = None;
                     op_defaults = [];
                     op_params = [];
                   })
@@ -5843,6 +5894,7 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
                                    fname = f.field_name.name;
                                    fty = Ty.Error;
                                    fdefault = None;
+                                   fdefault_member = None;
                                    fdefaults = [];
                                  })
                                c.ctor_fields;

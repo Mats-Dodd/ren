@@ -64,6 +64,7 @@ enum TokenType {
   STRING_ESCAPE,
   HOLE_START,
   STRING_END,
+  TYPE_APPLICATION_START,
 };
 
 // a string on the string stack: its `#`s, and whether it's `"""` and `b`
@@ -110,6 +111,82 @@ static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 static bool is_ident_char(int32_t c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
          (c >= '0' && c <= '9') || c == '_';
+}
+
+static bool is_space(int32_t c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static bool at_word(TSLexer *lexer, const char *word) {
+  for (unsigned i = 0; word[i]; i++) {
+    if (lexer->lookahead != word[i]) return false;
+    advance(lexer);
+  }
+  return !is_ident_char(lexer->lookahead);
+}
+
+// A value's `<...>` must be complete before it becomes a postfix. Leave
+// the contents to the grammar, but find its end without mistaking a
+// function type's `->` for a closing angle. Only the opening `<` is the
+// token: everything inspected after mark_end is read again by the parser.
+static bool type_application_start(TSLexer *lexer, bool adjacent, bool layout) {
+  if (lexer->lookahead != '<') return false;
+  advance(lexer);
+  lexer->mark_end(lexer);
+  unsigned depth = 1;
+  while (!lexer->eof(lexer)) {
+    int32_t c = lexer->lookahead;
+    advance(lexer);
+    if (c == '<') {
+      depth++;
+    } else if (c == '>') {
+      if (--depth == 0) break;
+    } else if (c == '-') {
+      if (lexer->lookahead != '>') return false;
+      advance(lexer);
+    } else if (c == '/') {
+      if (lexer->lookahead != '/') return false;
+      while (lexer->lookahead != '\n' && !lexer->eof(lexer)) advance(lexer);
+    } else if (!(is_ident_char(c) || is_space(c) || c == '.' || c == ',' ||
+                 c == '(' || c == ')' || c == ':' || c == '&' || c == '!' ||
+                 c == '|')) {
+      return false;
+    }
+  }
+  if (depth != 0) return false;
+  bool line_ended = false;
+  for (;;) {
+    if (is_space(lexer->lookahead)) {
+      if (lexer->lookahead == '\n') line_ended = true;
+      advance(lexer);
+    } else if (lexer->lookahead == '/') {
+      advance(lexer);
+      if (lexer->lookahead != '/') return false;
+      while (lexer->lookahead != '\n' && !lexer->eof(lexer)) advance(lexer);
+    } else {
+      break;
+    }
+  }
+  // Whitespace is allowed before a call. A standalone application needs
+  // the `<` touching its head and an expression boundary after its `>`.
+  bool boundary = (line_ended && layout) || lexer->eof(lexer) ||
+                  lexer->lookahead == ',' || lexer->lookahead == ')' ||
+                  lexer->lookahead == ']' || lexer->lookahead == '}';
+  if (lexer->lookahead != '(' && !(adjacent && boundary)) {
+    if (!adjacent) return false;
+    if (lexer->lookahead == '=') {
+      advance(lexer);
+      if (lexer->lookahead != '>') return false;
+    } else if (lexer->lookahead == 't') {
+      if (!at_word(lexer, "then")) return false;
+    } else if (lexer->lookahead == 'e') {
+      if (!at_word(lexer, "else")) return false;
+    } else {
+      return false;
+    }
+  }
+  lexer->result_symbol = TYPE_APPLICATION_START;
+  return true;
 }
 
 // Is the next word `uses`? Moves past what it reads, which is fine: the
@@ -385,6 +462,7 @@ bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
                                            const bool *valid) {
   Scanner *s = payload;
   bool recovering = valid[ERROR_SENTINEL];
+  bool adjacent = lexer->lookahead == '<';
 
   lexer->mark_end(lexer);
 
@@ -466,6 +544,9 @@ bool tree_sitter_ren_external_scanner_scan(void *payload, TSLexer *lexer,
   // A comment is left to the grammar, so it shows up in the tree: the
   // next call starts after it.
   if (saw_comment || saw_slash) return false;
+
+  if (lexer->lookahead == '<' && valid[TYPE_APPLICATION_START] && !recovering)
+    return type_application_start(lexer, adjacent, in_block(s));
 
   // a `,` after a lambda's block inside brackets closes it, as a closing
   // bracket does; one in a list of `with` items or dependencies inside it

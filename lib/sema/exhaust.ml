@@ -591,7 +591,7 @@ let check_match env ?(passes_on = false) (e : expr) (subject : expr) arms =
         Some
           (Ty.show
              (Ty.printer ~names:env.names
-                { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+                { ty = t; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
              t)
     | Con (p, _) -> Some (env.names p)
     | Variant (p, c, _) -> Some (env.names p ^ "." ^ c)
@@ -780,7 +780,7 @@ let rec check_expr env (e : expr) =
   | Piped ->
       ()
   | Interp ps -> List.iter (check_expr env) (Ast.holes ps)
-  | Named (_, a) -> check_expr env a
+  | Named (_, a) | Type_apply (a, _) -> check_expr env a
   | Pipe _ -> List.iter (check_expr env) (children e)
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms

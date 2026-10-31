@@ -4,7 +4,7 @@
 
 open Helpers
 
-let enabled = []
+let enabled = [ "s1" ]
 
 let until step f =
   if List.mem step enabled then f ()
@@ -49,7 +49,7 @@ fn main() uses Console =
   print(port)
 |}
         "8080\nlocal\ntrue\n8080\n()\n");
-  [%expect {| skipped until s1 |}]
+  [%expect {| |}]
 
 let%expect_test "[s1] reserved parse and repr are pure and agree" =
   until "s1" (fun () ->
@@ -67,7 +67,7 @@ let%expect_test "[s1] reserved parse and repr are pure and agree" =
   fn repr(self) -> Int = self
 |}
         [ "parse"; "repr" ]);
-  [%expect {| skipped until s1 |}]
+  [%expect {| |}]
 
 let%expect_test "[s2] dependency order, CRC data and data router" =
   until "s2" (fun () ->
@@ -317,7 +317,7 @@ fn main() uses Console =
   print(id<Int>(3) > 2)
 |} "[Some(7), None]\ntrue\ntrue\n()\n";
       rejects "fn main() = 1 < 2 > 3\n" [ "comparisons"; "chained" ]);
-  [%expect {| skipped until s1 |}]
+  [%expect {| |}]
 
 let%expect_test "[s1] constructors fill defaults without changing explicit fields" =
   until "s1" (fun () ->
@@ -325,15 +325,15 @@ let%expect_test "[s1] constructors fill defaults without changing explicit field
         {|type Source = Web | App
 type Cfg = { source: Source = Web, retries: Int = 3 }
 fn main() uses Console =
-  let a = Cfg()
-  let b = Cfg(source: App)
+  let a = Cfg {}
+  let b = Cfg { source: App }
   let c: Cfg = { ..b, retries: 9 }
   let { source, .. } = c
   print(a.source)
   print(source)
   print(c.retries)
 |} "Web\nApp\n9\n()\n");
-  [%expect {| skipped until s1 |}]
+  [%expect {| |}]
 
 let%expect_test "[s3] template holes run eagerly in source order and kind is a value" =
   until "s3" (fun () ->
@@ -943,7 +943,7 @@ fn main() uses Console =
   let id = try Id.parse(7)
   print(id.repr())
 |} "7\n()\n");
-  [%expect {| skipped until s1 |}]
+  [%expect {| |}]
 
 let%expect_test "[s2] data handler descriptions are frozen without executing operations" =
   until "s2" (fun () ->

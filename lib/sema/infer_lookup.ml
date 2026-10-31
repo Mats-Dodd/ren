@@ -473,8 +473,34 @@ let require env cx ~node loc p (inst : subst) =
 (* A fresh instance of the scheme of [p], a function of an earlier group
    or another module, or an intrinsic, recording the type arguments it
    picked at [node], [loc]. *)
+let seed_explicit env cx ~node loc params =
+  match Hashtbl.find_opt cx.explicit_args node with
+  | None -> ()
+  | Some (skip, written) ->
+      Hashtbl.remove cx.explicit_args node;
+      let rec drop n ps =
+        if n = 0 then ps else match ps with [] -> [] | _ :: rest -> drop (n - 1) rest
+      in
+      let params = drop skip params in
+      if List.length params <> List.length written then
+        report env
+          (Diag.make loc
+             ~help:(if params = [] then "remove the type arguments"
+                    else Printf.sprintf "give all %d declared type arguments in declaration order" (List.length params))
+             (Printf.sprintf "this function takes %d explicit type argument%s but was given %d"
+                (List.length params) (if List.length params = 1 then "" else "s")
+                (List.length written)))
+      else
+        List.iter2
+          (fun expected (loc, found) ->
+            Option.iter (fun expected -> unify_at env loc ~found ~expected) expected)
+          params written
+
 let fresh env cx ~node loc p =
   let t, s = instantiate env.st (Hashtbl.find env.globals p) in
+  let declared = Option.value (Hashtbl.find_opt env.type_params p) ~default:[] in
+  seed_explicit env cx ~node loc
+    (List.map (fun n -> Option.bind n (fun n -> Option.map snd (List.nth_opt s.tys n))) declared);
   Hashtbl.replace cx.targs node
     { tcallee = p; tvalue = false; tpicked = Fresh s };
   (* only a variable that needs something can make the use need it *)
@@ -530,11 +556,13 @@ let rec lookup env cx ~node loc = function
          its rows, like storing it as a `fn()`, closes only the instance's *)
       let g = List.assoc p env.group in
       let inst = own_instance env g in
+      seed_explicit env cx ~node loc (List.map (fun (_, t) -> Some t) inst.tys);
       require env cx ~node loc p inst;
       in_group cx ~node p (replace inst (g.declared ()))
   | Global p when p <> cx.self && List.mem_assoc p env.group ->
       let g = List.assoc p env.group in
       let jinst = own_instance env g in
+      seed_explicit env cx ~node loc (List.map (fun (_, t) -> Some t) jinst.tys);
       require env cx ~node loc p jinst;
       let used = replace jinst (g.declared ()) in
       defer env
@@ -543,6 +571,7 @@ let rec lookup env cx ~node loc = function
   | Global p when p = cx.self ->
       (* its own type, not generic until its group is done, so the copy
          is the same type *)
+      seed_explicit env cx ~node loc (List.map (fun t -> Some t) cx.tparams);
       in_group cx ~node p
         (fst (instantiate env.st (Hashtbl.find env.globals p)))
   | Global p -> fresh env cx ~node loc p
@@ -567,6 +596,7 @@ let rec lookup env cx ~node loc = function
           match dep_op_in env op td with
           | Some o -> (
               let tvars = List.map (fun _ -> fresh_var env.st) td.params in
+              seed_explicit env cx ~node loc (List.map (fun t -> Some t) tvars);
               (* the instance's types are its type arguments, which say
                  which implementation the call finds (Lower) *)
               if tvars <> [] then

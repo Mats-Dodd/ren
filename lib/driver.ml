@@ -1014,7 +1014,7 @@ let types ?(lint = false) ?load ~file src =
                                 ty = o.fty;
                                 names = List.mapi (fun i n -> (i, n)) params;
                                 reqs = [];
-                                row_reqs = [];
+                                row_reqs = []; tparams = [];
                                 modes = [];
                                 defaults = [];
                               }
@@ -1035,7 +1035,7 @@ let types ?(lint = false) ?load ~file src =
                 (* an alias: the instance it names *)
                 let pr =
                   Ty.printer ~names
-                    { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+                    { ty = Error; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
                 in
                 [
                   sprintf "%sdep %s = %s"
@@ -1072,7 +1072,7 @@ let types ?(lint = false) ?load ~file src =
                    payload's types *)
                 let pr =
                   Ty.printer ~names
-                    { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+                    { ty = Error; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
                 in
                 let errors =
                   match (decl td).body with

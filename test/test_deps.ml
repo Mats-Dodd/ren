@@ -39,7 +39,7 @@ let run_start files body =
               ty = Fun ([], body.ty, Ty.closed, Ty.closed);
               names = [];
               reqs = [];
-              row_reqs = [];
+              row_reqs = []; tparams = [];
               modes = [];
               defaults = [];
             };
@@ -124,7 +124,7 @@ let lint_evidence body =
           ty = Fun ([], Ty.int, Ty.closed, uses_d);
           names = [];
           reqs = [];
-          row_reqs = [];
+          row_reqs = []; tparams = [];
           modes = [];
           defaults = [];
         };
@@ -146,7 +146,7 @@ let lint_evidence body =
                   {
                     path = d;
                     params = [];
-                    body = Dep [ { fname = "op"; fty = int_fn; fdefault = None; fdefaults = [] } ];
+                    body = Dep [ { fname = "op"; fty = int_fn; fdefault = None; fdefaults = []; fdefault_member = None } ];
                     members = Path.Map.empty;
                     numeric = None;
                     opaque = false;

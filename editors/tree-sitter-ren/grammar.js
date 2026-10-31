@@ -85,6 +85,8 @@ module.exports = grammar({
     $._string_escape,
     $._hole_start,
     $._string_end,
+    // a complete value type application, distinguished from comparisons
+    $._type_application_start,
   ],
 
   extras: ($) => [/[ \t\r\n]/, $.comment],
@@ -390,7 +392,7 @@ module.exports = grammar({
               '(',
               choice(
                 seq(
-                  $.field_declaration,
+                  alias($._positional_field_declaration, $.field_declaration),
                   optional(seq('=', field('default', $._literal_default))),
                 ),
                 field('type', $._type),
@@ -403,6 +405,15 @@ module.exports = grammar({
       ),
 
     field_declaration: ($) =>
+      seq(
+        field('name', $.identifier),
+        ':',
+        field('type', $._type),
+        optional(seq('=', field('default', $._expression))),
+      ),
+
+    // The existing one-field positional variant keeps its literal default.
+    _positional_field_declaration: ($) =>
       seq(field('name', $.identifier), ':', field('type', $._type)),
 
     // ---- dependencies ----
@@ -1094,8 +1105,27 @@ module.exports = grammar({
         $.index_expression,
         $.call_expression,
         $.method_call_expression,
+        $.type_application_expression,
         $._primary,
       ),
+
+    // f<Int>, json.decode<Order>, Stack.of<Array<Int>>: the scanner only
+    // admits a complete list before a call, or an adjacent list at a
+    // value boundary. The types themselves are still parsed here.
+    type_application_expression: ($) =>
+      prec(
+        PREC.postfix,
+        seq(
+          field(
+            'function',
+            choice($.identifier, $.field_expression, $.item_expression),
+          ),
+          field('type_arguments', alias($._value_type_arguments, $.type_arguments)),
+        ),
+      ),
+
+    _value_type_arguments: ($) =>
+      seq(alias($._type_application_start, '<'), commaSep1($._type_argument), '>'),
 
     field_expression: ($) =>
       prec(

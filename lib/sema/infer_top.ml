@@ -116,6 +116,9 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Return a -> Option.iter expr a
     | Interp ps -> go (Ast.holes ps)
     | Named (_, a) -> expr a
+    | Type_apply (a, ts) ->
+        expr a;
+        List.iter ty_ ts
     | Pipe { subject; step } -> go [ subject; step ]
     | Unop (_, a, _)
     | Field (a, _)
@@ -231,7 +234,7 @@ let check_written sink ~sets ~names (prog : program) =
     | TyName _ | TyVariant _ | TyFn _ | TyImpl _ | TyInout _ | TyErrors _ | TyTuple _ -> ()
   in
   let pr =
-    Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+    Ty.printer ~names { ty = Error; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
   in
   let errors (es : Resolved.errors) =
     let tags = Iface.tags ~sets (Iface.declared_errors ~sets es) in
@@ -787,6 +790,7 @@ let new_env sink ~reachable (r : Resolve.t) =
        unsafe);
     generator_early = [];
     generator_late = [];
+    type_params = Hashtbl.create 16;
     group = [];
     hidden_calls = [];
     spelled = [];
@@ -884,6 +888,8 @@ let add_globals (env : Infer_env.env) ~imports ~reachable fns =
           Hashtbl.replace env.globals
             (Path.make iface.home v.vname)
             (of_scheme env.st v.scheme);
+          Hashtbl.replace env.type_params (Path.make iface.home v.vname)
+            v.scheme.tparams;
           Hashtbl.replace env.params_of (Path.make iface.home v.vname) v.vparams;
           Hashtbl.replace env.defaults_of
             (Path.make iface.home v.vname)
@@ -901,6 +907,7 @@ let add_globals (env : Infer_env.env) ~imports ~reachable fns =
           Path.Map.iter
             (fun path (o : Iface.op) ->
               let t = of_scheme env.st o.oscheme in
+              Hashtbl.replace env.type_params path o.oscheme.tparams;
               Hashtbl.replace env.defaults_of path
                 (given_defaults ~method_:(o.okind = Method) o.oscheme.defaults);
               Hashtbl.replace env.globals path
@@ -1066,6 +1073,7 @@ let setup (env : Infer_env.env) ~is_value (f : fn_def) =
       narrowed = Hashtbl.create 4;
       coerced = Hashtbl.create 4;
       targs = Hashtbl.create 16;
+      explicit_args = Hashtbl.create 4;
       required = Hashtbl.create 4;
       errs;
       return_ty = (if is_generator then unit else ret);
@@ -1146,7 +1154,7 @@ let check_body (env : Infer_env.env) ~is_value m =
         explain
           ~notes:
             [
-              declared_type ~value:(is_value f) (Ast.fn_name f)
+              declared_type ~value:(is_value f || String.starts_with ~prefix:"$default:" f.name.name) (Ast.fn_name f)
                 (show (printer env) m.ret);
             ]
           ()
@@ -1224,6 +1232,24 @@ let generalize_group (env : Infer_env.env) so_far ms =
       in
       close_result_needs mono;
       let scheme = generalize env.st ~skolems:m.skolems ~row_skolems mono in
+      let vars = List.map fst (generics scheme).tys in
+      let index id =
+        let rec find n = function
+          | [] -> None
+          | x :: _ when x = id -> Some n
+          | _ :: rest -> find (n + 1) rest
+        in
+        find 0 vars
+      in
+      let declared =
+        List.map
+          (fun (id, _) ->
+            match Option.map repr (Hashtbl.find_opt env.st.skolem_vars id) with
+            | Some (TVar { contents = Unbound (id, _) }) -> index id
+            | _ -> None)
+          m.skolems
+      in
+      Hashtbl.replace env.type_params path declared;
       Hashtbl.replace env.globals path scheme;
       Hashtbl.replace so_far.schemes path scheme;
       Hashtbl.replace so_far.tables path m.cx)
@@ -1265,35 +1291,65 @@ let check_spelled (env : Infer_env.env) ~is_value so_far ms =
         | _ -> assert false)
     ms
 
-(* A member with a reserved name, an operator, `key` or `show`, doesn't
-   fail or use a dependency, whatever its body calls: `a + b` has no `try`
-   in front, and `==` and `show` run wherever a value is compared or
-   shown (resolve.ml, [reserved], checks what's written). *)
+(* Reserved members are pure, whatever their bodies call. Operators,
+   `key`, `show` and `repr` can't fail either; `parse` may refuse a value
+   through its error row (resolve.ml, [reserved], checks what's written). *)
 let check_reserved (env : Infer_env.env) so_far ms =
   List.iter
     (fun m ->
       let f = m.fn in
       let reserved =
         f.owner <> None
-        && List.mem f.name.name ("key" :: "show" :: Infer_reqs.operators)
+        && List.mem f.name.name
+             ("key" :: "show" :: "parse" :: "repr" :: Infer_reqs.operators)
       in
       if reserved then
         match Hashtbl.find so_far.schemes m.cx.self with
         | TFun (_, _, errs, uses) -> (
             match (fst (row_parts errs), fst (row_parts uses)) with
-            | l :: _, _ ->
+            | l :: _, _ when f.name.name <> "parse" ->
                 report env
                   (Infer_msg.reserved_impure f.name.loc ~name:f.name.name
                      ~what:(sprintf "fail, but it can fail with `%s`" l.name))
-            | [], l :: _ ->
+            | _, l :: _ ->
                 report env
                   (Infer_msg.reserved_impure f.name.loc ~name:f.name.name
                      ~what:
                        (sprintf "use a dependency, but it uses `%s`"
                           (env.names (Ty.dep_path l.name))))
-            | [], [] -> ())
+            | _, [] -> ())
         | _ -> ())
     ms
+
+(* Both conversions describe the same encoded type. Compare the written
+   types after resolving names and expanding error sets; locations and the
+   order of row labels don't affect their identity. Owner parameters retain
+   their declaration positions here. *)
+let check_conversion_types env (r : Resolve.t) =
+  List.iter
+    (function
+      | Type td -> (
+          let member name =
+            List.find_opt
+              (fun (o : Resolved.op) -> o.op_fn.name.name = name)
+              td.type_ops
+          in
+          match (member "parse", member "repr") with
+          | Some parse, Some repr -> (
+              match (parse.op_fn.params, repr.op_fn.ret) with
+              | [ { pty = Some input; _ } ], Some output
+                when Iface.of_written ~sets:env.sets input
+                     <> Iface.of_written ~sets:env.sets output ->
+                  report env
+                    (Diag.make repr.op_fn.name.loc
+                       ~labels:
+                         [ (parse.op_fn.name.loc, "`parse` reads the encoded type here") ]
+                       ~help:"make `repr` return the type that `parse` takes"
+                       "`parse` and `repr` have to agree on their encoded type")
+              | _ -> ())
+          | _ -> ())
+      | _ -> ())
+    r.prog
 
 (* A type that keeps rules is opaque (module-build.md, "Private unless
    `pub`"). A public record or sum type is open: anyone can build one and
@@ -1345,7 +1401,8 @@ let check_keeps_rules (env : Infer_env.env) so_far (r : Resolve.t) =
       List.find_map
         (fun (o : op) ->
           let f = o.op_fn in
-          if o.op_kind <> Op_fn then None
+          if o.op_kind <> Op_fn
+             || String.starts_with ~prefix:"$default:" f.name.name then None
           else if changes f then Some (f, `Changes)
           else if refuses f then Some (f, `Refuses)
           else None)
@@ -1372,7 +1429,7 @@ let check_keeps_rules (env : Infer_env.env) so_far (r : Resolve.t) =
                     ty = Ty.Error;
                     names = List.mapi (fun i n -> (i, n)) decl.params;
                     reqs = [];
-                    row_reqs = [];
+                    row_reqs = []; tparams = [];
                     modes = [];
                     defaults = [];
                   }
@@ -1682,17 +1739,29 @@ let canonical (env : Infer_env.env) so_far (f : fn_def) =
     (args, needs)
   in
   let ty = canon_ty c ~all:false (Hashtbl.find so_far.schemes path) in
+  let cx = Hashtbl.find so_far.tables path in
+  let tparams =
+    List.map
+      (fun t ->
+        match t with
+        | TSkol (id, _) -> (
+            match Option.map repr (Hashtbl.find_opt env.st.skolem_vars id) with
+            | Some (TVar { contents = Unbound (id, _) }) -> Hashtbl.find_opt c.tys id
+            | _ -> None)
+        | _ -> None)
+      cx.tparams
+  in
   let scheme : Ty.scheme =
     {
       ty;
       names = canon_names c;
       reqs = canon_reqs c;
       row_reqs = canon_row_reqs c;
+      tparams;
       modes = Iface.modes_of f.params;
       defaults = Iface.defaults_of f.params;
     }
   in
-  let cx = Hashtbl.find so_far.tables path in
   (* a handler's `finally`: the body's type and its errors' row, skolems
      while it was checked, are variables of the function's now, numbered
      after its own, so lowering knows which the body's type is *)
@@ -2170,6 +2239,7 @@ let check_blocks (env : Infer_env.env) (r : Resolve.t) ~scheme_of ~handlers ~mak
     | Handler_arg | Install | Said | Kept _ -> pos
   in
   let rec walk pos (e : expr) =
+    let e = call_head e in
     let block = is_block e in
     if block then here pos e else here_handle pos e;
     dep_param pos e;
@@ -2192,7 +2262,7 @@ let check_blocks (env : Infer_env.env) (r : Resolve.t) ~scheme_of ~handlers ~mak
               generic := (h.loc, Infer_msg.generic_block h.loc ~tvar:None) :: !generic;
             walk Arg h)
           (Ast.holes ps)
-    | Named (_, a) -> walk pos a
+    | Named (_, a) | Type_apply (a, _) -> walk pos a
     | Pipe { subject; step } ->
         (* the subject is the step's call's first argument, which [Piped]
            stands for there *)
@@ -2408,6 +2478,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
   Infer_generators.expand_declarations env;
   let home = r.home in
   check_written sink ~sets:env.sets ~names:env.names r.prog;
+  check_conversion_types env r;
   (* the module's functions, its types' members included; an associated
      value is checked as a function of no parameters (ast.ml) *)
   let fns = Ast.functions r.prog in
@@ -2608,7 +2679,7 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
         | Some (name, _) -> f.name.name = name
         | None -> false
       in
-      check_blocks env r ~scheme_of ~handlers ~makers ~failing_finally ~shown ~value:(is_value f) f n)
+      check_blocks env r ~scheme_of ~handlers ~makers ~failing_finally ~shown ~value:(is_value f || String.starts_with ~prefix:"$default:" f.name.name) f n)
     fns nodes;
   (* an associated value is made once, so it's given no dictionaries: a
      value of its type variable is compared by its shape alone (walk.ml),

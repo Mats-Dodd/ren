@@ -13,7 +13,7 @@ let cursor_path = Ty.generator_cursor (path "values")
 let cursor item = Ty.Con (cursor_path, [ item ])
 
 let scheme ty : Ty.scheme =
-  { ty; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+  { ty; tparams = []; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
 
 let function_ ?generator ?(params = []) name ret body : fn_def =
   {

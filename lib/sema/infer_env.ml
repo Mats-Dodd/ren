@@ -142,6 +142,16 @@ let literal_kind (lit : literal) loc : expr_kind =
           },
           [] )
 
+(* A record/by-name field's expression default uses a hidden member in its
+   declaration's scope. Positional fields retain their literal defaults. *)
+let field_default_kind (f : Iface.field) loc ~node =
+  match (f.fdefault_member, f.fdefault) with
+  | Some (Value_default p), _ -> Some (Var (Global_value p))
+  | Some (Function_default p), _ ->
+      Some (Call ({ kind = Var (Global p); loc; node = min_int / 2 + node }, []))
+  | None, Some lit -> Some (literal_kind lit loc)
+  | None, None -> None
+
 (* What inference keeps of it, while a group is checked: its labels are
    the checker's, whose type arguments it may still learn. *)
 type found = label found_
@@ -247,6 +257,8 @@ type env = {
   mutable generator_early : (unit -> unit) list;
   mutable generator_late : (unit -> unit) list;
       (** top-level functions: a type scheme once their group is done *)
+  type_params : (Path.t, int option list) Hashtbl.t;
+      (** declared type parameters, in order, mapped to canonical variables *)
   written : (Path.t, bool list) Hashtbl.t;
       (** which of each of the module's functions' parameters have a type
           written: only there is an argument narrowed to what it asks for
@@ -782,6 +794,9 @@ and ctx = {
           asks for those (Infer_expr.narrow) *)
   targs : (int, targs) Hashtbl.t;
       (** the type arguments of each use of a top-level function, by node id *)
+  explicit_args : (int, int * (Loc.t * ty) list) Hashtbl.t;
+      (** written type arguments awaiting the callee's lookup; methods seed
+          these before checking value arguments, just as named functions do *)
   required : (int, required) Hashtbl.t;
       (** what each use of a top-level function needs of its type arguments, by
           node id, so a call of it can say which argument each is in *)

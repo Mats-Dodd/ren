@@ -145,7 +145,8 @@ let check_uses env ~is_value ~withheld ~main (f : fn_def) cx declared =
               service_undeclared f
                 ~service:(Option.get (Resolve.service_member (Ast.fn_path env.home f)))
                 shown call
-          | None when is_value f -> value_uses f shown call
+          | None when is_value f || String.starts_with ~prefix:"$default:" f.name.name ->
+              value_uses f shown call
           | None -> undeclared_use ~why ~notes ?alias f shown call))
     (sorted_labels cx.uses)
 
@@ -299,7 +300,7 @@ let check_errors env ~is_value (f : fn_def) cx declared =
               (* a public wiring's `!` (resolve.ml, [wiring_fns]) *)
               wiring_undeclared_error f.name.loc ~wiring
                 ~tag:(show_label pr l)
-          | None when is_value f ->
+          | None when is_value f || String.starts_with ~prefix:"$default:" f.name.name ->
               value_fails f ~tag:l.name ~shape:(show_label pr l) from
           | None -> undeclared_error f ~tag:l.name ~shape:(show_label pr l) from))
     (List.sort

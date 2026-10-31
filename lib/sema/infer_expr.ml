@@ -516,6 +516,12 @@ and check env cx ?(why = plain) ?written ?(exact = false) (e : expr) expected =
     | _ -> why
   in
   match (e.kind, reveal env.st expected) with
+  | Type_apply (f, ts), _ ->
+      ignore
+        (with_type_args env cx f ts (fun () ->
+             check env cx ~why ?written ~exact f expected;
+             expected));
+      fits ()
   | Con (c, args), _ ->
       let t = infer_con env cx e c args ~written ~expected in
       Hashtbl.replace cx.nodes e.node t;
@@ -826,6 +832,7 @@ and synth env cx (e : expr) : ty =
       | Some a -> check env cx a cx.return_ty
       | None -> unify_at env e.loc ~found:unit ~expected:cx.return_ty);
       fresh_var env.st
+  | Type_apply (f, ts) -> with_type_args env cx f ts (fun () -> infer env cx f)
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
       let ps =
@@ -1157,7 +1164,9 @@ and synth env cx (e : expr) : ty =
                 cx.sources;
               v
           | _ -> t)
-      | t ->
+      | _ ->
+          (* Revealing only asks whether this is a Result to unwrap. A call
+             returning an opaque scalar still gives that nominal type. *)
           m.hint <-
             (match a.kind with
             | With _ -> Some Installs_only
@@ -1453,7 +1462,7 @@ and pull_param env t =
 and pulls env cx (a : expr) =
   match a.kind with
   | Lambda _ | Var (Global _ | Intrinsic _ | Dep_op _ | Next_op _ | Call_op _)
-  | Piped | Named _ ->
+  | Piped | Named _ | Type_apply _ ->
       false
   | Var (Local b) -> (
       match reveal env.st (Hashtbl.find cx.locals b.id) with
@@ -2342,8 +2351,37 @@ and infer_pipe env cx (e : expr) subject step =
         (fun () -> around step (fun () -> infer env { cx with markers = [] } step))
   | _ -> invalid_arg "a chain's step that isn't a call of its subject"
 
+and with_type_args env cx (f : expr) ts run =
+  let loc = function
+    | TyName (t, _) | TyVariant (t, _, _) -> t.tloc
+    | TyFn (_, _, _, _, loc) | TyInout (_, loc) | TyTuple (_, loc) -> loc
+    | TyErrors e -> e.eloc
+    | TyImpl i -> i.impl_loc
+  in
+  let written =
+    List.map
+      (fun t -> (loc t, convert env ~tvars:cx.tparams ~named:cx.named ~row:closed t))
+      ts
+  in
+  Hashtbl.replace cx.explicit_args f.node (0, written);
+  Fun.protect
+    ~finally:(fun () -> Hashtbl.remove cx.explicit_args f.node)
+    (fun () ->
+      let t = run () in
+      if Hashtbl.mem cx.explicit_args f.node then
+        report env
+          (Diag.make f.loc ~help:"apply type arguments to a named generic function"
+             "this value has no declared type parameters");
+      t)
+
 and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
   match f.kind with
+  | Type_apply (head, ts) ->
+      let t = with_type_args env cx head ts (fun () -> infer_call env cx ?changed ?tr e head args) in
+      Option.iter (Hashtbl.replace cx.nodes f.node) (Hashtbl.find_opt cx.nodes head.node);
+      Option.iter (Hashtbl.replace cx.targs f.node) (Hashtbl.find_opt cx.targs head.node);
+      Option.iter (Hashtbl.replace cx.found f.node) (Hashtbl.find_opt cx.found head.node);
+      t
   | Field (r, m) -> (
       (* [tr] is the receiver's type, if it's inferred already; one of
          several dependencies' is the one that has [m] *)
@@ -2855,6 +2893,9 @@ and method_call env cx ?changed (e : expr) (f : expr) r (m : ident) tr td o args
       let path = op_path td o in
       if path.home = env.home && not (Hashtbl.mem env.globals path) then
         raise (Unchecked { caller = cx.self; callee = path });
+      (match Hashtbl.find_opt cx.explicit_args f.node with
+      | Some (_, ts) -> Hashtbl.replace cx.explicit_args f.node (List.length td.params, ts)
+      | None -> ());
       let tm = lookup env cx ~node:f.node f.loc (Global path) in
       Hashtbl.replace cx.nodes f.node tm;
       Hashtbl.replace cx.found f.node (Method_of path);
@@ -3919,6 +3960,26 @@ and infer_con env cx (e : expr) (cref : ctor_ref) args ~written ~expected =
       else unchecked ();
       t
 
+(* Defaults use their hidden members at fresh nodes, so their generic
+   arguments follow the same canonical mapping as an explicit member use. *)
+and check_field_defaults env cx (e : expr) ~tvars decl given =
+  List.iteri
+    (fun i (f : Iface.field) ->
+      let node = default_node e.node i in
+      match field_default_kind f e.loc ~node with
+      | Some kind when not (List.mem f.fname given) ->
+          (match f.fdefault_member with
+          | Some (Value_default p | Function_default p) ->
+              if p.home = env.home && not (Hashtbl.mem env.globals p) then
+                raise (Unchecked { caller = cx.self; callee = p });
+              Hashtbl.replace cx.found node (Method_of p)
+          | None -> ());
+          check env cx { kind; loc = e.loc; node }
+            (field_type ~tvars f)
+            ~why:(explain ~notes:[ part_of "default" "field" f.fname ] ())
+      | _ -> ())
+    decl
+
 (* `Rect { w: 2, h: 3 }`, a by-name constructor, where a value of type
    [expected] is wanted: found as [infer_con] finds one, then its fields
    checked as a record literal's are, each the constructor's, once, and
@@ -3977,10 +4038,13 @@ and infer_con_named env cx (e : expr) (cref : ctor_ref) fields ~written
                  unknown := true;
                  ignore (infer env cx v))
            fields;
+         check_field_defaults env cx e ~tvars ctor.cfields
+           (List.map (fun ((f : ident), _) -> f.name) fields);
          let missing =
-           List.filter
-             (fun n -> not (Hashtbl.mem seen n))
-             (field_names ctor.cfields)
+           List.filter_map
+             (fun (f : Iface.field) ->
+               if not (Hashtbl.mem seen f.fname) && f.fdefault = None && f.fdefault_member = None then Some f.fname else None)
+             ctor.cfields
          in
          if missing <> [] && not !unknown then
            report env (missing_fields e.loc c.name missing));
@@ -4040,7 +4104,9 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
         in
         let fits td =
           match record_fields td with
-          | Some fs when sorted (field_names fs) = given -> Some fs
+          | Some fs when
+              List.for_all (fun n -> List.mem n (field_names fs)) given
+              && List.for_all (fun (f : Iface.field) -> List.mem f.fname given || f.fdefault <> None || f.fdefault_member <> None) fs -> Some fs
           | _ -> None
         in
         match (known_decl env expected, through_type env ~known ~fits) with
@@ -4082,8 +4148,12 @@ and infer_record env cx (e : expr) name fields ~written ~expected =
               unknown := true;
               ignore (infer env cx v))
         fields;
+      check_field_defaults env cx e ~tvars decl given;
       let missing =
-        List.filter (fun d -> not (List.mem d given)) (field_names decl)
+        List.filter_map
+          (fun (f : Iface.field) ->
+            if not (List.mem f.fname given) && f.fdefault = None && f.fdefault_member = None then Some f.fname else None)
+          decl
       in
       if missing <> [] && not !unknown then
         report env (missing_fields e.loc (env.names td.path) missing);

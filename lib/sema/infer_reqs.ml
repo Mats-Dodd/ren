@@ -209,7 +209,7 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
               (* represented as a function: say which *)
               let pr =
                 Ty.printer ~names:env.names
-                  { ty = rep; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+                  { ty = rep; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
               in
               Some (Has_function (Ty.show pr rep))
           | w -> w)
@@ -301,7 +301,7 @@ and keyed env req p args =
             (* say it's the key that has no order, not the type *)
             let pr =
               Ty.printer ~names:env.names
-                { ty = k; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+                { ty = k; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] }
             in
             Lacks (Unordered (Unordered_key (env.names p, Ty.show pr k)))
         | h -> h

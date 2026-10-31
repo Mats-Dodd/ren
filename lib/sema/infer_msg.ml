@@ -256,7 +256,7 @@ let representation ~names (td : Iface.type_decl) =
           ty = rep;
           names = List.mapi (fun i n -> (i, n)) td.params;
           reqs = [];
-          row_reqs = [];
+          row_reqs = []; tparams = [];
           modes = [];
           defaults = [];
         }
@@ -503,7 +503,7 @@ let field_of_sum ~types ~names (f : Ast.ident) ~recv (td : Iface.type_decl) =
         ty = Ty.Con (td.path, List.mapi (fun i _ -> Ty.Var i) td.params);
         names = List.mapi (fun i n -> (i, n)) td.params;
         reqs = [];
-        row_reqs = [];
+        row_reqs = []; tparams = [];
         modes = [];
         defaults = [];
       }
@@ -2166,6 +2166,9 @@ let block_kept ~written loc place =
     | In_state ->
         ( "a handler's state can't hold a block",
           "keep data in the state, and call a function from the operation" )
+    | In_value v when String.starts_with ~prefix:"$default:" v ->
+        ( "a field default can't hold a block",
+          "hold pure data in the field, and pass the block to the call that runs it" )
     | In_value v ->
         ( "an associated value can't hold a block",
           sprintf "make it a function: `fn %s(...)`" v )
@@ -3217,9 +3220,17 @@ let through_param loc ~name =
    can't. *)
 let reserved_impure loc ~name ~what =
   Diag.make loc
+    ?help:
+      (if name = "repr" && String.starts_with ~prefix:"fail" what then
+         Some "make `repr` always return its encoded value; put validation in `parse`"
+       else if name = "parse" || name = "repr" then
+         Some "keep conversions pure; move dependency calls outside the conversion"
+       else None)
     ~notes:
       [
         (match name with
+        | "parse" | "repr" ->
+            "`parse` and `repr` are pure conversions used by the doors"
         | "key" -> "a key runs wherever two values are compared"
         | "show" -> "`show` runs wherever a value is shown"
         | _ ->
@@ -3748,6 +3759,13 @@ let no_type_has_method ~names ~can_name ?what (m : Ast.ident) elsewhere =
 (* The associated value [f]'s body uses [dep]; [call] is the first call
    that uses it. *)
 let value_uses (f : Ast.Resolved.fn_def) dep call =
+  let prefix = "$default:" in
+  let field =
+    if String.starts_with ~prefix f.name.name then
+      Some (String.sub f.name.name (String.length prefix)
+              (String.length f.name.name - String.length prefix))
+    else None
+  in
   Diag.make f.name.loc
     ~labels:
       (match call with
@@ -3755,19 +3773,33 @@ let value_uses (f : Ast.Resolved.fn_def) dep call =
       | None -> [])
     ~notes:
       [
-        "an associated value is made once, when the program starts, so it \
-         can't use a dependency";
+        (match field with
+        | Some _ -> "a field default holds pure data, known while building"
+        | None ->
+            "an associated value is made once, when the program starts, so it \
+             can't use a dependency");
       ]
     ~help:
-      (sprintf "make it an associated function, `fn %s() uses %s = ...`"
-         f.name.name dep)
-    (sprintf "the associated value `%s` uses `%s`" (Ast.fn_name f) dep)
+      (match field with
+      | Some field -> sprintf "use pure data, or require `%s` at construction" field
+      | None -> sprintf "make it an associated function, `fn %s() uses %s = ...`"
+          f.name.name dep)
+    (match field with
+    | Some field -> sprintf "the default for `%s` must be pure, but uses `%s`" field dep
+    | None -> sprintf "the associated value `%s` uses `%s`" (Ast.fn_name f) dep)
 
 (* ---- errors (errors.md) ---- *)
 
 (* The associated value [f] can fail with [tag], shown as [shape]; [from]
    is the first place it comes from, and what it is. *)
 let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
+  let prefix = "$default:" in
+  let field =
+    if String.starts_with ~prefix f.name.name then
+      Some (String.sub f.name.name (String.length prefix)
+              (String.length f.name.name - String.length prefix))
+    else None
+  in
   Diag.make f.name.loc
     ~labels:
       (match from with
@@ -3775,15 +3807,22 @@ let value_fails (f : Ast.Resolved.fn_def) ~tag ~shape from =
       | None -> [])
     ~notes:
       [
-        "an associated value is made once, when the program starts, so nothing \
-         could handle an error it failed with";
+        (match field with
+        | Some _ -> "a field default holds pure data, known while building"
+        | None ->
+            "an associated value is made once, when the program starts, so nothing \
+             could handle an error it failed with");
       ]
     ~help:
-      (sprintf
-         "handle it here with `match`, or make it an associated function, `fn \
-          %s() ! %s = ...`"
-         f.name.name shape)
-    (sprintf "the associated value `%s` can fail with `%s`" (Ast.fn_name f) tag)
+      (match field with
+      | Some _ -> "handle the error here with `match`, or require the field at construction"
+      | None -> sprintf
+          "handle it here with `match`, or make it an associated function, `fn \
+           %s() ! %s = ...`"
+          f.name.name shape)
+    (match field with
+    | Some field -> sprintf "the default for `%s` can fail with `%s`" field tag
+    | None -> sprintf "the associated value `%s` can fail with `%s`" (Ast.fn_name f) tag)
 
 (* Where an error came from, for a message about another shape of it. *)
 type origin =

@@ -78,14 +78,14 @@ let show t =
     (Ty.printer
        ~show_tail:(fun _ -> true)
        ~names:Path.full
-       { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+       { ty = t; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
     t
 
 (* A dependency's label, as its type is written, `Log<Int>`. *)
 let show_dep (l : Ty.label) =
   Ty.show_dep
     (Ty.printer ~names:Path.full
-       { ty = Error; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+       { ty = Error; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
     (Ty.of_label l)
 
 let fail env (loc : Loc.t) msg =

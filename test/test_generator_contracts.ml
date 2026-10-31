@@ -375,7 +375,7 @@ let%expect_test "[g1] typed record copies register cleanup in declaration order"
   let record_path = Path.make "generator_contracts" "Record" in
   let cursor_ty = Ty.Con (Ty.generator_cursor (Path.make "generator_contracts" "leaf"), []) in
   let field name : Iface.field =
-    { fname = name; fty = cursor_ty; fdefault = None; fdefaults = [] }
+    { fname = name; fty = cursor_ty; fdefault = None; fdefault_member = None; fdefaults = [] }
   in
   let declaration : Iface.type_decl =
     { path = record_path; params = []; body = Record [ field "z"; field "a" ];

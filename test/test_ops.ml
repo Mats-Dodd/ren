@@ -1624,7 +1624,7 @@ pub type Account = opaque { balance: Int }
 pub type Point = { x: Int, y: Int }
   pub fn moved(self, dx: Int) -> Point = Point { x: self.x + dx, y: self.y }
   pub fn origin() -> Point = Point { x: 0, y: 0 }
-  pub fn parse(s: Str) -> Int ! Bad =
+  pub fn parse_int(s: Str) -> Int ! Bad =
     if s == "" then fail Bad
     0
   pub fn made(f: fn() -> Point) -> Point = try f()
@@ -1639,7 +1639,7 @@ fn main() = ()
     pub type Point
       pub fn moved(self, dx: Int) -> Point
       pub fn origin() -> Point
-      pub fn parse(s: Str) -> Int ! Bad
+      pub fn parse_int(s: Str) -> Int ! Bad
       pub fn made(f: fn() -> Point) -> Point
     fn main()
     |}]

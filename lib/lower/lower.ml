@@ -742,6 +742,7 @@ and expr_of cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
   let here kind = mk kind (ty ()) e.loc in
   match e.kind with
+  | Type_apply (f, _) -> expr cx f
   | Int n -> here (Int n)
   | Float f -> here (Float f)
   | Bool b -> here (Bool b)
@@ -973,35 +974,18 @@ and expr_of cx (e : expr) : C.expr =
   | Record (_, fields) -> (
       match ty () with
       | Con (p, _) ->
-          here
-            (Record
-               (p, List.map (fun ((f : ident), v) -> (f.name, source_value cx (expr cx v))) fields))
+          let decl = record_decl cx p in
+          if List.length fields = List.length decl then
+            here (Record (p, List.map (fun ((f : ident), v) -> (f.name, source_value cx (expr cx v))) fields))
+          else
+            named_fields cx e decl fields
+              (fun fields -> here (Record (p, List.map2 (fun (d : Iface.field) v -> (d.fname, v)) decl fields)))
       | _ -> bug "a record literal whose type isn't a record")
   | Con_named (_, fields) -> (
       match (node cx e.node).found with
       | Some (Ctor_of (p, c)) ->
-          (* each value, in the order written, then the constructor's
-             fields in the order declared: written in that order, they're
-             the constructor's arguments as they are *)
-          let decl = ctor_decl cx p c in
-          let names = List.map (fun ((f : ident), _) -> f.name) fields in
-          if names = List.map (fun (d : Iface.field) -> d.fname) decl then
-            here (Con (p, c, List.map (fun (_, v) -> source_value cx (expr cx v)) fields))
-          else
-            let given =
-              List.map
-                (fun ((f : ident), v) ->
-                  let v = source_value cx (expr cx v) in
-                  (f.name, temp cx f.name v.ty, v))
-                fields
-            in
-            let arg (d : Iface.field) =
-              let _, v, _ = List.find (fun (f, _, _) -> f = d.fname) given in
-              local v e.loc
-            in
-            lets
-              (List.map (fun (_, v, value) -> (v, value)) given)
-              (here (Con (p, c, List.map arg decl)))
+          named_fields cx e (ctor_decl cx p c) fields
+            (fun fields -> here (Con (p, c, fields)))
       | _ -> bug "a by-name constructor inference didn't find")
   | Update { base; fields; _ } -> update cx e base fields
   | Field (r, f) -> (
@@ -2261,6 +2245,7 @@ and str_add cx (a : C.expr) (b : C.expr) loc =
   mk (Call (f, [ C.Value a; C.Value b ], cx.ev)) Ty.str loc
 
 and call cx ?(changed = false) (e : expr) f args =
+  let f = call_head f in
   (* a call that gives a default by name, or leaves it out: its arguments
      in order, each left out its literal (Infer.Args) *)
   let args =
@@ -3433,6 +3418,42 @@ and ctor_named cx path c =
       List.exists (fun (k : Iface.ctor) -> k.cname = c && k.cnamed) cs
   | _ -> false
 
+(* Evaluate written fields once, left to right, followed by omitted defaults
+   in declaration order, before putting them in the type's field order. *)
+and named_fields cx (e : expr) decl fields make =
+  if List.map (fun ((f : ident), _) -> f.name) fields
+     = List.map (fun (f : Iface.field) -> f.fname) decl then
+    make (List.map (fun (_, v) -> source_value cx (expr cx v)) fields)
+  else
+  let given =
+    List.map
+      (fun ((f : ident), v) ->
+        let v = source_value cx (expr cx v) in
+        (f.name, temp cx f.name v.ty, v))
+      fields
+  in
+  let defaults =
+    List.filter_map
+      (fun (i, (f : Iface.field)) ->
+        if List.exists (fun (n, _, _) -> n = f.fname) given then None
+        else
+          let node = Infer_env.default_node e.node i in
+          match Infer_env.field_default_kind f e.loc ~node with
+          | None -> bug "an omitted field without a default"
+          | Some kind ->
+              let v = source_value cx (expr cx
+                { kind; loc = e.loc; node }) in
+              Some (f.fname, temp cx f.fname v.ty, v))
+      (List.mapi (fun i f -> (i, f)) decl)
+  in
+  let all = given @ defaults in
+  let arg (f : Iface.field) =
+    let _, v, _ = List.find (fun (n, _, _) -> n = f.fname) all in
+    local v e.loc
+  in
+  lets (List.map (fun (_, v, value) -> (v, value)) all)
+    (make (List.map arg decl))
+
 (* The fields of the record type [path], as it's declared. *)
 and record_decl cx path =
   match cx.types path with
@@ -3671,6 +3692,7 @@ let max_binder (f : fn_def) =
     | Release a
     | Assert a
     | Named (_, a)
+    | Type_apply (a, _)
     | Inline_handler a ->
         go a
     | Pipe { subject = a; step = b }

@@ -194,7 +194,7 @@ let rec walk cx (e : expr) =
     ->
       ()
   | Interp ps -> List.iter (walk cx) (Ast.holes ps)
-  | Named (_, a) -> walk cx a
+  | Named (_, a) | Type_apply (a, _) -> walk cx a
   | Pipe { subject; step } ->
       (* the subject is a value the step's call is given, as a `let`'s *)
       walk cx subject;
@@ -213,6 +213,8 @@ let rec walk cx (e : expr) =
               walk cx lo;
               walk cx hi
           | _ -> ()))
+  | Ref ({ kind = Call (({ kind = Type_apply _; _ } as f), args); _ } as c) ->
+      walk cx { e with kind = Ref { c with kind = Call (call_head f, args) } }
   | Ref { kind = Call ({ kind = Field (r, _); _ }, args); _ } ->
       (* `&s.push(1)`: the receiver is changed, as if passed with `&` *)
       guard cx (fun () ->

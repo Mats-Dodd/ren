@@ -1,0 +1,716 @@
+================================================================================
+stage12a: explicit call type arguments and qualified function values
+================================================================================
+
+fn calls(x: Int, text: Str) =
+  f<Int>(x)
+  f <Int> (x)
+  f<Array<Int>>([x])
+  pair<Int, Str>(x, text)
+  json.decode<order.Order>(text)
+  shape.through<Array<Int>>([])
+  Stack.of<Int>(x)
+  stack.Stack.of<Int>(x)
+  apply(json.decode<Array<Int>>, text)
+  let specialized = f<Int>
+  specialized(x)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier)))))))
+        (arguments
+          (array_expression
+            (identifier))))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (arguments
+          (identifier)
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (identifier)
+                (type_identifier)))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier)))))))
+        (arguments
+          (array_expression)))
+      (call_expression
+        (type_application_expression
+          (item_expression
+            (type_name
+              (type_identifier))
+            (identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (item_expression
+            (type_name
+              (identifier)
+              (type_identifier))
+            (identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (identifier)
+        (arguments
+          (type_application_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier))
+                (type_arguments
+                  (named_type
+                    (type_name
+                      (type_identifier)))))))
+          (identifier)))
+      (let_statement
+        (identifier)
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier))))))
+
+================================================================================
+stage12a: function, variant, implementation and error type arguments
+================================================================================
+
+fn types() =
+  f<fn(Int) -> Str>(show)
+  f<Order.Placed>(order)
+  f<Clock uses Os>(clock)
+  f<Int, ! Missing | store.Down>(value)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (function_type
+              (function_type_parameter
+                (named_type
+                  (type_name
+                    (type_identifier))))
+              (named_type
+                (type_name
+                  (type_identifier))))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (variant_type
+              (type_name
+                (type_identifier))
+              (type_identifier))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (implementation_type
+              (type_name
+                (type_identifier))
+              (uses_clause
+                (dependency
+                  (type_identifier))))))
+        (arguments
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))
+            (error_set
+              (error_tag
+                (type_identifier))
+              (error_set_name
+                (identifier)
+                (type_identifier)))))
+        (arguments
+          (identifier))))))
+
+================================================================================
+stage12a: comparisons keep their expression trees
+================================================================================
+
+fn compare(a: Int, b: Int, c: Int) =
+  a < b
+  a > b
+  a <= b
+  a >= b
+  (a < b) == (b > c)
+  a<b>c
+  a < b > c
+  a<Int>c
+  a <Int> c
+  a < B
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (block
+      (binary_expression
+        (identifier)
+        (identifier))
+      (binary_expression
+        (identifier)
+        (identifier))
+      (binary_expression
+        (identifier)
+        (identifier))
+      (binary_expression
+        (identifier)
+        (identifier))
+      (binary_expression
+        (parenthesized_expression
+          (binary_expression
+            (identifier)
+            (identifier)))
+        (parenthesized_expression
+          (binary_expression
+            (identifier)
+            (identifier))))
+      (binary_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (identifier))
+      (binary_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (identifier))
+      (binary_expression
+        (binary_expression
+          (identifier)
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))))
+        (identifier))
+      (binary_expression
+        (binary_expression
+          (identifier)
+          (constructor_expression
+            (constructor_ref
+              (type_identifier))))
+        (identifier))
+      (binary_expression
+        (identifier)
+        (constructor_expression
+          (constructor_ref
+            (type_identifier)))))))
+
+================================================================================
+stage12a: record field defaults are expressions
+================================================================================
+
+type Order<T> = {
+  id: Int,
+  total: Int = 1 + 2 * 3,
+  source: Source = Source.Web,
+  items: Array<T> = [],
+  nested: Config = Config { label: "web", count: 2 },
+  key: Str = make_key<Int>(3),
+  enabled: Bool = if 1 < 2 then true else false,
+}
+type Private = opaque { count: Int = 2 + 3 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (type_parameters
+      (type_identifier))
+    (record_type
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (binary_expression
+          (number)
+          (binary_expression
+            (number)
+            (number))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (constructor_expression
+          (constructor_ref
+            (type_name
+              (type_identifier))
+            (type_identifier))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (array_expression))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (record_expression
+          (type_name
+            (type_identifier))
+          (field_initializer
+            (identifier)
+            (string))
+          (field_initializer
+            (identifier)
+            (number))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (call_expression
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier)))))
+          (arguments
+            (number))))
+      (field_declaration
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))
+        (if_expression
+          (binary_expression
+            (number)
+            (number))
+          (boolean)
+          (boolean)))))
+  (type_definition
+    (type_identifier)
+    (opaque_type
+      (record_type
+        (field_declaration
+          (identifier)
+          (named_type
+            (type_name
+              (type_identifier)))
+          (binary_expression
+            (number)
+            (number)))))))
+
+================================================================================
+stage12a: by-name variants have expression defaults
+================================================================================
+
+type Delivery =
+  | Web
+  | Sent { id: Int, retries: Int = retry_count(), source: Source = Web }
+  | Queued { values: Array<Int> = [1, 2], label: Str = "queued" }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (sum_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier)
+        (record_type
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))))
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))
+            (call_expression
+              (identifier)
+              (arguments)))
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))
+            (constructor_expression
+              (constructor_ref
+                (type_identifier))))))
+      (variant
+        (type_identifier)
+        (record_type
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier)))))
+            (array_expression
+              (number)
+              (number)))
+          (field_declaration
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))
+            (string)))))))
+
+================================================================================
+stage12a: reserved members and future contextual words remain names
+================================================================================
+
+type Id = opaque Int
+  pub fn parse(x: Str) -> Id = Id(1)
+  pub fn repr(self) -> Str = "id"
+fn format(via: Int, reads: Int, writes: Int) = via + reads + writes
+fn names() = format<Int>(via, reads, writes)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (opaque_type
+      (named_type
+        (type_name
+          (type_identifier))))
+    (type_members
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (identifier)
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (constructor_expression
+          (constructor_ref
+            (type_identifier))
+          (constructor_arguments
+            (number))))
+      (function_definition
+        (visibility)
+        (identifier)
+        (parameters
+          (parameter
+            (self)))
+        (named_type
+          (type_name
+            (type_identifier)))
+        (string))))
+  (function_definition
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier))))
+      (parameter
+        (identifier)
+        (named_type
+          (type_name
+            (type_identifier)))))
+    (binary_expression
+      (binary_expression
+        (identifier)
+        (identifier))
+      (identifier)))
+  (function_definition
+    (identifier)
+    (parameters)
+    (call_expression
+      (type_application_expression
+        (identifier)
+        (type_arguments
+          (named_type
+            (type_name
+              (type_identifier)))))
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)))))
+
+================================================================================
+stage12a: standalone boundaries and comments
+================================================================================
+
+fn boundaries() =
+  let f = json.decode<Int> // a specialized function value
+  let fs = [decode<Int>, decode<Str>]
+  let r = { decode: decode<Int> }
+  let p = (decode<Int>)
+  if ready<Int> then decode<Int> else decode<Str>
+  match decode<Int>
+    _ if ready<Int> => f
+  apply< // type arguments can have comments too
+    Array<Int>
+  >(values)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (block
+      (let_statement
+        (identifier)
+        (type_application_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (comment)
+      (let_statement
+        (identifier)
+        (array_expression
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier)))))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier)))))))
+      (let_statement
+        (identifier)
+        (record_expression
+          (field_initializer
+            (identifier)
+            (type_application_expression
+              (identifier)
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier))))))))
+      (let_statement
+        (identifier)
+        (parenthesized_expression
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier)))))))
+      (if_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier))))))
+      (match_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (type_name
+                (type_identifier)))))
+        (match_arm
+          (wildcard)
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (named_type
+                (type_name
+                  (type_identifier)))))
+          (identifier)))
+      (call_expression
+        (type_application_expression
+          (identifier)
+          (type_arguments
+            (comment)
+            (named_type
+              (type_name
+                (type_identifier))
+              (type_arguments
+                (named_type
+                  (type_name
+                    (type_identifier)))))))
+        (arguments
+          (identifier))))))
+
+================================================================================
+stage12a: standalone type arguments must touch their callable
+:error
+================================================================================
+
+fn value() = decode <Int>
+
+--------------------------------------------------------------------------------
+
+(source_file)
+
+================================================================================
+stage12a: explicit type arguments cannot be empty
+:error
+================================================================================
+
+fn value() = decode<>(text)
+
+--------------------------------------------------------------------------------
+
+(source_file)

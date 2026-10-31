@@ -1,0 +1,43 @@
+fn explicit(x: Int) = decode<Array<Int>>(x)
+//                    ^ function
+//                          ^ punctuation.bracket
+//                           ^ type
+//                                 ^ type
+//                                    ^ punctuation.bracket
+//                                     ^ punctuation.bracket
+fn qualified(text: Str) = json.decode<Order>(text)
+//                             ^ property
+//                                    ^ type
+fn member(x: Int) = Stack.of<Int>(x)
+//                  ^ type
+//                        ^ function
+//                           ^ type
+fn value() = decode<Int>
+//           ^ function
+//                  ^ type
+
+type Order = { total: Int = count() + 1, source: Source = Web }
+//             ^ property
+//                    ^ type
+//                          ^ function
+//                                  ^ operator
+//                                       ^ property
+//                                               ^ type
+//                                                        ^ constructor
+
+type Delivery = | Sent { id: Int, retries: Int = retry_count() }
+//                ^ constructor
+//                       ^ property
+//                                ^ property
+//                                               ^ function
+
+type Id = opaque Int
+  pub fn parse(x: Str) -> Id = Id(1)
+//       ^ function
+  pub fn repr(self) -> Str = "id"
+//       ^ function
+fn format(via: Int, reads: Int, writes: Int) = via + reads + writes
+// ^ function
+//        ^ variable.parameter
+//                  ^ variable.parameter
+//                              ^ variable.parameter

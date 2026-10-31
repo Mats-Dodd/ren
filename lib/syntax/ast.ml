@@ -292,6 +292,9 @@ and ('v, 'b, 't) expr_kind =
       (** with no [else], the [if] is [Unit] *)
   | Call of ('v, 'b, 't) expr * ('v, 'b, 't) expr list
       (** [f(x)], [make()(x)], [handlers.on_click()] *)
+  | Type_apply of ('v, 'b, 't) expr * 't ty list
+      (** written type arguments, [f<Int>] or [x.map<Str>]; declaration
+          order is independent of the scheme's canonical numbering *)
   | Lambda of ('b, 't) param list * ('v, 'b, 't) expr  (** [fn(x) => x + 1] *)
   | Block of ('v, 'b, 't) stmt list * ('v, 'b, 't) expr
       (** statements, then the block's value *)
@@ -548,6 +551,9 @@ type 't field = {
   field_name : ident;
   field_ty : 't ty;
   field_default : (literal * Loc.t * int) option;
+  field_default_member : string option;
+      (** the hidden member for a record/by-name field default;
+          its expression is checked among the type's members *)
   op_defaults : (int * string * (literal * Loc.t * int)) list;
   op_params : string list;
 }
@@ -850,6 +856,9 @@ let holes ps = List.filter_map (function Hole e -> Some e | Lit _ -> None) ps
 (* The expressions directly inside [e], in source order: a statement's
    value (and a `let ... else`'s `else`), a guard and an arm's body, a
    handler's state and arms too. *)
+let rec call_head (e : ('v, 'b, 't) expr) =
+  match e.kind with Type_apply (f, _) -> call_head f | _ -> e
+
 let children (e : ('v, 'b, 't) expr) =
   let stmt = function
     | Let { value; _ } -> [ value ]
@@ -862,6 +871,7 @@ let children (e : ('v, 'b, 't) expr) =
       []
   | Interp ps -> holes ps
   | Unop (_, a, _)
+  | Type_apply (a, _)
   | Field (a, _)
   | Ref a
   | Lambda (_, a)
@@ -1251,6 +1261,8 @@ let rec show_expr (e : expr) =
   | If (c, t, Some f) -> parens [ "if"; show_expr c; show_expr t; show_expr f ]
   | If (c, t, None) -> parens [ "if"; show_expr c; show_expr t ]
   | Call (f, args) -> parens ("call" :: show_expr f :: List.map show_expr args)
+  | Type_apply (f, ts) ->
+      parens ("type-apply" :: show_expr f :: List.map show_ty ts)
   | Lambda (params, body) ->
       parens [ "lambda"; parens (List.map show_param params); show_expr body ]
   | Block (stmts, last) ->
@@ -1704,6 +1716,8 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Fail (t, []) -> "fail " ^ t.name
     | Fail (t, args) -> "fail " ^ t.name ^ "(" ^ con_args args ^ ")"
     | Call (f, args) -> left 8 f ^ "(" ^ list args ^ ")"
+    | Type_apply (f, ts) ->
+        left 8 f ^ "<" ^ String.concat ", " (List.map written_ty ts) ^ ">"
     | Field (r, f) -> left 8 r ^ "." ^ f.name
     | Index (a, i) -> left 8 a ^ "[" ^ go i ^ "]"
     | Slice (a, lo, hi) -> left 8 a ^ "[" ^ go lo ^ ".." ^ go hi ^ "]"
@@ -1767,6 +1781,14 @@ let source ~type_name ~value_name (e : Resolved.expr) =
     | Unop (Neg, b, _) -> ends_open n 7 b
     | Unop (Not, b, _) when 3 >= at -> ends_open n 3 b
     | _ -> false
+  and written_ty = function
+    | TyName ({ tref = Named p; _ }, args) ->
+        type_name p
+        ^ (if args = [] then ""
+           else "<" ^ String.concat ", " (List.map written_ty args) ^ ">")
+    | TyTuple (ts, _) ->
+        "(" ^ String.concat ", " (List.map written_ty ts) ^ ")"
+    | _ -> raise Exit
   and list xs = String.concat ", " (List.map go xs)
   (* a by-name constructor's field, punned where its value is a local of
      its name *)

@@ -17336,6 +17336,20 @@ fields; explicit arguments evaluate left to right before missing defaults.
 Record updates keep all fields of their base; patterns' `..` does not
 compute defaults. Missing fields without defaults retain today's error.
 
+Step 1 represents a record/by-name field's expression default as a hidden
+associated value named `$default:field` (or `$default:Case.field`), on the
+owning type. `Ast.field.field_default_member` and
+`Iface.field.fdefault_member` carry its identity; the normal member scheme
+owns its canonical generic arguments. Declaration scope, imports, purity,
+data checks and dependency ordering therefore use the associated-value
+machinery. A synthesized use is inferred at each omitted field, which
+maps the helper's own generic order to that field's instantiated type.
+Existing positional constructor literal defaults keep their representation.
+Generic defaults use a pure zero-argument associated function instead,
+because generic associated values are outside today's native slice; the
+interface records which form a helper takes. Step 2 freezes both forms
+once per instantiated type along with other build-time data.
+
 Tree-sitter gains matching nodes for each new construct, with a generic
 call/comparison conflict resolved by the same postfix boundary, corpus
 cases for every delimiter and contextual-word use, and highlights for
@@ -17948,3 +17962,66 @@ excluded and replaced in full, with raw evidence retained. Step 0 remains
 partial for the native example build costs; steps 1–9 and their Done when
 conditions remain unfulfilled. The 1.5× gate, unfolding/fallback, and after
 measurements are not claimed.
+
+The owner subsequently directed completing all of 12a despite the native
+example baseline limits. Those three missing measurements remain explicit
+pre-existing limitations; they no longer block progressing from step 0.
+Steps still land in order, with THE CHECKS before each commit and a rebase
+before each push. Step 1 is now in progress: explicit type arguments,
+field defaults, reserved parse/repr, and matching editor grammar. The
+previous checkpoint's unstarted status above is historical.
+
+### Step 1 implementation
+
+The owner authorized test adjustments needed for progress, preserving
+meaningful assertions. Existing OCaml fixture records gain only empty
+`tparams` / `fdefault_member` metadata; the separately authorized Point
+fixture member is named parse_int. New focused tests cover explicit
+arguments, default values and reserved conversions. The s1 targets are
+now enabled in test/test_shapes.ml and bench/shapes/stages.
+
+Explicit arguments retain source declaration order separately from
+canonical type-variable order, including unused declared slots. Source
+calls and qualified function arguments lower through normal call paths;
+method receivers supply owner parameters before method-local arguments.
+Unused parameters have no runtime descriptor yet; body-only type facts
+such as T.shape extend that mechanism in step 4.
+
+Record/by-name defaults are pure hidden members, with their typed paths
+in field interfaces. Nongeneric defaults use associated values; generic
+defaults use zero-argument functions because generic associated values
+are outside the existing native slice. Both forbid dependencies, errors
+and escaping blocks. Explicit fields evaluate once in source order,
+then omitted defaults in declaration order. Fully explicit construction
+keeps the old lowering and binder numbering. Step 2 will freeze these
+computed defaults along with build-time values.
+
+Reserved parse may fail but uses no dependency; repr may do neither.
+Owner parameters are supported; extra member type parameters are refused
+because an instantiated owner must have a single encoded type. The
+encoded sides are compared after resolving named error sets. A blocking
+pre-existing try-inference bug was fixed: the non-Result branch now keeps
+the original opaque type instead of returning its revealed representation.
+
+Grammar and Zed support explicit applications and expression defaults.
+The focused grammar suite passes 136 corpus cases and 256 highlight
+assertions. Interpreter/native debug/release/TinyCC and sanitizer fixtures
+agree, including generic defaults and conversion refusals. Full required
+checks and step-1 commit are pending below.
+
+Step 1 validation: `dune build`, `dune test --force` with REN_TCC,
+`make -C editors/tree-sitter-ren check`, and all eleven example test
+commands passed. The grammar differential checked 2,306 programs:
+1,975 parsed by the compiler, with zero grammar misses. All 85 example
+tests passed. Generated sources were regenerated and verified against
+the staged output; `git diff --check` passed. Upstream's generator step
+will be rebased before pushing, retaining its implementation and rerunning
+the required checks on the integrated tree.
+
+Step 1 integrated with upstream generator commit 26d32cd. Its generator
+inference, frames and source-value adoption remain intact; the new default
+helpers are Ordinary_fn, and generator fixture records gain only the new
+empty type/default metadata. All required checks passed again on this
+rebased tree, including the grammar differential with zero misses and all
+85 example tests. No runtime-core or generator implementation was changed
+beyond combining the new front-end cases with its existing cases.

@@ -1068,7 +1068,7 @@ let rec show_desc = function
   | Known t ->
       Ty.show
         (Ty.printer ~names:Path.full
-           { ty = t; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] })
+           { ty = t; names = []; reqs = []; row_reqs = []; tparams = []; modes = []; defaults = [] })
         t
   | Param v -> show_var v
   | Applied (p, []) -> Path.full p

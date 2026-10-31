@@ -13,10 +13,15 @@
    Int = 16)`; and an operation's parameters' defaults, [fdefaults], by
    their place and name, as a function's scheme keeps them (compiler.md,
    "Services stage", "The grammar"). *)
+type field_default = Value_default of Path.t | Function_default of Path.t
+
 type field = {
   fname : string;
   fty : Ty.ty;
   fdefault : Ast.literal option;
+  fdefault_member : field_default option;
+      (** declaration-scoped expression default; its member scheme owns its
+          canonical generic argument order *)
   fdefaults : (int * string * Ast.literal) list;
 }
 
@@ -240,6 +245,11 @@ val declared_errors : sets:sets -> Ast.Resolved.errors -> error list
 (* The same as a row's labels: named sets expanded, sorted, each tag once
    (the first, if one has two shapes). *)
 val of_errors : sets:sets -> Ast.Resolved.errors -> Ty.label list
+
+(* A resolved written type in canonical form, retaining declaration-order
+   type parameters and expanding named error sets. *)
+val of_written :
+  ?rows:(string -> int option) -> sets:sets -> Ast.Resolved.ty -> Ty.ty
 
 (* A function's type scheme from its signature alone, as inference reads
    it too. A parameter written `fn(...)`, a block, fails with what the

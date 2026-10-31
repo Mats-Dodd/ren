@@ -3,7 +3,7 @@
 open Ren
 
 let scheme ty : Ty.scheme =
-  { ty; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
+  { ty; tparams = []; names = []; reqs = []; row_reqs = []; modes = []; defaults = [] }
 
 let shown ?(names = Path.full) ty =
   Ty.show (Ty.printer ~names (scheme ty)) ty

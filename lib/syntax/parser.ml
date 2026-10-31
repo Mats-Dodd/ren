@@ -862,13 +862,23 @@ let parse_param p : param =
   in
   { pname; pty; pmode; pblock; pdefault }
 
-let parse_field_decl p =
+let parse_field_decl ?default p =
   let field_name = ident p in
   expect p COLON;
+  let field_ty = parse_ty p in
+  let field_default_member =
+    if peek p = EQ then (
+      advance p;
+      match default with
+      | Some parse -> Some (parse p field_name field_ty)
+      | None -> Diag.error (loc p) "a default is not allowed here")
+    else None
+  in
   {
     field_name;
-    field_ty = parse_ty p;
+    field_ty;
     field_default = None;
+    field_default_member;
     op_defaults = [];
     op_params = [];
   }
@@ -880,13 +890,13 @@ let parse_field_decl p =
    declaration by name as the help, and read as that declaration, so the
    rest of the file is still parsed: a positional field's name is the
    one written, or else a letter. *)
-let parse_ctor_decl p =
+let parse_ctor_decl ?default p =
   let start = loc p in
   let ctor_name = upper_ident p "a constructor name" in
   match peek p with
   | LBRACE ->
       advance p;
-      let ctor_fields = sep_list p ~close:RBRACE parse_field_decl in
+      let ctor_fields = sep_list p ~close:RBRACE (parse_field_decl ?default:(Option.map (fun f -> f (Some ctor_name.name)) default)) in
       if ctor_fields = [] then
         Diag.error
           (Loc.span start (last_loc p))
@@ -920,7 +930,7 @@ let parse_ctor_decl p =
         (label, field_ty, shown, default)
       in
       let plain field_name field_ty =
-        { field_name; field_ty; field_default = None; op_defaults = []; op_params = [] }
+        { field_name; field_ty; field_default = None; field_default_member = None; op_defaults = []; op_params = [] }
       in
       match sep_list p ~close:RPAREN field with
       | [ (label, field_ty, _, field_default) ] ->
@@ -979,10 +989,10 @@ let parse_ctor_decl p =
 
 (* The constructors of a sum type, separated by `|`. When the type is
    indented under `type X =`, each `|` may start its own line. *)
-let parse_ctors p =
+let parse_ctors ?default p =
   if peek p = PIPE then advance p;
   let rec loop acc =
-    let c = parse_ctor_decl p in
+    let c = parse_ctor_decl ?default p in
     if peek p = NEWLINE && peek2 p = PIPE then advance p;
     if peek p = PIPE then (
       advance p;
@@ -991,7 +1001,7 @@ let parse_ctors p =
   in
   loop []
 
-let parse_type_body ~prelude p =
+let parse_type_body ?default ~prelude p =
   match peek p with
   | IDENT "builtin" when prelude ->
       (* a built-in type, whose members follow (ast.ml, [Builtin]) *)
@@ -999,12 +1009,12 @@ let parse_type_body ~prelude p =
       Builtin
   | LBRACE ->
       advance p;
-      Fields (sep_list p ~close:RBRACE parse_field_decl)
+      Fields (sep_list p ~close:RBRACE (parse_field_decl ?default:(Option.map (fun f -> f None) default)))
   | OPAQUE when peek2 p = LBRACE ->
       (* a record only its module sees as one *)
       advance p;
       advance p;
-      let fields = sep_list p ~close:RBRACE parse_field_decl in
+      let fields = sep_list p ~close:RBRACE (parse_field_decl ?default:(Option.map (fun f -> f None) default)) in
       if peek p = WITH then
         Diag.error (loc p)
           ~help:
@@ -1032,7 +1042,7 @@ let parse_type_body ~prelude p =
       in
       Opaque { rep; numeric }
   | BANG -> Errors (parse_errors ~lines:true p)
-  | _ -> Ctors (parse_ctors p)
+  | _ -> Ctors (parse_ctors ?default p)
 
 (* ---- patterns ---- *)
 
@@ -1971,8 +1981,39 @@ and parse_unary p =
 (* Field access and calls bind tightest: `-user.age` is `-(user.age)`. *)
 and parse_postfix p =
   let start = loc p in
+  (* Speculate with a private parser: comparison operands may start like
+     types, so neither its cursor, node counter nor diagnostics can escape. *)
+  let type_args (e : expr) =
+    match e.kind with
+    | Var _ | Field _ ->
+        let q = { p with sink = Diag.sink (); op_defaults = None; op_params = None } in
+        let adjacent = e.loc.stop = (loc p).start in
+        (try
+           advance q;
+           if peek q = GT then None
+           else
+             let ts = sep_list q ~close:GT (parse_ty ~arg:true) in
+             let boundary =
+               match peek q with
+               | NEWLINE | DEDENT | EOF | RPAREN | RBRACKET | RBRACE | COMMA
+               | THEN | ELSE | FATARROW -> true
+               | _ -> false
+             in
+             if not (Diag.has_errors q.sink)
+                && (peek q = LPAREN || (adjacent && boundary)) then
+               Some (q.i, ts)
+             else None
+         with Diag.Error _ -> None)
+    | _ -> None
+  in
   let rec loop e =
     match peek p with
+    | LT -> (
+        match type_args e with
+        | Some (i, ts) ->
+            p.i <- i;
+            loop (mk (Type_apply (e, ts)) start p)
+        | None -> e)
     | DOT -> (
         advance p;
         match peek p with
@@ -2902,12 +2943,27 @@ let parse_type ~prelude p ~pub =
   in
   expect p EQ;
   let tname = type_name.name in
+  let defaults = ref [] in
+  let default case p (field : ident) field_ty =
+    let body = parse_expr p in
+    let name = "$default:" ^ Option.fold ~none:"" ~some:(fun c -> c ^ ".") case ^ field.name in
+    defaults :=
+      { op_kind = (if type_params = [] then Op_value else Op_fn);
+        op_fn =
+          { pub = true; fn_kind = Ordinary_fn; name = { field with name }; tparams = []; tneeds = [];
+            params = []; ret = Some field_ty;
+            errors = Some { errs = []; etail = None; eloc = field.loc };
+            uses = Some { deps = []; dtail = None; uloc = field.loc };
+            body; owner = None; overload = 0; test = false; loc = body.loc } }
+      :: !defaults;
+    name
+  in
   let type_body, type_ops =
     if peek p = INDENT then (
       (* the body indented under `type X =`, and its members on the lines
          after it, at the same indentation *)
       advance p;
-      let b = parse_type_body ~prelude p in
+      let b = parse_type_body ~default ~prelude p in
       let members =
         if peek p = NEWLINE then (
           advance p;
@@ -2917,7 +2973,7 @@ let parse_type ~prelude p ~pub =
       expect p DEDENT;
       (b, members))
     else
-      let b = parse_type_body ~prelude p in
+      let b = parse_type_body ~default ~prelude p in
       if peek p = INDENT then (
         (* the members indented under a one-line body *)
         advance p;
@@ -2942,7 +2998,7 @@ let parse_type ~prelude p ~pub =
     type_name;
     type_params;
     type_body;
-    type_ops = owned_by type_name type_ops;
+    type_ops = owned_by type_name (List.rev !defaults @ type_ops);
   }
 
 (* A dependency (deps.md, "Declaring one"): its operations, indented under
@@ -3094,6 +3150,7 @@ and parse_dep_ops ?(prelude = false) p ~pub ~(type_name : ident) ~type_params =
       field_name;
       field_ty;
       field_default = None;
+      field_default_member = None;
       op_defaults = !defaults;
       op_params = !names;
     }
