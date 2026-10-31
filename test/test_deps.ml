@@ -131,6 +131,7 @@ let lint_evidence body =
       body = body ~loc ~op ~lambda ~call ~uses_d;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }

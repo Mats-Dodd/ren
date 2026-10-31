@@ -564,6 +564,15 @@ let unmarked env (c : ecall) unhandled =
       report env
         (unhandled_install c.ename_loc c.ename
            (List.map (show_label (printer env)) labels))
+  | _ when labels <> [] && c.estream <> None ->
+      let source, help = Option.get c.estream in
+      report env (Diag.make c.eloc
+        ~says:("it can fail with " ^ String.concat " | "
+          (List.map (show_label (printer env)) labels) ^ ", from `" ^ source ^ "`")
+        ~help
+        (if String.starts_with ~prefix:"yield from" help then
+           "this `yield from` can fail, and nothing handles it"
+         else "`next` can fail, and nothing handles it"))
   | _ when labels <> [] ->
       report env
         (unhandled_call c.eloc ~name_loc:c.ename_loc
@@ -872,6 +881,7 @@ let solve env ~is_value ~withheld =
     List.filter_map (function Declared c -> Some c | _ -> None) cs
   in
   List.iter (function Join j -> join env ~is_value j | _ -> ()) cs;
+  Infer_generators.early env;
   List.iter (function Drop d -> drop env d | _ -> ()) cs;
   List.iter (function Instance x -> instance env x | _ -> ()) cs;
   let ks = copies cs in
@@ -951,7 +961,8 @@ let solve env ~is_value ~withheld =
     cs;
   (* what's compared, and what's given to a function that compares it,
      once every type of the group is known *)
-  Infer_reqs.decide env cs;
+  let delayed_reqs, ready_reqs = List.partition Infer_generators.pending_requirement cs in
+  Infer_reqs.decide env ready_reqs;
   (* the uses of named rows, with those the `with`s made last, given the
      group's functions that declare what they use, by the variable their
      row ends in *)
@@ -969,6 +980,9 @@ let solve env ~is_value ~withheld =
       | Own_rows c -> Infer_declared.own_rows env ~is_value:is_fn_value c
       | _ -> ())
     cs;
+  Infer_generators.finish env;
+  Infer_reqs.decide env
+    (delayed_reqs @ List.filter (function Required _ -> true | _ -> false) ready_reqs);
   (* what's checked of the rows as they turned out, in the order met *)
   List.iter (function Later f -> f () | _ -> ()) (List.rev cs);
   let needs = List.filter_map (function Needs n -> Some n | _ -> None) cs in

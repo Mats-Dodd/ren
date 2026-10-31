@@ -91,6 +91,8 @@ type 'l found_ = 'l Infer_env.found_ =
   | Pulls_block
   | Pulled of { what : pulled; name : string }
   | For_param of int
+  | Gen_call of Path.t
+  | Gen_step of Path.t
 
 and pulled = Infer_env.pulled = Snapshot | Cursor of Path.t
 
@@ -113,6 +115,9 @@ type node = Infer_top.node = {
 
 type t = Infer_top.t = {
   schemes : Ty.scheme Path.Map.t;
+  generators : Ty.generator Path.Map.t;
+  replay_unsafe : Path.t list;
+  types : Iface.type_decl list;
   values : Path.t list;
   nodes : node Nodes.t Path.Map.t;
   in_scope : Path.t list;

@@ -2778,6 +2778,7 @@ let find p = Path.Map.find_opt p by_path
 let intrinsics : Iface.t =
   {
     home = Path.prelude_home;
+    replay_unsafe = [];
     types =
       List.map
         (fun (t : builtin_type) : Iface.type_decl ->
@@ -2807,7 +2808,7 @@ let intrinsics : Iface.t =
     values =
       List.map
         (fun x ->
-          { Iface.vname = Intrinsic.name x; scheme = scheme x; vparams = [] })
+          { Iface.vname = Intrinsic.name x; scheme = scheme x; generator = None; vparams = [] })
         fns;
     tests = [];
     wirings = [];

@@ -1,0 +1,15 @@
+pub gen fn numbers() -> Int =
+//  ^ keyword
+//      ^ keyword
+//         ^ function
+  yield 1
+//^ keyword
+  yield from child()
+//^ keyword
+//      ^ keyword
+//           ^ function
+  return
+//^ keyword
+
+fn pause() uses Async = Async.yield()
+//                            ^ function

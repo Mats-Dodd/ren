@@ -237,6 +237,7 @@ let%expect_test "Core Lint reports a node of the wrong type" =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -278,6 +279,7 @@ let%expect_test "Core Lint reports a test function used by other code" =
       body;
       test;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -329,6 +331,7 @@ let id_program ?descs ?tys ?(types = []) ?(shows = []) (targs : Ren.Ty.args) =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -438,6 +441,7 @@ let%expect_test "Core Lint reports a block that's returned" =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -512,6 +516,7 @@ let%expect_test "Core Lint reports a pattern of an error type" =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -559,6 +564,7 @@ let%expect_test "Core Lint reports a fail of something that isn't an error" =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -613,6 +619,7 @@ let%expect_test "Core Lint reports an instance that is a value" =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }
@@ -656,6 +663,7 @@ let values_program ~uses_b ~values =
       body;
       test = false;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }

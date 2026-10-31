@@ -1,2 +1,2 @@
 exit 1
-error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `gen`
+error: `Async` has no operation or member named `merge`

@@ -123,8 +123,10 @@ let keeps_length (a : var) (value : expr) =
 let rec changed (e : expr) =
   let here =
     match e.kind with
-    | Assign (a, v) when not (keeps_length a v) -> Ids.singleton a.id
-    | Call (_, args, _) ->
+    | Assign (a, v) | Owned_assign { target = a; value = v; _ }
+        when not (keeps_length a v) -> Ids.singleton a.id
+    | Gen_step { cursor; _ } -> Ids.singleton cursor.id
+    | Call (_, args, _) | Gen_create { args; _ } ->
         Ids.of_list
           (List.filter_map (function Ref (v : var) -> Some v.id | Value _ -> None) args)
     | _ -> Ids.empty
@@ -159,7 +161,7 @@ let nonneg (body : expr) (refs : Ids.t) =
     | Let (v, init, _) when v.ty = Ty.int ->
         lets := Ids.add v.id !lets;
         Hashtbl.add values v.id init
-    | Assign (v, value) -> Hashtbl.add values v.id value
+    | Assign (v, value) | Owned_assign { target = v; value; _ } -> Hashtbl.add values v.id value
     | _ -> ());
     List.iter go (children e)
   in
@@ -202,22 +204,32 @@ let info (body : expr) =
   in
   let rec go in_block (e : expr) =
     (match e.kind with
-    | Assign (v, value) ->
+    | Assign (v, value) | Owned_assign { target = v; value; _ } ->
         assigned v;
         if not (is_step v value) then other := Ids.add v.id !other;
         if in_block then unsteady := Ids.add v.id !unsteady
     (* a local passed with `&` is assigned whatever the callee leaves in
        it *)
-    | Call (_, args, _) ->
+    | Gen_step { cursor; _ } ->
+        assigned cursor;
+        other := Ids.add cursor.id !other;
+        refs := Ids.add cursor.id !refs;
+        if in_block then unsteady := Ids.add cursor.id !unsteady
+    | Call (_, args, _) | Gen_create { args; _ } ->
+        let retained = match e.kind with Gen_create _ -> true | _ -> in_block in
         List.iter
           (function
             | Ref (v : var) ->
                 assigned v;
                 other := Ids.add v.id !other;
                 refs := Ids.add v.id !refs;
-                if in_block then unsteady := Ids.add v.id !unsteady
+                if retained then unsteady := Ids.add v.id !unsteady
             | Value _ -> ())
-          args
+          args;
+        (match e.kind with
+         | Gen_create { places; _ } ->
+             List.iter (fun (p : gen_place) -> unsteady := Ids.add p.root.id !unsteady) places
+         | _ -> ())
     | _ -> ());
     let in_block =
       in_block || match e.kind with Lambda _ | Handler _ -> true | _ -> false
@@ -292,15 +304,19 @@ let learn fi env (v : var) (init : expr) =
 
 (* The last thing [body] does, through its [Let]s and [Seq]s. *)
 let rec last (body : expr) =
-  match body.kind with Let (_, _, b) | Seq (_, b) -> last b | _ -> body
+  match body.kind with
+  | Let (_, _, b) | Seq (_, b) | Owner_alias { body = b; _ }
+  | Cleanup_scope { body = b; _ } -> last b
+  | _ -> body
 
 (* How many assignments to [i] [e] has, a pass with `&` counted as one. *)
 let rec assigns_in (i : var) (e : expr) =
   List.fold_left
     (fun n c -> n + assigns_in i c)
     (match e.kind with
-    | Assign (v, _) when v.id = i.id -> 1
-    | Call (_, args, _) ->
+    | Assign (v, _) | Owned_assign { target = v; _ } when v.id = i.id -> 1
+    | Gen_step { cursor; _ } when cursor.id = i.id -> 1
+    | Call (_, args, _) | Gen_create { args; _ } ->
         List.length
           (List.filter (function Ref (v : var) -> v.id = i.id | Value _ -> false) args)
     | _ -> 0)
@@ -399,6 +415,21 @@ let map f (e : expr) =
   | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
   | Global_value _ | Intrinsic _ | Break ->
       e.kind
+  | Source_view v -> Source_view { v with value = f v.value }
+  | Pattern_scope p -> Pattern_scope { p with source = f p.source;
+      on_match = f p.on_match; on_else = Option.map f p.on_else }
+  | Return (p, e) -> Return (p, f e)
+  | Yield e -> Yield (f e)
+  | Yield_from y -> Yield_from { y with pull = f y.pull }
+  | Gen_close e -> Gen_close (f e)
+  | Gen_step _ -> e.kind
+  | Gen_create g -> Gen_create { g with args = List.map (function Core.Value e -> Core.Value (f e) | Ref v -> Ref v) g.args;
+        places = List.map (fun (p : Core.gen_place) -> { p with read = f p.read; write = f p.write }) g.places }
+  | Cleanup_scope c -> Cleanup_scope { c with body = f c.body }
+  | Instance_scope c -> Instance_scope { c with body = f c.body }
+  | Own o -> Own { o with value = f o.value }
+  | Owned_assign a -> Owned_assign { a with value = f a.value }
+  | Owner_alias a -> Owner_alias { a with body = f a.body }
   | Prim (p, es) -> Prim (p, List.map f es)
   | Array es -> Array (List.map f es)
   | Tuple es -> Tuple (List.map f es)
@@ -463,14 +494,23 @@ let map f (e : expr) =
 let rec max_id (e : expr) =
   let own =
     match e.kind with
-    | Local v | Assign (v, _) | Let (v, _, _) | Covered { result = v; _ } -> v.id
+    | Local v | Assign (v, _) | Let (v, _, _) | Covered { result = v; _ }
+    | Owned_assign { target = v; _ } | Own { owner = v; _ }
+    | Cleanup_scope { owner = v; _ } | Instance_scope { owner = v; _ } -> v.id
+    | Pattern_scope p ->
+        let arm = { pat = p.pat; guard = None; body = p.on_match } in
+        max (Option.fold ~none:0 ~some:(fun (v : var) -> v.id) p.binding)
+          (max (max p.owner.id p.receiving.id)
+            (max_id { e with kind = Match (p.source, [arm]) }))
+    | Gen_step { cursor; ev; _ } -> max cursor.id ev.id
+    | Owner_alias { target; root; _ } -> max target.id root.id
     | Lambda l ->
         List.fold_left (fun m (p : param) -> max m p.var.id) (max l.ev.id l.outer.id) l.params
     | Handle h -> max h.value.id h.error.id
     | With w -> w.ev.id
     | With_handler w -> w.ev.id
     | Handler h -> h.ev.id
-    | Call (_, args, ev) ->
+    | Call (_, args, ev) | Gen_create { args; ev; _ } ->
         List.fold_left
           (fun m -> function Ref (v : var) -> max m v.id | Value _ -> m)
           ev.id args
@@ -546,11 +586,30 @@ let rename fresh (e : expr) =
           let a = go a in
           let v = bind v in
           Let (v, a, go b)
-      | Covered { body; result; after } ->
+      | Covered ({ body; result; after; _ } as c) ->
           let body = go body in
           let result = bind result in
-          Covered { body; result; after = go after }
+          Covered { c with body; result; after = go after }
+      | Pattern_scope p ->
+          let receiving = use p.receiving in
+          let owner = bind p.owner in
+          let source = go p.source and on_else = Option.map go p.on_else in
+          let pattern = pat p.pat in
+          let binding = Option.map bind p.binding in
+          Pattern_scope { owner; receiving; binding; source; pat = pattern; on_match = go p.on_match; on_else }
       | Assign (v, a) -> Assign (use v, go a)
+      | Owned_assign a -> Owned_assign { a with target = use a.target; value = go a.value }
+      | Own a -> Own { a with owner = use a.owner; value = go a.value }
+      | Owner_alias a -> Owner_alias { target = use a.target; root = use a.root; body = go a.body }
+      | Cleanup_scope c ->
+          let owner = bind c.owner in Cleanup_scope { owner; body = go c.body }
+      | Instance_scope c ->
+          let owner = bind c.owner in Instance_scope { owner; body = go c.body }
+      | Gen_step g -> Gen_step { g with cursor = use g.cursor; ev = use g.ev }
+      | Gen_create g ->
+          Gen_create { g with ev = use g.ev; args = List.map (function Value a -> Value (go a) | Ref v -> Ref (use v)) g.args;
+            places = List.map (fun (p : gen_place) ->
+              { param = use p.param; root = use p.root; read = go p.read; write = go p.write }) g.places }
       | Match (s, arms) ->
           let s = go s in
           Match
@@ -656,17 +715,33 @@ let versions fi env (loop : expr) (i : var) (n : var) (body : expr) =
    its [bounds] and whether it holds here, and gives the [bounds] to
    keep. With [fresh], it makes a loop that would prove more in bounds
    two loops ([versions]). *)
+let rec suspends (e : expr) =
+  match e.kind with
+  | Yield _ | Yield_from _ -> true
+  | Lambda _ | Handler _ -> false
+  | _ -> List.exists suspends (children e)
+
 let rec walk ?fresh fi decide env (e : expr) : expr =
   let go = walk ?fresh fi decide env in
   let kind =
     match e.kind with
+    | Source_view v -> Source_view { v with value = go v.value }
+    | Pattern_scope p ->
+        let source = go p.source in
+        let env = if suspends p.source then empty else forget env (changed p.source) in
+        Pattern_scope { p with source;
+          on_match = walk ?fresh fi decide env p.on_match;
+          on_else = Option.map (walk ?fresh fi decide env) p.on_else }
+    | Owner_alias a -> Owner_alias { a with body = go a.body }
+    | Cleanup_scope c -> Cleanup_scope { c with body = go c.body }
+    | Instance_scope c -> Instance_scope { c with body = go c.body }
     | Let (v, init, body) ->
         let init = go init in
-        let env = learn fi (forget env (changed init)) v init in
+        let env = learn fi (if suspends init then empty else forget env (changed init)) v init in
         Let (v, init, walk ?fresh fi decide env body)
     | Seq (a, b) ->
         let a' = go a in
-        Seq (a', walk ?fresh fi decide (forget env (changed a)) b)
+        Seq (a', walk ?fresh fi decide (if suspends a then empty else forget env (changed a)) b)
     | If (c, t, f) ->
         let c' = go c in
         let env = forget env (changed c) in
@@ -686,7 +761,7 @@ let rec walk ?fresh fi decide env (e : expr) : expr =
               arms )
     | While (cond, body) -> (
         (* what a pass changes, it may have changed before any pass *)
-        let env = forget env (changed e) in
+        let env = if suspends e then empty else forget env (changed e) in
         (* a pass runs where its condition held *)
         let plain () =
           While
@@ -741,7 +816,7 @@ let rec walk ?fresh fi decide env (e : expr) : expr =
     | _ ->
         (* anything else: its parts in turn, knowing only what none of
            them can change *)
-        map (walk ?fresh fi decide (forget env (changed e))) e
+        map (walk ?fresh fi decide (if suspends e then empty else forget env (changed e))) e
   in
   { e with kind }
 
@@ -779,6 +854,8 @@ let rec with_last f (body : expr) =
   match body.kind with
   | Let (v, a, b) -> { body with kind = Let (v, a, with_last f b) }
   | Seq (a, b) -> { body with kind = Seq (a, with_last f b) }
+  | Owner_alias a -> { body with kind = Owner_alias { a with body = with_last f a.body } }
+  | Cleanup_scope c -> { body with kind = Cleanup_scope { c with body = with_last f c.body } }
   | _ -> f body
 
 let rec mark_steps fi (e : expr) =

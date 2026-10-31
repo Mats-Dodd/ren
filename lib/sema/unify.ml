@@ -27,6 +27,7 @@ let rec occurs id level t =
       if l > level then r := Unbound (id', level)
   | TVar { contents = Link _ } -> assert false
   | TSkol _ | TError -> ()
+  | TGen g -> List.iter (occurs id level) (generator_parts g)
   | TCon (_, args) | TVariant (_, _, args) -> List.iter (occurs id level) args
   | TErrors e -> occurs_row ~ty:id (-1) level e
   | TImpl i ->
@@ -78,6 +79,29 @@ let rec unify st a b =
   (* code with an error, already reported, fits anywhere; a variable unified
      with it becomes an error too, so the mistake isn't reported again *)
   | TError, _ | _, TError -> ()
+  | TGen a, TGen b when a.gpath = b.gpath ->
+      List.iter2 (unify st) a.gargs b.gargs;
+      unify st a.gitem b.gitem;
+      unify_row st a.gerrors b.gerrors;
+      unify_row st a.guses b.guses
+  | (TGen g as a), (TCon (p, args) as b)
+  | (TCon (p, args) as a), (TGen g as b) when p = g.gcursor ->
+      if List.length args = Ty.generator_cursor_arity p then (
+        List.iteri (fun i t -> unify st (List.nth g.gargs i) t) args;
+        st.generator_equalities <- (TGen g, TCon (p, g.gargs)) :: st.generator_equalities)
+      else (
+        if List.length g.gargs <> List.length args then raise Mismatch;
+        List.iter2 (unify st) g.gargs args;
+        st.generator_equalities <- (a, b) :: st.generator_equalities)
+  | (TGen g as a), (TFun ([], TCon (p, [item]), errs, uses) as b)
+  | (TFun ([], TCon (p, [item]), errs, uses) as a), (TGen g as b)
+      when p = Path.prelude "Option" ->
+      unify st g.gitem item;
+      unify_row st g.gerrors errs;
+      unify_row st REmpty uses;
+      st.generator_equalities <- (a, b) :: st.generator_equalities
+  | (TGen _ as a), b | a, (TGen _ as b) ->
+      st.generator_equalities <- (a, b) :: st.generator_equalities
   | TCon (n1, a1), TCon (n2, a2) when n1 = n2 && List.length a1 = List.length a2
     ->
       List.iter2 (unify st) a1 a2
@@ -259,6 +283,7 @@ and open_args (l : label) =
   let rec go t =
     match repr t with
     | TVar { contents = Unbound _ } -> true
+    | TGen _ -> true
     | TCon (_, args) | TVariant (_, _, args) -> List.exists go args
     | _ -> false
   in
@@ -313,6 +338,7 @@ let copier () =
             Hashtbl.replace tys id c;
             c)
     | TVar { contents = Link _ } -> assert false
+    | TGen g -> TGen (map_generator ty row g)
     | TCon (p, args) -> TCon (p, List.map ty args)
     | TVariant (p, c, args) -> TVariant (p, c, List.map ty args)
     | TFun (ps, r, e, u) ->

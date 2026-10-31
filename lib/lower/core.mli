@@ -178,11 +178,63 @@ type prim =
           "`over any` and `retry`"), in a function made for the tags it's
           given. A [Bool] *)
 
+type ownership = Copy_value | Adopt_value | Snapshot_value
+    (** [Snapshot_value] keeps independent logical positions for an implicit
+        collection snapshot; it owns no cleanup until an item is copied out. *)
+type assignment = Replace_value | Advance_value
+
 type param = { mode : mode; var : var }
 
 type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
+  | Return of Path.t * expr
+      (** return to this function, through every intervening cleanup *)
+  | Gen_create of {
+      producer : Path.t;
+      type_args : Ty.args;
+      args : arg list;
+      places : gen_place list;
+      tys : desc list;
+      dicts : dict list;
+      ev : var;
+    }
+      (** create a checked producer's frame; creation does not run its body *)
+  | Yield of expr
+  | Yield_from of { pull : expr; adapter : bool }
+      (** [adapter] is true only for a compiler-built protocol lambda: applying
+          that immediate wrapper does not add a logical call-depth level *)
+  | Gen_step of { cursor : var; ev : var; errors : Ty.row; uses : Ty.row }
+  | Gen_close of expr
+  | Source_view of { retained : bool; value : expr }
+      (** provenance for a pattern source only; this does not construct data *)
+  | Pattern_scope of {
+      owner : var;
+      receiving : var;
+      binding : var option;
+          (** the spelling of an ignored [Let], for printing and native erasure;
+              this is not a runtime or pattern binding *)
+      source : expr;
+      pat : pattern;
+      on_match : expr;
+      on_else : expr option;
+    }
+      (** evaluate the source once in its statement registry, transfer matched
+          binders to [receiving], close discarded leaves, then run [on_match];
+          an else runs inside the statement registry before leaving it *)
+  | Instance_scope of { owner : var; body : expr }
+      (** a registry transferred to the installed instance until its with ends *)
+  | Cleanup_scope of { owner : var; body : expr }
+      (** bind a lexical cleanup registry; detach the anonymous result before
+          closing its current and retired tokens in reverse registration order *)
+  | Own of { owner : var; mode : ownership; value : expr; desc : desc }
+      (** recursively fork a source copy, or adopt an anonymous result, into
+          this lexical registry; descriptors include opaque and generic leaves *)
+  | Owned_assign of { target : var; value : expr; mode : assignment }
+      (** the target cell retains its original root owner through inout calls;
+          replacement retires displaced leaves, advancement updates their state *)
+  | Owner_alias of { target : var; root : var; body : expr }
+      (** a projected inout temporary borrows its root's owner capability *)
   | Int of Int64.t
   | Float of float
   | Bool of bool
@@ -381,7 +433,7 @@ and kind =
           which goes on once [after] has run. Lowering writes a place passed
           with `&` back to it in [after], so a call that fails still changes it
       *)
-  | Covered of { body : expr; result : var; after : expr }
+  | Covered of { body : expr; result : var; after : expr; return_target : Path.t option }
       (** an arm's `finally` (handlers.md, "`finally`"): [body], what it covers,
           as `attempt` keeps it, a [Result] of what it ends in, bound to
           [result], then [after], whose value is the node's. It's [Let] but
@@ -394,6 +446,10 @@ and kind =
 (* A call's argument. An [inout] argument is always a plain local: the call
    reads it, and writes the parameter's final value back to it. *)
 and arg = Value of expr | Ref of var
+and gen_place = { param : var; root : var; read : expr; write : expr }
+    (** a frozen projected inout argument: refresh [param] from its original
+        root before each active step, then write it back on every suspension
+        and exit; neither callback runs at factory return or a terminal step *)
 and arm = { pat : pattern; guard : expr option; body : expr }
 and pattern = { pkind : pattern_kind; pty : Ty.ty; ploc : Loc.t }
 
@@ -466,6 +522,8 @@ type fn_def = {
           requirements, in order: the j-th, for [(n, req)], holds [req]'s
           dictionary for what [Var n] stands for ([dict]), and is the local
           [dict_params]'s j-th *)
+  generator : Ty.generator option;
+      (** a producer has a Unit body; its callable scheme describes creation *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   test : bool;
@@ -531,6 +589,9 @@ val mk : kind -> Ty.ty -> Loc.t -> expr
 
 (* The type of evidence, which no type in Ren source can name. *)
 val evidence_ty : Ty.ty
+
+(* A lexical generator cleanup registry, inaccessible from source. *)
+val owner_ty : Ty.ty
 
 (* The evidence a function takes, or a block or a [With] binds, as the
    local with this id. *)
@@ -653,8 +714,10 @@ val show : expr -> string
    argument in braces, [{Short | ..e}], and the dictionaries it's given
    after them; and the dictionary each [==] compares with, [(== (eq Int) a
    b)]. A plain print, the default, shows none of these. *)
-val fn_sexp : ?types:bool -> fn_def -> sexp
-val show_fn : ?types:bool -> fn_def -> string
+(* [ownership] shows the lexical cleanup registries and source copy/adopt
+   boundaries; the default keeps existing Core prints concise. *)
+val fn_sexp : ?types:bool -> ?ownership:bool -> fn_def -> sexp
+val show_fn : ?types:bool -> ?ownership:bool -> fn_def -> string
 
 (* A string or array pattern's kind with each of its pieces mapped by
    [pat] and its rest's variable by [var], left to right; any other kind

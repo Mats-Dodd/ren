@@ -10,7 +10,7 @@
                                    | group | wiring | service) | test | run
      import   := "import" IDENT { "/" IDENT } ["." "{" UIDENT, ... "}"]
                  ["as" IDENT]
-     fn_def   := "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
+     fn_def   := ["gen"] "fn" IDENT ["<" UIDENT, ... ">"] "(" param, ... ")"
                  ["->" type] [errors] [uses] "=" body
                                                    (`!` and `uses` may start
                                                     the next line, indented)
@@ -312,6 +312,11 @@ let ident p =
       let l = loc p in
       advance p;
       { name; loc = l }
+  | YIELD ->
+      (* `Async.yield()` and its operation's declaration keep their name. *)
+      let l = loc p in
+      advance p;
+      { name = "yield"; loc = l }
   | SELF ->
       Diag.error (loc p) ~help:"choose another name"
         "`self` is reserved for the first parameter of a method"
@@ -388,7 +393,18 @@ let parse_tyname ?(what = "a type name") p =
   | IDENT m, DOT when not (is_upper m) ->
       let alias = ident p in
       advance p;
-      { tmod = Some alias; tid = upper_ident p what }
+      (match (peek p, peek2 p, peek3 p) with
+      | IDENT g, DOT, IDENT "Cursor" when not (is_upper g) ->
+          (* `walks.walk.Cursor`: the type generated for another module's
+             generator, with only the module in [tmod]. *)
+          let name = ident p in
+          advance p;
+          let cursor = ident p in
+          {
+            tmod = Some alias;
+            tid = { name = name.name ^ ".Cursor"; loc = Loc.span name.loc cursor.loc };
+          }
+      | _ -> { tmod = Some alias; tid = upper_ident p what })
   | _ -> { tmod = None; tid = upper_ident p what }
 
 (* Is the next thing a type's name with a module in front, `billing.Plan`,
@@ -1877,6 +1893,24 @@ and parse_mul p =
 
 and parse_unary p =
   match peek p with
+  | YIELD ->
+      (* Keep the source and its marker intact; Resolve checks which
+         generator owns this yield, including a block or cleanup inside it. *)
+      let start = loc p in
+      advance p;
+      let from = peek p = IDENT "from" in
+      if from then advance p;
+      let value = parse_expr p in
+      mk (if from then Yield_from value else Yield value) start p
+  | RETURN ->
+      let start = loc p in
+      advance p;
+      let value =
+        match peek p with
+        | NEWLINE | DEDENT | EOF | ELSE | RPAREN | RBRACKET | RBRACE | COMMA -> None
+        | _ -> Some (parse_expr p)
+      in
+      mk (Return value) start p
   | MINUS -> (
       let start = loc p in
       advance p;
@@ -2083,7 +2117,11 @@ and parse_primary p =
       let t = parse_tyname p in
       match peek p with
       | LBRACE -> parse_record p start (Some (`Type t))
-      | DOT when match peek2 p with IDENT n -> not (is_upper n) | _ -> false
+      | DOT when
+          (match peek2 p with
+          | IDENT n -> not (is_upper n)
+          | YIELD -> true
+          | _ -> false)
         -> (
           (* `stack.Stack.empty`: a member of the type. Without
              the module, `Stack.of` could be one too, or `Admin.rank` a
@@ -2658,6 +2696,13 @@ let parse_tparams p =
 
 let parse_fn p ~pub =
   let start = loc p in
+  let fn_kind =
+    (* `gen` remains an ordinary module, function or local name elsewhere. *)
+    if peek p = IDENT "gen" then (
+      advance p;
+      Generator_fn start)
+    else Ordinary_fn
+  in
   expect p FN;
   let name = lower_ident p "a function's name" in
   let tparams, tneeds = parse_tparams p in
@@ -2698,6 +2743,7 @@ let parse_fn p ~pub =
   expect p EQ;
   let body = parse_body p in
   {
+    fn_kind;
     pub;
     name;
     tparams;
@@ -2731,7 +2777,7 @@ let parse_op ?(dep = false) p ~tname =
   let pub = peek p = PUB in
   if pub then advance p;
   match peek p with
-  | FN -> Some { op_kind = Op_fn; op_fn = parse_fn p ~pub }
+  | FN | IDENT "gen" -> Some { op_kind = Op_fn; op_fn = parse_fn p ~pub }
   | TEST ->
       Diag.error (loc p)
         ~help:"declare it at the top level: `test fn name(...)`"
@@ -2753,6 +2799,7 @@ let parse_op ?(dep = false) p ~tname =
           op_kind = Op_value;
           op_fn =
             {
+              fn_kind = Ordinary_fn;
               pub;
               name;
               tparams = [];
@@ -3017,7 +3064,7 @@ and parse_dep_ops ?(prelude = false) p ~pub ~(type_name : ident) ~type_params =
          (describe (peek p)));
   advance p;
   let at_op p =
-    match (peek p, peek2 p) with IDENT _, COLON -> true | _ -> false
+    match (peek p, peek2 p) with (IDENT _ | YIELD), COLON -> true | _ -> false
   in
   let op p =
     let field_name = ident p in
@@ -3235,7 +3282,7 @@ let parse_handler p ~pub =
   let state, more = state [] in
   let arm p =
     match (peek p, peek2 p) with
-    | IDENT _, (LPAREN | DOT) ->
+    | (IDENT _ | YIELD), (LPAREN | DOT) ->
         let arm_start = loc p in
         (* `Console.write(line) => ...` says which dependency's, where two
            it implements have an operation of that name *)
@@ -3259,7 +3306,7 @@ let parse_handler p ~pub =
           arm_name;
           arm_impl = mk (Lambda (params, body)) arm_start p;
         }
-    | IDENT _, FATARROW ->
+    | (IDENT _ | YIELD), FATARROW ->
         (* `call => ...`, the one arm of a handler `over any`, which runs
            for every operation, and names what it's given (Resolve checks
            it's in one) *)
@@ -3308,6 +3355,7 @@ let parse_handler p ~pub =
       (Loc.span body_start (last_loc p))
   in
   {
+    fn_kind = Ordinary_fn;
     pub;
     name;
     tparams;
@@ -3623,7 +3671,7 @@ let parse_service p ~pub =
     let pub = peek p = PUB in
     if pub then advance p;
     match peek p with
-    | FN -> parse_fn p ~pub
+    | FN | IDENT "gen" -> parse_fn p ~pub
     | (LET | VAR | FINALLY) when not pub ->
         Diag.error (loc p)
           ~help:"move it above the service's first function"
@@ -3657,7 +3705,7 @@ let parse_item ~prelude p =
   let pub = peek p = PUB in
   if pub then advance p;
   match peek p with
-  | FN -> Fn (parse_fn p ~pub)
+  | FN | IDENT "gen" -> Fn (parse_fn p ~pub)
   | TYPE -> Type (parse_type ~prelude p ~pub)
   | DEP -> Type (parse_dep ~prelude p ~pub)
   | HANDLER -> Fn (parse_handler p ~pub)
@@ -3667,11 +3715,11 @@ let parse_item ~prelude p =
   | IDENT "service"
     when match peek2 p with IDENT n -> is_upper n | _ -> false ->
       Service (parse_service p ~pub)
-  | TEST when peek2 p = FN || peek2 p = HANDLER ->
+  | TEST when peek2 p = FN || peek2 p = IDENT "gen" || peek2 p = HANDLER ->
       (* a test item, `test fn` or `test handler`, which only tests see
          (testing.md, "Test items") *)
       advance p;
-      let f = if peek p = FN then parse_fn p ~pub else parse_handler p ~pub in
+      let f = if peek p = HANDLER then parse_handler p ~pub else parse_fn p ~pub in
       Fn { f with test = true }
   | TEST when peek2 p = TYPE || peek2 p = DEP || peek2 p = LET ->
       Diag.error (loc p)

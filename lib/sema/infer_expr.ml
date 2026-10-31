@@ -789,6 +789,43 @@ and synth env cx (e : expr) : ty =
       in
       (* if it was meant to produce a value, it isn't a `Unit` *)
       if ok then unit else TError
+  | Yield a ->
+      (match cx.generator_item with
+      | Some item -> check env cx a item
+          ~why:(explain
+            ~msg:(fun found expected ->
+              "this generator yields `" ^ expected ^ "`, but this `yield` gives `" ^ found ^ "`")
+            ~help:(fun _ _ -> "yield an item of the declared type, or change the generator's item type") ())
+      | None -> ignore (infer env cx a));
+      env.generator_late <- (fun () ->
+          match Hashtbl.find_opt cx.nodes a.node with
+          | Some t when Infer_generators.has_block t ->
+              report env (Diag.make a.loc
+                ~help:"yield the data read from the block or scope instead"
+                "a generator's item must be data, without a block or scope")
+          | _ -> ()) :: env.generator_late;
+      unit
+  | Yield_from a ->
+      let loop = { e with kind = For { index = None;
+        pat = { pkind = PWild; ploc = a.loc; pnode = for_node e.node }; over = Each a;
+        body = { kind = Unit; node = e.node; loc = e.loc } } } in
+      ignore (infer env cx loop);
+      (match cx.generator_item, Hashtbl.find_opt cx.nodes (for_node e.node) with
+      | Some expected, Some item -> unify_at env a.loc ~found:item ~expected
+      | _ -> ());
+      env.generator_late <- (fun () ->
+          match Hashtbl.find_opt cx.nodes (for_node e.node) with
+          | Some t when Infer_generators.has_block t ->
+              report env (Diag.make a.loc
+                ~help:"delegate a source of data items instead"
+                "a generator's item must be data, without a block or scope")
+          | _ -> ()) :: env.generator_late;
+      unit
+  | Return value ->
+      (match value with
+      | Some a -> check env cx a cx.return_ty
+      | None -> unify_at env e.loc ~found:unit ~expected:cx.return_ty);
+      fresh_var env.st
   | Call (f, args) -> infer_call env cx e f args
   | Lambda (params, body) ->
       let ps =
@@ -934,11 +971,13 @@ and synth env cx (e : expr) : ty =
             want_int env Ranging hi (infer env cx hi);
             int
         | Each iter -> (
-            match block_subject env cx ~at:e.node iter with
+            match block_subject env cx ~at:e.node ~pattern:pat iter with
             | Some elem -> elem
             | None ->
                 let array_of = match iter.kind with Ref a -> a | _ -> iter in
-                let ta = pulled_here env array_of (fun () -> infer env cx array_of) in
+                let ta = match Hashtbl.find_opt cx.nodes iter.node with
+                  | Some t -> t
+                  | None -> pulled_here env array_of (fun () -> infer env cx array_of) in
                 Hashtbl.replace cx.nodes iter.node ta;
                 (* a `Map` gives its entries, each a `(k, v)`, and a `Set` its
                    members; anything else is an array *)
@@ -971,7 +1010,11 @@ and synth env cx (e : expr) : ty =
                     let elem = fresh_var env.st in
                     let ok =
                       unifies env
-                        (explain ~msg:not_iterable ())
+                        (if pat.pnode = for_node e.node then
+                           explain
+                             ~msg:(fun found _ -> "`yield from` takes what `for` takes, but this is " ^ article found)
+                             ~help:(fun _ _ -> "give it a cursor, collection, or a block that returns `Option`") ()
+                         else explain ~msg:not_iterable ())
                         (result_loc array_of) ~found:ta ~expected:(array elem)
                     in
                     match (pat.pkind, iter.kind) with
@@ -997,6 +1040,13 @@ and synth env cx (e : expr) : ty =
                 (cursor_index i.ploc
                    ~index:
                      (match i.pkind with PVar b -> b.ident.name | _ -> "i"))
+          | Each _ ->
+              env.generator_late <- (fun () ->
+                  match Hashtbl.find_opt cx.found e.node with
+                  | Some (Method_of _ | Pulls_block) ->
+                      report env (cursor_index i.ploc
+                        ~index:(match i.pkind with PVar b -> b.ident.name | _ -> "i"))
+                  | _ -> ()) :: env.generator_late
           | _ -> ())
         index;
       (match over with
@@ -1091,6 +1141,8 @@ and synth env cx (e : expr) : ty =
           | TErrors errs ->
               (* a `finally`'s `try r` of a cancelled body goes on with the
                  cancel, which isn't an error *)
+              if env.in_finally > 0 && List.mem cancelled_tag (row_names errs)
+              then m.failed <- true;
               let errs = without_cancelled errs in
               Hashtbl.replace cx.found e.node Unwrap;
               include_errors env cx ~loc:a.loc ~here:(This "Result")
@@ -1242,11 +1294,42 @@ and cursor ?(found = fun p -> Method_of p) ?meth_at ?fails env cx ~at (iter : ex
    by the `try`, and its dependencies are the caller's, as any call's are.
    Recorded at the `for`'s node, [at], for lowering. [None] if [f] isn't
    a local of a block's type, and the loop is over something else. *)
-and block_subject env cx ~at (iter : expr) =
+and block_subject env cx ~at ~pattern (iter : expr) =
   let f, tried = match iter.kind with Try f -> (f, Some iter) | _ -> (iter, None) in
+  let infer_source source =
+    let t, marked = match tried with
+    | None -> infer env cx source, None
+    | Some t ->
+        let m = marker env Mtry (keyword t.loc 3) in
+        Hashtbl.replace try_markers iter.node m;
+        infer env {cx with markers = m :: cx.markers} source, Some m in
+    let t = match marked, reveal env.st t with
+      | Some m, TCon (p, [value; TErrors errors]) when p = result_path ->
+          if env.in_finally > 0 && List.mem cancelled_tag (row_names errors) then m.failed <- true;
+          let errors = without_cancelled errors in
+          include_errors env cx ~loc:source.loc ~here:(This "Result")
+            ~sources:(sources_later cx ~this:(function Unwrapped (_, row) -> row == errors | _ -> false))
+            ~fix:rename_where_in errors cx.handler;
+          m.unwrapped <- errors :: m.unwrapped;
+          Option.iter (fun s -> s := Unwrapped (source.loc, errors) :: !s) cx.sources;
+          Hashtbl.replace cx.found iter.node Unwrap;
+          value
+      | _ -> t in
+    Hashtbl.replace cx.nodes iter.node t;
+    t
+  in
   match f.kind with
   | Var (Local b) -> (
       match reveal env.st (Hashtbl.find cx.locals b.id) with
+      | (TCon (p, _) as t) when Ty.is_generator_cursor p ->
+          ignore (infer env cx f);
+          Some (generator_loop env cx ~at ~pattern iter f t)
+      | (TVar _ as t) when List.exists (fun (p, _) -> Hashtbl.mem env.generators p) env.group ->
+          ignore (infer env cx f);
+          Some (generator_loop env cx ~at ~pattern iter f t)
+      | (TGen _ as t) ->
+          ignore (infer env cx f);
+          Some (generator_loop env cx ~at ~pattern iter f t)
       | TFun ([], ret, errs, uses) as tf ->
           let elem = fresh_var env.st in
           let ok =
@@ -1269,7 +1352,88 @@ and block_subject env cx ~at (iter : expr) =
           absorb env cx ~call:iter ~ename:b.ident.name ~fn:f errs uses;
           Some (if ok then elem else TError)
       | _ -> None)
+  | Call (callee, _) when
+      (match callee.kind with
+       | Var (Global p) ->
+           Hashtbl.mem env.generators p || Hashtbl.mem env.generator_signatures p
+           || (List.exists (fun (p, _) -> Hashtbl.mem env.generators p) env.group
+               && List.mem_assoc p env.group)
+       | _ -> false) -> (
+      let t = infer_source f in
+      match reveal env.st t with
+      | TGen _ | TVar _ | TFun ([], _, _, _) ->
+          Some (generator_loop env cx ~at ~pattern iter f t)
+      | TCon (p, _) when Ty.is_generator_cursor p ->
+          Some (generator_loop env cx ~at ~pattern iter f t)
+      | _ -> None)
+  | Ref ({ kind = Var (Local b); _ } as place) -> (
+      let t = Hashtbl.find cx.locals b.id in
+      match reveal env.st t with
+      | (TCon (p, _) as t) when Ty.is_generator_cursor p ->
+          ignore (infer env cx place);
+          Some (generator_loop env cx ~at ~pattern iter f t)
+      | TGen _ | TFun ([], _, _, _) ->
+          ignore (infer env cx place);
+          Some (generator_loop env cx ~at ~pattern iter f t)
+      | _ -> None)
+  | Field _ | Index _ -> (
+      let t = infer_source f in
+      match reveal env.st t with
+      | TGen _ | TFun ([], _, _, _) -> Some (generator_loop env cx ~at ~pattern iter f t)
+      | TCon (p, _) when Ty.is_generator_cursor p -> Some (generator_loop env cx ~at ~pattern iter f t)
+      | _ -> None)
+  | Ref place -> (
+      let t = infer_source place in
+      match reveal env.st t with
+      | TGen _ | TFun ([], _, _, _) -> Some (generator_loop env cx ~at ~pattern iter f t)
+      | TCon (p, _) when Ty.is_generator_cursor p -> Some (generator_loop env cx ~at ~pattern iter f t)
+      | _ -> None)
   | _ -> None
+
+and generator_loop env cx ~at ~pattern (iter : expr) (f : expr) actual =
+  let item, errs = Infer_generators.projection env cx iter.loc actual in
+  Hashtbl.replace cx.nodes iter.node actual;
+  let step_cx = match iter.kind with
+    | Try _ ->
+        let m = match Hashtbl.find_opt try_markers iter.node with
+          | Some m -> m
+          | None -> marker env Mtry (keyword iter.loc 3) in
+        { cx with markers = m :: cx.markers }
+    | _ -> cx
+  in
+  let source = Option.value (env.source f) ~default:"the stream" in
+  let name = match pattern.pkind with PVar b -> b.ident.name | _ -> "item" in
+  let help = if pattern.pnode = for_node at then "yield from try " ^ source
+    else "for " ^ name ^ " in try " ^ source in
+  absorb env step_cx ~call:iter ~ename:source ~fn:f ~stream:(source, help) errs REmpty;
+  env.generator_late <- (fun () ->
+      match repr actual with
+      | TFun _ ->
+          (match f.kind with Ref _ ->
+             let block = match f.kind with Ref p -> p | _ -> f in
+             let name = Option.value (env.source block) ~default:"p" in
+             report env (Diag.make f.loc ~help:("step the block with `" ^ name ^ "()`, or pass it without `&`")
+                           "a block never takes `&`") | _ -> ());
+          Hashtbl.replace cx.found at Pulls_block
+      | TCon (p, _) when Ty.is_generator_cursor p ->
+          let rec named (e : expr) = match e.kind with
+            | Var (Local _ | Global_value _) -> true
+            | Field (base, _) | Index (base, _) | Slice (base, _, _) -> named base
+            | _ -> false in
+          (if named f then report env (Diag.make f.loc
+               ~help:("write `for x in &" ^ Option.value (env.source f) ~default:"cursor" ^ "`")
+               "a named cursor is stepped in place with `&`"));
+          let next = Path.member p "next" in
+          let tm = TFun ([{mode = Inout; ty = actual}],
+              TCon (Path.prelude "Option", [item]), errs, REmpty) in
+          Hashtbl.replace cx.found at (Method_of next);
+          Hashtbl.replace cx.nodes (next_node at) tm;
+          Hashtbl.replace cx.nodes (next_node iter.node) tm
+      | TCon (p, _) when List.mem p [Path.prelude "Array"; Path.prelude "Map"; Path.prelude "Set"] -> ()
+      | TError -> ()
+      | _ -> report env (Diag.make iter.loc "this value is not a generator stream"))
+    :: env.generator_late;
+  item
 
 (* Whether [t], a parameter's type, is a pull parameter's: a block that
    takes nothing and gives an `Option`, `fn() -> Option<T>`, which takes
@@ -1329,11 +1493,38 @@ and pull_arg env cx ?known ~name (a : expr) expected =
     ignore (unifies env plain a.loc ~found:ret ~expected:(TCon (Path.prelude "Option", [ elem ])));
     ignore (unifies env why a.loc ~found:t ~expected:elem)
   in
+  let generator_given t =
+    let item, errors = Infer_generators.projection env cx a.loc t in
+    given item;
+    absorb env fails ~call:a ~ename:(Option.value (env.source a) ~default:"the stream")
+      ~fn:a errors REmpty;
+    env.generator_late <- (fun () ->
+        match repr t with
+        | TCon (p, _) when Ty.is_generator_cursor p ->
+            (match a.kind with Var (Local b) -> report env (Diag.make a.loc
+              ~help:("write `&" ^ b.ident.name ^ "`")
+              "a named cursor is stepped in place with `&`") | _ -> ());
+            let path = Path.member p "next" in
+            Hashtbl.replace cx.found at (pulled (Cursor path));
+            Hashtbl.replace cx.nodes (next_node a.node)
+              (TFun ([{mode = Inout; ty = t}],
+                TCon (Path.prelude "Option", [item]), errors, REmpty))
+        | TFun _ ->
+            (match a.kind with Ref _ -> report env (Diag.make a.loc
+                ~help:"pass the block without `&`" "a block never takes `&`") | _ -> ());
+            (* A block is passed directly, so it must have the parameter's
+               complete callable type. The earlier inclusion checks failures;
+               this equality also fixes the factory's instantiated row tails. *)
+            unify_at env a.loc ~found:t ~expected;
+            Hashtbl.remove cx.nodes at
+        | _ -> ()) :: env.generator_late
+  in
   match a.kind with
   | Ref place ->
       let t = infer_raw env cx place in
       Hashtbl.replace cx.nodes a.node t;
-      if cursor_of env t then
+      if (match repr t with TGen _ -> true | _ -> false) then generator_given t
+      else if cursor_of env t then
         given (cursor ~found:(fun p -> pulled (Cursor p)) ~meth_at:a.node ~fails env cx ~at place t)
       else if reveal env.st t <> TError then report env (arg_not_changed a.loc name)
   | _ -> (
@@ -1346,6 +1537,8 @@ and pull_arg env cx ?known ~name (a : expr) expected =
       in
       let map_path = Path.prelude "Map" and set_path = Path.prelude "Set" in
       match reveal env.st t with
+      | TGen _ | TFun ([], _, _, _) -> generator_given t
+      | TCon (p, _) when Ty.is_generator_cursor p -> generator_given t
       | TCon (p, [ k; v ]) when p = map_path ->
           Hashtbl.replace cx.found at (pulled Snapshot);
           given (TCon (Ty.tuple_path 2, [ k; v ]))
@@ -2174,6 +2367,10 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
         TError
       in
       match (op_of env tr m.name, reveal env.st tr) with
+      | _, TGen _ when m.name = "next" && args = [] ->
+          generator_next env cx ?changed e f r tr
+      | _, TCon (p, _) when Ty.is_generator_cursor p && m.name = "next" && args = [] ->
+          generator_next env cx ?changed e f r tr
       | None, TImpl ({ deps = [ d ]; _ } as i)
         when match Hashtbl.find_opt env.types d.dpath with
              | Some td -> dep_op_in env m.name td <> None
@@ -2191,7 +2388,7 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
       | None, TError -> nothing ()
       (* `x.hash()` of a type with no `hash` of its own, nor a field of
          that name: the derived hash, which any type with `hash` has *)
-      | None, ((TCon _ | TSkol _ | TFun _ | TVar _) as t)
+      | None, ((TCon _ | TSkol _ | TFun _ | TVar _ | TGen _) as t)
         when m.name = "hash" && args = [] && changed = None
              &&
              match t with
@@ -2311,10 +2508,13 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
                 | Var x -> Some (Infer_msg.Named (name_of x))
                 | _ -> None
               in
-              report env
-                (several_have_member ~names:env.names r.loc ?what m
-                   (List.map (fun p -> (p, member_kind env m.name p)) paths));
-              nothing ())
+              let diagnostic =
+                several_have_member ~names:env.names r.loc ?what m
+                  (List.map (fun p -> (p, member_kind env m.name p)) paths) in
+              if m.name = "next" && args = []
+                 && List.exists (fun (p, _) -> Hashtbl.mem env.generators p) env.group
+              then generator_next env cx ?changed ~ambiguous:diagnostic e f r tr
+              else (report env diagnostic; nothing ()))
       | None, TVar _
         when not
                (List.exists (fun td -> field_in m.name td <> None) env.visible)
@@ -2366,6 +2566,62 @@ and infer_call env cx ?changed ?tr (e : expr) (f : expr) args =
       end;
       t
   | _ -> call_with env cx e f (infer env cx f) args
+
+and generator_next env cx ?changed ?ambiguous (e : expr) (f : expr) (r : expr) actual =
+  let producer () = match repr actual with
+    | TGen g -> Some g.gpath
+    | TCon (p, _) -> Hashtbl.fold (fun path d found ->
+        if d.gen_type.gcursor = p then Some path else found) env.generators
+        (Hashtbl.fold (fun path (g : Ty.generator) found ->
+             if g.cursor_path = p then Some path else found) env.generator_signatures None)
+    | _ -> None
+  in
+  let enabled = ref true in
+  let delayed_result = Option.map (fun _ -> fresh_var env.st) ambiguous in
+  let item, errs = match ambiguous with
+    | None -> Infer_generators.projection env cx e.loc actual
+    | Some diagnostic ->
+        (* An ordinary SCC result is still a variable before Join. Register
+           the step's row now, then connect its projections before row solving.
+           Ordinary ambiguous receivers keep their original lookup error. *)
+        let item = fresh_var env.st and errs = fresh_row env.st in
+        env.generator_early <- (fun () ->
+            let generated = match repr actual with
+              | TGen _ -> true
+              | TCon (p, _) -> Ty.is_generator_cursor p
+              | _ -> false in
+            if generated then (
+                let projected_item, projected_errs = Infer_generators.projection env cx e.loc actual in
+                unify_at env e.loc ~found:item ~expected:projected_item;
+                Unify.unify_row env.st errs projected_errs;
+                Option.iter (fun result -> unify_at env e.loc ~found:result
+                    ~expected:(TCon (Path.prelude "Option", [item]))) delayed_result)
+            else (
+                enabled := false;
+                report env diagnostic;
+                close_row errs)) :: env.generator_early;
+        item, errs
+  in
+  let result = Option.value delayed_result
+      ~default:(TCon (Path.prelude "Option", [item])) in
+  let signature = TFun ([{mode = Inout; ty = actual}], result, errs, REmpty) in
+  Hashtbl.replace cx.nodes f.node signature;
+  Hashtbl.replace cx.nodes r.node actual;
+  absorb env cx ~call:e ~ename:"next" ~fn:f errs REmpty;
+  env.generator_late <- (fun () ->
+      match if !enabled then Some (repr actual) else None with
+      | Some (TCon (p, _)) when Ty.is_generator_cursor p ->
+          (if changed = None then report env (Diag.make e.loc
+             ~help:("write `&" ^ Option.value (env.source r) ~default:"cursor" ^ ".next()`")
+             "a cursor's `next` changes it in place"));
+          (match producer () with Some path ->
+             Hashtbl.replace cx.found e.node (Gen_step path);
+             Hashtbl.replace cx.found f.node (Gen_step path)
+           | None -> report env (Diag.make e.loc "this generator has no producer signature"))
+      | Some (TFun _) -> report env (Diag.make e.loc ~help:"step the block with `p()`"
+                              "a generator block is stepped by calling it")
+      | _ -> ()) :: env.generator_late;
+  result
 
 (* [tf], the type of a member function of a dependency called through
    [alias], an alias of it (Resolve.through), with what it uses of the
@@ -2908,8 +3164,39 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
                       | None -> ())
                   | _ -> ())
                 ps args);
+        (match callee with
+        | Some path when Hashtbl.mem env.generators path || Hashtbl.mem env.generator_signatures path ->
+            Hashtbl.replace cx.found f.node (Gen_call path);
+            (match Hashtbl.find_opt cx.found e.node with
+            | Some (Args _) -> ()
+            | _ -> Hashtbl.replace cx.found e.node (Gen_call path));
+            env.generator_late <- (fun () ->
+                match repr ret with
+                | TCon (p, _) when Ty.is_generator_cursor p ->
+                    List.iter (fun (a : expr) ->
+                        match Hashtbl.find_opt cx.nodes a.node with
+                        | Some t when Infer_generators.has_block t ->
+                            report env (Diag.make a.loc
+                              ~help:"keep this capability in a scope-owned block generator"
+                              "a value generator can only capture data")
+                        | _ -> ()) args
+                | _ -> ()) :: env.generator_late
+        | _ -> ());
         absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
         given_for env cx ~fnode:f.node ~at:e.loc ~ename ps args (made env ret))
+  | TGen _ ->
+      List.iter (fun a -> ignore (infer_arg env cx a)) args;
+      if args <> [] then report env (wrong_arity e.loc name 0 (List.length args));
+      let item, errs = Infer_generators.projection env cx e.loc tf in
+      absorb env cx ~call:e ~ename ~fn:f errs REmpty;
+      env.generator_late <- (fun () ->
+          match repr tf with
+          | TFun _ -> ()
+          | TCon _ -> report env (Diag.make f.loc
+              ~help:"step this data cursor with `&cursor.next()`"
+              "a value cursor is stepped through `next`")
+          | _ -> ()) :: env.generator_late;
+      TCon (Path.prelude "Option", [item])
   | TVar _ ->
       (* a parameter whose type isn't known yet: calling it says it's a
          block, whose errors are the call's. Its type isn't written, so it
@@ -2939,6 +3226,18 @@ and applied env cx (e : expr) ~name ?target ?callee ?written (f : expr) tf args 
 and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
     (ps, ret, errs, uses) args =
   let ename = Option.value name ~default:"this" in
+  let step_errors () =
+    let generator = Option.fold ~none:false ~some:(fun path ->
+        Hashtbl.mem env.generators path || Hashtbl.mem env.generator_signatures path) callee in
+    if not generator then errs else
+      match repr ret with
+      | TGen g -> g.gerrors
+      | TCon (p, args) when Ty.is_generator_cursor p ->
+          (match List.rev args with TErrors e :: _ -> e | _ -> errs)
+      | TFun ([], _, e, _) -> e
+      | _ -> errs
+  in
+
   let fn =
     match (callee, name) with
     | Some p, _ -> Path.short p
@@ -2961,7 +3260,22 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
      call's *)
   let rest_checked ps written args =
     pinning env e f (fun () -> check_args env cx ~name ?callee ?at:(post_at env f) ~written ps args);
-    absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses
+    absorb env cx ~call:e ~ename ~fn:f ?target ?callee errs uses;
+    (match callee with
+    | Some path when Hashtbl.mem env.generators path || Hashtbl.mem env.generator_signatures path ->
+        Hashtbl.replace cx.found f.node (Gen_call path);
+        env.generator_late <- (fun () ->
+            match repr ret with
+            | TCon (p, _) when Ty.is_generator_cursor p ->
+                List.iter (fun (a : expr) ->
+                    match Hashtbl.find_opt cx.nodes a.node with
+                    | Some t when Infer_generators.has_block t ->
+                        report env (Diag.make a.loc
+                          ~help:"keep this capability in a scope-owned block generator"
+                          "a value generator can only capture data")
+                    | _ -> ()) args
+            | _ -> ()) :: env.generator_late
+    | _ -> ())
   in
   if ntags > 0 && given = n - ntags && not (List.exists named args) then (
     (* no `on:` at all: the help writes it, with what the call can fail
@@ -2969,7 +3283,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
     let kept = List.filter (fun (p, _) -> not (tags p)) (List.combine ps written) in
     rest_checked (List.map fst kept) (List.map snd kept) args;
     let at = ref 0 and parts = ref [] and param = ref "on" in
-    let can = List.sort_uniq compare (row_names errs) in
+    let can = List.sort_uniq compare (row_names (step_errors ())) in
     List.iteri
       (fun i (p : Types.param) ->
         if tags p then (
@@ -3047,7 +3361,7 @@ and tags_call env cx (e : expr) ~name ?target ?callee (f : expr) tf
         defer env
           (Later
              (fun () ->
-               let can = List.sort_uniq compare (row_names errs) in
+               let can = List.sort_uniq compare (row_names (step_errors ())) in
                List.iter
                  (fun t ->
                    if not (List.mem t can) then

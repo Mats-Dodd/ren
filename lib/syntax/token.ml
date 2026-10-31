@@ -72,6 +72,8 @@ type t =
   | IDENT of string
   (* keywords *)
   | FN
+  | YIELD
+  | RETURN
   | PUB
   | LET
   | VAR
@@ -186,6 +188,8 @@ let to_string = function
   | BYTES s -> "b" ^ show_str s
   | IDENT s -> s
   | FN -> "fn"
+  | YIELD -> "yield"
+  | RETURN -> "return"
   | PUB -> "pub"
   | LET -> "let"
   | VAR -> "var"

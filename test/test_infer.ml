@@ -1277,6 +1277,8 @@ fn main() = print(Some(true))
       | Some (Args _) -> print_endline "arguments in order"
       | Some Pulls_block -> print_endline "a block pulled"
       | Some (Pulled _) -> print_endline "a pull argument"
+      | Some (Gen_call _) -> print_endline "a generator call"
+      | Some (Gen_step _) -> print_endline "a generator step"
       | Some (For_param k) -> print_endline ("for its variable " ^ string_of_int k)
       | None -> ())
     (Path.Map.find (Path.make "test" "main") second.nodes);

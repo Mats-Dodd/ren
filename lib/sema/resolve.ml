@@ -107,6 +107,9 @@ type t = {
           member as written, `Events.items`, with the alias: it runs with the
           alias's implementation as its dependency's (compiler.md, "Services
           stage", step 5) *)
+  generator_cursors : (Path.t * int) list;
+      (** generated nominal cursor paths and the number of source-written
+          type parameters; their internal arguments also carry frame facts *)
 }
 
 (* How module [r] writes the type [p]: the shortest way it can. Bare if
@@ -116,7 +119,14 @@ type t = {
    from a module that isn't imported can still turn up, through a field
    or a function's result. *)
 let type_name (r : t) (p : Path.t) =
-  match (List.assoc_opt p.name r.scope, List.assoc_opt p.home r.aliases) with
+  if Ty.is_generator_cursor p then
+    let name = Ty.generator_cursor_name p in
+    if p.home = r.home then name
+    else
+      match List.assoc_opt p.home r.aliases with
+      | Some alias -> alias ^ "." ^ name
+      | None -> p.home ^ "." ^ name
+  else match (List.assoc_opt p.name r.scope, List.assoc_opt p.home r.aliases) with
   | Some q, _ when q = p -> p.name
   | None, _ when p.home = r.home ->
       (* a handler's type, named after it, which is never written, so it's
@@ -141,7 +151,11 @@ let value_name (r : t) (p : Path.t) =
 (* Whether module [r] can write the type [p] at all: it's in scope, or its
    module is imported. *)
 let can_name (r : t) (p : Path.t) =
-  List.assoc_opt p.name r.scope = Some p || List.mem_assoc p.home r.aliases
+  List.exists (fun (_, q) -> q = p) r.scope || List.mem_assoc p.home r.aliases
+
+let generator_owner_name p =
+  let name = Ty.generator_cursor_name p in
+  String.sub name 0 (String.length name - String.length ".Cursor")
 
 type env = {
   sink : Diag.sink;
@@ -236,6 +250,8 @@ type scope = {
   rows : named;
       (** the rows the function's signature names, `..d` (see [rows]) *)
   depth : int;  (** how many lambdas deep *)
+  in_finally : bool;
+  block_boundary : bool;
   loop : loop_at;  (** where a `break` would go *)
   fn : fn_state;
   next : next_in;
@@ -267,6 +283,7 @@ and next_in =
           (compiler.md, "`over any` and `retry`") *)
 
 and fn_state = {
+  generator : bool;
   mutable last_id : int;  (** the last binder id handed out *)
   mutable calls : Path.t list;
   mutable dots : (string * Path.t option) list;
@@ -486,7 +503,17 @@ let not_a_type env loc ~what (t : tyname) =
    [params] are the type parameters in scope. A name that doesn't exist is
    reported, and gives [None]. *)
 let find_named env ~params (t : tyname) =
-  match t.tmod with
+  match find_type env (show_tyname t) with
+  | Some (p, n) when Ty.is_generator_cursor p ->
+      (match t.tmod with
+      | Some alias when Env.mem alias.name env.modules ->
+          Hashtbl.replace env.used alias.name ()
+      | _ -> ());
+      if p.home = env.home then
+        check_private env (tyname_loc t) ~key:("type " ^ p.name)
+          (generator_owner_name p);
+      Some (Named p, n)
+  | _ -> match t.tmod with
   | None -> (
       match index_of t.tid.name 0 params with
       | Some i -> Some (Param i, 0)
@@ -978,7 +1005,16 @@ let rec ty env ~params ?(rows = Declaration) ?(arg = false) ?(tags = false)
             | _ -> false
           in
           let help =
-            if given > n && List.exists ends_in_uses (List.tl (List.rev args))
+            if (match tref with Named p -> Ty.is_generator_cursor p | Param _ -> false)
+            then
+              Some
+                (if n = 0 then
+                   sprintf "write `%s` without type arguments" (show_tyname t)
+                 else
+                   sprintf
+                     "give `%s` %d type argument%s, matching its generator's declaration"
+                     (show_tyname t) n (plural n))
+            else if given > n && List.exists ends_in_uses (List.tl (List.rev args))
             then
               Some
                 "in a type argument, a `uses` list ends at a comma: to list \
@@ -1936,7 +1972,7 @@ let binding env sc bound (p : Parsed.pattern) = pattern env ~how:bound sc p
    panics with any type (compiler.md, "Data stage", "`let ... else`"). *)
 let rec leaves (e : Parsed.expr) =
   match e.kind with
-  | Fail _ | Break | Todo -> true
+  | Fail _ | Break | Return _ | Todo -> true
   | Block (_, last) -> leaves last
   | If (_, t, Some f) -> leaves t && leaves f
   | Match (_, arms) -> List.for_all (fun (a : Parsed.arm) -> leaves a.arm_body) arms
@@ -2394,6 +2430,30 @@ let rec expr env sc (e : Parsed.expr) : Resolved.expr =
     | Interp ps ->
         Interp (List.map (function Ast.Lit t -> Ast.Lit t | Hole h -> Hole (go h)) ps)
     | Unit -> Unit
+    | Yield a | Yield_from a ->
+        if not sc.fn.generator then
+          report env e.loc ~help:"mark this function `gen fn`, or return a value"
+            "`yield` is only allowed in a `gen fn`"
+        else if sc.in_finally then
+          report env e.loc ~help:"yield from the generator body before cleanup"
+            "`yield` isn't allowed in a `finally`"
+        else if sc.depth > 0 || sc.block_boundary then
+          report env e.loc
+            ~notes:
+              [ "the generator would stop here with a block's scope open in its consumer" ]
+            ~help:
+              "time the step where it's consumed, or put the producer on a task: `Async.produce(cap: 1, fn() => ...)`"
+            "`yield` inside a block";
+        (match e.kind with Yield _ -> Yield (go a) | _ -> Yield_from (go a))
+    | Return value ->
+        let own = sc.depth = 0 && not sc.block_boundary && not sc.in_finally in
+        if not own then
+          report env e.loc ~help:"return the block's value and make the decision in its caller"
+            "`return` can't leave this block";
+        if own && sc.fn.generator && value <> None then
+          report env e.loc ~help:"use `yield value` to give an item, or `return` to end the generator"
+            "a generator returns no value; it yields items";
+        Return (Option.map go value)
     | Var (Bare "next") when next_free env sc -> (
         match sc.next with
         | In_over (_, over) -> Var (next_kept env e.loc over ())
@@ -2870,7 +2930,11 @@ and block_stmts ?(finally = false) env sc (stmts : Parsed.stmt list) =
             (Let_pattern { pat; value; else_ } :: acc, sc)
         | Expr e -> (Expr (expr env sc e) :: acc, sc)
         | Finally f ->
-            if not finally then
+            if not
+                 (finally
+                 || sc.fn.generator && sc.depth = 0
+                    && not sc.block_boundary && not sc.in_finally)
+            then
               report env
                 {
                   f.loc with
@@ -2906,6 +2970,9 @@ and arm_lambda ?(arm = true) env sc (l : Parsed.expr) : Resolved.expr =
           (fun (p : Parsed.param) ->
             if p.pmode = Inout then By_inout else By_lambda)
           ps
+      in
+      let inner =
+        { inner with in_finally = sc.in_finally || not arm; block_boundary = true }
       in
       let body =
         match body.kind with
@@ -3650,6 +3717,11 @@ let rec lowest_node (e : Parsed.expr) =
 
 let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
     Resolved.fn_def * Path.t list * (string * Path.t option) list =
+  (match (owner, f.fn_kind) with
+  | Some _, Generator_fn loc ->
+      report env loc ~help:"move this `gen fn` out of the type"
+        "a generator is a top-level function"
+  | _ -> ());
   let outer = match owner with Some td -> td.type_params | None -> [] in
   let tparams = outer @ f.tparams in
   (* test code sees what an importer sees, but in the console *)
@@ -3727,9 +3799,12 @@ let fn_def env ?(owner : Parsed.type_def option) (f : Parsed.fn_def) :
       tparams = List.map (fun (t : ident) -> t.name) tparams;
       rows = [];
       depth = 0;
+      in_finally = false;
+      block_boundary = false;
       loop = No_loop;
       fn =
         {
+          generator = (match f.fn_kind with Generator_fn _ -> true | Ordinary_fn -> false);
           last_id = 0;
           calls = [];
           dots = [];
@@ -4366,19 +4441,26 @@ and named_in_errors (es : Resolved.errors) =
 
 (* Report each private type of [named], the types named somewhere and
    where. [say] words the error for each one. *)
+let diagnostic_type (p : Path.t) =
+  if Ty.is_generator_cursor p then { p with name = Ty.generator_cursor_name p }
+  else p
+
 let no_private_named env ~private_ ~say named =
   List.iter
     (fun ((p : Path.t), loc) ->
       if p.home = env.home then
         match Hashtbl.find_opt private_ p.name with
         | Some decl ->
+            let name =
+              if Ty.is_generator_cursor p then generator_owner_name p else p.name
+            in
             report env loc
-              ~help:(sprintf "mark `%s` `pub`" p.name)
+              ~help:(sprintf "mark `%s` `pub`" name)
               ~labels:
                 [
-                  (decl, sprintf "`%s` is declared here, without `pub`" p.name);
+                  (decl, sprintf "`%s` is declared here, without `pub`" name);
                 ]
-              (sprintf "%s, which is private to this module" (say p))
+              (sprintf "%s, which is private to this module" (say (diagnostic_type p)))
         | None -> ())
     named
 
@@ -4386,7 +4468,9 @@ let no_private_named env ~private_ ~say named =
    that type, [inside] when it's somewhere in [t]. *)
 let no_private env ~private_ ~whole ~inside (t : Resolved.ty) =
   let is_whole p =
-    match t with TyName ({ tref = Named q; _ }, _) -> p = q | _ -> false
+    match t with
+    | TyName ({ tref = Named q; _ }, _) -> p = diagnostic_type q
+    | _ -> false
   in
   no_private_named env ~private_ (named_in t) ~say:(fun (p : Path.t) ->
       if is_whole p then whole p.name else inside p.name)
@@ -4898,6 +4982,7 @@ let wiring_fns env (defs : Parsed.wiring_def list) =
               made :=
                 Fn
                   {
+                    fn_kind = Ordinary_fn;
                     pub = false;
                     name = { name = fname; loc = w.wname.loc };
                     tparams = [];
@@ -5064,6 +5149,7 @@ let wiring_fns env (defs : Parsed.wiring_def list) =
               {
                 pub = false;
                 name = { name = check_fn w.wname.name; loc };
+                fn_kind = Ordinary_fn;
                 tparams = [];
                 tneeds = [];
                 params =
@@ -5332,6 +5418,7 @@ let service_items env (s : Parsed.service_def) : Parsed.program =
   in
   let handler : Parsed.fn_def =
     {
+      fn_kind = Ordinary_fn;
       pub = s.spub;
       name = s.sname;
       tparams = [];
@@ -5549,6 +5636,35 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
   (* each dependency's sum of calls, `D.Call`, beside it (see
      [call_types]) *)
   let prog = if home = Path.prelude_home then prog else call_types env prog in
+  (* The source namespace takes only written type parameters. The private
+     nominal declaration below also carries inferred parameter/item/row
+     arguments, which Infer_written supplies rather than the programmer. *)
+  List.iter
+    (function
+      | Fn ({ fn_kind = Generator_fn _; _ } as f) ->
+          let cursor =
+            Ty.generator_cursor ~source_params:(List.length f.tparams)
+              (Ast.fn_path home f)
+          in
+          Hashtbl.replace env.types (Ty.generator_cursor_name cursor)
+            (cursor, List.length f.tparams);
+          if not f.pub then
+            Hashtbl.replace env.own_private ("type " ^ cursor.name) ()
+      | _ -> ())
+    prog;
+  List.iter
+    (fun ((i : import), (iface : Iface.t)) ->
+      List.iter
+        (fun (v : Iface.value) ->
+          match v.generator with
+          | Some g when g.kind = Ty.Value_gen ->
+              let arity = List.length g.cursor_args - List.length g.params - 2 in
+              Hashtbl.replace env.types
+                (i.alias.name ^ "." ^ Ty.generator_cursor_name g.cursor_path)
+                (g.cursor_path, arity)
+          | _ -> ())
+        iface.values)
+    env.imports;
   (* what's in scope bare: the prelude, which every module imports
      without asking, and the module's own names. Another module's are
      written with its alias. *)
@@ -5876,6 +5992,16 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
           Hashtbl.replace private_ td.type_name.name td.type_name.loc
       | Fn _ | Type _ | Import _ | Testing _ | Wiring _ | Service _ -> ())
     items;
+  List.iter
+    (function
+      | Fn ({ fn_kind = Generator_fn _; pub = false; _ } as f) ->
+          let cursor =
+            Ty.generator_cursor ~source_params:(List.length f.tparams)
+              (Ast.fn_path home f)
+          in
+          Hashtbl.replace private_ cursor.name f.name.loc
+      | _ -> ())
+    items;
   no_leaks env ~private_ ~groups items;
   no_opaque_cycles env items;
   no_set_cycles env items;
@@ -5896,6 +6022,29 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
         | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
       items
   in
+  let cursor_types =
+    List.filter_map
+      (function
+        | Fn ({ fn_kind = Generator_fn loc; _ } as f) ->
+            Some
+              ({
+                 path =
+                   Ty.generator_cursor ~source_params:(List.length f.tparams)
+                     (Ast.fn_path home f);
+                 params =
+                   List.map (fun (p : ident) -> p.name) f.tparams
+                   @ List.mapi (fun i _ -> "$arg" ^ string_of_int i) f.params
+                   @ [ "$item"; "$errors" ];
+                 body = Iface.Builtin;
+                 members = Path.Map.empty;
+                 numeric = None;
+                 opaque = true;
+                 loc = Some loc;
+               } : Iface.type_decl)
+        | _ -> None)
+      items
+  in
+  let types = types @ cursor_types in
   (* [imported n] says whether the name [n] in `.{}` imported a type; one
      that didn't was reported already *)
   let imported (n : ident) =
@@ -5947,6 +6096,12 @@ let program sink ~home ~imports ?(groups = []) ?(sees_all = false)
         (fun (w : Parsed.wiring_def) -> Hashtbl.find_opt env.wirings w.wname.name)
         wiring_defs;
     through = env.through;
+    generator_cursors =
+      Hashtbl.fold
+        (fun _ (p, arity) found ->
+          if Ty.is_generator_cursor p then (p, arity) :: found else found)
+        env.types []
+      |> List.sort_uniq compare;
   }
 
 (* How each link function of the module's wirings is written where its

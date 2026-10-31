@@ -44,6 +44,9 @@ type ctx = {
       (** inside an inline handler: the binders its own code binds, by id. What
           else it reads, it's copied when it's made (foundations.md, decision
           3), so it can't change it *)
+  defer_for : expr -> (unit -> unit) -> unit;
+      (** The subject's inferred type distinguishes a data cursor's mutation
+          from a block, which never takes `&`. *)
 }
 
 (* Run a check; if it finds a problem, report it and carry on. *)
@@ -260,7 +263,9 @@ let rec walk cx (e : expr) =
                 loop changes";
              ]
            "`&` can't be used here")
-  | Unop (_, a, _) | Try a | Attempt a | Release a | Assert a -> walk cx a
+  | Unop (_, a, _) | Try a | Attempt a | Release a | Assert a
+  | Yield a | Yield_from a -> walk cx a
+  | Return value -> Option.iter (walk cx) value
   | With { items; body } ->
       List.iter (walk cx) (with_links items);
       walk cx body
@@ -313,7 +318,7 @@ let rec walk cx (e : expr) =
       walk_indices cx target;
       walk cx value
   | For { over = Each { kind = Ref a; _ }; body; _ } ->
-      guard cx (fun () ->
+      cx.defer_for a (fun () ->
           writable cx a ~what:"`&` needs a variable it can change" ());
       walk_indices cx a;
       walk cx body
@@ -371,11 +376,13 @@ and walk_indices cx (e : expr) =
   | Field (r, _) -> walk_indices cx r
   | _ -> ()
 
-let program sink (r : Resolve.t) =
+let program ?defer_for sink (r : Resolve.t) =
+  let defer_for = Option.value defer_for
+      ~default:(fun _ check -> Diag.recover sink ~default:() check) in
   let source =
     Ast.source ~type_name:(Resolve.type_name r)
       ~value_name:(Resolve.value_name r)
   in
   List.iter
-    (fun (f : fn_def) -> walk { sink; source; in_handler = false; inline = None } f.body)
+    (fun (f : fn_def) -> walk { sink; source; in_handler = false; inline = None; defer_for } f.body)
     (Ast.functions r.prog)

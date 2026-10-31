@@ -785,8 +785,9 @@ let rec check_expr env (e : expr) =
   | Try ({ kind = Match (subject, arms); _ } as m) ->
       check_match_expr env ~passes_on:true m subject arms
   | Unop (_, a, _) | Field (a, _) | Ref a | Try a | Attempt a | Release a
-  | Assert a ->
+  | Assert a | Yield a | Yield_from a ->
       check_expr env a
+  | Return value -> Option.iter (check_expr env) value
   | Fail (_, args) -> List.iter (fun (_, a) -> check_expr env a) args
   | Binop (_, a, b, _) | Index (a, b) ->
       check_expr env a;

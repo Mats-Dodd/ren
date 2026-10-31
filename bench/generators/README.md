@@ -1,15 +1,16 @@
 # Generators stage tests
 
-`test/test_generators.ml` runs every staged specimen now through
-`Helpers.until "g1"` … `until "g5"`. The expected success output or required
-error headline and help is separate from today's compact rejection. When a
-specimen reaches its target, `until` fails with `Landed`; turn that test into
-an ordinary assertion and keep the target. Do not promote away `Landed`.
+`test/test_generators.ml` runs the g1 specimens as ordinary assertions.
+The remaining g2, g3 and g5 specimens run through `Helpers.until`; their
+required output or diagnostic is separate from the current compact rejection.
+When a specimen reaches its target, `until` fails with `Landed`; replace the
+staging wrapper with an ordinary assertion and keep the target. Do not
+promote away `Landed`.
 
 `bench/generators.t` executes each disabled interpreter specimen and checks
 its output, exit status and first diagnostic against `.pending`. This detects a changed rejection,
 a crash, and an accidental success; none counts as the specified behavior.
-The `stages` file starts empty. Add `g1`, …, `g5` there as their steps land,
+The `stages` file enables g1. Add subsequent steps there as they land,
 then update the cram transcript to the strict success messages. Regenerating
 a `.pending` file is appropriate only after reviewing the changed rejection.
 
@@ -24,9 +25,10 @@ The fixtures have these roles:
 | `part_two` | g1 | g4: explicit refusal with runtime-core help |
 | `stages` | g2 | g4: pushed chain, zip, user stage and composed pull |
 | `lifetime_push` | g2 | g4: normal end, break, return, failure and take cleanup |
-| `unique` | g4 | g4: copy captured between resumes keeps its old contents |
-| `depth_push`, `depth_pull` | g4 | g4: both report the recursive-call depth panic |
+| `unique` | g1 | g4: copy captured between resumes keeps its old contents |
+| `depth_push`, `depth_pull` | g1 | g4: both report the recursive-call depth panic |
 | `cancel_sim` | g1 | Tasks: interpreter only in part one |
+| `returns`, `return_with`, `native_refusal` | g1 | Ordinary returns agree in all native modes; dependency callback returns and generators give explicit native refusals |
 | `merge_sim`, `expand_sim` | g3 | Interpreter, 1,000 simulation seeds per test |
 | `replay` | g3 | Records and replays values and producer cleanup |
 | `fs`, `transaction` | g5 | Named dependency frames: interpreter only in part one |
@@ -43,25 +45,25 @@ The harness fails if a required compiler is unavailable; it cannot silently
 substitute cc for tcc. Runtime statistics and the already documented ASan
 stack-switch warning are the only stderr lines filtered.
 
-The OCaml suite additionally covers all default stages/sinks, inferred vs
+The OCaml suite additionally specifies all default stages/sinks, inferred vs
 publicly declared empty rows (a `pub` function omitting `uses` declares the
 empty row), a generator's typed failure kept after end, never-started
 transactions, statement vs binding cleanup, named resume, every consumer
 exit, diagnostic help, custom cursor recognition, ordinary methods named
 `map`, alias vocabulary, lookahead, and capture exclusivity. Two block heads
 in one call step a shared cursor sequentially; an explicit inout argument
-still conflicts with the pipeline capture for the whole call.
+still conflicts with the pipeline capture for the whole call. Pipeline and
+filesystem targets remain staged until their owning steps land.
 
 ## Pending internal adapters and remaining coverage
 
-`test/test_generator_contracts.ml` contains executable assertions with
-explicitly absent adapters to real internals. These cases print
-"skipped until gN"; they are not an alternative implementation or a claim
-that the behavior passes. The owning step connects its real implementation:
+`test/test_generator_contracts.ml` connects its g1 frame adapter to the real
+`Generator` implementation. It checks suspended and unstarted cancellation,
+independent replay positions, cleanup ownership, projected-place hooks,
+consumer depth and declaration-order cleanup. The remaining adapters are
+explicitly absent and print "skipped until gN"; their executable assertions
+are obligations for the owning steps, not alternative implementations:
 
-- g1: closing a suspended frame records Cancelled exactly once and every
-  later resume panics; closing an unstarted frame runs neither its body nor
-  finalizer and later resume has the cancelled-before-start outcome.
 - g4: pushed and pulled recursion have the same below/at/above depth limit.
 - g5: stale readers return typed Closed after mem_fs and real_fs family end,
   including after a replacement family is opened over the same path.

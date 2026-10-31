@@ -95,6 +95,7 @@ let rec labels_named name t =
     List.filter (fun (l : label) -> l.name = name) (fst (row_parts r))
   in
   match repr t with
+  | TGen g -> List.concat_map (labels_named name) (generator_parts g)
   | TFun (ps, r, e, _) ->
       row e @ List.concat_map (labels_named name) (r :: param_tys ps)
   | TCon (_, args) | TVariant (_, _, args) ->
@@ -2791,6 +2792,7 @@ let others_param loc ~fn ~other ~param ~declared =
 (* Why a type has no `==` (Infer_reqs): what in it is a function, as far
    as a message says. *)
 type no_eq =
+  | Generator_cursor of string
   | Is_function  (** it's a function itself *)
   | Has_function of string  (** a function type in it, shown *)
   | Field_function of string * string * string
@@ -2809,6 +2811,28 @@ type no_eq =
    "Generic code"). If [failed], [shown] are the errors something given to
    [by] fails with, which it compares, kept by `attempt`. *)
 let no_eq loc ~shown ~req ~op ~by ~failed why =
+  match why with
+  | Generator_cursor name ->
+      let requirement = if req = "hash" then "hash" else "equality" in
+      let direct = shown = name ||
+        (String.length shown > String.length name
+         && String.sub shown 0 (String.length name) = name
+         && shown.[String.length name] = '<') in
+      let subject = if direct then sprintf "generator cursor `%s`" shown
+        else sprintf "`%s`, which contains generator cursor `%s`," shown name in
+      let needed = match by with
+        | None -> ""
+        | Some f -> sprintf ", which `%s` needs" f in
+      let notes = match by with
+        | Some f when failed ->
+            [sprintf "`%s` compares what something it's given fails with" f]
+        | None -> [sprintf "this uses `%s` on the cursor position" op]
+        | Some _ -> [] in
+      Diag.make loc
+        ~notes
+        ~help:"compare the yielded data, or use a separate data key"
+        (sprintf "%s has no %s%s" subject requirement needed)
+  | _ ->
   (* `==`, or `hash`, which a `Map`'s key needs *)
   let needed = if req = "hash" then "hash" else "==" in
   let msg =
@@ -2818,6 +2842,7 @@ let no_eq loc ~shown ~req ~op ~by ~failed why =
   in
   let inside =
     match why with
+    | Generator_cursor _ -> []
     | Is_function -> []
     | Has_function f -> [ sprintf "it has `%s` in it" f ]
     | Field_function (_, t, f) ->
@@ -2885,6 +2910,7 @@ let req_symbol = function
 (* Why a type has no order (Infer_reqs): it's ordered only by its `key`,
    or it isn't ordered at all. *)
 type no_ord =
+  | Unordered_generator of string
   | Unordered_record of string  (** a record, named *)
   | Unordered_sum of string  (** a sum type with fields, named *)
   | Unordered_prelude of string
@@ -2926,6 +2952,9 @@ let no_ord loc ~shown ~op ~by ~uses why =
   let key t = sprintf "give `%s` a key: `fn key(self) -> K = ...`" t in
   let note, help =
     match why with
+    | Unordered_generator name ->
+        ([sprintf "generator cursor `%s` has no order" name],
+         Some "compare the yielded data, or use a separate data key")
     | Unordered_record t ->
         ( [
             "a record is ordered only by its `key`, so that reordering its \

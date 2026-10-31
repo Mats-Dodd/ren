@@ -99,6 +99,8 @@ type 'l found_ =
           Lower makes the block that pulls it, named [name] as a lambda is
           (streams.md, rule 3) *)
   | For_param of int
+  | Gen_call of Path.t
+  | Gen_step of Path.t
       (** at a call of a handler `for D`'s own node ([for_node]): which of its
           scheme's variables is [D], whose type argument there is the
           implementation it's made for (compiler.md, "Services stage",
@@ -204,6 +206,16 @@ type why = {
    other. *)
 type clause = { cbinder : int; rid : int; cases : (string * ty) list }
 
+type generator_def = {
+  gen_fn : fn_def;
+  gen_type : Types.generator;
+  gen_params : Types.param list;
+  gen_nodes : (int, Types.ty) Hashtbl.t;
+  gen_facts : (int, found) Hashtbl.t;
+  mutable gen_with : bool;
+  mutable gen_unsafe : bool;
+}
+
 type env = {
   st : Types.state;
   sink : Diag.sink;
@@ -224,6 +236,16 @@ type env = {
           error lists them in: its own, those imported by name, and the
           prelude's *)
   globals : (Path.t, ty) Hashtbl.t;
+  generators : (Path.t, generator_def) Hashtbl.t;
+  generator_signatures : (Path.t, Ty.generator) Hashtbl.t;
+  replay_defs : (Path.t, replay_def) Hashtbl.t;
+      (** Typed bodies from checked groups and the current SCC, retained for
+          the private replay-safety summary before choosing generator kinds. *)
+  replay_unsafe : (Path.t, unit) Hashtbl.t;
+      (** Callable and member paths that reach ambient state, unknown handler
+          code or unresolved user dispatch. This never changes source rows. *)
+  mutable generator_early : (unit -> unit) list;
+  mutable generator_late : (unit -> unit) list;
       (** top-level functions: a type scheme once their group is done *)
   written : (Path.t, bool list) Hashtbl.t;
       (** which of each of the module's functions' parameters have a type
@@ -337,6 +359,13 @@ type env = {
       (** the module's operations an arm of which pins an instance of a
           family for a block, `Shards.at`, or posts to one, `Shards.send`
           ([pinning_ops]) *)
+}
+
+and replay_def = {
+  replay_fn : fn_def;
+  replay_nodes : (int, Types.ty) Hashtbl.t;
+  replay_facts : (int, found) Hashtbl.t;
+  replay_required : (int, required) Hashtbl.t;
 }
 
 (* How a call reaches a keyed instance family: pinning one of its
@@ -644,6 +673,7 @@ and ecall = {
       (** whether it's installing a `with`'s item, which can fail to start
           (handlers.md, "State that can fail to start"), not a call *)
   estep : bool;
+  estream : (string * string) option;
       (** whether it's a chain's step, `|> validate`, which carries its own
           marker or none (language.md §8, "`try` on each step") *)
 }
@@ -756,6 +786,8 @@ and ctx = {
       (** what each use of a top-level function needs of its type arguments, by
           node id, so a call of it can say which argument each is in *)
   errs : row;  (** the errors of the innermost function or lambda *)
+  return_ty : ty;
+  generator_item : ty option;
   uses : row;  (** the dependencies of the innermost function or lambda *)
   handler : row;
       (** where a `fail`, and the errors of a call a `try` covers, go: the
@@ -884,6 +916,7 @@ let lambda_cx cx (params : Resolved.param list) ps ~errs ~uses =
   {
     cx with
     errs;
+    generator_item = None;
     uses;
     calls = ref [];
     handler = errs;

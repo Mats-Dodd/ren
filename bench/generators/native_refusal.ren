@@ -1,0 +1,6 @@
+gen fn values() -> Int =
+  yield 1
+
+fn main() uses Console =
+  var cursor = values()
+  print(&cursor.next())

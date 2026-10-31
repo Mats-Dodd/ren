@@ -122,6 +122,9 @@ module.exports = grammar({
     // `Doc.Call.Edit`: whether `Doc.Call` is a constructor or the type of
     // one, the token after it decides
     [$.constructor_ref, $.calls_type],
+    // `walks.numbers.Cursor` is a generated type; `walks.numbers` can
+    // also be a pipe step until the final name distinguishes them.
+    [$.type_name, $.step_path],
   ],
 
   supertypes: ($) => [$._expression, $._pattern, $._type],
@@ -169,6 +172,7 @@ module.exports = grammar({
       seq(
         optional($.visibility),
         optional(field('test', 'test')),
+        optional(field('generator', 'gen')),
         'fn',
         field('name', $.identifier),
         optional(field('type_parameters', $.type_parameters)),
@@ -804,6 +808,13 @@ module.exports = grammar({
       choice(
         prec(1, field('name', $.type_identifier)),
         seq(field('module', $.identifier), '.', field('name', $.type_identifier)),
+        seq(
+          field('module', $.identifier),
+          '.',
+          field('generator', $.identifier),
+          '.',
+          field('name', alias('Cursor', $.type_identifier)),
+        ),
       ),
 
     // ---- bodies and statements ----
@@ -928,6 +939,9 @@ module.exports = grammar({
         $.try_expression,
         $.attempt_expression,
         $.assert_expression,
+        $.yield_expression,
+        $.yield_from_expression,
+        $.return_expression,
         $.release_expression,
         $._postfix,
       ),
@@ -1037,6 +1051,21 @@ module.exports = grammar({
         PREC.prefix,
         seq('assert', field('operand', $._expression)),
       ),
+
+    // A generator's item, or every item of another pull source. Whether
+    // this is in its generator's own body is Resolve's check.
+    yield_expression: ($) =>
+      prec.right(PREC.prefix, seq('yield', field('value', $._expression))),
+
+    yield_from_expression: ($) =>
+      prec.right(
+        PREC.prefix,
+        seq('yield', 'from', field('source', $._expression)),
+      ),
+
+    // A generator ends without a value; an ordinary function can give one.
+    return_expression: ($) =>
+      prec.right(PREC.prefix, seq('return', optional(field('value', $._expression)))),
 
     // release Next.get(id): in a handler's arm, the instance is let go of
     // for that one call (foundations.md, decision 10). `release` is a word

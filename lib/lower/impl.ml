@@ -32,6 +32,21 @@ let rec unplaced (e : Core.expr) : Core.expr =
     | ( Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
       | Global_value _ | Intrinsic _ | Break ) as k ->
         k
+    | Source_view v -> Source_view { v with value = go v.value }
+    | Pattern_scope p -> Pattern_scope { p with source = go p.source;
+        on_match = go p.on_match; on_else = Option.map go p.on_else; pat = pattern p.pat }
+    | Return (p, e) -> Return (p, go e)
+    | Yield e -> Yield (go e)
+    | Yield_from y -> Yield_from { y with pull = go y.pull }
+    | Gen_close e -> Gen_close (go e)
+    | Gen_step _ -> e.kind
+    | Gen_create g -> Gen_create { g with args = List.map (function Core.Value e -> Core.Value (go e) | Ref v -> Ref v) g.args;
+        places = List.map (fun (p : Core.gen_place) -> { p with read = go p.read; write = go p.write }) g.places }
+    | Cleanup_scope c -> Cleanup_scope { c with body = go c.body }
+    | Instance_scope c -> Instance_scope { c with body = go c.body }
+    | Own o -> Own { o with value = go o.value }
+    | Owned_assign a -> Owned_assign { a with value = go a.value }
+    | Owner_alias a -> Owner_alias { a with body = go a.body }
     | Dep_call d -> Dep_call { d with args = List.map go d.args }
     | With w -> With { w with impl = go w.impl; body = go w.body }
     | Handler h -> Handler { h with body = go h.body }

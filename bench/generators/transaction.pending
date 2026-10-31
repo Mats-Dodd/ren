@@ -1,2 +1,2 @@
 exit 1
-error: expected `fn`, `type`, `dep`, `handler`, `test` or `group`, found `gen`
+error: `.take` needs a record, but this is a `fn() -> Option<Int>`

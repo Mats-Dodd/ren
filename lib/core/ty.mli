@@ -83,6 +83,28 @@ type scheme = {
    (core.ml). *)
 type args = { tys : ty list; rows : row list }
 
+type generator_kind = Value_gen | Block_gen
+
+(* The source signature, numbered in the variables of the factory scheme.
+   Creation itself has no errors; [errors] belongs to each step. *)
+type generator = {
+  path : Path.t;
+  cursor_path : Path.t;
+  cursor_args : ty list;
+  item : ty;
+  errors : row;
+  uses : row;
+  kind : generator_kind;
+  holds_instance : bool;
+  replay_unsafe : bool;
+  params : param list;
+}
+
+val generator_cursor : ?source_params:int -> Path.t -> Path.t
+val is_generator_cursor : Path.t -> bool
+val generator_cursor_arity : Path.t -> int
+val generator_cursor_name : Path.t -> string
+
 (* The prelude's types: [Int], [Bool], [Unit], [Str] and [Array<t>]. *)
 val int : ty
 val float : ty
@@ -195,6 +217,9 @@ val own_args : ty -> args
    which calls it takes from it (compiler.md, "Services stage",
    "`D.Call`"). *)
 val apply : ?calls:bool -> args -> ty -> ty
+
+val generator_instance : generator -> ty -> (args * generator) option
+val expand_generator_cursor : generator -> ty -> ty option
 
 (* [t], made from another by putting types in for its variables, with
    what's known once a dependency is: generic code's `Call<D, R, ! E>` of

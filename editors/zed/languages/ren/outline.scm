@@ -8,6 +8,7 @@
 (function_definition
   (visibility)? @context
   "test"? @context
+  "gen"? @context
   "fn" @context
   name: (identifier) @name) @item
 

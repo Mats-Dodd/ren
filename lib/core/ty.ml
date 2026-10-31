@@ -115,6 +115,51 @@ type scheme = {
    with them put in. *)
 type args = { tys : ty list; rows : row list }
 
+(* A generator's source signature. Its callable scheme describes creation;
+   these rows describe its body, which only a step runs. All variables use
+   the numbering of that callable scheme. *)
+type generator_kind = Value_gen | Block_gen
+
+type generator = {
+  path : Path.t;
+  cursor_path : Path.t;
+  cursor_args : ty list;
+  item : ty;
+  errors : row;
+  uses : row;
+  kind : generator_kind;
+  holds_instance : bool;
+  replay_unsafe : bool;
+  params : param list;
+}
+
+let generator_cursor ?(source_params = 0) p =
+  Path.make p.Path.home
+    ("$gen$" ^ string_of_int source_params ^ "$" ^ Path.local p ^ "$Cursor")
+let is_generator_cursor p = String.starts_with ~prefix:"$gen$" p.Path.name
+
+(* Only the written arguments are part of a cursor's source name. Keeping
+   their count in its private name lets every printer recover that fact
+   without a global registry or a different kind of Path. *)
+let generator_cursor_prefix p =
+  if not (is_generator_cursor p) then (0, 0)
+  else
+    match String.index_from_opt p.Path.name 5 '$' with
+    | Some stop -> (
+        match int_of_string_opt (String.sub p.name 5 (stop - 5)) with
+        | Some n when n >= 0 -> (n, stop + 1)
+        | _ -> (0, 5))
+    | None -> (0, 5)
+
+let generator_cursor_arity p = fst (generator_cursor_prefix p)
+
+let generator_cursor_name p =
+  if is_generator_cursor p then (
+    let _, start = generator_cursor_prefix p in
+    String.sub p.Path.name start (String.length p.Path.name - start - 7)
+    ^ ".Cursor")
+  else Path.local p
+
 let int = Con (Path.prelude "Int", [])
 let float = Con (Path.prelude "Float", [])
 let bool = Con (Path.prelude "Bool", [])
@@ -452,6 +497,111 @@ and apply_row ?(calls = true) a (r : row) : row =
         tail = more.tail;
       }
 
+(* Recover a generator's instantiation from its nominal cursor. Repeated
+   variables must agree; the row carried by a cursor is not supplied by a
+   step node that happens to use it. *)
+let generator_instance (g : generator) cursor =
+  let tys = Hashtbl.create 8 and rows = Hashtbl.create 4 in
+  let bind table n v =
+    match Hashtbl.find_opt table n with
+    | None -> Hashtbl.add table n v
+    | Some old when old = v -> ()
+    | Some _ -> raise Exit
+  in
+  (* Substitution can reorder instances of the same generic dependency.
+     A choice must also satisfy the cursor's later arguments, not merely
+     the remaining labels in this row. *)
+  let choose candidates accept =
+    let restore table saved =
+      Hashtbl.clear table;
+      Hashtbl.iter (Hashtbl.add table) saved
+    in
+    let rec try_next before = function
+      | [] -> raise Exit
+      | candidate :: rest ->
+          let saved_tys = Hashtbl.copy tys and saved_rows = Hashtbl.copy rows in
+          try accept candidate (List.rev_append before rest) with Exit ->
+            restore tys saved_tys;
+            restore rows saved_rows;
+            try_next (candidate :: before) rest
+    in
+    try_next [] candidates
+  in
+  let rec ty pattern actual next =
+    match pattern, actual with
+    | Var n, t -> bind tys n t; next ()
+    | Con (p, xs), Con (q, ys) when p = q -> list xs ys next
+    | Variant (p, c, xs), Variant (q, d, ys) when p = q && c = d -> list xs ys next
+    | Errors a, Errors b -> row a b next
+    | Fun (ps, r, e, u), Fun (qs, s, f, v) when List.length ps = List.length qs ->
+        List.iter2 (fun (p : param) (q : param) ->
+            if p.mode <> q.mode then raise Exit) ps qs;
+        list (List.map (fun (p : param) -> p.ty) ps)
+          (List.map (fun (p : param) -> p.ty) qs)
+          (fun () -> ty r s (fun () -> row e f (fun () -> row u v next)))
+    | Impl a, Impl b when a.over = b.over && List.length a.deps = List.length b.deps ->
+        deps a.deps b.deps (fun () -> row a.needs b.needs (fun () -> row a.fails b.fails next))
+    | Error, Error -> next ()
+    | _ -> raise Exit
+  and list xs ys next = match xs, ys with
+    | [], [] -> next ()
+    | x :: xs, y :: ys -> ty x y (fun () -> list xs ys next)
+    | _ -> raise Exit
+  and deps patterns actual next = match patterns with
+    | [] -> if actual <> [] then raise Exit; next ()
+    | (pattern : dep) :: rest ->
+        choose actual (fun (found : dep) remaining ->
+            if pattern.dpath <> found.dpath then raise Exit;
+            list pattern.dargs found.dargs (fun () -> deps rest remaining next))
+  and row (pattern : row) (actual : row) next =
+    let rec labels patterns remaining = match patterns with
+      | [] ->
+          (match pattern.tail with
+          | None -> if remaining <> [] || actual.tail <> None then raise Exit
+          | Some n -> bind rows n { labels = remaining; tail = actual.tail });
+          next ()
+      | (label : label) :: rest ->
+          choose remaining (fun (found : label) remaining ->
+              if found.name <> label.name then raise Exit;
+              list label.payload found.payload (fun () -> labels rest remaining))
+    in
+    labels pattern.labels actual.labels
+  in
+  try
+    ty (Con (g.cursor_path, g.cursor_args)) cursor (fun () ->
+    let parameters = own_args (Fun (g.params, Con (g.cursor_path, g.cursor_args), g.errors, g.uses)) in
+    let a = {
+      tys = List.mapi (fun n _ -> match Hashtbl.find_opt tys n with Some t -> t | None -> raise Exit) parameters.tys;
+      rows = List.mapi (fun n _ -> match Hashtbl.find_opt rows n with Some r -> r | None -> raise Exit) parameters.rows;
+    } in
+    Some (a, { g with cursor_args = List.map (apply a) g.cursor_args;
+                     item = apply a g.item; errors = apply_row a g.errors;
+                     uses = apply_row a g.uses;
+                     params = List.map (fun (p : param) -> {p with ty = apply a p.ty}) g.params }))
+  with Exit | Invalid_argument _ | Failure _ -> None
+
+(* A written cursor type lists only the generator's source type parameters.
+   A stored field needs every hidden parameter to follow from those: leaving
+   one unknown would silently introduce an existential cursor type. *)
+let expand_generator_cursor (g : generator) cursor =
+  let count = generator_cursor_arity g.cursor_path in
+  match cursor with
+  | Con (p, args) when p = g.cursor_path && g.kind = Value_gen
+                      && List.length args = count ->
+      let prefix = List.filteri (fun i _ -> i < count) g.cursor_args in
+      if List.length prefix <> count then None else
+      let written = { g with cursor_args = prefix; item = unit;
+                            params = []; errors = closed; uses = closed } in
+      (match generator_instance written cursor with
+      | None -> None
+      | Some (a, _) ->
+          let full = Con (g.cursor_path, g.cursor_args) in
+          let required = own_args (Fun (g.params, full, g.errors, g.uses)) in
+          if List.length required.tys <> List.length a.tys
+             || List.length required.rows <> List.length a.rows then None
+          else Some (apply a full))
+  | _ -> None
+
 (* A scheme with its variables renumbered by where they first appear,
    reading left to right, as inference numbers them: type variables and
    row variables separately. [names], [reqs] and [row_reqs] follow their
@@ -540,7 +690,13 @@ type printer = {
 
 let printer ?(show_tail = fun _ -> false) ~names (s : scheme) =
   {
-    type_name = names;
+    type_name =
+      (fun p ->
+        let name = names p in
+        if is_generator_cursor p && String.ends_with ~suffix:p.Path.name name then
+          String.sub name 0 (String.length name - String.length p.name)
+          ^ generator_cursor_name p
+        else name);
     hints = s.names;
     names = Hashtbl.create 8;
     order = [];
@@ -578,6 +734,37 @@ let set_hints pr hints = pr.hints <- hints
    parameter prints as itself, whatever else is named `T`. *)
 let name pr id n = Hashtbl.replace pr.names id n
 
+let source_args p args =
+  if not (is_generator_cursor p) then args
+  else
+    let rec first n = function
+      | x :: xs when n > 0 -> x :: first (n - 1) xs
+      | _ -> []
+    in
+    first (generator_cursor_arity p) args
+
+(* A projection used only to decide what links a printed signature shows.
+   The semantic traversals above still see every hidden frame argument. *)
+let rec displayed t =
+  let row r =
+    { r with labels = List.map (fun l -> { l with payload = List.map displayed l.payload }) r.labels }
+  in
+  match t with
+  | Con (p, args) -> Con (p, List.map displayed (source_args p args))
+  | Variant (p, c, args) -> Variant (p, c, List.map displayed args)
+  | Errors e -> Errors (row e)
+  | Fun (ps, r, e, u) ->
+      Fun
+        ( List.map (fun (p : param) -> { p with ty = displayed p.ty }) ps,
+          displayed r, row e, row u )
+  | Impl i ->
+      Impl
+        { i with
+          deps = List.map (fun d -> { d with dargs = List.map displayed d.dargs }) i.deps;
+          needs = row i.needs;
+          fails = row i.fails }
+  | Var _ | Error -> t
+
 (* Keep the declared names of a type's variables free, so an automatic name
    handed out first doesn't take them. *)
 let rec reserve pr t =
@@ -587,7 +774,8 @@ let rec reserve pr t =
         (fun h -> pr.reserved <- h :: pr.reserved)
         (List.assoc_opt id pr.hints)
   | Error -> ()
-  | Con (_, args) | Variant (_, _, args) -> List.iter (reserve pr) args
+  | Con (p, args) -> List.iter (reserve pr) (source_args p args)
+  | Variant (_, _, args) -> List.iter (reserve pr) args
   | Errors e -> List.iter (reserve_label pr) e.labels
   | Impl _ -> ()
   | Fun (ps, r, e, _) ->
@@ -653,6 +841,10 @@ and show pr t =
       ^ show_row pr ~prefix:" ! " ~sep:" | " ~kind:"e" i.fails
       ^ show_row pr ~prefix:" uses " ~sep:", " ~kind:"d" (shown_needs i)
   | Con (p, args) when is_tuple p -> "(" ^ show_list pr args ^ ")"
+  | Con (p, args) when is_generator_cursor p -> (
+      match source_args p args with
+      | [] -> pr.type_name p
+      | args -> pr.type_name p ^ "<" ^ show_list pr args ^ ">")
   | Con (p, []) -> pr.type_name p
   | Con (p, args) -> pr.type_name p ^ "<" ^ show_list pr args ^ ">"
   | Variant (p, c, []) -> pr.type_name p ^ "." ^ c
@@ -822,7 +1014,7 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
          rows, a parameter, the result. So is one at the end of what a
          block parameter uses, which would read as what its type lists
          without it *)
-      let all = tails (Fun (linked, ret, errs, uses)) in
+      let all = tails (displayed (Fun (linked, ret, errs, uses))) in
       let links id = List.length (List.filter (( = ) id) all) > 1 in
       let kept =
         List.concat_map
@@ -838,7 +1030,8 @@ let signature ?(outer = []) ~names ~pub ~name ~params (s : scheme) =
       let rec needs t =
         match t with
         | Impl i -> Option.to_list i.needs.tail @ Option.to_list i.fails.tail
-        | Con (_, args) | Variant (_, _, args) -> List.concat_map needs args
+        | Con (p, args) -> List.concat_map needs (source_args p args)
+        | Variant (_, _, args) -> List.concat_map needs args
         | Var _ | Error | Errors _ | Fun _ -> []
       in
       let kept = kept @ needs ret in

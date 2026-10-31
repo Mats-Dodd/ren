@@ -1,3 +1,4 @@
 # Add g1, g2, ..., g5 on separate lines only after that step passes.
 # A disabled step is checked against its recorded rejection, never counted
 # as passing the target behavior. Enabling a step makes every check strict.
+g1

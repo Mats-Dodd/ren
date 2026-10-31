@@ -36,6 +36,8 @@ type ty =
           the by-name constructor and the sum's type arguments. It unifies
           only with itself, never with its sum *)
   | TFun of param list * ty * row * row  (** params, result, errors, uses *)
+  | TGen of generator
+      (** a generator call's result before its SCC's dependency rows settle *)
   | TVar of tvar ref
   | TErrors of row
       (** an error set as a type argument, which only [Result<T, ! ...>] takes
@@ -58,6 +60,16 @@ type ty =
    can't be passed where one that only reads it is expected: the caller
    wouldn't write `&`, and the change would be lost. *)
 and param = { mode : mode; ty : ty }
+
+and generator = {
+  gpath : Path.t;
+  gcursor : Path.t;
+  gargs : ty list;
+  gitem : ty;
+  gerrors : row;
+  guses : row;
+  gkind : Ty.generator_kind option ref;
+}
 
 (* An implementation's type (ty.ml, [impl]): the dependencies it
    implements, sorted, each once; whether it goes over another
@@ -119,6 +131,8 @@ module Names = Set.Make (String)
 type state = {
   mutable level : int;  (** the level new variables are created at *)
   mutable last_id : int;  (** the last id handed out to a variable *)
+  mutable generator_equalities : (ty * ty) list;
+      (** shape equations that cannot choose cursor or block before row solving *)
   hints : (int, string) Hashtbl.t;
       (** the names of type parameters, remembered so `ren types` can print `T`
           for a variable that came from `fn id<T>` *)
@@ -148,6 +162,7 @@ let new_state () =
   {
     level = 1;
     last_id = 0;
+    generator_equalities = [];
     hints = Hashtbl.create 16;
     skolem_vars = Hashtbl.create 16;
     skolem_rows = Hashtbl.create 8;
@@ -176,6 +191,12 @@ let str = TCon (Path.prelude "Str", [])
 let array t = TCon (Path.prelude "Array", [ t ])
 let read ty = { mode = Read; ty }
 let param_tys ps = List.map (fun p -> p.ty) ps
+
+let map_generator ty row g =
+  { g with gargs = List.map ty g.gargs; gitem = ty g.gitem;
+           gerrors = row g.gerrors; guses = row g.guses }
+
+let generator_parts g = g.gitem :: g.gargs @ [ TErrors g.gerrors; TErrors g.guses ]
 
 (* The type of an implementation of [deps], needing [needs]: one
    dependency's, `Clock`, or for several, a type that lists them, `Clock &
@@ -284,6 +305,12 @@ let refined : (int, ty) Hashtbl.t = Hashtbl.create 1
    chain as it goes so later lookups are quick. *)
 let rec repr t =
   match chase t with
+  | TGen g -> (
+      match !(g.gkind) with
+      | None -> TGen g
+      | Some Ty.Value_gen -> TCon (g.gcursor, g.gargs)
+      | Some Ty.Block_gen ->
+          TFun ([], TCon (Path.prelude "Option", [ g.gitem ]), g.gerrors, REmpty))
   | TSkol (id, _) as t when Hashtbl.length refined > 0 -> (
       match Hashtbl.find_opt refined id with Some r -> repr r | None -> t)
   | t -> t
@@ -335,6 +362,9 @@ let rec repr_row r =
    dependency apart, where inference doesn't unify them ([same_label]). *)
 let rec same_ty a b =
   match (repr a, repr b) with
+  | TGen a, TGen b ->
+      a.gkind == b.gkind && List.length a.gargs = List.length b.gargs
+      && List.for_all2 same_ty a.gargs b.gargs
   | TVar r1, TVar r2 -> r1 == r2
   | TSkol (i, _), TSkol (j, _) -> i = j
   | TError, TError -> true
@@ -495,6 +525,7 @@ let rec close_free_needs t =
         | _ -> ()
       in
       go i.needs
+  | TGen g -> List.iter close_free_needs (generator_parts g)
   | TCon (_, args) | TVariant (_, _, args) -> List.iter close_free_needs args
   | TErrors e -> row_args e
   | TFun (ps, r, e, u) ->
@@ -515,6 +546,7 @@ let close_result_needs t =
         List.iter (fun d -> List.iter ty d.dargs) i.deps;
         row i.needs;
         row i.fails
+    | TGen g -> List.iter ty (generator_parts g)
     | TCon (_, args) | TVariant (_, _, args) -> List.iter ty args
     | TErrors e -> row e
     | TFun (ps, r, e, u) ->
@@ -639,6 +671,7 @@ let generalize st ~skolems ?(row_skolems = []) t =
               Hashtbl.add table id v;
               Hashtbl.replace st.skolem_vars id v;
               v)
+    | TGen g -> TGen (map_generator go row g)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TVariant (n, c, args) -> TVariant (n, c, List.map go args)
     | TErrors e -> TErrors (row e)
@@ -701,6 +734,7 @@ let generics t =
     | TVar { contents = Unbound (id, l) } as v when l = generic_level ->
         see seen_tys id v
     | TVar _ | TSkol _ | TError -> ()
+    | TGen g -> List.iter walk (generator_parts g)
     | TCon (_, args) | TVariant (_, _, args) -> List.iter walk args
     | TErrors e -> walk_row e
     | TImpl i ->
@@ -747,6 +781,7 @@ let instantiate st t =
             Hashtbl.add tys id v;
             v)
     | (TVar _ | TSkol _ | TError) as t -> t
+    | TGen g -> TGen (map_generator go row g)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TVariant (n, c, args) -> TVariant (n, c, List.map go args)
     | TErrors e -> TErrors (row e)
@@ -804,6 +839,7 @@ let replace (s : subst) t =
     match repr t with
     | TSkol (id, _) as t -> Option.value (List.assoc_opt id s.tys) ~default:t
     | (TVar _ | TError) as t -> t
+    | TGen g -> TGen (map_generator go row g)
     | TCon (n, args) -> TCon (n, List.map go args)
     | TVariant (n, c, args) -> TVariant (n, c, List.map go args)
     | TErrors e -> TErrors (row e)
@@ -898,6 +934,9 @@ let rec canon_ty c ~all t : Ty.ty =
       | Some v -> canon_ty c ~all v
       | None -> Error)
   | TVar _ | TError -> Error
+  | TGen g when c.for_message ->
+      Con (g.gcursor, List.map (canon_ty c ~all) g.gargs)
+  | TGen _ -> failwith "an unresolved generator kind reached canonical output"
   | TCon (p, args) when is_calls p -> (
       (* a call's row of cases is the checker's (see [calls]) *)
       match List.rev args with
@@ -999,6 +1038,7 @@ let to_scheme st t : Ty.scheme =
 let rec solved t =
   match repr t with
   | TVar { contents = Unbound _ } -> false
+  | TGen _ -> false
   | TCon (_, args) | TVariant (_, _, args) -> List.for_all solved args
   | TErrors r -> solved_row r
   | TImpl i -> List.for_all (fun d -> List.for_all solved d.dargs) i.deps
@@ -1291,6 +1331,7 @@ let rec row_vars t =
   in
   match repr t with
   | TVar _ | TSkol _ | TError -> []
+  | TGen g -> List.concat_map row_vars (generator_parts g)
   | TCon (_, args) | TVariant (_, _, args) -> List.concat_map row_vars args
   | TErrors e -> row e
   | TImpl i ->
@@ -1304,6 +1345,7 @@ let rec skolems t =
   match repr t with
   | TSkol (id, n) -> [ (id, n) ]
   | TVar _ | TError | TErrors _ | TImpl _ -> []
+  | TGen g -> List.concat_map skolems (generator_parts g)
   | TCon (_, args) | TVariant (_, _, args) -> List.concat_map skolems args
   | TFun (ps, r, _, _) -> List.concat_map skolems (r :: param_tys ps)
 
@@ -1316,6 +1358,7 @@ let mentions v t =
         match repr t with
         | TVar { contents = Unbound (i, _) } -> i = id
         | TVar _ | TSkol _ | TError -> false
+        | TGen g -> List.exists go (generator_parts g)
         | TCon (_, args) | TVariant (_, _, args) -> List.exists go args
         | TErrors e -> row e
         | TImpl i ->

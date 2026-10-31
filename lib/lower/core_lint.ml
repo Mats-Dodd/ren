@@ -49,6 +49,9 @@ type env = {
       (** every top-level function, and every function among a type's members *)
   values : (Path.t, Ty.scheme) Hashtbl.t;
       (** every associated value's type, as a scheme *)
+  generators : (Path.t, fn_def) Hashtbl.t;
+  returning : (Path.t * Ty.ty) option;
+  yielding : Ty.generator option;
   fn : string;  (** the function being checked *)
   ev : var option;  (** the evidence in scope, the innermost *)
   uses : Ty.row;  (** what the function or lambda being checked uses *)
@@ -526,6 +529,7 @@ and has_eq env seen (t : Ty.ty) =
       r.labels
   in
   match t with
+  | Con (p, _) when Ty.is_generator_cursor p -> false
   | Fun _ -> false
   | Var _ | Error -> true
   | Impl _ -> false
@@ -561,6 +565,7 @@ and has_eq env seen (t : Ty.ty) =
 and has_ord env (t : Ty.ty) =
   match t with
   | Var _ | Error -> true
+  | Con (p, _) when Ty.is_generator_cursor p -> false
   | Con (p, args) when Ty.is_tuple p -> List.for_all (has_ord env) args
   | Con (p, args) -> (
       match (key_ty env p args, Hashtbl.find_opt env.types p) with
@@ -673,11 +678,245 @@ let dicts env sc loc name (s : Ty.scheme) (a : Ty.args) ds =
           fail env loc (sprintf "`%s` needs something of a type it hasn't" name))
     s.reqs ds
 
+let rec generator_capability (t : Ty.ty) =
+  match t with
+  | Con (p, args) ->
+      p = Path.prelude "Scope" || p = Path.prelude "Background"
+      || List.exists generator_capability args
+  | Variant (_, _, args) -> List.exists generator_capability args
+  | Errors row ->
+      List.exists (fun (l : Ty.label) -> List.exists generator_capability l.payload) row.labels
+  | Fun _ -> true
+  | Var _ | Impl _ | Error -> false
+
+let cursor_generator env loc ty =
+  let found =
+    Hashtbl.fold
+      (fun _ (f : fn_def) found ->
+        match found, f.generator with
+        | Some _, _ -> found
+        | None, Some g -> Option.map snd (Ty.generator_instance g ty)
+        | None, None -> None)
+      env.generators None
+  in
+  match found with
+  | Some g when g.kind = Value_gen -> g
+  | _ -> fail env loc "a cursor doesn't instantiate a value generator"
+
+let retained_place env loc (place : gen_place) =
+  let bad () = fail env loc "a retained generator place doesn't read and write the same projection" in
+  let rec same (a : expr) (b : expr) =
+    match a.kind, b.kind with
+    | Local x, Local y -> x = y
+    | Int x, Int y -> x = y
+    | Field (x, p, n), Field (y, q, m) -> p = q && n = m && same x y
+    | Prim (p, xs), Prim (q, ys) ->
+        p = q && List.length xs = List.length ys && List.for_all2 same xs ys
+    | _ -> false
+  in
+  let frozen (e : expr) = match e.kind with Local _ | Int _ -> true | _ -> false in
+  let rec layers (e : expr) =
+    match e.kind with
+    | Local v when v = place.root -> []
+    | Field (base, _, name) ->
+        layers base @ [ (fun (value : expr) -> match value.kind with
+          | Update (original, field, child) when field = name && same original base -> child
+          | _ -> bad ()) ]
+    | Prim (Get_index _, [ base; index ]) when frozen index ->
+        layers base @ [ (fun (value : expr) -> match value.kind with
+          | Prim (Set_index _, [ original; at; child ]) when same original base && same at index -> child
+          | _ -> bad ()) ]
+    | Prim (Slice Range, [ base; lo; hi ]) when frozen lo && frozen hi ->
+        layers base @ [ (fun (value : expr) -> match value.kind with
+          | Prim (Splice, [ original; a; b; child ])
+            when same original base && same a lo && same b hi -> child
+          | _ -> bad ()) ]
+    | _ -> bad ()
+  in
+  let updates = layers place.read in
+  match place.write.kind with
+  | Owned_assign { target; value; mode = Advance_value } when target = place.root ->
+      let leaf = List.fold_left (fun value next -> next value) value updates in
+      (match leaf.kind with Local v when v = place.param -> () | _ -> bad ())
+  | _ -> bad ()
+
 let rec expr env sc (e : expr) =
   let loc = e.loc in
   if has_error e.ty then fail env loc "a node has an error type";
   let is what t = same env loc what e.ty t in
   match e.kind with
+  | Return (target, value) ->
+      expr env sc value;
+      (match env.returning with
+      | Some (path, ty) when path = target ->
+          same env loc "a returned value" value.ty ty
+      | _ -> fail env loc "a return outside its function, or crossing a block")
+  | Yield value ->
+      expr env sc value;
+      (match env.yielding with
+      | Some g ->
+          if g.kind = Value_gen && env.installed <> [] then
+            fail env loc "a value cursor suspends inside an installed dependency";
+          same env loc "a yielded item" value.ty g.item
+      | None -> fail env loc "a yield outside a producer, or inside a block or cleanup");
+      is "a yield" Ty.unit
+  | Yield_from { pull; adapter } ->
+      let rec adapted (e : expr) =
+        match e.kind with
+        | Lambda { params = []; _ } -> true
+        | Let (_, _, body) | Cleanup_scope { body; _ }
+        | Owner_alias { body; _ } -> adapted body
+        | Own { value; _ } -> adapted value
+        | _ -> false
+      in
+      if adapter && not (adapted pull) then
+        fail env loc "a delegation adapter isn't a generated pull block";
+      expr env sc pull;
+      (match env.yielding, reveal env pull.ty with
+      | Some g, Fun ([], Con (p, [ item ]), errors, uses)
+        when p = Path.prelude "Option" ->
+          same env loc "a delegated item" item g.item;
+          if not (needs_within errors g.errors) then
+            fail env loc "a delegation's errors aren't in its producer's row";
+          List.iter (available env loc "a delegated dependency") uses.labels
+      | None, _ -> fail env loc "delegation outside a producer, or inside a block or cleanup"
+      | _ -> fail env loc "delegation without a checked pull block");
+      is "delegation" Ty.unit
+  | Gen_step { cursor; ev; errors; uses } ->
+      in_scope env sc loc cursor;
+      current env loc "a generator step" ev;
+      let item, expected_errors, expected_uses =
+        match reveal env cursor.ty with
+        | Con (p, _) as ty when Ty.is_generator_cursor p ->
+            let g = cursor_generator env loc ty in
+            g.item, g.errors, Ty.closed
+        | Fun ([], Con (p, [ item ]), errors, uses)
+          when p = Path.prelude "Option" -> item, errors, uses
+        | _ -> fail env loc "a generator step without a cursor or pull block"
+      in
+      if not (same_row errors expected_errors && same_row uses expected_uses) then
+        fail env loc "a generator step's rows don't match its cursor";
+      List.iter (available env loc "a generator step's dependency") uses.labels;
+      is "a generator step" (Ty.option item)
+  | Gen_close value ->
+      expr env sc value;
+      (match reveal env value.ty with
+      | Con (p, _) as ty when Ty.is_generator_cursor p ->
+          ignore (cursor_generator env loc ty)
+      | Fun ([], Con (p, [ _ ]), _, _) when p = Path.prelude "Option" -> ()
+      | _ -> fail env loc "closing something that isn't a cursor or pull block");
+      is "closing a generator" Ty.unit
+  | Gen_create { producer; type_args; args; tys; dicts = given; ev; places } ->
+      let f =
+        match Hashtbl.find_opt env.generators producer with
+        | Some f -> f
+        | None -> fail env loc "a frame created without a producer definition"
+      in
+      let name = Path.local producer in
+      let g = Option.get f.generator in
+      if places <> [] && g.kind <> Ty.Block_gen then
+        fail env loc "a value generator retains a projected inout place";
+      let retained = ref [] in
+      List.iter
+        (fun (place : gen_place) ->
+          if List.mem place.param.id !retained then
+            fail env loc "a generator retains one parameter place twice";
+          retained := place.param.id :: !retained;
+          in_scope env sc loc place.param;
+          in_scope env sc loc place.root;
+          if not (List.exists (function Ref v -> v = place.param | Value _ -> false) args) then
+            fail env loc "a retained generator place isn't an inout argument";
+          let callback = { env with returning = None; yielding = None; in_loop = false } in
+          expr callback sc place.read;
+          expr callback sc place.write;
+          same env loc "a retained place's read" place.read.ty place.param.ty;
+          same env loc "a retained place's write" place.write.ty Ty.unit;
+          retained_place env loc place)
+        places;
+      current env loc "a generator's captured evidence" ev;
+      descs env sc loc name type_args tys;
+      dicts env sc loc name f.scheme type_args given;
+      let own = Ty.own_args f.scheme.ty in
+      if List.length type_args.tys <> List.length own.tys
+         || List.length type_args.rows <> List.length own.rows then
+        fail env loc "a generator has the wrong number of type or row arguments";
+      let actual = Ty.apply type_args f.scheme.ty in
+      used env loc name f.scheme.ty type_args actual;
+      (match actual with
+      | Fun (ps, ret, errors, uses) ->
+          if errors <> Ty.closed then
+            fail env loc "a generator factory has immediate errors";
+          if g.kind = Ty.Value_gen
+             && List.exists (fun (p : Ty.param) -> generator_capability p.ty) ps then
+            fail env loc "a value cursor is instantiated with a block or capability";
+          List.iter (available env loc "a generator's captured dependency") uses.labels;
+          if List.length ps <> List.length args then
+            fail env loc "a generator has the wrong number of arguments";
+          List.iter2
+            (fun (p : Ty.param) a ->
+              match p.mode, a with
+              | Read, Value value ->
+                  expr env sc value;
+                  same env value.loc "a generator argument" value.ty p.ty
+              | Inout, Ref v ->
+                  in_scope env sc loc v;
+                  same env loc "a generator's inout argument" v.ty p.ty
+              | Read, Ref _ -> fail env loc "a generator read argument passed as inout"
+              | Inout, Value _ -> fail env loc "a generator inout argument isn't a local")
+            ps args;
+          is "a generator frame" ret
+      | _ -> fail env loc "a generator factory doesn't have a function type")
+  | Cleanup_scope { owner; body } ->
+      same env loc "a cleanup owner" owner.ty owner_ty;
+      if Scope.mem owner.id sc then fail env loc "a cleanup owner rebinds a local";
+      expr env (add owner sc) body;
+      is "a cleanup scope" body.ty
+  | Instance_scope { owner; body } ->
+      same env loc "an instance cleanup owner" owner.ty owner_ty;
+      if Scope.mem owner.id sc then fail env loc "an instance cleanup owner rebinds a local";
+      expr env (add owner sc) body;
+      (match reveal env body.ty with
+      | Impl _ -> ()
+      | _ -> fail env loc "an instance cleanup scope doesn't produce an instance");
+      is "an instance cleanup scope" body.ty
+  | Own { owner; value; desc; _ } ->
+      in_scope env sc loc owner;
+      same env loc "a cleanup owner" owner.ty owner_ty;
+      expr env sc value;
+      describes env sc loc "an owned value" desc value.ty;
+      is "an owned value" value.ty
+  | Source_view { value; _ } ->
+      expr env sc value;
+      is "a pattern source view" value.ty
+  | Pattern_scope { owner; receiving; binding; source; pat; on_match; on_else } ->
+      same env loc "a pattern source owner" owner.ty owner_ty;
+      if Scope.mem owner.id sc then fail env loc "a pattern source owner rebinds a local";
+      in_scope env sc loc receiving;
+      same env loc "a pattern receiving owner" receiving.ty owner_ty;
+      let source_scope = add owner sc in
+      expr env source_scope source;
+      Option.iter (fun (v : var) ->
+          if pat.pkind <> PWild || on_else <> None || v.name <> "_" then
+            fail env loc "an ignored let's spelling on a non-wildcard pattern";
+          if Scope.mem v.id sc then
+            fail env loc "an ignored let's spelling reuses a local";
+          same env loc "an ignored let's spelling" v.ty source.ty) binding;
+      let bound = pattern env sc pat source.ty in
+      expr env bound on_match;
+      same env loc "a successful pattern binding" on_match.ty e.ty;
+      Option.iter (fun (otherwise : expr) ->
+          expr env source_scope otherwise;
+          same env otherwise.loc "a failed pattern binding" otherwise.ty e.ty) on_else
+  | Owned_assign { target; value; _ } ->
+      in_scope env sc loc target;
+      expr env sc value;
+      same env loc "an owned assignment" value.ty target.ty;
+      is "an owned assignment" Ty.unit
+  | Owner_alias { target; root; body } ->
+      in_scope env sc loc target;
+      in_scope env sc loc root;
+      expr env sc body;
+      is "an owner alias" body.ty
   | Int _ -> is "an `Int`" Ty.int
   | Float _ -> is "a `Float`" Ty.float
   | Bool _ -> is "a `Bool`" Ty.bool
@@ -688,6 +927,8 @@ let rec expr env sc (e : expr) =
       if v.ty = evidence_ty then
         fail env loc
           (sprintf "the evidence `%s` (%d) used as a value" v.name v.id);
+      if v.ty = owner_ty then
+        fail env loc "a cleanup owner used as a value";
       is ("`" ^ v.name ^ "`") v.ty
   | Global (p, a, ds, dicts_given) -> (
       descs env sc loc (Path.local p) a ds;
@@ -839,6 +1080,8 @@ let rec expr env sc (e : expr) =
               (inside env loc "a handler's evidence" ev needs) with
               handler = Some (ev, needs);
               in_loop = false;
+              returning = None;
+              yielding = None;
             }
             (add ev inner) body;
           same env body.loc "a handler's body" body.ty e.ty
@@ -956,7 +1199,7 @@ let rec expr env sc (e : expr) =
       same env loc ("the value of `" ^ v.name ^ "`") value.ty v.ty;
       expr env (add v sc) body;
       is "a `let`" body.ty
-  | Covered { body; result; after } ->
+  | Covered { body; result; after; return_target } ->
       (* what an arm's `finally` is given: a [Result] of what it covers,
          whose errors have `Cancelled`, which a cancelled body gives it *)
       expr env sc body;
@@ -974,7 +1217,15 @@ let rec expr env sc (e : expr) =
                "a `finally` given `%s`, not a `Result` whose errors have \
                 `Cancelled`"
                (show t)));
-      expr env (add result sc) after;
+      Option.iter
+        (fun target ->
+          match env.returning, result.ty with
+          | Some (path, ret), Con (p, [ value; Errors _ ])
+            when target = path && p = Path.prelude "Result" ->
+              same env loc "a returning finalizer's result" value ret
+          | _ -> fail env loc "a returning finalizer doesn't own this function's result")
+        return_target;
+      expr { env with returning = None; yielding = None } (add result sc) after;
       is "a `finally`" after.ty
   | Assign (v, value) ->
       in_scope env sc loc v;
@@ -1016,6 +1267,10 @@ let rec expr env sc (e : expr) =
       expr env sc b;
       is "a sequence" b.ty
   | Call (f, args, ev) -> (
+      (match f.kind with
+      | Global (p, _, _, _) when Hashtbl.mem env.generators p ->
+          fail env loc "a generator called without creating its frame"
+      | _ -> ());
       expr env sc f;
       (* every function takes the same: the evidence where it's called *)
       let what =
@@ -1102,6 +1357,8 @@ let rec expr env sc (e : expr) =
           ev = Some ev;
           uses = { env.uses with labels = env.uses.labels @ given_labels };
           in_loop = false;
+          returning = None;
+          yielding = None;
         }
         inner body;
       match reveal env e.ty with
@@ -1255,7 +1512,7 @@ let rec expr env sc (e : expr) =
       same env on_error.loc "what a `Handle` gives an error" on_error.ty e.ty
   | Finally (body, after) ->
       expr env sc body;
-      expr env sc after;
+      expr { env with returning = None; yielding = None } sc after;
       same env after.loc "what runs after a `Finally`" after.ty Ty.unit;
       is "a `Finally`" body.ty
   | Assert a ->
@@ -1650,6 +1907,7 @@ let rec instances env (e : expr) =
 
 and handler_end env (e : expr) =
   match e.kind with
+  | Instance_scope { body; _ } -> handler_end env body
   | Let (_, a, b) | Covered { body = a; after = b; _ } | Seq (a, b) ->
       instances env a;
       handler_end env b
@@ -1671,6 +1929,11 @@ and handler_end env (e : expr) =
           if ends_in_instance a.body then handler_end env a.body
           else instances env a.body)
         arms
+  | Pattern_scope { source; on_match; on_else; _ } when ends_in_instance e ->
+      instances env source;
+      handler_end env on_match;
+      Option.iter (fun e ->
+          if ends_in_instance e then handler_end env e else instances env e) on_else
   | _ -> fail env e.loc "a handler's body that doesn't end in an instance"
 
 (* Blocks are second-class (foundations.md): inference checked that a
@@ -1692,10 +1955,35 @@ let rec blocks env allowed (e : expr) =
   | Call (callee, args, _) ->
       blocks env true callee;
       List.iter (function Value a -> blocks env true a | Ref _ -> ()) args
+  | Gen_create { args; places; _ } ->
+      List.iter (function Value a -> blocks env true a | Ref _ -> ()) args;
+      List.iter (fun (p : gen_place) -> blocks env false p.read; blocks env false p.write) places
+  | Own { value; _ }
+  | Source_view { value; _ }
+  | Cleanup_scope { body = value; _ }
+  | Instance_scope { body = value; _ }
+  | Owner_alias { body = value; _ } -> blocks env allowed value
+  | Gen_close value | Yield_from { pull = value; _ } -> blocks env true value
   | Dep_call { args; _ } -> List.iter (blocks env true) args
   | Let (_, value, body) ->
       blocks env true value;
-      blocks env false body
+      (* Frozen indices and projected parameter cells belong to the explicit
+         frame creation. They may wrap a factory used in a block position,
+         without admitting an ordinary expression that returns a block. *)
+      let rec factory (e : expr) = match e.kind with
+        | Gen_create { producer; _ } ->
+            (match Hashtbl.find_opt env.generators producer with
+            | Some { generator = Some { kind = Ty.Block_gen; _ }; _ } -> true
+            | _ -> false)
+        | Let (_, _, body) | Cleanup_scope { body; _ }
+        | Owner_alias { body; _ } | Own { value = body; _ } -> factory body
+        | _ -> false
+      in
+      blocks env (allowed && factory body) body
+  | Pattern_scope { source; on_match; on_else; _ } ->
+      blocks env true source;
+      blocks env false on_match;
+      Option.iter (blocks env false) on_else
   | Covered { body; after; _ } ->
       blocks env false body;
       blocks env false after
@@ -1708,6 +1996,32 @@ let rec blocks env allowed (e : expr) =
         impls;
       Option.iter (blocks env true) finally
   | _ -> List.iter (blocks env false) (children e)
+
+(* Provenance is local to a destructuring source. It must not be set by an
+   argument, condition, nested block or another unrelated computation. *)
+let rec source_views env allowed (e : expr) =
+  let no = source_views env false and tail = source_views env allowed in
+  match e.kind with
+  | Source_view { value; _ } ->
+      if not allowed then fail env e.loc "a source view outside a pattern source result";
+      no value
+  | Pattern_scope { source; on_match; on_else; _ } ->
+      source_views env true source;
+      no on_match;
+      Option.iter no on_else
+  | Let (_, value, body) | Seq (value, body) -> no value; tail body
+  | If (condition, yes, otherwise) -> no condition; tail yes; tail otherwise
+  | Match (subject, arms) ->
+      no subject;
+      List.iter (fun (a : arm) -> Option.iter no a.guard; tail a.body) arms
+  | Finally (body, after) -> tail body; no after
+  | Covered { body; after; _ } -> tail body; tail after
+  | Handle { body; on_value; on_error; _ } -> tail body; tail on_value; tail on_error
+  | With { impl; body; _ } -> no impl; tail body
+  | With_handler { handler; body; _ } -> no handler; tail body
+  | Cleanup_scope { body; _ } | Instance_scope { body; _ }
+  | Owner_alias { body; _ } | Own { value = body; _ } -> tail body
+  | _ -> List.iter no (children e)
 
 (* Whether there's a function type in [t] (or in an error's payload). *)
 let rec has_fun (t : Ty.ty) =
@@ -1743,6 +2057,7 @@ let rec no_fun_args env (e : expr) =
   in
   (match e.kind with
   | Global (p, a, _, _) | Global_value (p, a) -> args (Path.local p) a
+  | Gen_create { producer; type_args; _ } -> args (Path.local producer) type_args
   | Intrinsic (i, a, _, _) -> args (Intrinsic.name i) a
   | _ -> ());
   if fun_inside e.ty then
@@ -1785,6 +2100,7 @@ let rec no_kept_handles env ~prelude (e : expr) =
   in
   (match e.kind with
   | Global (p, a, _, _) | Global_value (p, a) -> args (Path.local p) a
+  | Gen_create { producer; type_args; _ } -> args (Path.local producer) type_args
   | Intrinsic (i, a, _, _) -> args (Intrinsic.name i) a
   | _ -> ());
   if handle_inside e.ty then
@@ -1837,7 +2153,16 @@ let waits_only_with_async env (f : fn_def) =
   go f.body
 
 let fn_def env (f : fn_def) =
-  let env = { env with fn = Path.local f.path; ntys = List.length f.tys } in
+  let returning =
+    match f.scheme.ty with
+    | Fun (_, ret, _, _) ->
+        Some (f.path, if f.generator = None then ret else Ty.unit)
+    | _ -> None
+  in
+  let env =
+    { env with fn = Path.local f.path; ntys = List.length f.tys;
+      returning; yielding = f.generator }
+  in
   no_kept_handles env ~prelude:(f.path.home = Path.prelude_home) f.body;
   waits_only_with_async env f;
   (match f.scheme.ty with
@@ -1845,6 +2170,7 @@ let fn_def env (f : fn_def) =
       fail env f.loc "a function gives a scope"
   | _ -> ());
   instances env f.body;
+  source_views env false f.body;
   (* each index marked in bounds is, and each step marked as not
      overflowing can't, by what its loop shows (bounds.ml) *)
   Option.iter
@@ -1863,6 +2189,49 @@ let fn_def env (f : fn_def) =
   let env = { env with own = List.combine f.scheme.reqs f.dicts } in
   match f.scheme.ty with
   | Fun (ps, ret, _, uses) when List.length ps = List.length f.params ->
+      Option.iter
+        (fun (g : Ty.generator) ->
+          let rec source seen (f : fn_def) =
+            if List.mem f.path seen then fail env f.loc "a generator's source copies form a cycle";
+            match f.origin with
+            | Copy p ->
+                (match Hashtbl.find_opt env.generators p with
+                | Some original -> source (f.path :: seen) original
+                | None -> p)
+            | Written -> f.path
+            | Lifted_block _ | Lifted_op _ ->
+                fail env f.loc "a producer is an arbitrarily lifted block"
+          in
+          if g.path <> source [] f
+             || g.cursor_path <> Ty.generator_cursor
+                  ~source_params:(Ty.generator_cursor_arity g.cursor_path) g.path then
+            fail env f.loc "a producer's identity doesn't match its definition";
+          if List.length g.params <> List.length ps
+             || not (List.for_all2
+                       (fun (p : Ty.param) (q : Ty.param) ->
+                         p.mode = q.mode && equal env p.ty q.ty)
+                       g.params ps) then
+            fail env f.loc "a producer's parameters don't match its factory";
+          if not (same_row uses g.uses) then
+            fail env f.loc "a producer's dependency row doesn't match its factory";
+          if generator_capability g.item then fail env f.loc "a producer yields a block";
+          match g.kind with
+          | Value_gen ->
+              if g.holds_instance || g.replay_unsafe || g.uses <> Ty.closed
+                 || List.exists (fun (p : Ty.param) ->
+                        p.mode = Inout || generator_capability p.ty) ps then
+                fail env f.loc "a value cursor retains a block, inout parameter, dependency or ambient runtime state";
+              (match ret with
+              | Con (p, _) when p = g.cursor_path -> ()
+              | _ -> fail env f.loc "a value generator's factory doesn't return its cursor")
+          | Block_gen ->
+              (match ret with
+              | Fun ([], result, errors, _) ->
+                  same env f.loc "a block generator's step result" result (Ty.option g.item);
+                  if not (same_row errors g.errors) then
+                    fail env f.loc "a block generator's step errors differ from its body"
+              | _ -> fail env f.loc "a block generator's factory doesn't return a pull block"))
+        f.generator;
       let env = inside env f.loc "the function's evidence" f.ev uses in
       List.iter2
         (fun (p : Ty.param) (q : param) ->
@@ -1879,13 +2248,18 @@ let fn_def env (f : fn_def) =
           f.params
       in
       expr env sc f.body;
-      same env f.loc "the body" f.body.ty ret
+      same env f.loc "the body" f.body.ty
+        (if f.generator = None then ret else Ty.unit)
   | t -> fail env f.loc (sprintf "a function has type `%s`" (show t))
 
 (* The functions and values [e] names, in the order written. *)
 let rec globals (e : expr) =
   match e.kind with
   | Global (p, _, _, _) | Global_value (p, _) -> [ p ]
+  | Gen_create { producer; args; places; _ } ->
+      producer :: (List.concat_map (function Value a -> globals a | Ref _ -> []) args
+      @ List.concat_map (fun (p : gen_place) -> globals p.read @ globals p.write) places)
+  | Gen_step _ -> []
   | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Intrinsic _ | Break ->
       []
   | Prim (_, es)
@@ -1910,6 +2284,16 @@ let rec globals (e : expr) =
   | Assert_equal (a, b, _, _) ->
       globals a @ globals b
   | Assign (_, a)
+  | Return (_, a)
+  | Yield a
+  | Yield_from { pull = a; _ }
+  | Gen_close a
+  | Cleanup_scope { body = a; _ }
+  | Instance_scope { body = a; _ }
+  | Own { value = a; _ }
+  | Owned_assign { value = a; _ }
+  | Owner_alias { body = a; _ }
+  | Source_view { value = a; _ }
   | Field (a, _, _)
   | Of_variant a
   | Lambda { body = a; _ }
@@ -1925,6 +2309,8 @@ let rec globals (e : expr) =
       @ List.concat_map
           (fun a -> Option.fold ~none:[] ~some:globals a.guard @ globals a.body)
           arms
+  | Pattern_scope { source; on_match; on_else; _ } ->
+      globals source @ globals on_match @ Option.fold ~none:[] ~some:globals on_else
   | Call (f, args, _) ->
       globals f
       @ List.concat_map (function Value a -> globals a | Ref _ -> []) args
@@ -2285,6 +2671,9 @@ let whole ~everyone (linked : program list) =
       types = Hashtbl.create 256;
       schemes = Hashtbl.create 1024;
       values = Hashtbl.create 64;
+      generators = Hashtbl.create 64;
+      returning = None;
+      yielding = None;
       fn = "";
       ev = None;
       handler = None;
@@ -2329,6 +2718,7 @@ let whole ~everyone (linked : program list) =
     (fun (m : program) ->
       List.iter
         (fun (f : fn_def) ->
+          Option.iter (fun _ -> Hashtbl.replace base.generators f.path f) f.generator;
           if f.test then Hashtbl.replace tests f.path ();
           Hashtbl.replace fns f.path f)
         m.fns)

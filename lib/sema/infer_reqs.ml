@@ -181,6 +181,7 @@ let is_number p = p = int_path || p = float_path
    is compared by it, so it's its key's type that's looked into. *)
 let rec decl_lacks env seen p : Infer_msg.no_eq option =
   match (Hashtbl.find_opt env.types p, key_of env p) with
+  | _ when Ty.is_generator_cursor p -> Some (Infer_msg.Generator_cursor (env.names p))
   | _ when List.mem p seen -> None
   | Some _, Some _ when key_loops env p -> None
   | None, _ -> None
@@ -190,7 +191,8 @@ let rec decl_lacks env seen p : Infer_msg.no_eq option =
       (* a record's field, or a constructor's, by its name *)
       let field owner (f : Iface.field) =
         Option.map
-          (fun _ -> Infer_msg.Field_function (env.names p, owner, f.fname))
+          (function Infer_msg.Generator_cursor _ as why -> why
+            | _ -> Infer_msg.Field_function (env.names p, owner, f.fname))
           (lacks_in env seen f.fty)
       in
       match td.body with
@@ -330,6 +332,7 @@ and has_eq env req t =
 and has_ord env t =
   let unordered why = Lacks (Unordered why) in
   match t with
+  | TCon (p, _) when Ty.is_generator_cursor p -> unordered (Infer_msg.Unordered_generator (env.names p))
   | TCon (p, args) when Ty.is_tuple p -> all env "ord" args
   | TCon (p, args) -> (
       match keyed env "ord" p args with

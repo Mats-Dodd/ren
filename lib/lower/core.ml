@@ -218,11 +218,63 @@ type prim =
           "`over any` and `retry`"), in a function made for the tags it's
           given. A [Bool] *)
 
+type ownership = Copy_value | Adopt_value | Snapshot_value
+    (** [Snapshot_value] keeps independent logical positions for an implicit
+        collection snapshot; it owns no cleanup until an item is copied out. *)
+type assignment = Replace_value | Advance_value
+
 type param = { mode : mode; var : var }
 
 type expr = { kind : kind; ty : Ty.ty; loc : Loc.t }
 
 and kind =
+  | Return of Path.t * expr
+      (** return to this function, through every intervening cleanup *)
+  | Gen_create of {
+      producer : Path.t;
+      type_args : Ty.args;
+      args : arg list;
+      places : gen_place list;
+      tys : desc list;
+      dicts : dict list;
+      ev : var;
+    }
+      (** create a checked producer's frame; creation does not run its body *)
+  | Yield of expr
+  | Yield_from of { pull : expr; adapter : bool }
+      (** [adapter] is true only for a compiler-built protocol lambda: applying
+          that immediate wrapper does not add a logical call-depth level *)
+  | Gen_step of { cursor : var; ev : var; errors : Ty.row; uses : Ty.row }
+  | Gen_close of expr
+  | Source_view of { retained : bool; value : expr }
+      (** provenance for a pattern source only; this does not construct data *)
+  | Pattern_scope of {
+      owner : var;
+      receiving : var;
+      binding : var option;
+          (** the spelling of an ignored [Let], for printing and native erasure;
+              this is not a runtime or pattern binding *)
+      source : expr;
+      pat : pattern;
+      on_match : expr;
+      on_else : expr option;
+    }
+      (** evaluate the source once in its statement registry, transfer matched
+          binders to [receiving], close discarded leaves, then run [on_match];
+          an else runs inside the statement registry before leaving it *)
+  | Instance_scope of { owner : var; body : expr }
+      (** a registry transferred to the installed instance until its with ends *)
+  | Cleanup_scope of { owner : var; body : expr }
+      (** bind a lexical cleanup registry; detach the anonymous result before
+          closing its current and retired tokens in reverse registration order *)
+  | Own of { owner : var; mode : ownership; value : expr; desc : desc }
+      (** recursively fork a source copy, or adopt an anonymous result, into
+          this lexical registry; descriptors include opaque and generic leaves *)
+  | Owned_assign of { target : var; value : expr; mode : assignment }
+      (** the target cell retains its original root owner through inout calls;
+          replacement retires displaced leaves, advancement updates their state *)
+  | Owner_alias of { target : var; root : var; body : expr }
+      (** a projected inout temporary borrows its root's owner capability *)
   | Int of Int64.t
   | Float of float
   | Bool of bool
@@ -422,7 +474,7 @@ and kind =
           which goes on once [after] has run. Lowering writes a place passed
           with `&` back to it in [after], so a call that fails still changes it
       *)
-  | Covered of { body : expr; result : var; after : expr }
+  | Covered of { body : expr; result : var; after : expr; return_target : Path.t option }
       (** an arm's `finally` (handlers.md, "`finally`"): [body], what it covers,
           as `attempt` keeps it, a [Result] of what it ends in, bound to
           [result], then [after], whose value is the node's. It's [Let] but
@@ -435,6 +487,10 @@ and kind =
 (* A call's argument. An [inout] argument is always a plain local: the call
    reads it, and writes the parameter's final value back to it. *)
 and arg = Value of expr | Ref of var
+and gen_place = { param : var; root : var; read : expr; write : expr }
+    (** a frozen projected inout argument: refresh [param] from its original
+        root before each active step, then write it back on every suspension
+        and exit; neither callback runs at factory return or a terminal step *)
 and arm = { pat : pattern; guard : expr option; body : expr }
 and pattern = { pkind : pattern_kind; pty : Ty.ty; ploc : Loc.t }
 
@@ -506,6 +562,8 @@ type fn_def = {
           requirements, in order: the j-th, for [(n, req)], holds [req]'s
           dictionary for what [Var n] stands for ([dict]), and is the local
           [dict_params]'s j-th *)
+  generator : Ty.generator option;
+      (** a producer has a Unit body; its callable scheme describes creation *)
   scheme : Ty.scheme;  (** its type, whose variables its nodes' types share *)
   body : expr;
   test : bool;
@@ -570,6 +628,8 @@ let mk kind ty loc = { kind; ty; loc }
 
 (* The type of evidence. Nothing in Ren source has it: its `$` keeps it
    apart from every type a program can name. *)
+let owner_ty = Ty.Con (Path.prelude "$generator_owner", [])
+
 let evidence_ty = Ty.Con (Path.prelude "$Evidence", [])
 
 (* The evidence a function takes, or a block or a [With] binds. *)
@@ -763,6 +823,16 @@ let children (e : expr) =
   | Int _ | Float _ | Bool _ | Str _ | Unit | Local _ | Global _
   | Global_value _ | Intrinsic _ | Break ->
       []
+  | Gen_create { args; places; _ } ->
+      List.filter_map (function Value e -> Some e | Ref _ -> None) args
+      @ List.concat_map (fun p -> [ p.read; p.write ]) places
+  | Gen_step _ -> []
+  | Source_view { value; _ } -> [value]
+  | Pattern_scope { source; on_match; on_else; _ } ->
+      source :: (on_match :: Option.to_list on_else)
+  | Return (_, a) | Yield a | Yield_from { pull = a; _ } | Gen_close a
+  | Own { value = a; _ } | Owned_assign { value = a; _ }
+  | Cleanup_scope { body = a; _ } | Instance_scope { body = a; _ } | Owner_alias { body = a; _ } -> [ a ]
   | Prim (_, es)
   | Array es
   | Tuple es
@@ -807,6 +877,8 @@ let starts_failing (t : Ty.ty) =
 let rec can_fail (e : expr) =
   match e.kind with
   | Fail _ -> true
+  | Gen_step { errors; _ } -> errors.labels <> [] || errors.tail <> None
+  | Yield_from { pull; _ } when fails pull.ty -> true
   | Call (f, _, _) when fails f.ty -> true
   | Dep_call { fty; _ } when fails fty -> true
   | With { impl; _ } when starts_failing impl.ty -> true
@@ -818,6 +890,8 @@ let rec can_fail (e : expr) =
 let rec ends_in_instance (e : expr) =
   match e.kind with
   | Instance _ -> true
+  | Instance_scope { body; _ } -> ends_in_instance body
+  | Pattern_scope { on_match; _ } -> ends_in_instance on_match
   | Let (_, _, b) | Seq (_, b) | Covered { after = b; _ } | Handle { body = b; _ }
     ->
       ends_in_instance b
@@ -826,7 +900,8 @@ let rec ends_in_instance (e : expr) =
 
 let rec can_stop (e : expr) =
   match e.kind with
-  | Call _ | Dep_call _ | With _ | With_handler _ -> true
+  | Call _ | Dep_call _ | With _ | With_handler _ | Gen_step _
+  | Yield _ | Yield_from _ | Gen_close _ | Cleanup_scope _ | Instance_scope _ -> true
   | Lambda _ | Handler _ -> false
   | _ -> List.exists can_stop (children e)
 
@@ -908,8 +983,9 @@ let var v = Atom (show_var v)
 (* What a lambda or handler captures, as printed: its hidden type and
    dictionary parameters aren't, like the descriptors passed to a use,
    since the type arguments a typed print shows say what they are. *)
-let shown_captures =
-  List.filter (fun (v : var) -> v.ty <> type_ty && v.ty <> dict_ty)
+let shown_captures ~ownership =
+  List.filter (fun (v : var) ->
+      v.ty <> type_ty && v.ty <> dict_ty && (ownership || v.ty <> owner_ty))
 
 (* What a typed print prints with: [pr] names the function's type
    variables, and [own] are its dictionary parameters, by the requirement
@@ -1034,13 +1110,52 @@ let used t name (a : Ty.args) ds =
   | _ -> Atom name
 
 (* [t] is what a typed print prints with, [None] for a plain one. *)
-let rec sexp_with t e =
-  let sexp = sexp_with t and arm_sexp = arm_sexp_with t in
+let rec sexp_with ?(ownership = false) t e =
+  let sexp = sexp_with ~ownership t and arm_sexp = arm_sexp_with ~ownership t in
   (* the dictionary [d], before what's after it, in a typed print only *)
   let dict d rest =
     match t with Some t -> dict_sexp t d :: rest | None -> rest
   in
   match e.kind with
+  | Return (target, value) -> List [ atom "return"; atom (Path.full target); sexp value ]
+  | Gen_create { producer; args; places; _ } ->
+      let args = List.map (function Value e -> sexp e | Ref v -> List [ atom "&"; var v ]) args in
+      let places = List.map (fun p ->
+          List [ atom "place"; var p.param; var p.root; sexp p.read; sexp p.write ]) places in
+      List ((atom "gen-create" :: atom (Path.full producer) :: args) @ places)
+  | Yield e -> List [ atom "yield"; sexp e ]
+  | Yield_from { pull; adapter } ->
+      List [ atom "yield-from"; atom (if adapter then "adapted" else "block"); sexp pull ]
+  | Gen_step { cursor; _ } -> List [ atom "gen-step"; var cursor ]
+  | Gen_close e -> List [ atom "gen-close"; sexp e ]
+  | Source_view { value; _ } when not ownership -> sexp value
+  | Source_view { retained; value } ->
+      List [ atom "source-view"; atom (if retained then "retained" else "anonymous"); sexp value ]
+  | Pattern_scope { owner; receiving; binding; source; pat; on_match; on_else } ->
+      let arms = { pat; guard = None; body = on_match } ::
+        (match on_else with None -> [] | Some body ->
+          [{ pat = { pkind = PWild; pty = source.ty; ploc = source.loc }; guard = None; body }]) in
+      if not ownership then
+        (match binding with
+         | Some v -> List [ atom "let"; var v; sexp source; sexp on_match ]
+         | None -> List (atom "match" :: sexp source :: List.map arm_sexp arms))
+      else List (atom "pattern-scope" :: var owner :: var receiving ::
+          Option.to_list (Option.map (fun v -> List [atom "binding"; var v]) binding)
+          @ (sexp source :: List.map arm_sexp arms))
+  | Instance_scope { body; _ } | Cleanup_scope { body; _ } | Owner_alias { body; _ }
+      when not ownership -> sexp body
+  | Own { value; _ } when not ownership -> sexp value
+  | Owned_assign { target; value; _ } when not ownership -> List [ atom "="; var target; sexp value ]
+  | Instance_scope { owner; body } -> List [ atom "instance-scope"; var owner; sexp body ]
+  | Cleanup_scope { owner; body } -> List [ atom "cleanup-scope"; var owner; sexp body ]
+  | Own { owner; mode; value; _ } ->
+      List [ atom (match mode with Copy_value -> "own-copy" | Adopt_value -> "own-adopt" | Snapshot_value -> "snapshot");
+             var owner; sexp value ]
+  | Owned_assign { target; value; mode } ->
+      List [ atom (match mode with Replace_value -> "replace" | Advance_value -> "advance");
+             var target; sexp value ]
+  | Owner_alias { target; root; body } ->
+      List [ atom "owner-alias"; var target; var root; sexp body ]
   | Int n -> Atom (Int64.to_string n)
   | Float f -> Atom (Ast.show_float f)
   | Bool b -> Atom (string_of_bool b)
@@ -1074,7 +1189,7 @@ let rec sexp_with t e =
       List
         [
           atom "handler";
-          List (atom "captures" :: List.map var (shown_captures captures));
+          List (atom "captures" :: List.map var (shown_captures ~ownership captures));
           var ev;
           sexp body;
         ]
@@ -1117,7 +1232,7 @@ let rec sexp_with t e =
       List (Atom (show_prim op) :: dict d (List.map sexp args))
   | Prim (op, args) -> List (Atom (show_prim op) :: List.map sexp args)
   | Let (v, value, body) -> List [ atom "let"; var v; sexp value; sexp body ]
-  | Covered { body; result; after } ->
+  | Covered { body; result; after; _ } ->
       List [ atom "covered"; var result; sexp body; sexp after ]
   | Assign (v, value) -> List [ atom "="; var v; sexp value ]
   | If (c, t, f) -> List [ atom "if"; sexp c; sexp t; sexp f ]
@@ -1142,7 +1257,7 @@ let rec sexp_with t e =
         [
           atom "lambda";
           List (List.map param params);
-          List (atom "captures" :: List.map var (shown_captures captures));
+          List (atom "captures" :: List.map var (shown_captures ~ownership captures));
           var ev;
           List
             (atom "extend" :: var outer
@@ -1174,11 +1289,11 @@ let rec sexp_with t e =
   | Assert_equal (a, b, _, d) ->
       List (atom "assert" :: atom "==" :: dict d [ sexp a; sexp b ])
 
-and arm_sexp_with t a =
+and arm_sexp_with ~ownership t a =
   let guard =
-    match a.guard with Some g -> [ atom "if"; sexp_with t g ] | None -> []
+    match a.guard with Some g -> [ atom "if"; sexp_with ~ownership t g ] | None -> []
   in
-  List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp_with t a.body ])
+  List ((pattern_sexp a.pat :: guard) @ [ atom "=>"; sexp_with ~ownership t a.body ])
 
 let sexp e = sexp_with None e
 let show e = render 0 (sexp e)
@@ -1187,7 +1302,7 @@ let show e = render 0 (sexp e)
    variables its uses' type arguments are written in, with every row
    tail, and what it needs, the dictionaries it takes, if anything:
    [(needs (eq T))]. *)
-let fn_sexp ?(types = false) f =
+let fn_sexp ?(types = false) ?(ownership = false) f =
   let t =
     if types then
       Some
@@ -1214,11 +1329,11 @@ let fn_sexp ?(types = false) f =
     | None -> []
   in
   List
-    ((atom "fn" :: Atom (Path.local f.path) :: ty)
+    ((atom (if f.generator = None then "fn" else "gen-fn") :: Atom (Path.local f.path) :: ty)
     @ [
         List (List.map (fun p -> var p.var) f.params);
         var f.ev;
-        sexp_with t f.body;
+        sexp_with ~ownership t f.body;
       ])
 
-let show_fn ?types f = render 0 (fn_sexp ?types f)
+let show_fn ?types ?ownership f = render 0 (fn_sexp ?types ?ownership f)

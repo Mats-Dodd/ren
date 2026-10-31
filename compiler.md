@@ -16461,13 +16461,14 @@ generators introduce no scheduler, task kind, stored closure or resource
 ownership rule. The interpreter defines the meaning; native push and
 pure-frame lowering must preserve it.
 
-**Status: step 0 specification.** The decisions below describe work to
-build, not features that this section's addition implements. Existing
+**Status: step 1 implemented and THE CHECKS passed.** The decisions
+below include later work still to build. Existing
 `for` over a cursor or pull block, pull arguments, `produce`, `map_pull`,
-the scheduler's bounded buffer and families are built. `gen fn`, its
-frames, pipelines, `merge`, `expand` and the two `Fs` forms are not yet
-built. Each step's actual result belongs in the progress log below. No
-g1--g5 gate is enabled merely by writing this specification.
+the scheduler's bounded buffer and families are built. The working tree
+adds `gen fn` and interpreter frames; g1's source tests and differential
+harness pass, and g1 is enabled. Pipelines, `merge`, `expand` and the two
+`Fs` forms remain later steps, with g2--g5 disabled. Each step's actual
+result belongs in the progress log below.
 
 ### The AST and Core
 
@@ -16481,8 +16482,30 @@ the parser must not insert a hidden parameter into the written call.
 The generator body finishes with `Unit`; its `return` has no value.
 Ordinary `return e` returns the enclosing function's result. Resolve
 records the target function and rejects a return that crosses a literal
-block. This is additive control-flow work: today neither AST nor Core
-has `Return`, so a skipped return test is an outstanding g1 requirement.
+block. Step 1 adds `Return` to AST and Core and tests its unwind behavior.
+`gen` is contextual at a declaration's start, so existing imports,
+functions and local variables named `gen` continue to work.
+
+**Return across a typed cleanup region, a choice where the spec is
+silent.** A generator's top-level `finally` covers its `Unit` result:
+an explicit bare return gives it `Ok(())`. A nonlocal return leaving a
+nested expression region, including a `with`, abandons that region
+before it produces its own value. That region's finalizer gets
+`Err(Cancelled)`, and the original return continues after cleanup.
+Never put the enclosing function's return value into an unrelated
+`Result<R, E>`: an `Int` return can leave a region whose result is
+`Unit`. Core's `Covered.return_target` records which finalizer covers
+the producer's result, and Core Lint checks its target and payload type.
+Ordinary functions still cannot declare a source `finally`; their
+generator bindings and installed handlers nevertheless unwind on return.
+
+**Generator declaration namespace, a choice where the spec is silent.**
+Part one accepts top-level `gen fn` declarations. A generator inside a
+type is diagnosed with help to move it out of the type. The specified
+source type is `walk.Cursor`; nested `Type.walk.Cursor` and its imported
+four-part spelling have no defined source namespace in this stage.
+Such a declaration must not be accepted as an ordinary function or
+exported without its generator classification.
 
 **Choose explicit typed Core generator operations.** Retain a generator
 body definition, its item type, parameters, inferred step errors and
@@ -16558,6 +16581,16 @@ arbitrary nested member namespace. The interface's generated-type lookup
 maps that surface name to the private path, including imported generic
 generators and their step error rows.
 
+The internal cursor schema also carries inferred parameter types, its
+item and its step-error row; these are hidden from source type printing.
+A stored field or public type declaration cannot leave any of those
+hidden types existentially unknown. Its written source arguments must
+determine the complete schema, otherwise inference reports an ambiguous
+cursor annotation with help to make the generator's generic signature
+explicit. A local binding annotation can instead learn hidden arguments
+from its initializer. This preserves nominal, fully typed cursors without
+introducing the erased `Cursor<T>` that this stage excludes.
+
 **Generated-cursor operations, a choice where streams.md is silent.**
 `walk.Cursor` supports data copying, storage and `next`; that does not
 imply `eq`, `hash` or `ord`. Those three requirements are unavailable
@@ -16579,8 +16612,8 @@ live locals, yielded values or errors, exposes a continuation address,
 or reads the shared replay cache's position/state as the logical state.
 It has no requirement on item or argument types. Display and refusal
 must agree in the interpreter and every supported native build. This
-is a specification choice, not an implemented capability; g1 tests pin
-interpreter behavior and g4 adds the cross-build agreement.
+is implemented and tested in the interpreter at g1; g4 adds the
+cross-build agreement.
 
 Inside a recursive group, a generator call initially carries a pending
 result-kind constraint tied to its signature. `for`, `yield from` and
@@ -16653,6 +16686,44 @@ as for a written block, not under whatever handler happens to step it.
 Arguments that are data are evaluated once at creation and captured as
 values; a block's captured places are read at each step. `inout` is
 allowed on a block-kind generator; it is not an additional blanket ban.
+
+The retained-instance analysis follows local sources, aliases and block
+captures to a fixed point. Merely constructing a child does not start its
+instance; direct exhaustive iteration and delegation close it. A child
+passed to an ordinary helper is conservatively considered potentially
+stepped and still active when that helper returns. This is a precision
+limitation: the checker does not summarize arbitrary helpers' guarantees
+to leave a source unstarted or exhausted, so some otherwise pure producers
+are classified as blocks. It does not allow a retained instance in a
+copyable cursor. Imported producers publish the same retention summary.
+
+**Handled ambient behavior, a necessary conservative classification
+choice.** An empty outward row can hide observations of the current task:
+public `test_random` consults a task-specific stream. A completed
+`with sim.scheduler(...)` also changes runtime state even though no
+instance remains at the next yield. Replaying either prefix in another
+consumer can change an already saved local or try to install a runtime
+while other tasks run. Native frame copies would preserve those locals.
+Such a producer must therefore be a block in this stage. It is not
+reported as holding an instance when none remains open.
+
+A private `replay_unsafe` summary follows ambient primitives through
+ordinary helpers, generated producers, imported functions, methods and
+implicit user-code dispatch. Unknown handler-description execution and
+unresolved user-code dispatch are conservative: they do not establish
+replay safety. This can classify additional producers as blocks even
+with empty outward rows; it does not change their written dependency
+signatures. Known pure local handlers that finish before yielding and
+local stages over the producer's own pure data remain eligible for value
+cursors. This restriction avoids replaying scheduler state or changing
+the protected scheduler implementation; it is a compiler precision limit
+beyond rule 2's retained-instance test.
+Interfaces export that summary only for public callables and implicit
+dispatch providers on reachable data types, including private providers.
+An exported callable with a nonempty or open declared `uses` row is
+conservatively unsafe regardless of its body. Unrelated private helpers
+and `main` do not change the interface; changing a body within that
+declared dependency contract preserves the existing interface guarantee.
 
 ### Chains chosen by type
 
@@ -16749,12 +16820,41 @@ owner, not the helper's scope. Handler state uses the instance's owning
 capabilities are compiler metadata, never fields a program can inspect,
 store separately or mistake for ownership of a file or dependency.
 
+Passing an anonymous aggregate to a read parameter does not transfer its
+ownership into a new result the function constructs. For example,
+`box([Some(cursor)])` keeps the argument temporary until the caller's
+statement ends; a `box` body that constructs `{ value }` copies its
+borrowed parameter into the returned record. The returned anonymous
+record is adopted by its receiving binding, while the argument temporary
+still closes at statement end. Naming that argument instead gives it
+the named binding's lifetime. Neither a callee return nor an optimization
+may prematurely close the borrowed input or erase its observable cleanup.
+
+An implementation snapshot is not another source-owned binding. The
+read-only capture environment of a spawned block, and an implicit
+collection snapshot for `for` or a pull argument, preserve independent
+cursor positions without registering extra cleanup tokens. A source
+binding made from a snapshot forks its own owned leaves. A task that
+never starts therefore creates no task-local owning binding to finalize;
+rule C forbids stepping a captured data cursor in place. Explicit
+library calls still preserve the copies made by their source bodies.
+An optimized collection operation must use the ordinary checked call
+when it cannot preserve those observable copies for cleanup-bearing
+elements.
+
 Distinguish **advancement** from **replacement**. A step updates the same
 token's latest state; it does not create another abandoned copy of every
 prior position. Explicit assignment, replacement or deletion retires
 displaced cursor tokens to their original owner's cleanup list, retaining
 their last state until that lexical scope ends. Scope exit closes both
 current and retired tokens in reverse registration order, once each.
+Within an aggregate copy, cursor leaves register in descriptor/declaration
+order for record fields, positional order for constructor and tuple
+fields, index order for arrays, and insertion order for maps (key before
+value). Cleanup reverses that order. Both builds must agree: even pure
+cleanup can panic, making the first cleanup observable. Source copies
+resolve generic descriptors before walking fields; the interpreter's
+sorted record representation does not determine this order.
 No reference-count drop, container removal or helper return closes them
 early. A data copy has independent tokens; closing one cannot cancel
 another. For replay cursors, close reconstructs the saved suspension and
@@ -16762,18 +16862,32 @@ discontinues it when needed; no live continuation cache is required, and
 the shared cache never owns finalization. Pure cleanup panic/divergence
 must be preserved in both builds, including copies and retired frames.
 
-This needs real generator machinery: a scoped token registry, recursive
+Destructuring creates ownership for the variables it binds, not an
+invisible binding for the entire right-hand side. Discarded leaves of an
+anonymous value close at the statement's end. Each binding copied from a
+named value gets independent leaves. Anonymous projections may transfer
+their leaves, but overlapping bindings (`as`, for example) must fork a
+leaf already transferred to another binding. Evaluate the right-hand
+side once and preserve whether its selected branch borrowed a named value
+or produced an anonymous one.
+Patterns in a `match` arm or a read `for` remain borrowed views of their
+owning subject or item; `as` does not itself make another cursor copy.
+Copying a projection into a `let`, `var`, aggregate or returned value
+creates its own leaves. In a `let` pattern the receiving storage bindings
+are what require independent ownership, including when they overlap.
+Patterns of an `inout` loop remain projections of the original place.
+
+Step 1 implements a scoped token registry, recursive
 clone/retire operations through descriptors for cursor-containing types,
 and owner propagation across generic `inout` calls. Structurally
 cleanup-free types take the ordinary data fast path; that proof must
 include nested/delegated frames and data leaves, not just an empty
 dependency row. Preserve source ownership boundaries and the distinction
 between step advancement and replacement **before Lower erases place
-updates into ordinary `Assign`**. Add generator-specific Core metadata or
-nodes for those operations; ordinary `Core.var`/`Ref`/`Assign` do not
-currently carry enough information. This is a g1 obligation and a
-specified implementation route, not machinery this document implements
-or proves correct. It imposes no affine restriction on data copies and
+updates into ordinary `Assign`**. `Own`, `Owned_assign`, `Owner_alias`,
+cleanup scopes and pattern scopes preserve those facts in typed Core.
+Core Lint checks their types and scope; malformed-Core tests cover the
+boundaries. This imposes no affine restriction on data copies and
 changes no ownership rule for types without generator cleanup.
 
 Both representations distinguish `Unstarted`, `Running`, `Suspended`,
@@ -16889,6 +17003,14 @@ owning family. `Fs.lines(p)` is the use-here generator with a `finally`;
 the family's end closes leftovers. No separate resource owner or drop
 rule is added. `Db`, `Net`, time operators and byte framing stay at their
 brief's boundaries.
+
+Per the owner's 2026-10-31 instruction and runtime-io.md Part 4
+(`5f36761`), both reader functions belong inside `dep Fs` and use L1's
+`Fs.open`, `Fs.read_at` and `Fs.close`; neither is a new dependency
+operation. Rebase before step 5 and reuse those operations if the runtime
+core run has landed them. Otherwise this stage adds exactly those three
+specified signatures and their real, in-memory and simulated handlers.
+The runtime core run owns the rest of Part 4's world-interface reshaping.
 
 Visible reader escape from a `with` must still be rejected. Consequently
 the `Closed`-after-`with` behavior needs a g5 internal stale-reader probe,
@@ -17048,6 +17170,97 @@ green, commit the finished work and identify the exact missing piece.
   `Generators stage, step 0: spec, staged tests and measured baselines`,
   contains the specification, staged tests and measured baseline together.
   No g1--g5 gate is enabled, and steps 1--6 have not started.
+- **2026-10-31 UTC, step 1 candidate:** step 0 was pushed as `a889c21` after GitHub
+  access was restored. The front end, inferred generator classification,
+  nominal cursor interfaces, Core nodes and ownership checks, interpreter
+  frames, grammar and editor support are implemented in the working tree.
+  All 82 active g1 source cases pass, including depth limits, cleanup
+  outcomes, copies, indexed `inout` places, imported types and errors.
+  Additional tests cover frame state, ownership, retention and replay
+  safety, generic substitution, exclusivity, syntax and malformed Core.
+  The generator harness passes interpreter/release comparisons, 1,000-seed
+  cancellation/queue cases and ordinary-return native compatibility under
+  both RC modes, sanitizers and TinyCC. The 27 later-stage cases retain
+  reviewed unsupported-feature diagnostics or explicit missing adapters;
+  no g2--g5 target has been counted as implemented. The completed full
+  check run and integration status are recorded below.
+- **Step 1 integration choices:** a block frame's mutable position counts
+  as a captured write even when its body changes no outer variable. Sharing
+  one across concurrent callbacks is rejected; creating a fresh frame
+  inside each callback is allowed. Source `&` loop mutability checks wait
+  for the inferred protocol only so a block gets the "never takes `&`"
+  diagnostic; ordinary data-place errors retain priority. Native generator
+  execution remains explicitly refused until step 4. Ordinary returns are
+  lowered natively, while a return crossing an installed dependency's
+  callback or a typed `Covered` finalizer has an explicit temporary refusal.
+  Those boundaries must be implemented before the corresponding g4 tests
+  can be enabled.
+- **Step 1 replay-safety correction:** public `test_random` and
+  `sim.scheduler` provided concrete counterexamples to treating every
+  completed local `with` as replayable. Added the conservative private
+  summary described above, including ordinary/imported helpers, implicit
+  dictionaries and hidden private display methods. Source regressions
+  verify classification and normal block execution; pure local-handler and
+  local-stage regressions remain value cursors. Generic rows also retain
+  their full mapping when substitution reorders dependency instances, and
+  pull-argument unification now aligns a block factory's step row with its
+  receiving parameter before Core is built.
+- **Step 1 full-suite corrections:** the first forced run found two
+  existing example Core snapshots printing an ignored `let` as a `match`.
+  Preserve its original binder as spelling-only ownership metadata; the
+  old snapshots remain unchanged. Performance inspection also found that
+  the runtime descriptor table omitted intrinsic primitive declarations,
+  causing integer arrays to take the conservative generator-cleanup path
+  on every update. Seed the table with intrinsic declarations before the
+  linked program's declarations; a focused regression keeps primitive
+  data cleanup-free while cursor payloads still require cleanup. The two
+  superseded check runs were interrupted for these fixes, not counted as
+  passes; the complete checks must pass on the corrected tree.
+- **Step 1 review corrections:** a failed handler initialization now
+  preserves its contained body panic while closing owned cursors, and
+  transfers a cursor carried by its error to the caller before closing
+  the failed instance's registry. Both have source regressions; removing
+  the panic guard reproduces the incorrect cleanup panic. Written cursor
+  annotations also reject block generators in function signatures and
+  nested annotations, as stored fields already did. Four annotation
+  regressions and explicit Running/reentrant frame tests pass. The full
+  checks are restarted after these fixes; all earlier interrupted runs
+  remain non-passes. Upstream documentation through `5f36761` is included.
+- **Step 1 compatibility corrections:** the full suite exposed existing
+  benchmark imports named `gen`, so the generator modifier is contextual
+  rather than a reserved identifier. The unchanged benchmark entry points
+  check successfully, with additional syntax and tree-sitter coverage.
+  The existing interface-equality test also caught private replay facts
+  leaking body changes through a declared dependency contract. Normalize
+  exported replay facts as described above, retaining private implicit
+  providers on reachable types and testing both visible records and
+  opaque representations. Existing test expectations remain unchanged.
+- **Step 1 test-run bookkeeping correction:** the weak root-capability
+  table was shared across completed test executions. Dead ephemeron
+  entries accumulated in its constant-hash bucket: a documentation test
+  grew from about 0.003 seconds per seed to 0.070 seconds by seed 700.
+  Clearing the table between completed executions made all 1,000 seeds
+  pass in 2.213 seconds. `run_installed` now creates a fresh table for
+  each complete execution; nested calls and child tasks still share it.
+  Ordinary `run` already loads a fresh context, and console sessions
+  reconstruct their whole execution. A repeated-execution regression
+  checks cursor copies across parent and child tasks. The fifth full run
+  had no reported failures and completed the native matrix, but was
+  interrupted to fix this measured accumulation before final checks.
+- **Step 1 green checkpoint:** THE CHECKS passed on `c2d57f6` plus this
+  implementation: `dune build`, `dune test --force` with `REN_TCC`,
+  tree-sitter's `make check`, and all eight example suites (bank, prices,
+  just, ledger, crawler, refresh, server and transfer). The final run
+  required no timing-flake retry. Grammar checks passed 132 corpus cases,
+  235 highlight assertions and 2,353 differential programs, missing none
+  accepted by the compiler. The optional NEON check skipped because its
+  cross-compiler is absent; scalar and OCaml checks each exercised
+  2,108,100 inputs with zero disagreements. The complete documentation
+  suite now passes all four tests under 1,000 seeds in 19.616 seconds,
+  and both required occurrences passed in the full suite. Upstream's
+  documentation-only `f71d0f7` was then fast-forwarded without changing
+  the checked code. Step 1's commit is `Generators stage, step 1: checked
+  generators and interpreter frames`. Steps 2--6 remain to implement.
 
 ## Stage 12a
 

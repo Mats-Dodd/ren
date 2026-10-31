@@ -4,14 +4,14 @@ gen fn numbers(n: Int) -> Int =
 
 gen fn dedup(src: fn() -> Option<Int>) -> Int =
   var last: Option<Int> = None
-  for x in src
+  for x in try src
     if Some(x) != last then
       last = Some(x)
       yield x
 
 fn consume(src: fn() -> Option<Int>) -> Int =
   var sum = 0
-  for x in src
+  for x in try src
     sum += x
   sum
 

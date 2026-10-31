@@ -545,6 +545,7 @@ let%expect_test "Core Lint refuses the world reached from anywhere else" =
       body;
       test;
       loc;
+      generator = None;
       origin = Written;
       known = [];
     }

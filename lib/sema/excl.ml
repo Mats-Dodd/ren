@@ -102,6 +102,7 @@ type why =
       (** read or changed where it's written; for a read, the code that reads it
       *)
   | Called  (** a block parameter, called *)
+  | Stepped  (** the caller-owned state of a named generator block *)
   | Passed  (** `&p`, for the call *)
   | Borrowed of hoisted
       (** a counted value passed to a parameter that only reads it, for the call
@@ -122,6 +123,9 @@ type access = {
   loc : Loc.t;
   why : why;
   block_param : bool;  (** [var] is a block parameter, which rule A is about *)
+  spawned : int list;
+      (** scopes a retained generator argument may spawn readers into, once
+          the generator is stepped, not when its frame is made *)
 }
 
 (* The accesses an argument makes for the whole of its call, or the
@@ -139,6 +143,7 @@ let none = { held = []; via = None; sibling = false }
 type ctx = {
   nodes : Infer.node Infer.Nodes.t;
   types : (Path.t, Iface.type_decl) Hashtbl.t;
+  generators : Ty.generator Path.Map.t;
   schemes : (Path.t, Ty.scheme) Hashtbl.t;
       (** the scheme of each function the module can call, its own and its
           imports', members included *)
@@ -147,6 +152,9 @@ type ctx = {
       (** code as it's written, for messages (Ast.source) *)
   depth : int;  (** how many lambdas deep *)
   loops : access list;  (** the `for &` loops around, each a write *)
+  deferred_scopes : int list;
+      (** scopes outside a block whose definition is being checked; reads
+          spawned there become live only when that block can run *)
   blocks : (int, access list) Hashtbl.t;
       (** the blocks bound by `let`, by their binder, each with what it accesses
           of the variables from outside it *)
@@ -196,9 +204,54 @@ let ty cx (e : expr) =
 
 let is_block cx e = match ty cx e with Fun _ -> true | _ -> false
 
+let is_scope cx e =
+  match ty cx e with
+  | Con (p, _) -> p = Path.prelude "Scope" || p = Path.prelude "Background"
+  | _ -> false
+
+let rec unlabel (e : expr) =
+  match e.kind with Named (_, value) | Try value -> unlabel value | _ -> e
+
+let generator cx (e : expr) (f : expr) =
+  let fact (x : expr) =
+    match Infer.Nodes.find_opt x.node cx.nodes with
+    | Some { found = Some (Gen_call p); _ } -> Some p
+    | _ -> None
+  in
+  let path =
+    match fact e with
+    | Some p -> Some p
+    | None -> (match fact f with Some p -> Some p | None ->
+        match f.kind with Var (Global p) -> Some p | _ -> None)
+  in
+  Option.bind path (fun p -> Path.Map.find_opt p cx.generators)
+
+(* An inferred call returning code makes a block here: ordinary functions
+   cannot return blocks. The producer fact also recognizes pure factories,
+   whose result is data and whose arguments are copied at creation. *)
+let factory cx (e : expr) =
+  let e = unlabel e in
+  let shape =
+    match e.kind with
+    | Call (f, args) -> Some (e, f, args, false)
+    | Ref ({ kind = Call (({ kind = Field _; _ } as f), args); _ } as call) ->
+        Some (call, f, args, true)
+    | _ -> None
+  in
+  Option.bind shape (fun (call, f, args, changed) ->
+    match generator cx call f with
+    | Some g -> Some (call, f, args, changed, Some g)
+    | None when is_block cx e -> Some (call, f, args, changed, None)
+    | None -> None)
+
+let is_pull cx (e : expr) =
+  match Infer.Nodes.find_opt (Infer.pulled_node e.node) cx.nodes with
+  | Some { found = Some (Pulled _); _ } -> true
+  | _ -> false
+
 let is_method cx (f : expr) =
   match Infer.Nodes.find_opt f.node cx.nodes with
-  | Some { found = Some (Method_of _); _ } -> true
+  | Some { found = Some (Method_of _ | Gen_step _); _ } -> true
   | _ -> false
 
 (* Whether calling [f] is a dependency call: an operation, or a
@@ -237,6 +290,8 @@ let callee_of nodes schemes (f : expr) =
       match Infer.Nodes.find_opt f.node nodes with
       | Some { Infer.found = Some (Method_of p); _ } ->
           Option.map (fun p -> (p, 1)) (known p)
+      | Some { Infer.found = Some (Gen_step p); _ } ->
+          Some (Path.member (Ty.generator_cursor p) "next", 1)
       | _ -> None)
   | _ -> None
 
@@ -310,6 +365,7 @@ let access ?(loc : Loc.t option) (p : place) kind why =
     loc = Option.value loc ~default:p.ploc;
     why;
     block_param = false;
+    spawned = [];
   }
 
 (* One path is a prefix of the other, or they differ only in indices. *)
@@ -698,7 +754,11 @@ let rule_b cx (b : binder) (loc : Loc.t) ~own ~(wanted : Ty.block_mode) ~callee
    it captures. *)
 let task_write cx (a : access) (m : Ty.block_mode) =
   let x = a.var.ident.name in
-  match m with
+  if a.why = Stepped then
+    report cx a.loc
+      ~help:"create and consume a fresh generator inside the task's block"
+      (sprintf "`%s` is a generator stepped in place, so its frame can't be shared by tasks" x)
+  else match m with
   | Concurrent ->
       report cx a.loc ~says:"changed here"
         ~notes:[ "a block that runs on several tasks at once can only read what it captures" ]
@@ -838,6 +898,16 @@ let against_tasks cx (a : access) =
         | None -> ())
       cx.tasks
 
+let spawned_read cx (a : access) =
+  if a.kind = Read && not a.block_param then
+    List.iter
+      (fun fr ->
+        if List.mem fr.sid a.spawned
+           && not (List.mem fr.sid cx.deferred_scopes)
+           && a.var.depth < fr.sdepth then
+          fr.reads := a :: !(fr.reads))
+      cx.tasks
+
 (* An access that lasts an instant: it only has to keep clear of the
    loops around, and of what spawned tasks read. *)
 let instant cx (a : access) =
@@ -849,7 +919,7 @@ let instant cx (a : access) =
 
 (* A block parameter, [b], used at [loc]. *)
 let param_use cx (b : binder) loc why =
-  record cx { var = b; path = []; kind = Read; loc; why; block_param = true }
+  record cx { var = b; path = []; kind = Read; loc; why; block_param = true; spawned = [] }
 
 (* ---- what a task can reach (foundations.md, decision 7) ---- *)
 
@@ -889,6 +959,9 @@ let reach cx (e : expr) =
   in
   let scheme p = Option.map (fun (s : Ty.scheme) -> s.ty) (Hashtbl.find_opt cx.schemes p) in
   let rec go (e : expr) =
+    Option.iter
+      (fun (g : Ty.generator) -> List.iter add g.uses.labels)
+      (match e.kind with Call (f, _) -> generator cx e f | _ -> None);
     (match e.kind with
     | Var (Dep_op (p, _)) -> add (Ty.label (Ty.dep_label p))
     | Var (Global p) -> uses (scheme p)
@@ -903,7 +976,15 @@ let reach cx (e : expr) =
     | _ -> ());
     List.iter go (children e)
   in
-  go e;
+  let rec made (e : expr) =
+    match factory cx e with
+    | Some (_, _, args, _, producer) ->
+        uses (Some (ty cx e));
+        Option.iter (fun (g : Ty.generator) -> List.iter add g.uses.labels) producer;
+        List.iter (fun a -> if is_block cx (unlabel a) then made (unlabel a)) args
+    | None -> go e
+  in
+  made e;
   !found
 
 (* [f] with [args] is a spawn, `s.spawn(body)` or `bg.spawn(body)`, into the scope [receiver] of
@@ -967,7 +1048,7 @@ let rec walk cx (e : expr) =
       call cx e f args ~changed:true
   | Ref _ -> (* mut.ml reported it *) ()
   | Call (f, args) -> call cx e f args ~changed:false
-  | Lambda _ -> ignore (block cx e)
+  | Lambda _ -> ignore (block ~defer:true cx e)
   | Inline_handler l ->
       (* what it reads is copied when it's made, data that nothing it does
          can change *)
@@ -981,7 +1062,12 @@ let rec walk cx (e : expr) =
       match place_of cx target with
       | Some p -> instant cx (access p Write (Used None))
       | None -> ())
-  | For { pat; over = Each { kind = Ref a; loc = iter_loc; _ }; body; _ } -> (
+  | For { pat; over = Each source; body; _ }
+    when changed_receiver (unlabel source) = None
+         && (match (unlabel source).kind with Ref _ -> true | _ -> false) -> (
+      let iter = unlabel source in
+      let a = match iter.kind with Ref a -> a | _ -> assert false in
+      let iter_loc = iter.loc in
       walk_indices cx a;
       match place_of cx a with
       | Some p ->
@@ -990,6 +1076,20 @@ let rec walk cx (e : expr) =
           instant cx l;
           walk { cx with loops = l :: cx.loops } body
       | None -> walk cx body)
+  | For { over = Each source; body; _ } when is_block cx source ->
+      call ~step:true cx source source [] ~changed:false;
+      walk cx body
+  | Yield_from source -> (
+      let source = unlabel source in
+      if is_block cx source then
+        call ~step:true cx source source [] ~changed:false
+      else match source.kind with
+      | Ref place when changed_receiver source = None ->
+          walk_indices cx place;
+          (match place_of cx place with
+          | Some p -> instant cx (access p Write Passed ~loc:source.loc)
+          | None -> walk cx place)
+      | _ -> walk cx source)
   | Handler { state; arms; _ } ->
       List.iter (function Finally _ -> () | s -> stmt cx s) state;
       let vars =
@@ -1042,7 +1142,7 @@ let rec walk cx (e : expr) =
   | Match _ | Array _ | Interp _
   | Tuple _
   | For _ | While _ | Fail _ | Try _ | Attempt _ | Assert _
-  | Named _ | Tag_set _ | Pipe _ ->
+  | Named _ | Tag_set _ | Pipe _ | Yield _ | Return _ ->
       List.iter (walk cx) (children e)
   | Release a -> (
       (* it lets go of the instance of the arm it's written in, so there
@@ -1057,10 +1157,18 @@ let rec walk cx (e : expr) =
       | _ -> walk cx a)
 
 and stmt cx = function
-  | Let { name; value = { kind = Lambda _; _ } as value; mut = false; _ } ->
+  | Let { name; value; mut = false; _ }
+    when (match (unlabel value).kind with Lambda _ -> true | _ ->
+          is_block cx value && factory cx value <> None) ->
       (* no access where it's bound: its captures are made where it's
          called or passed *)
-      Hashtbl.replace cx.blocks name.id (block cx value);
+      let caps = block ~defer:true cx value in
+      let caps = if factory cx value <> None then
+        { var = name; path = []; kind = Write; loc = value.loc; why = Stepped;
+          block_param = false; spawned = [] } :: caps
+        else caps
+      in
+      Hashtbl.replace cx.blocks name.id caps;
       Hashtbl.replace cx.reaches name.id (reach cx value)
   | Let { value; _ } -> walk cx value
   | Let_pattern { value; else_; _ } ->
@@ -1075,10 +1183,16 @@ and stmt cx = function
 (* A block, checked on its own, and what it accesses of the variables
    from outside it, its captures, nested blocks' included. [scope], if
    it's the body of `Async.scope` or `Async.background`, is which. *)
-and block ?scope cx (e : expr) =
+and block ?scope ?(defer = false) cx (e : expr) =
   match e.kind with
   | Lambda (ps, body) ->
-      let inner = { cx with depth = cx.depth + 1; loops = []; seen = ref [] } in
+      let inner =
+        { cx with depth = cx.depth + 1; loops = []; seen = ref [];
+          deferred_scopes = if defer then
+            List.sort_uniq compare
+              (cx.deferred_scopes @ List.map (fun fr -> fr.sid) cx.tasks)
+            else cx.deferred_scopes }
+      in
       (* the body of an `Async.scope` call: its parameter is the scope its
          tasks are spawned into *)
       let inner =
@@ -1100,7 +1214,10 @@ and block ?scope cx (e : expr) =
       in
       walk inner body;
       List.filter (fun a -> a.var.depth < inner.depth) !(inner.seen)
-  | _ -> []
+  | Named (_, value) | Try value -> block ?scope ~defer cx value
+  | _ -> (match factory cx e with
+      | Some (call, f, args, changed, _) -> factory_frame cx call f args ~changed
+      | None -> [])
 
 (* The index expressions inside a place, like the `i` in `xs[i].pos`. *)
 and walk_indices cx (e : expr) =
@@ -1119,13 +1236,18 @@ and walk_indices cx (e : expr) =
    with `&`, `&s.push(1)`, and [released] if it's marked `release`. Its
    arguments are evaluated in order, each checked as it's made; then
    every access that lasts the call starts. *)
-and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
+and call ?(released = false) ?(step = false) cx (e : expr) (f : expr) args ~changed =
+  match (if step then None else factory cx e) with
+  | Some (call, f, args, changed, _) ->
+      ignore (factory_frame cx call f args ~changed)
+  | None ->
+  let f = unlabel f in
   let state_writes why loc =
     match cx.state with
     | Some vars ->
         List.map
           (fun v ->
-            { var = v; path = []; kind = Write; loc; why; block_param = false })
+            { var = v; path = []; kind = Write; loc; why; block_param = false; spawned = [] })
           vars
     | None -> []
   in
@@ -1159,6 +1281,8 @@ and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
             ( { none with held = state_writes (Block_call b.ident.name) e.loc },
               None ))
     | Lambda _ -> ({ none with held = block cx f; via = Some f.loc }, None)
+    | _ when is_block cx f && factory cx f <> None ->
+        ({ none with held = block cx f; via = Some f.loc }, None)
     | _ ->
         walk cx f;
         let held = if lets_go then state_writes why e.loc else [] in
@@ -1232,16 +1356,16 @@ and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
           (* a spawned task reads the variables of the frame that called
              `Async.scope` where they are, until it ends (rule C); the
              others are copied when it's spawned *)
-          if m = Spawned then
-            List.iter
-              (fun fr ->
-                fr.reads :=
-                  List.filter (fun c -> c.var.depth < fr.sdepth) reads
-                  @ !(fr.reads))
-              frames;
+          let reads = if m = Spawned then
+            List.map
+              (fun c -> { c with spawned = List.sort_uniq compare
+                (c.spawned @ List.map (fun fr -> fr.sid) frames) }) reads
+            else reads
+          in
           reads
       in
-      match a.kind with
+      let value = unlabel a in
+      match value.kind with
       | Lambda (_, body) when until_call ->
           (* `Async.until`'s condition is checked only while the instance
              is free, so it conflicts with nothing in its arm; and it's
@@ -1257,7 +1381,7 @@ and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
           walk cx a;
           none
       | Lambda _ ->
-          let caps = block ?scope:scope_call cx a in
+          let caps = block ?scope:scope_call cx value in
           if isolate_call then isolated_changes cx caps;
           { held = as_task caps; via = Some a.loc; sibling }
       | Var (Local b) -> (
@@ -1270,6 +1394,14 @@ and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
               if isolate_call then not_written_here cx a ~callee:"Async.isolate";
               if m <> Ordinary then passed_on b a.loc m;
               none)
+      | _ when factory cx value <> None ->
+          if m <> Ordinary then
+            report cx a.loc
+              ~help:"create and consume a fresh generator inside the task's block"
+              "a generator's caller-owned frame can't be shared by tasks";
+          let caps = block cx value in
+          if isolate_call then isolated_changes cx caps;
+          { held = as_task caps; via = Some a.loc; sibling }
       | _ ->
           (* an operation passed as a block, `xs.each(Sink.put)`, is a
              plain dependency call where it's called: it holds nothing *)
@@ -1302,9 +1434,14 @@ and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
   let args_held =
     List.map
       (fun (i, (a : expr)) ->
+        let m = mode_at i in
+        if m <> Ordinary && is_pull cx (unlabel a) then
+          report cx a.loc
+            ~help:"create and consume a fresh cursor inside the task's block"
+            "a pull adapter's caller-owned state can't be shared by tasks";
         match a.kind with
         | Ref p when changed_receiver a = None -> passed p ~loc:a.loc
-        | _ -> plain ~m:(mode_at i) a ~code:(hoist cx a))
+        | _ -> plain ~m a ~code:(hoist cx a))
       (placed cx.nodes e args)
   in
   (* rule A *)
@@ -1355,9 +1492,123 @@ and call ?(released = false) cx (e : expr) (f : expr) args ~changed =
             (fun l -> if clash l a then once (l, None) (a, g.via))
             cx.loops;
           against_tasks cx a;
+          spawned_read cx a;
           record cx a)
         g.held)
     groups
+
+(* A generator factory evaluates data and projected indices now. It
+   retains inout places and block arguments for its future steps. Data
+   arguments are snapshots, so their reads do not last those steps. *)
+and factory_frame cx (e : expr) (f : expr) args ~changed =
+  let receiver =
+    match f.kind with Field (r, _) when is_method cx f -> Some r | _ -> None
+  in
+  if receiver = None then walk cx f;
+  let callee = callee_of cx.nodes cx.schemes f in
+  let mode_at i =
+    match callee with Some (p, off) when i >= 0 -> mode_of cx.schemes p (i + off)
+    | _ -> Ty.Ordinary
+  in
+  let scopes =
+    let given = List.filter_map
+      (fun (a : expr) -> match (unlabel a).kind with
+        | Var (Local b) -> List.find_opt (fun fr -> fr.sid = b.id) cx.tasks
+        | _ -> None)
+      (Option.to_list receiver @ args)
+    in
+    if given = [] then cx.tasks else given
+  in
+  let retained_block (a : expr) m =
+    let a = unlabel a in
+    if m <> Ordinary && factory cx a <> None then
+      report cx a.loc
+        ~help:"create and consume a fresh generator inside the task's block"
+        "a generator's caller-owned frame can't be shared by tasks";
+    let caps = match a.kind with
+      | Var (Local b) -> (match Hashtbl.find_opt cx.blocks b.id with
+          | Some caps -> caps
+          | None ->
+              let state = match cx.state with
+                | None -> []
+                | Some vars -> List.map
+                    (fun var ->
+                      { var; path = []; kind = Write; loc = a.loc;
+                        why = Block_call b.ident.name; block_param = false;
+                        spawned = [] }) vars
+              in
+              { var = b; path = []; kind = Read; loc = a.loc; why = Called;
+                block_param = true; spawned = [] } :: state)
+      | _ -> block ~defer:true cx a
+    in
+    if m = Ty.Ordinary then caps
+    else (
+      let changed = ref [] in
+      List.iter
+        (fun c ->
+          if c.block_param then (
+            let own = Option.value (List.assoc_opt c.var.id cx.own_modes) ~default:Ty.Ordinary in
+            if rank own < rank m then rule_b cx c.var c.loc ~own ~wanted:m
+              ~callee:(Option.value (cx.source f) ~default:"this"))
+          else if c.kind = Write && not (state_write c)
+                  && not (List.mem c.var.id !changed) then (
+            changed := c.var.id :: !changed;
+            task_write cx c m)) caps;
+      List.map
+        (fun c ->
+          if m = Spawned && c.kind = Read && not c.block_param then
+            { c with spawned = List.sort_uniq compare
+                (c.spawned @ List.map (fun fr -> fr.sid) scopes) }
+          else c) caps)
+  in
+  let place (a : expr) loc =
+    walk_indices cx a;
+    match place_of cx a with
+    | Some p -> { none with held = [ access p Write Passed ~loc ] }
+    | None -> walk cx a; none
+  in
+  let value a m =
+    if is_block cx a then
+      { held = retained_block a m; via = Some a.loc; sibling = m = Ordinary }
+    else if is_scope cx a then (
+      walk_indices cx a;
+      match place_of cx a with
+      | Some p -> { none with held = [ access p Read (Borrowed (hoist cx a)) ]; via = Some a.loc }
+      | None -> walk cx a; none)
+    else (walk cx a; none)
+  in
+  let receiver = match receiver with
+    | Some r when changed -> [ place r r.loc ]
+    | Some r -> [ value r Ty.Ordinary ]
+    | None -> []
+  in
+  let groups = receiver @ List.map
+    (fun (i, (a : expr)) ->
+      let value_arg = unlabel a in
+      let m = mode_at i in
+      if m <> Ordinary && is_pull cx value_arg then
+        report cx a.loc
+          ~help:"create and consume a fresh cursor inside the task's block"
+          "a pull adapter's caller-owned state can't be shared by tasks";
+      match value_arg.kind with
+      | Ref p when changed_receiver value_arg = None -> place p value_arg.loc
+      | _ -> value value_arg m)
+    (placed cx.nodes e args)
+  in
+  let reported = ref [] in
+  let rec pairs = function
+    | [] -> ()
+    | g :: rest ->
+        List.iter
+          (fun h -> if not (g.sibling && h.sibling) then
+            List.iter (fun a -> List.iter (fun b ->
+              if clash a b && not (List.mem a.var.id !reported) then (
+                reported := a.var.id :: !reported;
+                conflict cx (a, g.via) (b, h.via))) h.held) g.held) rest;
+        pairs rest
+  in
+  pairs groups;
+  List.concat_map (fun g -> g.held) groups
 
 (* Rule B for the module's private functions, whose modes aren't written:
    each block parameter takes the strongest mode of the parameters it's
@@ -1380,10 +1631,37 @@ let infer_modes (r : Resolve.t) (inferred : Infer.t) schemes =
       in
       if b.bound = By_param then go 0 f.params else None
     in
-    let rec params_in (e : expr) =
-      match e.kind with
-      | Var (Local b) -> Option.to_list (index b)
-      | _ -> List.concat_map params_in (children e)
+    let is_block (e : expr) =
+      match Infer.Nodes.find_opt e.node nodes with
+      | Some { ty = Ty.Fun _; _ } -> true
+      | _ -> false
+    in
+    let definitions = Hashtbl.create 8 in
+    let rec definitions_in (e : expr) =
+      (match e.kind with
+      | Block (stmts, _) -> List.iter
+          (function Let { name; value; mut = false; _ } when is_block value ->
+              Hashtbl.replace definitions name.id value
+            | _ -> ()) stmts
+      | _ -> ());
+      List.iter definitions_in (children e)
+    in
+    definitions_in f.body;
+    let rec params_in ?(made = true) seen (e : expr) =
+      match (unlabel e).kind with
+      | Var (Local b) when is_block e -> (match index b with
+          | Some k -> [ k ]
+          | None when not (List.mem b.id seen) ->
+              (match Hashtbl.find_opt definitions b.id with
+              | Some value -> params_in (b.id :: seen) value
+              | None -> [])
+          | None -> [])
+      | Var _ -> []
+      | Lambda (_, body) -> params_in ~made:false seen body
+      | Call (_, args) when made && is_block e ->
+          List.concat_map
+            (fun a -> if is_block (unlabel a) then params_in seen a else []) args
+      | _ -> List.concat_map (params_in ~made:false seen) (children e)
     in
     let found = ref [] in
     let rec go (e : expr) =
@@ -1395,8 +1673,9 @@ let infer_modes (r : Resolve.t) (inferred : Infer.t) schemes =
                 (fun (i, (a : expr)) ->
                   let ks =
                     match a.kind with
-                    | Var (Local b) -> Option.to_list (index b)
-                    | Lambda _ -> params_in a
+                    | Var (Local _) when is_block a -> params_in [] a
+                    | Lambda _ -> params_in [] a
+                    | _ when is_block a -> params_in [] a
                     | _ -> []
                   in
                   if i >= 0 then
@@ -1439,6 +1718,7 @@ let infer_modes (r : Resolve.t) (inferred : Infer.t) schemes =
 
 let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
   let types = Hashtbl.create 16 and schemes = Hashtbl.create 64 in
+  let generators = ref inferred.generators in
   List.iter
     (fun (td : Iface.type_decl) ->
       Hashtbl.replace types td.path td;
@@ -1450,7 +1730,9 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
     (fun (i : Iface.t) ->
       List.iter
         (fun (v : Iface.value) ->
-          Hashtbl.replace schemes (Path.make i.home v.vname) v.scheme)
+          Hashtbl.replace schemes (Path.make i.home v.vname) v.scheme;
+          Option.iter (fun (g : Ty.generator) ->
+            generators := Path.Map.add g.path g !generators) v.generator)
         i.values)
     reachable;
   Path.Map.iter (Hashtbl.replace schemes) inferred.schemes;
@@ -1475,11 +1757,13 @@ let program sink ~reachable (r : Resolve.t) (inferred : Infer.t) =
         {
           nodes;
           types;
+          generators = !generators;
           schemes;
           sink;
           source;
           depth = 0;
           loops = [];
+          deferred_scopes = [];
           blocks = Hashtbl.create 8;
           state = None;
           in_op = false;

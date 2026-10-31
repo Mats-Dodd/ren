@@ -1,18 +1,18 @@
 Generators stage (compiler.md, "Generators stage"). Every disabled specimen
-executes and must produce its recorded rejection. Adding g1 ... g5 to
-`generators/stages` activates strict targets. The native checks require cc,
+executes and must produce its recorded rejection. g1 is enabled in
+`generators/stages`; subsequent steps activate strict targets there. The native checks require cc,
 ASan/UBSan and tcc (REN_TCC); they never silently skip a missing compiler.
 
   $ sh generators/check.sh interpreter
-  pure: until g1 (recorded rejection)
-  cursor_show: until g1 (recorded rejection)
-  lifetime: until g1 (recorded rejection)
-  part_two: until g1 (recorded rejection)
+  pure: interpreter and ren run --release as specified
+  cursor_show: interpreter and ren run --release as specified
+  lifetime: interpreter and ren run --release as specified
+  part_two: interpreter and ren run --release as specified
   stages: until g2 (recorded rejection)
   lifetime_push: until g2 (recorded rejection)
-  unique: until g4 (recorded rejection)
-  depth_push: until g4 (recorded rejection)
-  depth_pull: until g4 (recorded rejection)
+  unique: interpreter and ren run --release as specified
+  depth_push: interpreter and ren run --release as specified
+  depth_pull: interpreter and ren run --release as specified
   fs: until g5 (recorded rejection)
   transaction: until g5 (recorded rejection)
   fs_push: until g5 (recorded rejection)
@@ -34,9 +34,23 @@ ASan/UBSan and tcc (REN_TCC); they never silently skip a missing compiler.
   $ sh generators/check.sh sim
   queues: existing contracts pass across 1000 seeds
   close_sender: existing closed-send panic as specified
-  cancel_sim: until g1 (recorded rejection)
+  cancel_sim: all assertions passed across 1000 seeds
   merge_sim: until g3 (recorded rejection)
   expand_sim: until g3 (recorded rejection)
 
   $ sh generators/check.sh replay
   replay: until g3 (recorded rejection)
+
+Ordinary returns are checked natively at g1; generator lowering remains g4.
+The Unit-valued dependency callback boundary must be explicit until then.
+
+  $ sh generators/check.sh compatibility
+  returns: interpreter and ren run --release as specified
+  returns: perceus agrees, objects live at exit 0
+  returns: naive agrees, objects live at exit 0
+  returns: release agrees, objects live at exit 0
+  returns: tcc agrees, objects live at exit 0
+  return_with: interpreter and ren run --release as specified
+  return_with: explicit native callback boundary
+  native_refusal: interpreter and ren run --release as specified
+  generator execution: explicit g1 native refusal

@@ -358,6 +358,12 @@ and ('v, 'b, 't) expr_kind =
   | Break
       (** [break]: leaves the innermost `while` or `for` it's written in, never
           a block's (resolve.ml) *)
+  | Yield of ('v, 'b, 't) expr
+      (** [yield item], in a generator's own body *)
+  | Yield_from of ('v, 'b, 't) expr
+      (** [yield from try source]: the marker stays on the source *)
+  | Return of ('v, 'b, 't) expr option
+      (** [return] ends a generator; [return value] ends an ordinary function *)
   | Todo
       (** [todo]: code still to write, of any type, which panics where it's
           reached, "reached a `todo`"; what a `match`'s missing arms are
@@ -581,7 +587,10 @@ type 't type_body =
           written here join its built-in ones. Only the prelude's source can
           write one (Parser.parse_program's [prelude]) *)
 
+type fn_kind = Ordinary_fn | Generator_fn of Loc.t
+
 type ('v, 'b, 't) fn_def = {
+  fn_kind : fn_kind;  (** a generator retains the location of its [gen] *)
   pub : bool;
   name : ident;
   tparams : ident list;  (** the [T] in [fn id<T>(x: T) -> T] *)
@@ -863,6 +872,8 @@ let children (e : ('v, 'b, 't) expr) =
   | Release a
   | Assert a ->
       [ a ]
+  | Yield a | Yield_from a -> [ a ]
+  | Return a -> Option.to_list a
   | Binop (_, a, b, _)
   | Index (a, b)
   | Assign { target = a; value = b; _ }
@@ -1295,6 +1306,9 @@ let rec show_expr (e : expr) =
         ]
   | While { cond; body } -> parens [ "while"; show_expr cond; show_expr body ]
   | Break -> "break"
+  | Yield a -> parens [ "yield"; show_expr a ]
+  | Yield_from a -> parens [ "yield from"; show_expr a ]
+  | Return a -> parens ("return" :: Option.to_list (Option.map show_expr a))
   | Todo -> "todo"
   | Fail (t, args) ->
       let show_arg = function
@@ -1407,7 +1421,12 @@ let show_fn (f : fn_def) =
     | None -> []
   in
   (* a test item, `test fn` *)
-  let fn = if f.test then [ "test"; "fn" ] else [ "fn" ] in
+  let fn =
+    (if f.test then [ "test" ] else [])
+    @ (match f.fn_kind with
+      | Ordinary_fn -> [ "fn" ]
+      | Generator_fn _ -> [ "gen"; "fn" ])
+  in
   parens
     ((fn @ [ f.name.name; parens params ] @ errors @ uses)
     @ [ show_expr f.body ])
@@ -1719,6 +1738,7 @@ let source ~type_name ~value_name (e : Resolved.expr) =
             (List.map (fun ((f : ident), v) -> ", " ^ f.name ^ ": " ^ go v) fields)
         ^ " }"
     | If _ | Lambda _ | Block _ | Match _ | Assign _ | For _ | While _ | Break
+    | Yield _ | Yield_from _ | Return _
     | With _ | Handler _ | Inline_handler _ | Piped ->
         raise Exit
   and operand n (a : Resolved.expr) =

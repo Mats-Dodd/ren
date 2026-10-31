@@ -112,6 +112,7 @@ val absorb :
   ?install:bool ->
   ?target:Path.t ->
   ?callee:Path.t ->
+  ?stream:(string * string) ->
   Types.row ->
   Types.row ->
   unit

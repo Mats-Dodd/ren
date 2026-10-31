@@ -49,6 +49,19 @@ let rec convert env ~tvars ?(named = []) ~row (t : Resolved.ty) =
   | TyName ({ tref = Named p; _ }, args) when is_calls p ->
       (* `Doc.Call` written, which may be any of its calls (Types.calls) *)
       TCon (p, List.map go args @ [ TErrors (every_call p) ])
+  | TyName ({ tref = Named p; _ }, args) when Ty.is_generator_cursor p ->
+      let args = List.map go args in
+      let total = match Hashtbl.find_opt env.types p with
+        | Some td -> List.length td.params | None -> List.length args + 2 in
+      let shape = Hashtbl.fold (fun _ (g : Ty.generator) found ->
+          if g.cursor_path = p then Some g else found) env.generator_signatures None in
+      let expanded = Option.bind shape (fun g -> Ty.expand_generator_cursor g
+          (Ty.Con (p, List.mapi (fun i _ -> Ty.Var i) args))) in
+      (match expanded with
+      | Some t -> of_ty ~vars:(List.nth args) ~tails:(fun _ -> REmpty) t
+      | None -> TCon (p, args
+          @ List.init (max 0 (total - List.length args - 1)) (fun _ -> fresh_var env.st)
+          @ [TErrors (fresh_row env.st)]))
   | TyName ({ tref = Named p; _ }, args) -> TCon (p, List.map go args)
   | TyVariant ({ tref = Named p; _ }, c, args) ->
       (* Resolve checked it's a sum's constructor with named fields *)

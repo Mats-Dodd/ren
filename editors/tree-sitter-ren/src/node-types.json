@@ -116,6 +116,10 @@
         "named": true
       },
       {
+        "type": "return_expression",
+        "named": true
+      },
+      {
         "type": "self",
         "named": true
       },
@@ -145,6 +149,14 @@
       },
       {
         "type": "with_expression",
+        "named": true
+      },
+      {
+        "type": "yield_expression",
+        "named": true
+      },
+      {
+        "type": "yield_from_expression",
         "named": true
       }
     ]
@@ -594,6 +606,10 @@
             "named": true
           },
           {
+            "type": "return_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -623,6 +639,14 @@
           },
           {
             "type": "with_expression",
+            "named": true
+          },
+          {
+            "type": "yield_expression",
+            "named": true
+          },
+          {
+            "type": "yield_from_expression",
             "named": true
           }
         ]
@@ -742,6 +766,10 @@
             "named": true
           },
           {
+            "type": "return_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -771,6 +799,14 @@
           },
           {
             "type": "with_expression",
+            "named": true
+          },
+          {
+            "type": "yield_expression",
+            "named": true
+          },
+          {
+            "type": "yield_from_expression",
             "named": true
           }
         ]
@@ -954,6 +990,10 @@
             "named": true
           },
           {
+            "type": "return_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -983,6 +1023,14 @@
           },
           {
             "type": "with_expression",
+            "named": true
+          },
+          {
+            "type": "yield_expression",
+            "named": true
+          },
+          {
+            "type": "yield_from_expression",
             "named": true
           }
         ]
@@ -1965,6 +2013,16 @@
           {
             "type": "error_set",
             "named": true
+          }
+        ]
+      },
+      "generator": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "gen",
+            "named": false
           }
         ]
       },
@@ -3977,6 +4035,10 @@
             "named": true
           },
           {
+            "type": "return_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -4006,6 +4068,14 @@
           },
           {
             "type": "with_expression",
+            "named": true
+          },
+          {
+            "type": "yield_expression",
+            "named": true
+          },
+          {
+            "type": "yield_from_expression",
             "named": true
           }
         ]
@@ -4136,6 +4206,22 @@
     "type": "rest_pattern",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "return_expression",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "sequence_rest",
@@ -4550,6 +4636,10 @@
             "named": true
           },
           {
+            "type": "return_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -4579,6 +4669,14 @@
           },
           {
             "type": "with_expression",
+            "named": true
+          },
+          {
+            "type": "yield_expression",
+            "named": true
+          },
+          {
+            "type": "yield_from_expression",
             "named": true
           }
         ]
@@ -4798,6 +4896,16 @@
     "type": "type_name",
     "named": true,
     "fields": {
+      "generator": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
       "module": {
         "multiple": false,
         "required": false,
@@ -4952,6 +5060,10 @@
             "named": true
           },
           {
+            "type": "return_expression",
+            "named": true
+          },
+          {
             "type": "self",
             "named": true
           },
@@ -4981,6 +5093,14 @@
           },
           {
             "type": "with_expression",
+            "named": true
+          },
+          {
+            "type": "yield_expression",
+            "named": true
+          },
+          {
+            "type": "yield_from_expression",
             "named": true
           }
         ]
@@ -5345,6 +5465,38 @@
     }
   },
   {
+    "type": "yield_expression",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "yield_from_expression",
+    "named": true,
+    "fields": {
+      "source": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "!",
     "named": false
   },
@@ -5554,6 +5706,14 @@
     "named": false
   },
   {
+    "type": "from",
+    "named": false
+  },
+  {
+    "type": "gen",
+    "named": false
+  },
+  {
     "type": "group",
     "named": false
   },
@@ -5634,6 +5794,10 @@
     "named": false
   },
   {
+    "type": "return",
+    "named": false
+  },
+  {
     "type": "self",
     "named": true
   },
@@ -5699,6 +5863,10 @@
   },
   {
     "type": "with",
+    "named": false
+  },
+  {
+    "type": "yield",
     "named": false
   },
   {

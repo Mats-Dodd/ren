@@ -33,6 +33,8 @@ type t =
           which shares most of the old one *)
   | VClosure of {
       params : int list;  (** the parameters' binder ids *)
+      types : Ty.ty list;  (** descriptors of the defining function *)
+      capture_types : Ty.ty Env.t;
       ev : int;  (** the id of the evidence its body runs with *)
       outer : int;
           (** the id of the evidence where it was written, which it captured *)
@@ -134,7 +136,7 @@ and store = { mutable items : t array; mutable used : int }
 
 (* A handler's description: its body makes an instance, given the
    evidence [ev] where it's installed, with the variables it captured. *)
-and handler = { ev : int; body : Core.expr; env : t ref Env.t; site : string }
+and handler = { ev : int; body : Core.expr; env : t ref Env.t; site : string; types : Ty.ty list }
 (* [site] is the label of the code that made it, its handler's name for
    one made by calling it, `counter`, which a panic about it names *)
 
@@ -193,6 +195,10 @@ let push v x =
     VArray { store = { items; used = v.len + 1 }; len = v.len + 1 }
   end
 
+(* Extensible runtime handles supply their opaque display without making Value
+   depend on the module that defines the handle. *)
+let sched_show : (sched -> string option) ref = ref (fun _ -> None)
+
 let rec show = function
   | VInt n -> Int64.to_string n
   | VFloat f -> Ast.show_float f
@@ -227,6 +233,6 @@ let rec show = function
   | VInstance _ -> "<instance>"
   | VCell _ -> "<cell>"
   | VEvidence _ -> "<evidence>"
-  | VSched _ -> "<task>"
+  | VSched handle -> Option.value (!sched_show handle) ~default:"<task>"
   | VType _ -> "<type>"
   | VDict _ -> "<dict>"

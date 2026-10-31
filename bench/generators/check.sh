@@ -49,7 +49,7 @@ program() {
 
 native() {
   name=$1
-  if ! enabled g4; then echo "$name: native until g4"; return; fi
+  if ! enabled g4 && [ "${ordinary_returns:-0}" != 1 ]; then echo "$name: native until g4"; return; fi
   capture ren run "$name.ren" -- "$work/lines.txt"
   diff -u "$name.expected" "$work/result"
   cp "$work/result" "$work/interp.result"
@@ -118,9 +118,9 @@ case "$1" in
     program g1 part_two
     program g2 stages
     program g2 lifetime_push
-    program g4 unique
-    program g4 depth_push
-    program g4 depth_pull
+    program g1 unique
+    program g1 depth_push
+    program g1 depth_pull
     program g5 fs
     program g5 transaction
     program g5 fs_push
@@ -175,6 +175,42 @@ case "$1" in
     seeded g3 merge_sim
     seeded g3 expand_sim
     ;;
+  compatibility)
+    if ! enabled g1; then
+      echo 'ordinary returns: compatibility until g1'
+      echo 'return_with: compatibility until g1'
+      echo 'generator refusal: compatibility until g1'
+    else
+      program g1 returns
+      ordinary_returns=1
+      native returns
+      ordinary_returns=0
+      program g1 return_with
+      if enabled g4; then
+        native return_with
+        echo 'generator execution: covered by g4 native behavior checks'
+      else
+        set +e
+        ren build --debug return_with.ren -o "$work/refused.bin" > "$work/out" 2> "$work/err"
+        code=$?
+        set -e
+        [ "$code" -ne 0 ]
+        grep -Fq 'a `return` through an installed dependency' "$work/err"
+        grep -q 'help:' "$work/err"
+        echo 'return_with: explicit native callback boundary'
+        program g1 native_refusal
+        set +e
+        ren build --debug native_refusal.ren -o "$work/refused.bin" > "$work/out" 2> "$work/err"
+        code=$?
+        set -e
+        [ "$code" -ne 0 ]
+        grep -Fq "generator execution isn't native yet" "$work/err"
+        grep -q 'help:' "$work/err"
+        grep -Fq 'native generators arrive' "$work/err"
+        echo 'generator execution: explicit g1 native refusal'
+      fi
+    fi
+    ;;
   replay)
     capture ren run --record "$work/run.journal" replay.ren
     if ! enabled g3; then pending g3 replay; exit 0; fi
@@ -184,5 +220,5 @@ case "$1" in
     diff -u "$work/record.out" "$work/replay.out"
     echo 'merge and expand: journal replays every value and cleanup'
     ;;
-  *) echo 'expected interpreter, native, sim or replay' >&2; exit 2 ;;
+  *) echo 'expected interpreter, native, sim, compatibility or replay' >&2; exit 2 ;;
 esac

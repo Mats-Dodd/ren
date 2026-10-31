@@ -106,6 +106,7 @@ type type_decl = {
 type value = {
   vname : string;
   scheme : Ty.scheme;
+  generator : Ty.generator option;
   vparams : string list;
       (** its parameters' names, which a message about an argument passed by
           name names *)
@@ -143,6 +144,7 @@ type wiring = {
 
 type t = {
   home : string;  (** the module this is the interface of *)
+  replay_unsafe : Path.t list;
   types : type_decl list;  (** in the order they're declared *)
   values : value list;
   tests : value list;
@@ -684,7 +686,114 @@ let handler_deps (f : Ast.Resolved.fn_def) =
    path, as its scheme's [reqs] and [row_reqs]. And whether an opaque type
    has `==` depends on what it's represented as, which the interface
    hides, so [has_eq] says, by the type's path, as inference found it. *)
-let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
+let generator_type (g : Ty.generator) =
+  let cursor = Ty.Con (g.cursor_path, g.cursor_args) in
+  let next : op =
+    {
+      oname = "next"; onum = 0; opub = true; okind = Method;
+      oscheme = Ty.canonical
+        { ty = Fun ([ { mode = Inout; ty = cursor } ], Ty.option g.item,
+                    g.errors, Ty.closed);
+          names = []; reqs = []; row_reqs = []; modes = []; defaults = [] };
+    }
+  in
+  {
+    path = g.cursor_path;
+    params = List.mapi (fun i _ -> "$cursor" ^ string_of_int i) g.cursor_args;
+    body = Builtin;
+    members = Path.Map.singleton (Path.member g.cursor_path "next") next;
+    numeric = None; opaque = false; loc = None;
+  }
+
+let rec has_generator_cursor = function
+  | Ty.Con (p, args) -> Ty.is_generator_cursor p || List.exists has_generator_cursor args
+  | Variant (_, _, args) -> List.exists has_generator_cursor args
+  | Fun (ps, result, errors, uses) ->
+      List.exists (fun (p : Ty.param) -> has_generator_cursor p.ty) ps
+      || has_generator_cursor result || row_has_generator_cursor errors
+      || row_has_generator_cursor uses
+  | Errors row -> row_has_generator_cursor row
+  | Impl i ->
+      List.exists (fun (d : Ty.dep) -> List.exists has_generator_cursor d.dargs) i.deps
+      || row_has_generator_cursor i.needs || row_has_generator_cursor i.fails
+  | Var _ | Error -> false
+and row_has_generator_cursor (row : Ty.row) =
+  List.exists (fun (l : Ty.label) -> List.exists has_generator_cursor l.payload) row.labels
+
+(* Replay summaries cross the module boundary only for callable exports and
+   implicit dispatch reachable through their data. A declared dependency is
+   already sufficient to refuse replay, independently of which body uses it.
+   Private helpers are summarized transitively by their exported callers. *)
+let replay_interface ~types (iface : t) =
+  let module Paths = Set.Make (struct type t = Path.t let compare = compare end) in
+  let visible = ref Paths.empty and unsafe = ref Paths.empty in
+  let reached = ref Paths.empty in
+  let dispatch (td : type_decl) =
+    Path.Map.filter (fun path (op : op) ->
+        op.oname = "show" || op.oname = "key"
+        || List.exists (fun req ->
+            match provider td req with
+            | Some (p, _) -> p = path
+            | None -> false)
+          ["add"; "sub"; "mul"; "div"; "rem"; "neg"; "zero"; "one"])
+      td.members
+  in
+  let callable path ty =
+    visible := Paths.add path !visible;
+    match ty with
+    | Ty.Fun (_, _, _, uses) when uses.labels <> [] || uses.tail <> None ->
+        unsafe := Paths.add path !unsafe
+    | _ -> ()
+  in
+  let rec ty = function
+    | Ty.Con (p, args) | Variant (p, _, args) ->
+        List.iter ty args;
+        declaration p
+    | Fun (ps, result, errors, uses) ->
+        List.iter (fun (p : Ty.param) -> ty p.ty) ps;
+        ty result; row errors; row uses
+    | Errors r -> row r
+    | Impl i ->
+        List.iter (fun (d : Ty.dep) -> declaration d.dpath; List.iter ty d.dargs) i.deps;
+        row i.needs; row i.fails
+    | Var _ | Error -> ()
+  and row (r : Ty.row) =
+    List.iter (fun (l : Ty.label) -> List.iter ty l.payload) r.labels
+  and declaration p =
+    if not (Paths.mem p !reached) then (
+      reached := Paths.add p !reached;
+      match List.find_opt (fun (td : type_decl) -> td.path = p) types with
+      | None -> ()
+      | Some td ->
+          let fields fs = List.iter (fun (f : field) -> ty f.fty) fs in
+          (match td.body with
+          | Record fs | Dep fs -> fields fs
+          | Sum cs -> List.iter (fun (c : ctor) -> fields c.cfields) cs
+          | Opaque (Rep t) -> ty t
+          | Errors es -> List.iter (function
+              | Tag (_, ts) -> List.iter ty ts
+              | Set p -> declaration p) es
+          | Dep_alias d -> declaration d.dpath; List.iter ty d.dargs
+          | Builtin | Opaque (Hidden _) -> ());
+          Path.Map.iter (fun path (op : op) ->
+              callable path op.oscheme.ty;
+              ty op.oscheme.ty) (dispatch td))
+  in
+  List.iter (fun (v : value) ->
+      callable (Path.make iface.home v.vname) v.scheme.ty;
+      ty v.scheme.ty) (iface.values @ iface.tests);
+  List.iter (fun (td : type_decl) ->
+      declaration td.path;
+      Path.Map.iter (fun path (op : op) ->
+          callable path op.oscheme.ty;
+          ty op.oscheme.ty) td.members) iface.types;
+  let unsafe = List.fold_left (fun acc path ->
+      if Paths.mem path !visible then Paths.add path acc else acc)
+      !unsafe iface.replay_unsafe in
+  {iface with replay_unsafe = Paths.elements unsafe}
+
+let of_module ?(generators = Path.Map.empty) ?(types = []) ?(replay_unsafe = []) ~home ~sets ~needs ~has_eq ~found
+    (prog : Ast.Resolved.program) =
   (* [canonical] keeps a scheme's numbering, and drops what it needs of a
      variable its type hasn't: an associated value's type is its
      function's result, without the rows *)
@@ -703,18 +812,23 @@ let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
                with itself, which only inference finds (compiler.md,
                "`over any` and `retry`") *)
             let scheme =
-              match f.body.kind with
-              | Handler { any = true; _ } -> found (Path.make home f.name.name)
+              match f.fn_kind, f.body.kind with
+              | Generator_fn _, _ -> found (Ast.fn_path home f)
+              | _, Handler { any = true; _ } -> found (Path.make home f.name.name)
               (* and a handler `for D`'s lists what `D` is, as only
                  inference writes it (Ty.param_path) *)
-              | Handler { deps = [ { dep = { tref = Param _; _ }; _ } ]; _ } ->
+              | _, Handler { deps = [ { dep = { tref = Param _; _ }; _ } ]; _ } ->
                   found (Path.make home f.name.name)
-              | _ -> signature ~sets f
+              | _ ->
+                  let said = signature ~sets f in
+                  if has_generator_cursor said.ty then found (Ast.fn_path home f)
+                  else said
             in
             Some
               {
                 vname = f.name.name;
                 scheme = needed (Path.make home f.name.name) scheme;
+                generator = Path.Map.find_opt (Ast.fn_path home f) generators;
                 vparams =
                   List.map
                     (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
@@ -733,7 +847,14 @@ let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
               (* a private `key` still says what equal means in every
                  module, though only its own can call it (operators.md) *)
               if o.opub || o.oname = "key" then
-                Some { o with oscheme = needed path o.oscheme }
+                let scheme =
+                  if has_generator_cursor o.oscheme.ty then
+                    match o.okind, (found path).ty with
+                    | Value, Fun ([], ty, _, _) -> { (found path) with ty }
+                    | _ -> found path
+                  else o.oscheme
+                in
+                Some { o with oscheme = needed path scheme }
               else None)
             td.members;
       }
@@ -741,20 +862,31 @@ let of_module ~home ~sets ~needs ~has_eq ~found (prog : Ast.Resolved.program) =
     if td.opaque then { td with body = Opaque (Hidden { eq = has_eq td.path }) }
     else td
   in
-  {
+  let iface = {
     home;
+    replay_unsafe;
     types =
       List.filter_map
         (function
           | Ast.Type td when td.type_pub ->
-              Some (public (of_type_def ~home ~sets td))
+              let path = Path.make home td.type_name.name in
+              let written = of_type_def ~home ~sets td in
+              let declaration = match List.find_opt (fun (d : type_decl) -> d.path = path) types with
+                | Some d -> { written with body = d.body; numeric = d.numeric }
+                | None -> written
+              in
+              Some (public declaration)
+          | Fn f when f.pub ->
+              Option.bind (Path.Map.find_opt (Ast.fn_path home f) generators)
+                (fun g -> if g.kind = Ty.Value_gen then Some (generator_type g) else None)
           | Type _ | Fn _ | Import _ | Testing _ | Wiring _ | Service _ -> None)
         prog;
     (* a public test item is in its own tier, which only tests read *)
     values = public_fns ~test:false;
     tests = public_fns ~test:true;
     wirings = [];
-  }
+  } in
+  replay_interface ~types iface
 
 (* A built-in type [a] with the members [b], its declaration in the
    prelude's source, writes (`pub type Array<T> = builtin`): [a]'s
@@ -778,6 +910,7 @@ let union a b =
   let joined d = match in_b d with Some e -> join d e | None -> d in
   {
     home = a.home;
+    replay_unsafe = List.sort_uniq compare (a.replay_unsafe @ b.replay_unsafe);
     types =
       List.map joined a.types
       @ List.filter (fun d -> find_type a d.path.name = None) b.types;

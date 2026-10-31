@@ -163,6 +163,7 @@ let real_of sink (t : test_def) =
 let fn_of ~name ~loc ?(params = []) body =
   Fn
     {
+      fn_kind = Ordinary_fn;
       pub = false;
       name = { name; loc };
       tparams = [];

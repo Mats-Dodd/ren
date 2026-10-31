@@ -299,7 +299,7 @@ let chain_steps : (int, unit) Hashtbl.t = Hashtbl.create 8
    [fn] are the callee, as a message names it and as it's written, and
    [target] the function of the group it calls, if it does. *)
 let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?(install = false) ?target
-    ?callee errs uses =
+    ?callee ?stream errs uses =
   let name_loc = fn.loc in
   let op = match fn.kind with Var (Dep_op (_, o)) -> Some o | _ -> None in
   use_row env cx ~loc:call.loc ?callee ?op ?shown:(env.source call) uses;
@@ -330,6 +330,7 @@ let absorb env cx ~(call : expr) ~ename ~(fn : expr) ?(install = false) ?target
       eselves = cx.selves;
       einstall = install;
       estep = Hashtbl.mem chain_steps call.node;
+      estream = stream;
     }
   in
   let sources =

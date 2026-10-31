@@ -91,6 +91,7 @@ type type_decl = {
 type value = {
   vname : string;
   scheme : Ty.scheme;
+  generator : Ty.generator option;
   vparams : string list;
       (** its parameters' names, which a message about an argument passed by
           name names *)
@@ -128,6 +129,9 @@ type wiring = {
 
 type t = {
   home : string;  (** the module this is the interface of *)
+  replay_unsafe : Path.t list;
+      (** callable paths that may observe ambient runtime state, including
+          through hidden code; private classification metadata *)
   types : type_decl list;  (** in the order they're declared *)
   values : value list;
   tests : value list;
@@ -272,8 +276,13 @@ val handler_deps : Ast.Resolved.fn_def -> Ty.dep list option
    its path, as its scheme's [reqs] and [row_reqs]; and [has_eq] whether
    each opaque type has `==`, which its hidden representation decides.
    A handler `over any`'s type lists what its arm fails with itself,
-   which only inference knows, so [found] gives its scheme. *)
+   which only inference knows, so [found] gives its scheme. [generators]
+   publishes inferred producer metadata; [types] supplies finalized type
+   bodies whose cursor annotations include their hidden schema arguments. *)
 val of_module :
+  ?generators:Ty.generator Path.Map.t ->
+  ?types:type_decl list ->
+  ?replay_unsafe:Path.t list ->
   home:string ->
   sets:sets ->
   needs:(Path.t -> (int * string) list * (int * string) list) ->
@@ -281,6 +290,9 @@ val of_module :
   found:(Path.t -> Ty.scheme) ->
   Ast.Resolved.program ->
   t
+
+(* The nominal cursor and its inferred [next] signature. *)
+val generator_type : Ty.generator -> type_decl
 
 (* The built-in type [a] with the members its declaration in the
    prelude's source, [b], writes: `pub type Array<T> = builtin`. *)

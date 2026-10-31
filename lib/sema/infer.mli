@@ -104,6 +104,8 @@ type 'l found_ =
           block parameter `fn() -> Option<T>` as `for` takes it, and the name
           of the block Lower makes that pulls it (streams.md, rule 3) *)
   | For_param of int
+  | Gen_call of Path.t
+  | Gen_step of Path.t
       (** at a call of a handler `for D`'s own node ([for_node]): which of its
           scheme's variables is [D], whose type argument there is the
           implementation it's made for (compiler.md, "Services stage",
@@ -155,6 +157,9 @@ type node = {
    its nodes' types number their variables together. *)
 type t = {
   schemes : Ty.scheme Path.Map.t;
+  generators : Ty.generator Path.Map.t;
+  replay_unsafe : Path.t list;
+  types : Iface.type_decl list;
       (** each function's type scheme, by its path: a member's is its type's,
           and which member it is (path.ml) *)
   values : Path.t list;

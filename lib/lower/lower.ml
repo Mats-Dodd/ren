@@ -160,6 +160,11 @@ type call = {
 
 (* What lowering one top-level function needs. *)
 type cx = {
+  top_body : int;
+  return_to : Path.t;
+  mutable generators : Ty.generator Path.Map.t;
+  mutable owner : C.var;
+  mutable next_owner : int;
   nodes : Infer.node Infer.Nodes.t;  (** what inference found, by node id *)
   mutable subst : subst;
       (** what its types become, in a function made for a request *)
@@ -431,6 +436,162 @@ let hold ?(local = false) cx name (e : C.expr) =
     let v = temp cx name e.ty in
     ([ (v, e) ], C.local v e.loc)
 
+(* Cleanup metadata follows source value boundaries, before place writes and
+   temporary bindings erase the distinction between copying and borrowing.
+   False proves that no generated cursor can occur in this representation;
+   unknown type parameters and hidden opaque representations stay conservative. *)
+let rec cleanup_type cx seen (ty : Ty.ty) =
+  match ty with
+  | Var _ -> true
+  | Fun _ | Impl _ | Error -> false
+  | Errors r -> r.tail <> None || List.exists (fun (l : Ty.label) -> List.exists (cleanup_type cx seen) l.payload) r.labels
+  | Con (p, args) | Variant (p, _, args) ->
+      if Ty.is_generator_cursor p then true
+      else if List.mem p seen then List.exists (cleanup_type cx seen) args
+      else
+        let at = cleanup_type cx (p :: seen) in
+        let apply t = Ty.apply { tys = args; rows = [] } t in
+        match cx.types p with
+        | Some { body = Opaque (Hidden _); _ } -> true
+        | Some { body = Opaque (Rep t); _ } -> at (apply t)
+        | Some { body = Record fs; _ } -> List.exists (fun (f : Iface.field) -> at (apply f.fty)) fs
+        | Some { body = Sum cs; _ } ->
+            List.exists (fun (c : Iface.ctor) -> List.exists (fun (f : Iface.field) -> at (apply f.fty)) c.cfields) cs
+        | _ -> List.exists at args
+
+let rec temporary_frame cx (e : expr) =
+  match e.kind with
+  | Call _ -> (match ty_of cx e.node with Ty.Fun _ -> true | _ -> false)
+  | Block (_, last) -> temporary_frame cx last
+  | If (_, yes, no) -> temporary_frame cx yes || Option.fold ~none:false ~some:(temporary_frame cx) no
+  | Match (_, arms) -> List.exists (fun (a : arm) -> temporary_frame cx a.arm_body) arms
+  | Try e | With { body = e; _ } -> temporary_frame cx e
+  | _ -> false
+
+let pattern_cleanup cx (e : expr) =
+  cleanup_type cx [] (ty_of cx e.node) || temporary_frame cx e
+
+let own cx mode (value : C.expr) =
+  if cleanup_type cx [] value.ty then
+    mk (Own { owner = cx.owner; mode; value; desc = C.describe cx.tys value.ty }) value.ty value.loc
+  else value
+
+let rec retained_source cx ?(borrowed = Ids.empty) (e : C.expr) =
+  match e.kind with
+  | Local v -> Hashtbl.mem cx.vars v.id || Ids.mem v.id borrowed
+  | Global_value _ -> true
+  | Field (e, _, _) | Of_variant e
+  | Prim (Get_index _, e :: _) | Prim (Slice _, e :: _) ->
+      retained_source cx ~borrowed e
+  | _ -> false
+
+let rec pattern_ids (p : C.pattern) =
+  match p.pkind with
+  | PVar v -> Ids.singleton v.id
+  | PAs (p, v) -> Ids.add v.id (pattern_ids p)
+  | PCon (_, _, ps) | PTag (_, ps) | POr ps | PTuple ps | PRecord (_, ps) ->
+      List.fold_left (fun ids p -> Ids.union ids (pattern_ids p)) Ids.empty ps
+  | (PStr_rest _ | PArray _) as k ->
+      let ids = List.fold_left (fun ids (v : C.var) -> Ids.add v.id ids)
+          Ids.empty (C.seq_rest k) in
+      List.fold_left (fun ids p -> Ids.union ids (pattern_ids p)) ids (C.seq_pieces k)
+  | PWild | PInt _ | PBool _ | PStr _ -> Ids.empty
+
+let copy_result cx value =
+  let rec tail borrowed (value : C.expr) =
+    let copy = tail borrowed in
+    let kind =
+      match value.kind with
+      | Let (v, a, b) -> C.Let (v, a, copy b)
+      | Seq (a, b) -> C.Seq (a, copy b)
+      | If (c, a, b) -> C.If (c, copy a, copy b)
+      | Match (e, arms) ->
+          let retained = retained_source cx ~borrowed e in
+          let arm (a : C.arm) =
+            let borrowed = if retained then Ids.union borrowed (pattern_ids a.pat) else borrowed in
+            { a with body = tail borrowed a.body } in
+          C.Match (e, List.map arm arms)
+      | Handle h -> C.Handle { h with on_value = copy h.on_value; on_error = copy h.on_error }
+      | Covered h -> C.Covered { h with after = copy h.after }
+      | With w -> C.With { w with body = copy w.body }
+      | With_handler w -> C.With_handler { w with body = copy w.body }
+      | Finally (body, after) -> C.Finally (copy body, after)
+      | Cleanup_scope h -> C.Cleanup_scope { h with body = copy h.body }
+      | Local _ | Global_value _ | Field _ | Of_variant _
+      | Prim (Get_index _, _) | Prim (Slice _, _) when retained_source cx ~borrowed value ->
+          (own cx Copy_value value).kind
+      | _ -> value.kind
+    in
+    { value with kind }
+  in
+  tail Ids.empty value
+
+let source_view cx value =
+  let rec view borrowed (value : C.expr) =
+    let tail = view borrowed in
+    let kind = match value.kind with
+      | Let (v, a, b) ->
+          let borrowed = if retained_source cx ~borrowed a then Ids.add v.id borrowed else borrowed in
+          C.Let (v, a, view borrowed b)
+      | Seq (a, b) -> C.Seq (a, tail b)
+      | If (c, a, b) -> C.If (c, tail a, tail b)
+      | Match (e, arms) ->
+          let retained = retained_source cx ~borrowed e in
+          let arm (a : C.arm) =
+            let borrowed = if retained then Ids.union borrowed (pattern_ids a.pat) else borrowed in
+            { a with body = view borrowed a.body } in
+          C.Match (e, List.map arm arms)
+      | Handle h -> C.Handle { h with on_value = tail h.on_value; on_error = tail h.on_error }
+      | Covered h -> C.Covered { h with after = tail h.after }
+      | With w -> C.With { w with body = tail w.body }
+      | With_handler w -> C.With_handler { w with body = tail w.body }
+      | Finally (body, after) -> C.Finally (tail body, after)
+      | Cleanup_scope c -> C.Cleanup_scope { c with body = tail c.body }
+      | _ -> C.Source_view { retained = retained_source cx ~borrowed value; value }
+    in
+    { value with kind }
+  in
+  view Ids.empty value
+
+let source_value cx value = own cx Adopt_value (copy_result cx value)
+
+let registry cx =
+  let id = cx.next_owner in
+  cx.next_owner <- id + 1;
+  { C.id; name = "$owner"; ty = C.owner_ty }
+
+let lexical_scope cx ?(instance = false) ?(discard = false) ?(force = false) loc lower =
+  let outer = cx.owner in
+  let owner = registry cx in
+  cx.owner <- owner;
+  let body = Fun.protect ~finally:(fun () -> cx.owner <- outer) lower in
+  let rec needed (e : C.expr) =
+    match e.kind with
+    | Own { owner = v; _ } -> v.id = owner.id
+    | Gen_create _ -> true
+    | Pattern_scope { receiving; _ } when receiving.id = owner.id -> true
+    | Cleanup_scope _ -> true
+    | Lambda _ | Handler _ | Instance_scope _ -> false
+    | _ -> List.exists needed (C.children e)
+  in
+  if force || needed body || cleanup_type cx [] body.ty then
+    let body = if discard && body.ty <> Ty.unit then seq body (C.unit loc) else body in
+    mk (if instance then Instance_scope { owner; body } else Cleanup_scope { owner; body }) body.ty loc
+  else body
+
+let checked_call cx ?(places = []) (f : C.expr) args ty loc =
+  match f.kind with
+  | Global (producer, type_args, tys, dicts) when Path.Map.mem producer cx.generators ->
+      let args = List.map (function C.Value e -> C.Value (source_value cx e) | Ref v -> Ref v) args in
+      mk (Gen_create { producer; type_args; tys; dicts; args; places; ev = cx.ev }) ty loc
+  | Global (next, _, _, _) when Path.Map.exists
+      (fun _ (g : Ty.generator) -> next = Path.member g.cursor_path "next") cx.generators ->
+      (match args, f.ty with
+       | [C.Ref cursor], Ty.Fun (_, _, errors, uses) ->
+           mk (Gen_step { cursor; ev = cx.ev; errors; uses }) ty loc
+       | _ -> bug "a generated next with unchecked arguments")
+  | _ -> mk (Call (f, args, cx.ev)) ty loc
+
 (* ---- places ----
 
    A place is a local variable, then a path of fields and indices into its
@@ -490,9 +651,12 @@ let rec update (base : C.expr) steps (v : C.expr) =
       let inner = update (mk (Prim (Slice Range, [ base; a; b ])) ty loc) rest v in
       mk (Prim (Splice, [ base; a; b; inner ])) base.ty loc
 
+let update_place = update
+
 (* Write [v] to the place. *)
 let write pl (v : C.expr) loc =
-  mk (Assign (pl.root, update (local pl.root loc) pl.steps v)) Ty.unit loc
+  mk (Owned_assign { target = pl.root; value = update_place (local pl.root loc) pl.steps v;
+                     mode = Advance_value }) Ty.unit loc
 
 (* A place with a range in it, `xs[a..b].f`, split after its last range:
    the place of the range, and the steps after it. A loop that changes
@@ -570,6 +734,10 @@ let rec expr cx (e : expr) : C.expr =
       let x = if read <> None then widen x else x in
       Option.fold ~none:x ~some:(fun (k, wrap) -> store_as k ~wrap x) store
 
+and binding_value cx (e : expr) =
+  let value = lexical_scope cx e.loc (fun () -> source_value cx (expr cx e)) in
+  own cx Adopt_value value
+
 and expr_of cx (e : expr) : C.expr =
   let ty () = ty_of cx e.node in
   let here kind = mk kind (ty ()) e.loc in
@@ -604,7 +772,8 @@ and expr_of cx (e : expr) : C.expr =
           List.fold_left (fun a b -> str_add cx a b e.loc) first rest)
   | Unit -> here Unit
   | Var (Local b) -> local (var_of cx b) e.loc
-  | Var (Global p) when (node cx e.node).found = None ->
+  | Var (Global p) when (match (node cx e.node).found with
+      | None | Some (Gen_call _ | Gen_step _) -> true | _ -> false) ->
       (* called: a call takes it as it is *)
       let a = targs_of cx e.node in
       here (Global (p, a, descs cx a, dicts_of cx e.node))
@@ -627,7 +796,7 @@ and expr_of cx (e : expr) : C.expr =
       let c = the_call cx in
       match c.cargs with
       | [] -> here Unit
-      | vs -> here (Tuple (List.map (fun v -> local v e.loc) vs)))
+      | vs -> here (Tuple (List.map (fun v -> own cx Copy_value (local v e.loc)) vs)))
   | Var (Call_op _) -> bug "`call` used other than through"
   | Named _ | Tag_set _ -> bug "tags lowered other than as a call's"
   | Var (Assoc_value (_, req)) -> value_of cx req (ty ()) e.loc
@@ -660,7 +829,7 @@ and expr_of cx (e : expr) : C.expr =
       here (Match (a, [ some; none ]))
   | Fail (tag, args) ->
       (* a payload's names only document it, so it's in the order written *)
-      let args = List.map (fun (_, a) -> expr cx a) args in
+      let args = List.map (fun (_, a) -> source_value cx (expr cx a)) args in
       let set : Ty.row =
         {
           labels =
@@ -707,6 +876,7 @@ and expr_of cx (e : expr) : C.expr =
          §8) *)
       let s = temp cx "piped" (ty_of cx subject.node) in
       let value = expr cx subject in
+      if retained_source cx value then Hashtbl.replace cx.vars s.id s;
       piped := s :: !piped;
       let call =
         Fun.protect ~finally:(fun () -> piped := List.tl !piped) (fun () ->
@@ -721,7 +891,7 @@ and expr_of cx (e : expr) : C.expr =
       (* `Ok` of its value, or `Err` of its error *)
       let t = ty () in
       let v, errs = result_args t in
-      let body = expr cx a in
+      let body = source_value cx (expr cx a) in
       let value = temp cx "value" v and error = temp cx "error" errs in
       here
         (Handle
@@ -775,12 +945,14 @@ and expr_of cx (e : expr) : C.expr =
       in
       let name, given = block_of cx e.node in
       block_value cx ~name ~given params (ty ()) e.loc (fun () -> expr cx body)
-  | Block (stmts, last) -> block cx stmts last
+  | Block (stmts, last) ->
+      let return_target = if e.node = cx.top_body then Some cx.return_to else None in
+      lexical_scope cx e.loc (fun () -> block cx ?return_target stmts last)
   | Con (tag, args) -> (
       match (node cx e.node).found with
       | Some Error_tag ->
           (* a tag, inside `Err(...)`: the error it holds *)
-          let args = List.map (fun (_, a) -> expr cx a) args in
+          let args = List.map (fun (_, a) -> source_value cx (expr cx a)) args in
           here (Tag (tag.name.name, args, payload_descs cx args))
       | Some (Ctor_of (p, c)) -> (
           (* ctor_shape (infer_lookup.ml) made sure the arguments are in the
@@ -796,14 +968,14 @@ and expr_of cx (e : expr) : C.expr =
                 }
               in
               here (Con (p, c, [ expr cx d ]))
-          | _ -> here (Con (p, c, List.map (fun (_, a) -> expr cx a) args)))
+          | _ -> here (Con (p, c, List.map (fun (_, a) -> source_value cx (expr cx a)) args)))
       | _ -> bug "a constructor inference didn't find")
   | Record (_, fields) -> (
       match ty () with
       | Con (p, _) ->
           here
             (Record
-               (p, List.map (fun ((f : ident), v) -> (f.name, expr cx v)) fields))
+               (p, List.map (fun ((f : ident), v) -> (f.name, source_value cx (expr cx v))) fields))
       | _ -> bug "a record literal whose type isn't a record")
   | Con_named (_, fields) -> (
       match (node cx e.node).found with
@@ -814,12 +986,12 @@ and expr_of cx (e : expr) : C.expr =
           let decl = ctor_decl cx p c in
           let names = List.map (fun ((f : ident), _) -> f.name) fields in
           if names = List.map (fun (d : Iface.field) -> d.fname) decl then
-            here (Con (p, c, List.map (fun (_, v) -> expr cx v) fields))
+            here (Con (p, c, List.map (fun (_, v) -> source_value cx (expr cx v)) fields))
           else
             let given =
               List.map
                 (fun ((f : ident), v) ->
-                  let v = expr cx v in
+                  let v = source_value cx (expr cx v) in
                   (f.name, temp cx f.name v.ty, v))
                 fields
             in
@@ -855,15 +1027,16 @@ and expr_of cx (e : expr) : C.expr =
       in
       let subject = expr cx subject in
       here (Match (subject, List.map (arm cx) arms))
-  | Array xs -> here (Array (List.map (expr cx) xs))
-  | Tuple xs -> here (Tuple (List.map (expr cx) xs))
+  | Array xs -> here (Array (List.map (fun e -> source_value cx (expr cx e)) xs))
+  | Tuple xs -> here (Tuple (List.map (fun e -> source_value cx (expr cx e)) xs))
   | Index (a, i) ->
       let a = expr cx a in
       here (Prim (Get_index Checked, [ a; expr cx i ]))
   | Slice (a, lo, hi) ->
       let a = expr cx a in
       let lo = expr cx lo in
-      here (Prim (Slice Range, [ a; lo; expr cx hi ]))
+      let value = here (Prim (Slice Range, [ a; lo; expr cx hi ])) in
+      own cx (if retained_source cx a then Copy_value else Adopt_value) value
   | Ref ({ kind = Call (f, args); _ } as c) -> call cx ~changed:true c f args
   | Ref _ -> bug "`&` outside a call or a `for` loop"
   | Assign { target; op; value; onode } -> assign cx e ~onode target op value
@@ -874,6 +1047,11 @@ and expr_of cx (e : expr) : C.expr =
       let cond = expr cx cond in
       here (While (cond, expr cx body))
   | Break -> here Break
+  | Yield value -> here (Yield (source_value cx (expr cx value)))
+  | Yield_from source -> yield_from cx e source
+  | Return value ->
+      here (Return (cx.return_to, Option.fold ~none:(C.unit e.loc)
+          ~some:(fun value -> source_value cx (expr cx value)) value))
   | Todo -> todo cx e.loc (ty ())
   | With { items; body } -> with_ cx e items body
   | Handler { deps; state; arms; _ } ->
@@ -886,7 +1064,7 @@ and expr_of cx (e : expr) : C.expr =
         (match Ty.impl_parts (ty_of cx e.node) with
         | Some (ds, _) -> ds
         | None -> []);
-      let body = handler cx e deps state arms in
+      let body = lexical_scope cx ~instance:true e.loc (fun () -> handler cx e deps state arms) in
       cx.ev <- outer;
       cx.handler_ev <- around;
       cx.handler_deps <- around_deps;
@@ -950,7 +1128,7 @@ and the_call cx =
 and block_value cx ~name ~given params ty loc body =
   let ev = evidence cx and outer = cx.ev in
   cx.ev <- ev;
-  let body = body () in
+  let body = lexical_scope cx loc (fun () -> source_value cx (body ())) in
   cx.ev <- outer;
   let given = List.map (key_of_label cx) given in
   (* the descriptors its keys are built from are captured too *)
@@ -988,6 +1166,9 @@ and named_block cx (e : expr) =
         { mode = p.mode; var = temp cx "x" p.ty })
       ps
   in
+  (* The adapter's parameters borrow its caller's values just as written
+     parameters do. A generator capturing one must fork that retained input. *)
+  List.iter (fun (p : C.param) -> Hashtbl.replace cx.vars p.var.id p.var) params;
   let ret = match fty with Fun (_, r, _, _) -> r | _ -> Ty.unit in
   block_value cx ~name ~given params (block_ty fty given) e.loc (fun () ->
       let args =
@@ -1005,7 +1186,7 @@ and named_block cx (e : expr) =
           let f =
             mk (Global (p, a, descs cx a, dicts_of cx e.node)) fty e.loc
           in
-          mk (Call (f, args, cx.ev)) ret e.loc
+          checked_call cx f args ret e.loc
       | Var (Intrinsic x) ->
           let a = targs_of cx e.node in
           let f =
@@ -1204,14 +1385,22 @@ and handler cx (e : expr) deps state arms =
   in
   let rec state_lets = function
     | [] -> instance ()
+    | Let { name; value; _ } :: rest
+        when name.ident.name = "_" && pattern_cleanup cx value ->
+        let binding = bind cx name (ty_of cx value.node) in
+        owned_pattern cx ~binding
+          (fun () -> { C.pkind = PWild; pty = ty_of cx value.node; ploc = name.ident.loc })
+          value (fun () -> state_lets rest)
     | Let { name; value; _ } :: rest ->
-        let value = expr cx value in
+        let value = binding_value cx value in
         let v = bind cx name value.ty in
         let body = state_lets rest in
         mk (Let (v, value, body)) body.ty value.loc
     | Let_pattern { pat; value; else_ } :: rest ->
-        take_apart cx pat ?else_ (expr cx value) (fun () -> state_lets rest)
-    | Expr s :: rest -> seq (expr cx s) (state_lets rest)
+        pattern_binding cx pat ?else_ value (fun () -> state_lets rest)
+    | Expr s :: rest ->
+        let value = lexical_scope cx ~discard:true s.loc (fun () -> expr cx s) in
+        seq value (state_lets rest)
     | Finally f :: rest ->
         (* the state after it, which, if it fails to start, it's given;
            most can't *)
@@ -1798,12 +1987,11 @@ and with_cells cx cells (lam : C.expr) =
             lets [ (r, body) ] (List.fold_right seq ws (local r loc))
       in
       let body =
-        lets
-          (List.map
-             (fun ((v : C.var), (c : C.var)) ->
-               (v, mk (Prim (Get_cell, [ local c loc ])) v.ty loc))
-             used)
-          body
+        List.fold_right
+          (fun ((v : C.var), (c : C.var)) body ->
+            lets [ (v, mk (Prim (Get_cell, [ local c loc ])) v.ty loc) ]
+              (mk (Owner_alias { target = v; root = c; body }) body.C.ty loc))
+          used body
       in
       let captures = captures_of params ev outer body in
       {
@@ -1817,7 +2005,8 @@ and with_cells cx cells (lam : C.expr) =
 and assigned acc (e : C.expr) =
   let acc =
     match e.kind with
-    | Assign (v, _) -> Ids.add v.id acc
+    | Assign (v, _) | Owned_assign { target = v; _ } -> Ids.add v.id acc
+    | Gen_step { cursor; _ } -> Ids.add cursor.id acc
     | Call (_, args, _) ->
         List.fold_left
           (fun acc -> function
@@ -1923,9 +2112,13 @@ and place cx (e : expr) =
    the value, then reads and writes the place: the value is held in a
    temporary first in case it changes what the place holds. *)
 and assign cx (e : expr) ~onode target op value =
-  let value = expr cx value in
+  let value = source_value cx (expr cx value) in
   match (target.kind, op) with
-  | Var (Local b), None -> mk (Assign (var_of cx b, value)) Ty.unit e.loc
+  | Var (Local b), None ->
+      let target = var_of cx b in
+      if cleanup_type cx [] target.ty then
+        mk (Owned_assign { target; value; mode = Replace_value }) Ty.unit e.loc
+      else mk (Assign (target, value)) Ty.unit e.loc
   | _ ->
       (* [place] evaluates the indices, so it has to come first *)
       let binds, pl = place cx target in
@@ -1954,7 +2147,11 @@ and assign cx (e : expr) ~onode target op value =
                 | None -> x)
             | None, None -> bug ("`" ^ binop_to_string op ^ "=`"))
       in
-      lets (binds @ hold_v) (write pl v e.loc)
+      let value = update_place (local pl.root e.loc) pl.steps v in
+      let written = if cleanup_type cx [] pl.root.ty then
+          mk (Owned_assign { target = pl.root; value; mode = Replace_value }) Ty.unit e.loc
+        else mk (Assign (pl.root, value)) Ty.unit e.loc in
+      lets (binds @ hold_v) written
 
 (* An operator, `a + b` or `-a`, given its operands, lowered: what
    inference found at its node [onode] (Infer_expr.operator). A method of
@@ -2071,14 +2268,31 @@ and call cx ?(changed = false) (e : expr) f args =
     | Some { found = Some (Args xs); _ } -> xs
     | _ -> args
   in
-  match f.kind with
-  | Todo ->
+  match (node cx e.node).found, f.kind with
+  | Some (Gen_step _), Field (receiver, _) ->
+      let binds, pl = place cx receiver in
+      let fty = ty_of cx f.node in
+      let errors, uses = match fty with
+        | Ty.Fun (_, _, errors, uses) -> errors, uses
+        | _ -> bug "a generated next without a function type"
+      in
+      let step cursor = mk (Gen_step { cursor; ev = cx.ev; errors; uses }) (ty_of cx e.node) e.loc in
+      (match pl.steps with
+       | [] -> lets binds (step pl.root)
+       | _ ->
+           let cursor = temp cx "cursor" (ty_of cx receiver.node) in
+           let result = temp cx "next" (ty_of cx e.node) in
+           let body = lets [ result, step cursor ]
+               (seq (write pl (local cursor e.loc) e.loc) (local result e.loc)) in
+           lets (binds @ [cursor, read pl receiver.loc])
+             (mk (Owner_alias { target = cursor; root = pl.root; body }) body.ty e.loc))
+  | _, Todo ->
       (* `todo(x)`: the callee is evaluated first, and panics, so nothing
          is called and its arguments are never evaluated, as in `ren run`;
          a type variable never stands for a block (Core Lint), so it's the
          panic at the call's type, not a block's *)
       todo cx f.loc (ty_of cx e.node)
-  | Var (Dep_op (dep, op)) ->
+  | _, Var (Dep_op (dep, op)) ->
       (* never with `&` (mut.ml), so its arguments are values, evaluated in
          order *)
       let args = nan_checked dep op (List.map (expr cx) args) in
@@ -2095,7 +2309,7 @@ and call cx ?(changed = false) (e : expr) f args =
              args;
            })
         (ty_of cx e.node) e.loc
-  | Var (Next_op (dep, op)) ->
+  | _, Var (Next_op (dep, op)) ->
       (* `next.get(id)`: the innermost implementation where the handler
          was installed, which is the one it's over (handlers.md, "How it
          runs"), whatever is installed where the call runs *)
@@ -2117,7 +2331,7 @@ and call cx ?(changed = false) (e : expr) f args =
         (Dep_call
            { dep; dargs; op; fty = ty_of cx f.node; ev; next = true; args })
         (ty_of cx e.node) e.loc
-  | Var (Call_op "forward") ->
+  | _, Var (Call_op "forward") ->
       (* `call.forward()`: the operation the copy of the arm is for, given
          its arguments, through the evidence where the handler was
          installed, as `next` is *)
@@ -2139,13 +2353,13 @@ and call cx ?(changed = false) (e : expr) f args =
              args = List.map (fun v -> local v e.loc) c.cargs;
            })
         (ty_of cx e.node) e.loc
-  | Var (Global p) when for_param cx f.node <> None ->
+  | _, Var (Global p) when for_param cx f.node <> None ->
       for_call cx ~changed e f p (Option.get (for_param cx f.node)) args
-  | Var (Global _) when Hashtbl.mem cx.through (f.node, f.loc) ->
+  | _, Var (Global _) when Hashtbl.mem cx.through (f.node, f.loc) ->
       plain_call cx ~changed ~through:(Hashtbl.find cx.through (f.node, f.loc)) e f args
-  | Var (Global p) when List.exists is_named args ->
+  | _, Var (Global p) when List.exists is_named args ->
       tags_call cx ~changed e f p args
-  | Field (r, _) -> (
+  | _, Field (r, _) -> (
       match ((node cx f.node).found, args) with
       | Some (Calls_op { key; from; op; recv; call }), _ ->
           desc_method cx e f r ~key ~from ~op ~written:recv ~shown:call args
@@ -2156,8 +2370,7 @@ and call cx ?(changed = false) (e : expr) f args =
         ->
           split_at cx e r n body
       | _ -> plain_call cx ~changed e f args)
-  | _ -> plain_call cx ~changed e f args
-
+  | _, _ -> plain_call cx ~changed e f args
 (* Which of the variables of the handler `for D` called at [node] is [D]
    (Infer.For_param), if it's one. *)
 and for_param cx node =
@@ -2206,6 +2419,11 @@ and tags_call cx ~changed (e : expr) (f : expr) p args =
   in
   let req = Tags_for (p, sets) in
   cx.requests := req :: !(cx.requests);
+  (match Path.Map.find_opt p cx.generators with
+   | Some g ->
+       let params = List.filter (fun (p : Ty.param) -> not (is_tags p.ty)) g.params in
+       cx.generators <- Path.Map.add (made_path req) { g with params } cx.generators
+   | None -> ());
   let fty =
     match ty_of cx f.node with
     | Fun (ps, r, errs, uses) ->
@@ -2321,10 +2539,13 @@ and split_at cx (e : expr) (r : expr) n body =
         (lo, half Before []);
         (hi, half After [ local lo loc ]);
       ])
-    (if C.fails body.ty then mk (Finally (call, back)) ty loc
-     else
-       let result = temp cx "result" ty in
-       lets [ (result, call) ] (seq back (local result loc)))
+    (let body =
+       if C.fails body.ty then mk (Finally (call, back)) ty loc
+       else
+         let result = temp cx "result" ty in
+         lets [ (result, call) ] (seq back (local result loc)) in
+     mk (Owner_alias { target = lo; root = pl.root;
+          body = mk (Owner_alias { target = hi; root = pl.root; body }) ty loc }) ty loc)
 
 and plain_call cx ~changed ?callee ?through (e : expr) f args =
   let inout (p : expr) ty =
@@ -2377,55 +2598,73 @@ and plain_call cx ~changed ?callee ?through (e : expr) f args =
     | Inout _ | Pull _ -> None
   in
   if through = None && List.for_all (fun a -> direct a <> None) lowered then
-    mk (Call (f, List.filter_map direct lowered, cx.ev)) ty e.loc
+    checked_call cx f (List.filter_map direct lowered) ty e.loc
   else
     let hold_f, f = hold cx "f" f in
-    let binds, args, writes =
+    let creating = match f.kind with
+      | Global (p, _, _, _) -> Path.Map.mem p cx.generators
+      | _ -> false in
+    let binds, args, writes, aliases, places =
       List.fold_left
-        (fun (binds, args, writes) a ->
+        (fun (binds, args, writes, aliases, places) a ->
           match a with
           | Read v ->
+              let v = match f.kind with
+                | Global (p, _, _, _) when Path.Map.mem p cx.generators -> source_value cx v
+                | _ -> v in
               let b, v = hold cx "arg" v in
-              (binds @ b, args @ [ C.Value v ], writes)
-          | Pull (b, block) -> (binds @ b, args @ [ C.Value block ], writes)
+              (binds @ b, args @ [ C.Value v ], writes, aliases, places)
+          | Pull (b, block) -> (binds @ b, args @ [ C.Value block ], writes, aliases, places)
           | Inout r ->
               let t = temp cx "ref" r.ty in
               ( binds @ r.binds @ [ (t, read r.place r.loc) ],
                 args @ [ C.Ref t ],
-                writes @ [ write r.place (local t r.loc) r.loc ] ))
-        (hold_f, [], []) lowered
+                writes @ [ write r.place (local t r.loc) r.loc ],
+                aliases @ [t, r.place.root],
+                places @ [{ C.param = t; root = r.place.root;
+                            read = read r.place r.loc;
+                            write = write r.place (local t r.loc) r.loc }] ))
+        (hold_f, [], [], [], []) lowered
     in
     (* through an alias, only the call itself runs with the alias's
        implementation: the callee and its arguments are held first *)
     let call =
       match through with
-      | Some alias -> rebound cx ~alias e.loc (fun () -> mk (Call (f, args, cx.ev)) ty e.loc)
-      | None -> mk (Call (f, args, cx.ev)) ty e.loc
+      | Some alias -> rebound cx ~alias e.loc (fun () -> checked_call cx ~places:(if creating then places else []) f args ty e.loc)
+      | None -> checked_call cx ~places:(if creating then places else []) f args ty e.loc
     in
-    if C.fails f.ty then
-      (* the places are written back even if it fails *)
-      lets binds (mk (Finally (call, seq_all e.loc writes)) ty e.loc)
-    else
-      let result = temp cx "result" ty in
-      lets binds
-        (lets
-           [ (result, call) ]
-           (List.fold_right seq writes (local result e.loc)))
+    let body =
+      if creating then call
+      else if C.fails f.ty then
+        (* the places are written back even if it fails *)
+        mk (Finally (call, seq_all e.loc writes)) ty e.loc
+      else
+        let result = temp cx "result" ty in
+        lets [ (result, call) ] (List.fold_right seq writes (local result e.loc))
+    in
+    let body = List.fold_right (fun (target, root) body ->
+        mk (Owner_alias { target; root; body }) body.C.ty e.loc) aliases body in
+    lets binds body
 
-and block cx stmts last =
+and block cx ?return_target stmts last =
   match stmts with
-  | [] -> expr cx last
+  | [] -> source_value cx (expr cx last)
+  | Let { name; value; _ } :: rest
+      when name.ident.name = "_" && pattern_cleanup cx value ->
+      let binding = bind cx name (ty_of cx value.node) in
+      owned_pattern cx ~binding
+        (fun () -> { C.pkind = PWild; pty = ty_of cx value.node; ploc = name.ident.loc })
+        value (fun () -> block cx ?return_target rest last)
   | Let { name; value; _ } :: rest ->
-      let value = expr cx value in
+      let value = binding_value cx value in
       let v = bind cx name value.ty in
-      let body = block cx rest last in
+      let body = block cx ?return_target rest last in
       mk (Let (v, value, body)) body.ty value.loc
   | Let_pattern { pat; value; else_ } :: rest ->
-      let value = expr cx value in
-      take_apart cx pat ?else_ value (fun () -> block cx rest last)
+      pattern_binding cx pat ?else_ value (fun () -> block cx ?return_target rest last)
   | Expr e :: rest ->
-      let e = expr cx e in
-      seq e (block cx rest last)
+      let e = lexical_scope cx ~discard:true e.loc (fun () -> expr cx e) in
+      seq e (block cx ?return_target rest last)
   | Finally f :: rest -> (
       (* in an arm: it's given what the rest of it ends in, or
          `Err(Cancelled)`, if that was cancelled (Core.Covered) *)
@@ -2434,12 +2673,12 @@ and block cx stmts last =
         | Fun ([ r ], _, _, _) -> r.ty
         | _ -> bug "a `finally` whose type isn't a function's"
       in
-      let covered = attempted cx (block cx rest last) rt in
+      let covered = attempted cx (block cx ?return_target rest last) rt in
       match f.kind with
       | Lambda ([ p ], body) ->
           let result = bind cx p.pname rt in
           let after = expr cx body in
-          mk (Covered { body = covered; result; after }) after.ty f.loc
+          mk (Covered { body = covered; result; after; return_target }) after.ty f.loc
       | _ -> bug "a `finally` that isn't a lambda of one parameter")
 
 (* [body ()] with [pat] bound to [value]: a [Let], or a [match] of one
@@ -2447,6 +2686,23 @@ and block cx stmts last =
    PAT = value else LEAVE`, a [match] of two arms, [pat] then the body,
    and `_` then [else_], which leaves, so it's of the body's type
    (inference checked it is). *)
+and owned_pattern cx ?binding make_pattern ?else_ (source : expr) body =
+  let receiving = cx.owner in
+  let owner = registry cx in
+  cx.owner <- owner;
+  let source, on_else =
+    Fun.protect ~finally:(fun () -> cx.owner <- receiving) (fun () ->
+      let source = source_view cx (expr cx source) in
+      source, Option.map (expr cx) else_) in
+  let pat = make_pattern () in
+  let on_match = body () in
+  mk (Pattern_scope { owner; receiving; binding; source; pat; on_match; on_else }) on_match.ty source.loc
+
+and pattern_binding cx (pat : pattern) ?else_ (source : expr) body =
+  if not (pattern_cleanup cx source) then
+    take_apart cx pat ?else_ (expr cx source) body
+  else owned_pattern cx (fun () -> pattern cx pat) ?else_ source body
+
 and take_apart cx (pat : pattern) ?else_ (value : C.expr) body =
   match (pat.pkind, else_) with
   | PVar b, None ->
@@ -2501,8 +2757,12 @@ and for_loop cx (e : expr) index (pat : pattern) (iter : expr) body =
   | Some Pulls_block -> block_loop cx e pat iter body
   | Some (Method_of next) -> (
       match zipped cx iter with
-      | Some arrays -> zip_loop cx e pat arrays body
-      | None -> cursor_loop cx e pat iter next body)
+      (* A written Zip constructs owned snapshots, including unused leaves.
+         Only cleanup-free elements let the ordinary loop erase that work. *)
+      | Some arrays when List.for_all (fun (a : expr) ->
+            not (cleanup_type cx [] (C.elem_ty (ty_of cx a.node)))) arrays ->
+          zip_loop cx e pat arrays body
+      | _ -> cursor_loop cx e pat iter next body)
   | _ -> array_loop cx e index pat iter body
 
 (* The arrays of `xs.zip(ys)` or `xs.zip(ys).zip(zs)`, if [iter] is one
@@ -2634,10 +2894,11 @@ and array_loop cx (e : expr) idx (pat : pattern) (iter : expr) body =
           (* the element is written back after the body, even if it fails *)
           let write = write at (local x loc) loc in
           let rest =
-            if C.can_fail body || breaks body then
+            if C.can_fail body || breaks body || returns body then
               seq (mk (Finally (body, write)) body.ty loc) step
             else seq body (seq write step)
           in
+          let rest = mk (Owner_alias { target = x; root = pl.root; body = rest }) Ty.unit loc in
           mk (Let (x, read at iter.loc, rest)) Ty.unit loc
         in
         loop ~start:(read pl iter.loc) ~pass:(numbered pass)
@@ -2656,21 +2917,24 @@ and array_loop cx (e : expr) idx (pat : pattern) (iter : expr) body =
           let t = temp cx "range" ty in
           let looped = changing { root = t; steps = after } in
           let back = write range (local t loc) loc in
-          lets
-            (binds @ [ (t, read range iter.loc) ])
-            (if C.can_fail looped then mk (Finally (looped, back)) Ty.unit loc
-             else seq looped back))
+          let body =
+            if C.can_fail looped || returns looped then mk (Finally (looped, back)) Ty.unit loc
+            else seq looped back in
+          lets (binds @ [ (t, read range iter.loc) ])
+            (mk (Owner_alias { target = t; root = range.root; body }) Ty.unit loc))
   | Ref _, _ -> bug "a `for` with `&` that takes its element apart"
   | _ ->
       let xs = temp cx "xs" array_ty in
       let xs_e = local xs iter.loc in
       let element = mk (Prim (Get_index Checked, [ xs_e; index ])) elem iter.loc in
       lets
-        [ (xs, elements (expr cx iter)) ]
+        [ (xs, own cx Snapshot_value (elements (expr cx iter))) ]
         (loop ~start:xs_e
            ~pass:
              (numbered (fun () ->
-                  take_apart cx pat element (fun () -> seq (expr cx body) step))))
+                  lexical_scope cx loc (fun () ->
+                    let element = own cx Copy_value element in
+                    take_apart cx pat element (fun () -> seq (expr cx body) step)))))
 
 (* `for x in &c` over a cursor (Infer_expr.cursor), whose method [next]
    is called each time round, with `&` of the place, until it gives
@@ -2697,12 +2961,13 @@ and cursor_loop cx (e : expr) (pat : pattern) (iter : expr) next body =
         | _ ->
             let t = temp cx "ref" cursor and got = temp cx "next" opt in
             ( binds,
-              lets
-                [ (t, read pl iter.loc); (got, call t) ]
-                (seq (write pl (local t loc) loc) (local got loc)) ))
+              lets [ (t, read pl iter.loc) ]
+                (mk (Owner_alias { target = t; root = pl.root;
+                      body = lets [ (got, call t) ]
+                        (seq (write pl (local t loc) loc) (local got loc)) }) opt loc) ))
     | _ ->
         let copy = temp cx "cursor" cursor in
-        ([ (copy, expr cx iter) ], call copy)
+        ([ (copy, source_value cx (expr cx iter)) ], call copy)
   in
   option_loop cx e pat binds advance body
 
@@ -2841,6 +3106,9 @@ and pull_block cx (a : expr) =
             mk (Prim (Members, [ v ])) array_ty loc
         | _ -> v
       in
+      (* A read snapshot keeps logical positions but owns no source copies;
+         the item returned on each pull receives its own cleanup token. *)
+      let snapshot = own cx Snapshot_value snapshot in
       let xs = temp cx "xs" array_ty and i = temp cx "i" Ty.int in
       let index = local i loc in
       let binop op a b ty = mk (Prim (Binop op, [ a; b ])) ty loc in
@@ -2852,7 +3120,7 @@ and pull_block cx (a : expr) =
              in
              let next =
                lets
-                 [ (x, mk (Prim (Get_index Checked, [ local xs loc; index ])) elem loc) ]
+                 [ (x, own cx Copy_value (mk (Prim (Get_index Checked, [ local xs loc; index ])) elem loc)) ]
                  (seq
                     (mk (Assign (i, binop Add index (int_lit 1L loc) Ty.int)) Ty.unit loc)
                     (mk (Con (option_path, "Some", [ local x loc ])) opt loc))
@@ -2868,27 +3136,79 @@ and pull_block cx (a : expr) =
           ( binds,
             pulling (fun () ->
                 let t = temp cx "ref" cursor and got = temp cx "next" opt in
-                lets
-                  [ (t, read pl loc); (got, call t) ]
-                  (seq (write pl (local t loc) loc) (local got loc))) ))
+                lets [ (t, read pl loc) ]
+                  (mk (Owner_alias { target = t; root = pl.root;
+                        body = lets [ (got, call t) ]
+                          (seq (write pl (local t loc) loc) (local got loc)) }) opt loc)) ))
   | Cursor next, _ ->
       let c = temp cx "cursor" (ty_of cx a.node) in
       let call = next_call cx ?through:(made_through cx a) ~at ~meth_at:a.node next opt loc in
-      ([ (c, expr cx a) ], pulling (fun () -> call c))
+      ([ (c, source_value cx (expr cx a)) ], pulling (fun () -> call c))
 
 (* A call of [next], a cursor's method, found at the node [at], at the
    type recorded at [meth_at]'s [Infer.next_node], on the cursor in [v],
    giving [opt]: what uses it has, a channel's `items()`'s, are in the
    evidence where it's called. *)
+and yield_from cx (e : expr) (source : expr) =
+  let source = match source.kind with Try inner -> inner | _ -> source in
+  let value = expr cx source in
+  let loc = e.loc in
+  let binds, pull =
+    match (node cx e.node).found with
+    | Some Pulls_block -> [], value
+    | Some (Method_of next) ->
+        let fty = ty_of cx (Infer.next_node e.node) in
+        let opt, errors, uses = match fty with
+          | Ty.Fun (_, opt, errors, uses) -> opt, errors, uses
+          | _ -> bug "a delegated next without a function type"
+        in
+        let cursor = temp cx "cursor" value.ty in
+        let pullty = Ty.Fun ([], opt, errors, uses) in
+        let body = block_value cx ~name:("yield-from@" ^ string_of_int e.node)
+            ~given:[] [] pullty loc
+            (fun () -> next_call cx ~at:e.node ~meth_at:e.node next opt loc cursor)
+        in
+        [ cursor, source_value cx value ], body
+    | _ ->
+        let arrayty, elements = match value.ty with
+          | Ty.Con (p, [k;v]) when p = Path.prelude "Map" ->
+              let ty = Ty.array (Ty.tuple [k;v]) in ty, mk (Prim (Entries, [value])) ty loc
+          | Ty.Con (p, [t]) when p = Path.prelude "Set" ->
+              let ty = Ty.array t in ty, mk (Prim (Members, [value])) ty loc
+          | ty -> ty, value
+        in
+        let item = C.elem_ty arrayty in
+        let opt = Ty.Con (option_path, [item]) in
+        let xs = temp cx "items" arrayty and i = temp cx "i" Ty.int in
+        let pullty = Ty.Fun ([], opt, Ty.closed, Ty.closed) in
+        let pull = block_value cx ~name:("yield-from@" ^ string_of_int e.node)
+            ~given:[] [] pullty loc (fun () ->
+              let index = local i loc in
+              let more = mk (Prim (Binop Lt, [index; mk (Prim (Length, [local xs loc])) Ty.int loc])) Ty.bool loc in
+              let item = own cx Copy_value (mk (Prim (Get_index Checked, [local xs loc; index])) item loc) in
+              let result = temp cx "item" item.ty in
+              let step = mk (Assign (i, mk (Prim (Binop Add, [index; int_lit 1L loc])) Ty.int loc)) Ty.unit loc in
+              let some = lets [result, item] (seq step (mk (Con (option_path, "Some", [local result loc])) opt loc)) in
+              mk (If (more, some, mk (Con (option_path, "None", [])) opt loc)) opt loc)
+        in
+        [xs, own cx Snapshot_value elements; i, int_lit 0L loc], pull
+  in
+  let adapter = (node cx e.node).found <> Some Pulls_block in
+  lets binds (mk (Yield_from { pull; adapter }) Ty.unit loc)
+
 and next_call cx ?through ~at ~meth_at next opt loc (v : C.var) =
   let fty = ty_of cx (Infer.next_node meth_at) in
-  let a = targs_of cx at in
-  let callee : C.kind =
-    match Prelude.find next with
-    | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx at)
-    | None -> Global (next, a, descs cx a, dicts_of cx at)
+  let call () =
+    match v.ty, fty with
+    | Ty.Con (path, _), Ty.Fun (_, _, errors, uses) when Ty.is_generator_cursor path ->
+        mk (Gen_step { cursor = v; ev = cx.ev; errors; uses }) opt loc
+    | _ ->
+        let a = targs_of cx at in
+        let callee : C.kind = match Prelude.find next with
+          | Some x -> Intrinsic (x, a, descs cx a, dicts_of cx at)
+          | None -> Global (next, a, descs cx a, dicts_of cx at) in
+        mk (Call (mk callee fty loc, [ Ref v ], cx.ev)) opt loc
   in
-  let call () = mk (Call (mk callee fty loc, [ Ref v ], cx.ev)) opt loc in
   match through with
   | Some alias -> rebound cx ~alias loc call
   | None -> call ()
@@ -2942,9 +3262,9 @@ and pulled_count cx loc ~by binds (items : C.expr) rest =
    call does. *)
 and block_loop cx (e : expr) (pat : pattern) (iter : expr) body =
   let f = match iter.kind with Try f -> f | _ -> iter in
-  let fv = expr cx f in
+  let binds, fv = hold ~local:true cx "items" (expr cx f) in
   let ret = match fv.ty with Fun (_, r, _, _) -> r | _ -> bug "a block pulled that isn't one" in
-  option_loop cx e pat [] (mk (Call (fv, [], cx.ev)) ret iter.loc) body
+  option_loop cx e pat binds (mk (Call (fv, [], cx.ev)) ret iter.loc) body
 
 (* The loop of a cursor or a block: [advance] each time round, after
    [binds], until it gives `None`, the body run with [pat] bound to what's
@@ -2954,6 +3274,7 @@ and option_loop cx (e : expr) (pat : pattern) binds (advance : C.expr) body =
   let opt = advance.ty in
   (* the pattern binds what the body uses, so it's lowered first *)
   let elem_pat = pattern cx pat in
+  let pass = lexical_scope cx ~force:(cleanup_type cx [] elem_pat.pty) loc (fun () ->
   let body =
     (* its value is dropped, as a statement's is *)
     let b = expr cx body in
@@ -2978,11 +3299,17 @@ and option_loop cx (e : expr) (pat : pattern) binds (advance : C.expr) body =
       body = mk Break Ty.unit loc;
     }
   in
-  let pass = mk (Match (advance, [ some; none ])) Ty.unit loc in
+  mk (Match (advance, [ some; none ])) Ty.unit loc) in
   lets binds (mk (While (mk (Bool true) Ty.bool loc, pass)) Ty.unit loc)
 
 (* Whether [e] has a [Break] in it that leaves it, one outside every
    [While] in it. *)
+and returns (e : C.expr) =
+  match e.kind with
+  | Return _ -> true
+  | Lambda _ | Handler _ -> false
+  | _ -> List.exists returns (C.children e)
+
 and breaks (e : C.expr) =
   match e.kind with
   | Break -> true
@@ -3140,11 +3467,12 @@ and update cx (e : expr) base fields =
   let loc = e.loc in
   let t = ty_of cx e.node in
   let b = expr cx base in
+  let retained = retained_source cx b in
   let bv = temp cx "base" b.ty in
   let given =
     List.map
       (fun ((f : ident), v) ->
-        let v = expr cx v in
+        let v = source_value cx (expr cx v) in
         (f.name, temp cx f.name v.ty, v))
       fields
   in
@@ -3157,11 +3485,9 @@ and update cx (e : expr) base fields =
     match List.find_opt (fun (f, _, _) -> f = d.fname) given with
     | Some (_, v, _) -> (d.fname, local v loc)
     | None ->
-        ( d.fname,
-          mk
-            (Field (local bv loc, bpath, d.fname))
-            (field_ty cx b.ty bpath d.fname)
-            loc )
+        let value = mk (Field (local bv loc, bpath, d.fname))
+            (field_ty cx b.ty bpath d.fname) loc in
+        (d.fname, own cx (if retained then Copy_value else Adopt_value) value)
   in
   let bound = (bv, b) :: List.map (fun (_, v, value) -> (v, value)) given in
   match ((node cx e.node).found, t, b.ty) with
@@ -3196,6 +3522,26 @@ and free (e : C.expr) =
   let rec go (e : C.expr) =
     match e.kind with
     | Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break -> ()
+    | Return (_, a) | Yield a | Yield_from { pull = a; _ } | Gen_close a -> go a
+    | Gen_create { args; places; tys; dicts; ev; _ } ->
+        use ev;
+        List.iter use (List.concat_map C.desc_vars tys);
+        List.iter use (List.concat_map C.dict_vars dicts);
+        List.iter (function C.Value e -> go e | C.Ref v -> use v) args;
+        List.iter (fun (p : C.gen_place) -> use p.param; use p.root; go p.read; go p.write) places
+    | Source_view { value; _ } -> go value
+    | Pattern_scope { owner; receiving; source; pat = p; on_match; on_else; _ } ->
+        use receiving;
+        bind owner;
+        go source;
+        Option.iter go on_else;
+        pat p;
+        go on_match
+    | Gen_step { cursor; ev; _ } -> use cursor; use ev
+    | Cleanup_scope { owner; body } | Instance_scope { owner; body } -> bind owner; go body
+    | Own { owner; value; desc; _ } -> use owner; List.iter use (C.desc_vars desc); go value
+    | Owned_assign { target; value; _ } -> use target; go value
+    | Owner_alias { target; root; body } -> use target; use root; go body
     | Global (_, _, ds, dicts) | Intrinsic (_, _, ds, dicts) ->
         (* the hidden type and dictionary parameters its descriptors and
            dictionaries are built from *)
@@ -3256,7 +3602,7 @@ and free (e : C.expr) =
         bind v;
         go value;
         go body
-    | Covered { body; result; after } ->
+    | Covered { body; result; after; _ } ->
         go body;
         bind result;
         go after
@@ -3314,6 +3660,8 @@ let max_binder (f : fn_def) =
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
     | Piped ->
         ()
+    | Return value -> Option.iter go value
+    | Yield value | Yield_from value -> go value
     | Interp ps -> List.iter go (Ast.holes ps)
     | Unop (_, a, _)
     | Field (a, _)
@@ -3504,6 +3852,13 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
   in
   let cx =
     {
+      top_body = f.body.node;
+      return_to = (match made with Some req -> made_path req | None -> path);
+      generators = inferred.generators;
+      owner = { C.id = min_int; name = "$owner"; ty = C.owner_ty };
+      (* Descriptor ids count down from -1; lexical owner ids count up
+         from the other end, leaving source and temporary numbering intact. *)
+      next_owner = min_int + 1;
       nodes;
       subst;
       shift = 0;
@@ -3544,6 +3899,12 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
         { mode = p.pmode; var = bind cx p.pname t.ty })
       own ps
   in
+  let generator = Option.map (fun (g : Ty.generator) ->
+      { g with item = subst_ty subst g.item;
+               errors = subst_row subst g.errors;
+               uses = subst_row subst g.uses;
+               cursor_args = List.map (subst_ty subst) g.cursor_args;
+               params = ps }) (Path.Map.find_opt path inferred.generators) in
   {
     path = (match made with Some req -> made_path req | None -> path);
     params;
@@ -3551,10 +3912,12 @@ let fn_def ~home ~types ~through ~requests ~calls ?made (inferred : Infer.t) (f 
     tys = cx.tys;
     dicts = List.map snd cx.dicts;
     scheme;
-    body = expr cx f.body;
+    generator;
+    body = lexical_scope cx f.body.loc (fun () ->
+        source_value cx (expr cx f.body));
     test = f.test;
     loc = f.name.loc;
-    origin = Written;
+    origin = (match made, generator with Some _, Some _ -> Copy path | _ -> Written);
     known = [];
   }
 
@@ -3620,6 +3983,22 @@ let ops (types : Iface.type_decl list) =
     types
 
 let program ~types (r : Resolve.t) (inferred : Infer.t) =
+  let generated = Path.Map.fold
+      (fun _ (g : Ty.generator) acc ->
+        if g.path.home = r.home && g.kind = Value_gen then
+          Path.Map.add g.cursor_path (Iface.generator_type g) acc
+        else acc)
+      inferred.generators Path.Map.empty in
+  let types path = match Path.Map.find_opt path generated with
+    | Some decl -> Some decl
+    | None -> types path in
+  let declared = List.filter_map (fun (decl : Iface.type_decl) ->
+      if Ty.is_generator_cursor decl.path then Path.Map.find_opt decl.path generated
+      else Some decl) inferred.types in
+  let declared = declared @ (Path.Map.bindings generated |> List.filter_map
+      (fun (path, decl) ->
+        if List.exists (fun (old : Iface.type_decl) -> old.path = path) declared
+        then None else Some decl)) in
   let requests = ref [] and calls = ref [] in
   let fns =
     List.filter_map
@@ -3634,12 +4013,12 @@ let program ~types (r : Resolve.t) (inferred : Infer.t) =
   in
   ( ({
        home = r.home;
-       types = r.types;
+       types = declared;
        fns;
        values = inferred.values;
-       shows = shows r.types fns;
-       keys = keys r.types fns;
-       ops = ops r.types;
+       shows = shows inferred.types fns;
+       keys = keys inferred.types fns;
+       ops = ops inferred.types;
        method_calls = !calls;
      }
       : C.program),
@@ -3742,6 +4121,7 @@ let start (main : C.fn_def) : C.fn_def =
     tys;
     dicts;
     scheme;
+    generator = None;
     body = install 1 deps;
     test = false;
     loc;

@@ -103,6 +103,9 @@ exception Failed of Value.t
    there's one around it, in the same function or block. *)
 exception Broke
 
+(* Nonlocal return keeps its checked function identity through every unwind. *)
+exception Returned of Path.t * Ty.ty * Value.t
+
 (* The type checker rules these out, so reaching one is a compiler bug. *)
 let bug what = failwith ("bug: checking or lowering let through " ^ what)
 
@@ -138,6 +141,11 @@ type ctx = {
           labelled by ([site_of]); the prelude's code keeps its caller's *)
   entry : Path.t option;
       (** the test running, whose code's label is `test` *)
+  type_args : Ty.ty list;
+  cleanup : Generator.scope option;
+  instance_owner : Generator.scope option;
+  source_view : bool option ref option;
+  roots : Generator.scope Generator.Roots.t;
   call : Loc.t option;
       (** the program's call the prelude's code running was reached from,
           which a task waiting in it is said to wait at ([at_call]) *)
@@ -547,11 +555,45 @@ let rec fn_label cx (f : fn_def) =
    inside the scope, a loop's, is read as it was when the task was
    spawned, as rule C says (async.md, "What a task can touch"). A handler
    state's cell is a value ([VCell]), so the task still shares it. *)
-let rec copied v =
+let rec copied cx v =
   match v with
   | VClosure c ->
-      VClosure { c with env = Env.map (fun r -> ref (copied !r)) c.env }
-  | v -> v
+      let env = Env.mapi (fun id r ->
+        let value = match !r with
+          | VClosure _ -> copied cx !r
+          | VSched (Generator.Frame { representation = Generator.Block _; _ }) -> !r
+          | value ->
+              let cleanup = match Env.find_opt id c.capture_types with
+                | Some ty -> Generator.may_cleanup cx.types ty
+                | None -> true
+              in
+              if cleanup then
+                (match Env.find_opt id c.capture_types with
+                | Some ty -> Generator.clone_typed cx.types ty value
+                | None -> Generator.clone value)
+              else value
+        in ref value) c.env
+      in VClosure { c with env }
+  | VSched (Generator.Frame { representation = Generator.Block _; _ }) -> v
+  | v -> Generator.clone v
+
+(* Passive contexts captured by a suspended producer are not the consumer's
+   active [with]s. They still constrain the lifetime of a task borrowing that
+   producer. Include them only while checking/snapshotting a spawn context. *)
+let with_reached_frames value call =
+  let rec frames seen = function
+    | VSched (Generator.Frame frame) -> Generator.dynamic_frames frame
+    | VClosure closure when not (List.memq closure.body seen) ->
+        Env.fold (fun _ value result -> frames (closure.body :: seen) !value @ result) closure.env []
+    | _ -> []
+  in
+  match Sched.current () with
+  | None -> call ()
+  | Some task ->
+      let previous = task.frames in
+      let captured = List.filter (fun frame -> not (List.memq frame previous)) (frames [] value) in
+      task.frames <- captured @ previous;
+      Fun.protect ~finally:(fun () -> task.frames <- previous) call
 
 (* [v], a block about to run as a task of its own, can reach the instances
    installed where it was written, its evidence, and where each block it
@@ -569,6 +611,7 @@ let share_reach v =
     end
   in
   let rec value = function
+    | VSched (Generator.Frame frame) -> List.iter installed (Generator.reaching frame)
     | VEvidence is -> List.iter installed is
     | VClosure { env; _ } | VHandler { env; _ } ->
         Env.iter (fun _ r -> value !r) env
@@ -588,6 +631,7 @@ let share_reach v =
    decision 7). *)
 let reaching (fns : (Path.t, fn_def) Hashtbl.t) v =
   let deps = ref [ Path.prelude "Async" ] and seen = ref [] in
+  let frames = ref [] in
   let add (p : Path.t) = if not (List.mem p !deps) then deps := p :: !deps in
   let rec expr (e : Core.expr) =
     (match e.kind with
@@ -600,6 +644,10 @@ let reaching (fns : (Path.t, fn_def) Hashtbl.t) v =
     | _ -> ());
     List.iter expr (Core.children e)
   and value = function
+    | VSched (Generator.Frame frame) ->
+        let reached = Generator.reaching frame in
+        frames := reached @ !frames;
+        List.iter (fun (i : installed) -> add i.dep) reached
     | VClosure { body; env; _ } when not (List.memq body !seen) ->
         seen := body :: !seen;
         expr body;
@@ -608,10 +656,11 @@ let reaching (fns : (Path.t, fn_def) Hashtbl.t) v =
   in
   value v;
   match v with
+  | VSched (Generator.Frame frame) -> Generator.reaching frame
   | VClosure { outer; env; _ } -> (
       match Option.map ( ! ) (Env.find_opt outer env) with
       | Some (VEvidence installed) ->
-          List.filter (fun (i : installed) -> List.mem i.dep !deps) installed
+          !frames @ List.filter (fun (i : installed) -> List.mem i.dep !deps) installed
       | _ -> [])
   | _ -> []
 
@@ -695,6 +744,272 @@ let ctor_field cx p c f =
 
 let rec eval cx env (e : expr) =
   match e.kind with
+  | Return (target, value) -> raise (Returned (target, Walk.subst cx.type_args value.ty, eval cx env value))
+  | Yield value ->
+      let evaluated = eval cx env value in
+      let evaluated = if Generator.may_cleanup cx.types (Walk.subst cx.type_args value.ty) then
+        Generator.detach evaluated else evaluated in
+      Generator.yield evaluated; VUnit
+  | Yield_from { pull; adapter } ->
+      let source = eval cx env pull in
+      let next () = if adapter then
+        finish cx None (start cx source [] (VEvidence []))
+      else ok (fst (call_at cx e.loc source [] (VEvidence []))) in
+      let item = match Walk.subst cx.type_args pull.ty with
+        | Ty.Fun (_, Ty.Con (p, [ item ]), _, _) when p = Path.prelude "Option" -> Some item
+        | _ -> None
+      in
+      let rec consume () =
+        match next () with
+        | VCon { name = "Some"; args = [ value ]; _ } ->
+            let value = match item with
+              | Some ty -> Generator.detach_typed cx.types ty value
+              | None -> Generator.detach value
+            in Generator.yield value; consume ()
+        | VCon { name = "None"; args = []; _ } -> ()
+        | _ -> bug "a delegated pull source without an Option result"
+      in consume (); VUnit
+  | Gen_step { cursor; ev; errors; _ } ->
+      let source = !(cell env cursor) in
+      (match source with
+      | VSched (Generator.Frame frame) ->
+          (match Generator.step ~depth:!(cx.depth) frame with
+          | Generator.Item value ->
+              let result = VCon { ty = Path.prelude "Option"; name = "Some"; args = [ value ] } in
+              (match cx.cleanup with None -> result | Some owner ->
+                Generator.adopt_typed owner cx.types (Walk.subst cx.type_args e.ty) result)
+          | Generator.End -> VCon { ty = Path.prelude "Option"; name = "None"; args = [] }
+          | Generator.Error error -> raise (Failed (Generator.clone_typed ?owner:cx.cleanup cx.types (Ty.Errors errors) error)))
+      | _ -> ok (fst (call_at cx e.loc source []
+          (VEvidence (evidence_in env ev "a pull step")))))
+  | Gen_close value ->
+      (match eval cx env value with
+      | VSched (Generator.Frame frame) -> Generator.close ~depth:!(cx.depth) frame
+      | VClosure _ | VFn _ | VBuiltin _ -> ()
+      | _ -> bug "closing a value that is not a generator or pull block"); VUnit
+  | Source_view { retained; value } ->
+      let value = eval cx env value in
+      Option.iter (fun marker -> marker := Some retained) cx.source_view;
+      value
+  | Pattern_scope { owner; receiving; source; pat; on_match; on_else; _ } ->
+      let scope = Generator.new_scope ~depth:(fun () -> !(cx.depth)) () in
+      let marker = ref None in
+      let scoped_env = Env.add owner.id (ref (Generator.owner_value scope)) env in
+      let scoped_cx = { cx with cleanup = Some scope; source_view = Some marker } in
+      let close () = Sched.shielded (fun () -> Generator.close_scope ~depth:!(cx.depth) scope) in
+      let escape ty value = Generator.escape_typed scope cx.cleanup cx.types ty value in
+      let protected f = match f () with
+        | value -> value
+        | exception Returned (target, ty, value) ->
+            let value = escape ty value in close (); raise (Returned (target, ty, value))
+        | exception Failed error ->
+            let error = escape (Ty.Errors { labels = []; tail = Some 0 }) error in
+            close (); raise (Failed error)
+        | exception (Panic _ as exn) when Sched.isolatable () ->
+            (try close () with _ -> ()); raise exn
+        | exception exn -> close (); raise exn
+      in
+      protected (fun () ->
+        let value = eval scoped_cx scoped_env source in
+        match match_pattern cx.types pat value scoped_env with
+        | None ->
+            (match on_else with
+            | None -> close (); panic e.loc "a binding pattern did not match"
+            | Some body ->
+                let value = eval scoped_cx scoped_env body in
+                let value = escape (Walk.subst cx.type_args body.ty) value in
+                close (); value)
+        | Some bound ->
+            let receiving = Generator.owner_of_value !(cell env receiving) in
+            let rec binders (pat : Core.pattern) = match pat.pkind with
+              | PVar var -> [ var ]
+              | PCon (_,_,ps) | PTag (_,ps) | PTuple ps | PRecord (_,ps) -> List.concat_map binders ps
+              | PAs (pat,var) -> binders pat @ [ var ]
+              | POr (pat :: _) -> binders pat
+              | PArray { front; rest; back } ->
+                  List.concat_map binders front @
+                  (match rest with Rest (Some var) -> [ var ] | _ -> []) @
+                  List.concat_map binders back
+              | PStr_rest { rest = Some var; _ } -> [ var ]
+              | _ -> []
+            in
+            let retained = Option.value !marker ~default:true in
+            List.iter (fun (var : Core.var) ->
+              let cell = cell bound var in
+              let ty = Walk.subst cx.type_args var.ty in
+              match !cell with
+              | VSched (Generator.Frame { representation = Generator.Block _; _ }) ->
+                  ignore (Generator.escape scope (Some receiving) !cell)
+              | _ when Generator.may_cleanup cx.types ty ->
+                  cell := Generator.bind_from_typed ~source:scope ~retained receiving cx.types ty !cell;
+                  Generator.Roots.replace cx.roots cell receiving
+              | _ -> ()) (binders pat);
+            close ();
+            eval cx bound on_match)
+  | Instance_scope { owner; body } ->
+      let scope = Generator.new_scope ~depth:(fun () -> !(cx.depth)) () in
+      let env = Env.add owner.id (ref (Generator.owner_value scope)) env in
+      let close () = Sched.shielded (fun () -> Generator.close_scope ~depth:!(cx.depth) scope) in
+      (match eval { cx with cleanup = Some scope; instance_owner = Some scope } env body with
+      | VInstance instance ->
+          VInstance { instance with finally = Some (VSched (Generator.Instance_finally { finally = instance.finally; owner = scope })) }
+      | _ -> close (); bug "an instance cleanup scope without an instance"
+      | exception Failed error ->
+          let error = Generator.escape_typed scope cx.cleanup cx.types
+            (Ty.Errors { labels = []; tail = Some 0 }) error in
+          close (); raise (Failed error)
+      | exception (Panic _ as exn) when Sched.isolatable () ->
+          (try close () with _ -> ()); raise exn
+      | exception exn -> close (); raise exn)
+  | Cleanup_scope { owner; body } ->
+      let parent = cx.cleanup in
+      let scope = Generator.new_scope ~depth:(fun () -> !(cx.depth)) () in
+      let env = Env.add owner.id (ref (Generator.owner_value scope)) env in
+      let cx = { cx with cleanup = Some scope } in
+      let close () = Sched.shielded (fun () -> Generator.close_scope ~depth:!(cx.depth) scope) in
+      let escaped ?ty value =
+        let cleanup = match ty with
+          | Some ty -> Generator.may_cleanup cx.types (Walk.subst cx.type_args ty)
+          | None -> true
+        in
+        let cleanup = cleanup || (match value with VSched (Generator.Frame _) -> true | _ -> false) in
+        if not cleanup then value else
+        (match ty with Some ty -> Generator.escape_typed scope parent cx.types (Walk.subst cx.type_args ty) value
+        | None -> Generator.escape scope parent value) in
+      (match eval cx env body with
+      | value -> let value = escaped ~ty:body.ty value in close (); value
+      | exception Returned (target, ty, value) ->
+          let value = escaped ~ty value in close (); raise (Returned (target, ty, value))
+      | exception Failed error ->
+          let error = escaped ~ty:(Ty.Errors { labels = []; tail = Some 0 }) error in close (); raise (Failed error)
+      | exception (Panic _ as exn) when Sched.isolatable () ->
+          (try close () with _ -> ()); raise exn
+      | exception exn -> close (); raise exn)
+  | Own { owner; mode; value; desc } ->
+      let value = eval cx env value in
+      let ty = type_of env desc in
+      if not (Generator.may_cleanup cx.types ty) then value else
+      let owner = Generator.owner_of_value !(cell env owner) in
+      (match mode with
+      | Copy_value -> Generator.clone_typed ~owner cx.types ty value
+      | Snapshot_value -> Generator.clone_typed cx.types ty value
+      | Adopt_value -> Generator.adopt_typed owner cx.types ty value)
+  | Owned_assign { target; value; mode } ->
+      let target_ty = Walk.subst cx.type_args target.ty in
+      let cleanup = Generator.may_cleanup cx.types target_ty in
+      let target = cell env target in
+      let value = eval cx env value in
+      let owner = match Generator.Roots.find_opt cx.roots target with
+        | Some owner -> Some owner | None -> cx.cleanup
+      in
+      if cleanup && mode = Replace_value then Option.iter (fun owner -> ignore (Generator.adopt_typed owner cx.types target_ty value)) owner;
+      target := value;
+      VUnit
+  | Owner_alias { target; root; body } ->
+      let target = cell env target and root = cell env root in
+      let root = match !root with VCell actual -> actual | _ -> root in
+      let prior = Generator.Roots.find_opt cx.roots target in
+      (match Generator.Roots.find_opt cx.roots root with
+      | Some owner -> Generator.Roots.replace cx.roots target owner
+      | None -> Generator.Roots.remove cx.roots target);
+      Fun.protect
+        ~finally:(fun () -> match prior with
+          | Some owner -> Generator.Roots.replace cx.roots target owner
+          | None -> Generator.Roots.remove cx.roots target)
+        (fun () -> eval cx env body)
+  | Gen_create { producer; args; tys; dicts; ev; type_args = _; places } ->
+      let runtime_types = cx.types in
+      let fn = Hashtbl.find cx.fns producer in
+      let metadata = Option.get fn.generator in
+      let descriptors = List.map (type_of env) tys in
+      let dictionaries = List.map (fun d -> VDict (dict cx env d)) dicts in
+      let captured = List.map2 (fun (parameter : param) -> function
+        | Value value ->
+            let evaluated = eval cx env value in
+            (match parameter.var.ty with
+            | Ty.Fun _ -> `Borrowed evaluated
+            | _ ->
+                let ty = Walk.subst descriptors parameter.var.ty in
+                let cleanup = Generator.may_cleanup runtime_types ty in
+                `Data ((if cleanup then Generator.detach_typed runtime_types ty evaluated else evaluated), ty, cleanup))
+        | Ref var -> `Place (cell env var)) fn.params args in
+      let evidence = match metadata.kind with
+        | Ty.Value_gen -> VEvidence []
+        | Ty.Block_gen -> VEvidence (evidence_in env ev "a generator creation")
+      in
+      let basecx = match metadata.kind with
+        | Ty.Value_gen -> { cx with cleanup = None; instance_owner = None; source_view = None; roots = Generator.Roots.create 8; depth = ref !(cx.depth) }
+        | Ty.Block_gen -> cx
+      in
+      let inputs depth =
+        let owner = Generator.new_scope ~depth:(fun () -> !depth) () in
+        let parameters = List.map (function
+          | `Data (value, ty, cleanup) ->
+              let c = ref (if cleanup then Generator.clone_typed ~owner runtime_types ty value else value) in
+              if cleanup then Generator.Roots.replace basecx.roots c owner; c
+          | `Borrowed value -> ref value
+          | `Place c -> c) captured in
+        owner, parameters
+      in
+      let run_at_depth depth =
+        let owner, parameters = inputs depth in
+        let inner = List.fold_left2 (fun env (v : var) ty -> Env.add v.id (ref (VType ty)) env)
+          Env.empty fn.tys descriptors in
+        let inner = List.fold_left2 (fun env (v : var) value -> Env.add v.id (ref value) env)
+          inner fn.dicts dictionaries in
+        let inner = List.fold_left2 (fun env (p : param) cell -> Env.add p.var.id cell env)
+          inner fn.params parameters in
+        let inner = Env.add fn.ev.id (ref evidence) inner in
+        let gcx = { basecx with cleanup = Some owner; source_view = None; type_args = descriptors; depth; site = fn_label basecx fn } in
+        let body () =
+          if !(gcx.depth) >= max_depth then raise Too_deep;
+          incr gcx.depth;
+          Fun.protect ~finally:(fun () -> decr gcx.depth) (fun () ->
+            try ignore (finish gcx None (tail gcx inner fn.body)) with
+            | Returned (target, _, _) when target = producer || target = metadata.path -> ())
+        in
+        match body () with
+        | () -> Generator.close_scope ~depth:!depth owner
+        | exception Failed error ->
+            let error = Generator.detach error in
+            Generator.close_scope ~depth:!depth owner; raise (Failed error)
+        | exception (Panic _ as exn) when Sched.isolatable () ->
+            (try Generator.close_scope ~depth:!depth owner with _ -> ()); raise exn
+        | exception exn -> Generator.close_scope ~depth:!depth owner; raise exn
+      in
+      let unstarted_close_at_depth depth = let owner, _ = inputs depth in Generator.close_scope ~depth:!depth owner in
+      let failure = function Failed error -> Some error | _ -> None in
+      let reach = match metadata.kind, evidence with
+        | Ty.Block_gen, VEvidence installed ->
+            let dependencies = Path.prelude "Async" :: List.map (fun label -> (Ty.of_label label).dpath) metadata.uses.labels in
+            List.filter (fun (i : installed) -> List.mem i.dep dependencies) installed @
+            List.concat_map (function `Borrowed value -> reaching cx.fns value | _ -> []) captured
+        | _ -> []
+      in
+      let make = match metadata.kind with Ty.Value_gen -> Generator.replay | Ty.Block_gen -> Generator.block in
+      let blocks = List.filter_map (function `Borrowed value -> Some value | _ -> None) captured in
+      let before_step () =
+        (* Freeze all projections before changing any parameter cell. *)
+        let reads = List.map (fun (place : Core.gen_place) -> place, eval cx env place.read) places in
+        List.iter (fun (place, value) ->
+          let parameter = cell env place.param in
+          let root = cell env place.root in
+          let root = match !root with VCell actual -> actual | _ -> root in
+          (match Generator.Roots.find_opt cx.roots root with
+          | Some owner -> Generator.Roots.replace cx.roots parameter owner
+          | None -> Generator.Roots.remove cx.roots parameter);
+          parameter := value) reads
+      in
+      let after_step () = List.iter (fun (place : Core.gen_place) -> ignore (eval cx env place.write)) places in
+      let before_step = if places = [] then None else Some before_step in
+      let after_step = if places = [] then None else Some after_step in
+      let errors = { metadata.errors with labels = List.map (fun (label : Ty.label) ->
+        { label with payload = List.map (Walk.subst descriptors) label.payload }) metadata.errors.labels } in
+      let copy_payload error = Generator.clone_typed runtime_types (Ty.Errors errors) error in
+      let register_payload owner error = ignore (Generator.adopt_typed owner runtime_types (Ty.Errors errors) error) in
+      Generator.to_value (make ?owner:cx.cleanup ~unstarted_close_at_depth ~run_at_depth ~reach ~blocks
+        ~item:(Walk.subst descriptors metadata.item) ~copy_payload ~register_payload ?before_step ?after_step ~name:(Path.local metadata.path)
+        ~run:(fun () -> ()) ~failure ~panic:(panic_at e.loc) ())
   | Int n -> VInt n
   | Float f -> VFloat f
   | Bool b -> VBool b
@@ -776,10 +1091,14 @@ let rec eval cx env (e : expr) =
       (* like a lambda, it copies what it captures now *)
       let env =
         List.fold_left
-          (fun inner (v : var) -> Env.add v.id (ref !(cell env v)) inner)
+          (fun inner (v : var) ->
+            let value = !(cell env v) in
+            let value = if Generator.may_cleanup cx.types (Walk.subst cx.type_args v.ty) then
+              Generator.clone_typed cx.types (Walk.subst cx.type_args v.ty) value else value in
+            Env.add v.id (ref value) inner)
           Env.empty captures
       in
-      VHandler { ev = ev.id; body; env; site = cx.site }
+      VHandler { ev = ev.id; body; env; site = cx.site; types = cx.type_args }
   | Instance { impls; finally; exclusive } ->
       let values = eval_all cx env (List.map snd impls) in
       VInstance
@@ -887,10 +1206,24 @@ let rec eval cx env (e : expr) =
       match eval cx env a with
       | VTag { name; _ } -> VBool (List.mem name names)
       | _ -> bug "a tag asked of what isn't an error")
+  | Prim (New_cell, [ value ]) ->
+      let cleanup = Generator.may_cleanup cx.types (Walk.subst cx.type_args value.ty) in
+      let c = ref (eval cx env value) in
+      if cleanup then Option.iter (fun owner -> Generator.Roots.replace cx.roots c owner)
+        (match cx.instance_owner with Some _ as owner -> owner | None -> cx.cleanup);
+      VCell c
+  | Prim (Set_cell, [ target; value ]) ->
+      let target = match eval cx env target with VCell c -> c | _ -> bug "a state cell that is not a cell" in
+      (* This is only Lower's writeback. Source replacements and insertions
+         already used the persistent state-root owner through Owner_alias. *)
+      target := eval cx env value; VUnit
   | Prim (op, args) -> prim e.loc op (eval_all cx env args) args
   | Let (v, value, body) ->
       let x = eval cx env value in
-      eval cx (Env.add v.id (ref x) env) body
+      let c = ref x in
+      if Generator.may_cleanup cx.types (Walk.subst cx.type_args v.ty) then
+        Option.iter (fun owner -> Generator.Roots.replace cx.roots c owner) cx.cleanup;
+      eval cx (Env.add v.id c env) body
   | Assign (v, value) ->
       cell env v := eval cx env value;
       VUnit
@@ -917,7 +1250,11 @@ let rec eval cx env (e : expr) =
       in
       let ev = evidence_in env ev ("a call of " ^ describe f) in
       let result, finals =
-        try call_at cx e.loc f values (VEvidence ev) with
+        try
+          let owners = List.map (function
+            | Ref var -> Generator.Roots.find_opt cx.roots (cell env var)
+            | Value _ -> None) args in
+          call_at ~owners cx e.loc f values (VEvidence ev) with
         (* a help that names the receiver, the first argument *)
         | Panic ({ help = Some h; recv = None; _ } as p)
           when String.contains h '\002' && args <> [] ->
@@ -946,6 +1283,9 @@ let rec eval cx env (e : expr) =
           site =
             (if body.loc.file = Prelude.file then ""
              else block_site cx name);
+          types = cx.type_args;
+          capture_types = List.fold_left (fun types (var : var) ->
+            Env.add var.id (Walk.subst cx.type_args var.ty) types) Env.empty captures;
           params = List.map (fun (p : param) -> p.var.id) params;
           ev = ev.id;
           outer = outer.id;
@@ -1046,16 +1386,40 @@ let rec eval cx env (e : expr) =
              a `for &`'s element *)
           after ();
           raise Broke
+      | exception (Returned _ as returned) ->
+          after ();
+          raise returned
+      | exception (Panic _ as exn) when Sched.isolatable () ->
+          (try after () with _ -> ());
+          raise exn
       | exception Sched.Cancelled ->
           after ();
           raise Sched.Cancelled)
-  | Covered { body; result; after } -> (
+  | Covered { body; result; after; return_target } -> (
       (* an arm's `finally`: [body] is what it covers, as `attempt`
          keeps it, which a cancel goes through *)
       match eval cx env body with
       | outcome ->
           Sched.shielded (fun () ->
               eval cx (Env.add result.id (ref outcome) env) after)
+      | exception Returned (target, ty, value) ->
+          let outcome = if return_target = Some target then
+            VCon { ty = Path.prelude "Result"; name = "Ok"; args = [ value ] }
+          else VCon { ty = Path.prelude "Result"; name = "Err"; args = [ cancelled_tag ] } in
+          let cleanup () = ignore (Sched.shielded (fun () -> eval cx (Env.add result.id (ref outcome) env) after)) in
+          if return_target = Some target then cleanup ()
+          else (try cleanup () with Failed _ | Sched.Cancelled -> ());
+          raise (Returned (target, ty, value))
+      | exception Broke ->
+          let outcome = VCon { ty = Path.prelude "Result"; name = "Err"; args = [ cancelled_tag ] } in
+          (try ignore (Sched.shielded (fun () -> eval cx (Env.add result.id (ref outcome) env) after))
+           with Failed _ | Sched.Cancelled -> ());
+          raise Broke
+      | exception (Panic _ as exn) when Sched.isolatable () ->
+          let outcome = VCon { ty = Path.prelude "Result"; name = "Err"; args = [ cancelled_tag ] } in
+          (try ignore (Sched.shielded (fun () -> eval cx (Env.add result.id (ref outcome) env) after))
+           with _ -> ());
+          raise exn
       | exception Sched.Cancelled ->
           let outcome =
             VCon { ty = Path.prelude "Result"; name = "Err"; args = [ cancelled_tag ] }
@@ -1080,7 +1444,10 @@ and tail cx env (e : expr) =
       if truth (eval cx env c) then tail cx env t else tail cx env f
   | Let (v, value, body) ->
       let x = eval cx env value in
-      tail cx (Env.add v.id (ref x) env) body
+      let c = ref x in
+      if Generator.may_cleanup cx.types (Walk.subst cx.type_args v.ty) then
+        Option.iter (fun owner -> Generator.Roots.replace cx.roots c owner) cx.cleanup;
+      tail cx (Env.add v.id c env) body
   | Seq (a, b) ->
       ignore (eval cx env a);
       tail cx env b
@@ -1152,7 +1519,7 @@ and ok = function Ok v -> v | Error err -> raise (Failed err)
    implementation of each of its dependencies, its `finally`, and whether
    it's exclusive. *)
 and instance cx (h : handler) outer what =
-  match eval cx (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
+  match eval { cx with type_args = h.types } (Env.add h.ev (ref (VEvidence outer)) h.env) h.body with
   | VInstance { impls; finally; exclusive } -> (impls, finally, exclusive)
   | _ -> bug (what ^ " whose description doesn't make an instance")
 
@@ -1188,6 +1555,11 @@ and ending cx env (loc : Loc.t) finally desc outer installed body =
       | v -> Sched.shielded (given (VCon { ty = result; name = "Ok"; args = [ v ] }))
       | exception Failed err ->
           Sched.shielded (given (VCon { ty = result; name = "Err"; args = [ err ] }))
+      | exception (Returned _ as returned) ->
+          (try ignore (Sched.shielded (given
+            (VCon { ty = result; name = "Err"; args = [ cancelled_tag ] })))
+           with Failed _ | Sched.Cancelled -> ());
+          raise returned
       | exception Sched.Cancelled ->
           (try
              ignore
@@ -1202,7 +1574,7 @@ and ending cx env (loc : Loc.t) finally desc outer installed body =
                (Sched.shielded
                   (given
                      (VCon { ty = result; name = "Err"; args = [ cancelled_tag ] })))
-           with Failed _ | Sched.Cancelled -> ());
+           with _ -> ());
           raise p)
 
 (* A call of the operation [op] of [dep], given [args], on the instance
@@ -1315,8 +1687,8 @@ and installing (loc : Loc.t) f =
       raise (moved loc p)
 
 (* [apply], from a call at [loc]. *)
-and call_at cx loc f args ev =
-  try apply ~loc cx f args ev with
+and call_at ?owners cx loc f args ev =
+  try apply ~loc ?owners cx f args ev with
   | Builtins.Panic msg -> panic loc msg
   | Builtins.Panic_help { msg; help } -> panic ~help loc msg
   | Panic { loc = l; _ } as p
@@ -1336,9 +1708,35 @@ and call_at cx loc f args ev =
 (* Call [f], passing it the evidence [ev]. Returns its result, or the
    error it failed with, and the final value of every parameter, so the
    caller can write back the ones passed `inout`. *)
-and apply ?loc cx f args ev =
+and apply ?loc ?owners cx f args ev =
   match f with
-  | VBuiltin _ -> builtin ?loc ~ev cx f args
+  | VSched (Generator.Frame frame) ->
+      if args <> [] then bug "a generator block passed arguments";
+      (match Generator.step ~depth:!(cx.depth) frame with
+      | Generator.Item value ->
+          let value = match cx.cleanup, frame.item with
+            | Some owner, Some ty -> Generator.adopt_typed owner cx.types ty value
+            | Some owner, None -> Generator.adopt owner value
+            | None, _ -> value
+          in Ok (VCon { ty = Path.prelude "Option"; name = "Some"; args = [ value ] }), []
+      | Generator.End -> Ok (VCon { ty = Path.prelude "Option"; name = "None"; args = [] }), []
+      | Generator.Error error -> Error (Generator.clone ?owner:cx.cleanup error), [])
+  | VSched (Generator.Instance_finally { finally; owner }) ->
+      let original () = match finally with
+        | None ->
+            let outcome = match List.nth args 1 with
+              | VCon { name = "Ok"; args = [ value ]; _ } -> Ok value
+              | VCon { name = "Err"; args = [ error ]; _ } -> Error error
+              | _ -> bug "an instance cleanup without its outcome"
+            in outcome, args
+        | Some f -> apply ?loc cx f args ev
+      in
+      (match original () with
+      | result -> Generator.close_scope ~depth:!(cx.depth) owner; result
+      | exception (Panic _ as exn) when Sched.isolatable () ->
+          (try Generator.close_scope ~depth:!(cx.depth) owner with _ -> ()); raise exn
+      | exception exn -> Generator.close_scope ~depth:!(cx.depth) owner; raise exn)
+  | VBuiltin _ -> builtin ?loc ~ev ?owners cx f args
   | _ ->
       (* the function's parameters are cells, whose final values are
          returned, to be written back to the arguments passed `inout`. The
@@ -1346,6 +1744,9 @@ and apply ?loc cx f args ev =
          returned; none passes anything `inout`, so these cells are still
          the ones to return *)
       let cells = List.map ref args in
+      Option.iter (fun owners -> List.iter2 (fun cell -> function
+        | Some owner -> Generator.Roots.replace cx.roots cell owner
+        | None -> ()) cells owners) owners;
       if !(cx.depth) >= max_depth then raise Too_deep;
       incr cx.depth;
       let result =
@@ -1369,14 +1770,15 @@ and start ?loc cx f cells ev =
     | VEvidence installed -> installed
     | _ -> bug ("a call of " ^ describe f ^ " passing something not evidence")
   in
-  let run cx params ev_id ev body env =
+  let run ?(targets = []) cx params ev_id ev body env =
     if List.length params <> List.length cells then
       bug ("a call of " ^ describe f ^ " with the wrong number of arguments");
     let env =
       List.fold_left2 (fun env id c -> Env.add id c env) env params cells
     in
     let env = Env.add ev_id (ref ev) env in
-    tail cx env body
+    try tail cx env body with
+    | Returned (path, _, value) when List.mem path targets -> Done value
   in
   match f with
   | VFn (p, tys, dicts) ->
@@ -1418,10 +1820,11 @@ and start ?loc cx f cells ev =
           | Some l when l.file <> Prelude.file -> { cx with call = Some l }
           | _ -> cx
       in
-      run cx
+      let targets = p :: (match f.origin with Copy source -> [ source ] | _ -> []) in
+      run ~targets { cx with type_args = tys }
         (List.map (fun (p : param) -> p.var.id) f.params)
         f.ev.id ev f.body env
-  | VClosure { params; ev = ev_id; outer; given; body; env; site } ->
+  | VClosure { params; ev = ev_id; outer; given; body; env; site; types; capture_types = _ } ->
       (* a block runs with the evidence where it was written, with the
          caller's implementations of what it's given on top, as a
          [With_handler] puts its instance's on top of what's outside it:
@@ -1448,7 +1851,7 @@ and start ?loc cx f cells ev =
       in
       (* a handler's arm runs as `handler.op`, which its call set *)
       let cx = if site = "" then cx else { cx with site = site_in cx site } in
-      run cx params ev_id (VEvidence installed) body env
+      run { cx with type_args = types } params ev_id (VEvidence installed) body env
   | _ -> bug "a call to something that isn't a function"
 
 (* A call in tail position, which [finish] makes: a built-in's value, or
@@ -1460,7 +1863,7 @@ and enter ~at cx f args ev =
 
 (* A call of a built-in function, which [apply] returns, from [loc], where
    a NaN it makes is said to be made. *)
-and builtin ?loc ?ev cx f args =
+and builtin ?loc ?ev ?owners cx f args =
   match f with
   | VBuiltin (Async_worker, _, _) -> (Ok (VInt (Int64.of_int (Sched.worker ()))), args)
   | VBuiltin
@@ -1539,8 +1942,33 @@ and builtin ?loc ?ev cx f args =
         List.map (function VDict d -> d | _ -> bug "a dictionary") dicts
       in
       let made () = match loc with Some l -> Nan.tag_at l | None -> 0 in
+      let destination = match owners with
+        | Some (Some owner :: _) -> Some owner
+        | _ -> cx.cleanup
+      in
+      let inserted ty value = Generator.clone_typed ?owner:cx.cleanup cx.types ty value in
+      let args, insertion = match x, args, tys with
+        | Array_push, [ receiver; value ], ty :: _ ->
+            let value = inserted ty value in [ receiver; value ], Some (ty,value)
+        | Map_set, [ receiver; key; value ], _ :: ty :: _ ->
+            let value = inserted ty value in [ receiver; key; value ], Some (ty,value)
+        | _ -> args, None
+      in
       match Builtins.run x ~dicts ~tys ~made args with
-      | v, finals -> (Ok v, finals)
+      | v, finals ->
+          (match insertion, destination with
+          | Some (ty,value), Some owner -> ignore (Generator.adopt_typed owner cx.types ty value)
+          | _ -> ());
+          (* This generic intrinsic set creates no generator frames: every
+             cursor leaf in its result is borrowed from an input. Copy just
+             the result; scanning a Map's entire input on each get would make
+             otherwise constant-time lookup quadratic. *)
+          let result_ty = match (Prelude.scheme x).ty with
+            | Ty.Fun (_, result, _, _) -> Walk.subst tys result
+            | _ -> Ty.Error
+          in
+          let v = Generator.clone_typed ?owner:cx.cleanup cx.types result_ty v in
+          (Ok v, finals)
       (* a `Map`'s or a `Set`'s key with a NaN in it, which hashing it
          found first (nan.ml) *)
       | exception Nan.Seen v -> raise (Builtins.Panic (Nan.observed Nan.hashed v))
@@ -2035,8 +2463,8 @@ and tasks ?loc cx (x : Intrinsic.t) args =
      can, which [failed] is given *)
   let spawn ?(failed = fun _ -> bug "a spawned block that failed") sc body =
     share_reach body;
-    let body = copied body in
-    (match Sched.inner sc ~reaching:(fun () -> reaching cx.fns body) with
+    let body = copied cx body in
+    (match with_reached_frames body (fun () -> Sched.inner sc ~reaching:(fun () -> reaching cx.fns body)) with
     | Some i ->
         raise
           (panic_at loc ~help:"open the scope inside the `with`"
@@ -2051,12 +2479,12 @@ and tasks ?loc cx (x : Intrinsic.t) args =
         ~help:"spawn it in a scope that's still running: the task's own, or one outside it"
         "a task is started in a scope that has ended"
     in
-    Sched.spawn ?at sc ~label:cx.site ~ended (fun () ->
-        match fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) with
+    with_reached_frames body (fun () -> Sched.spawn ?at sc ~label:cx.site ~ended (fun () ->
+        match fst (call_at { cx with depth = ref 0; source_view = None } loc body [] (VEvidence [])) with
         | Ok v -> v
         | Error err ->
             failed err;
-            VUnit)
+            VUnit))
   in
   (* [run b], [b] a background: the body of `Async.beside` or
      `Async.background`, run in this task beside [b]'s tasks, which are
@@ -2360,7 +2788,7 @@ and tasks ?loc cx (x : Intrinsic.t) args =
       let next () =
         match pulled cx loc src with
         | Ok (Some v) ->
-            Ok (Some (fun () -> fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence []))))
+            Ok (Some (fun () -> fst (call_at { cx with depth = ref 0; source_view = None } loc f [ v ] (VEvidence []))))
         | Ok None -> Ok None
         | Error err -> Error err
       in
@@ -2377,7 +2805,7 @@ and tasks ?loc cx (x : Intrinsic.t) args =
   | Task_both, [ a; b ] ->
       share_reach a;
       share_reach b;
-      let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
+      let call body () = fst (call_at { cx with depth = ref 0; source_view = None } loc body [] (VEvidence [])) in
       let r =
         match all_of ~what:"waits for `Async.both`'s tasks" ~max:2 (listed [ call a; call b ]) with
         | Ok vs -> Ok (VTuple vs)
@@ -2387,7 +2815,7 @@ and tasks ?loc cx (x : Intrinsic.t) args =
   | Task_race, [ a; b ] ->
       share_reach a;
       share_reach b;
-      let call body () = fst (call_at { cx with depth = ref 0 } loc body [] (VEvidence [])) in
+      let call body () = fst (call_at { cx with depth = ref 0; source_view = None } loc body [] (VEvidence [])) in
       (Ok (race [ call a; call b ]), args)
   (* `Async.beside`: [task], concurrent, runs while [body] does, as a task
      of the background's scope *)
@@ -2396,7 +2824,7 @@ and tasks ?loc cx (x : Intrinsic.t) args =
       let b = Sched.background () in
       ignore
         (Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
-             (match fst (call_at { cx with depth = ref 0 } loc task [] (VEvidence [])) with
+             (match fst (call_at { cx with depth = ref 0; source_view = None } loc task [] (VEvidence [])) with
              | Ok _ -> ()
              | Error err -> failed_beside b err);
              VUnit));
@@ -2419,15 +2847,15 @@ and tasks ?loc cx (x : Intrinsic.t) args =
         panic ~help:"`cap:` is at least 1" loc
           (sprintf "`Async.produce`'s `cap` is %Ld, so nothing could be sent" cap);
       share_reach f;
-      let f = copied f in
+      let f = copied cx f in
       let st = Sched.stream (Int64.to_int cap) in
       let b = Sched.background () in
       ignore
-        (Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
+        (with_reached_frames f (fun () -> Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
              let failed =
                match
                  fst
-                   (call_at { cx with depth = ref 0 } loc f
+                   (call_at { cx with depth = ref 0; source_view = None } loc f
                       [ VSched (Sched.Outbox st) ]
                       (VEvidence []))
                with
@@ -2441,7 +2869,7 @@ and tasks ?loc cx (x : Intrinsic.t) args =
                    raise e
              in
              Sched.end_stream st failed;
-             VUnit));
+             VUnit)));
       ( beside_body b (fun () ->
             fst
               (call_at cx loc body
@@ -2475,7 +2903,7 @@ and tasks ?loc cx (x : Intrinsic.t) args =
           ignore
             (Sched.spawn ?at b.tasks ~label:cx.site ~ended:mine (fun () ->
                  let r =
-                   match fst (call_at { cx with depth = ref 0 } loc f [ v ] (VEvidence [])) with
+                   match fst (call_at { cx with depth = ref 0; source_view = None } loc f [ v ] (VEvidence [])) with
                    | Ok v -> Ok v
                    | Error err ->
                        Sched.came_from err (Sched.current_path ());
@@ -2673,7 +3101,9 @@ and traced cx t ~dep ~op (fty : Ty.ty) args call =
    it has one, unless that's where this is. The method's type variables
    are the type's parameters, in order, so it's given [args] for them. *)
 and own_show cx (p : Path.t) args v : Shown.own =
-  match Hashtbl.find_opt cx.shows p with
+  match v with
+  | VSched (Generator.Frame frame) when Ty.is_generator_cursor p -> Itself (Generator.show frame)
+  | _ -> match Hashtbl.find_opt cx.shows p with
   | Some _ when List.mem p cx.showing -> Inside
   | Some m when Hashtbl.mem cx.fns m -> (
       let cx = { cx with showing = p :: cx.showing } in
@@ -2835,12 +3265,17 @@ let load (modules : program list) =
       fns = Hashtbl.create 16;
       values = Hashtbl.create 16;
       types =
-        Shown.types (List.concat_map (fun (m : program) -> m.types) modules);
+        Generator.runtime_types (List.concat_map (fun (m : program) -> m.types) modules);
       shows = Hashtbl.create 16;
       keys = Hashtbl.create 16;
       ops = Hashtbl.create 16;
       showing = [];
       depth = ref 0;
+      type_args = [];
+      cleanup = None;
+      instance_owner = None;
+      source_view = None;
+      roots = Generator.Roots.create 16;
       dir = Filename.current_dir_name;
       trace = None;
       outputs = Hashtbl.create 16;
@@ -3073,7 +3508,7 @@ type outcome =
    runs this way, and so does a `ren console` session (driver.ml). *)
 let run_installed ?(dir = Filename.current_dir_name) ?journal
     ?(record_order = false) ?(root = "test") cx ~(fn : Path.t) ~real ~seed =
-  let cx = { cx with dir; entry = Some fn; site = "test" } in
+  let cx = { cx with dir; entry = Some fn; site = "test"; roots = Generator.Roots.create 16 } in
   let what = "installing a test's implementations" in
   (* each built-in dependency's test implementation, the handler [path]
      given [args] and made with [outer], or its real one if the test asks

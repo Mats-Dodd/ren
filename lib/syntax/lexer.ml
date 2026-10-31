@@ -51,6 +51,8 @@ open Token
 let keywords =
   [
     ("fn", FN);
+    ("yield", YIELD);
+    ("return", RETURN);
     ("pub", PUB);
     ("let", LET);
     ("var", VAR);

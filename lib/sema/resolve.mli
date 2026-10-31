@@ -36,6 +36,9 @@ type t = {
       (** each member function of a dependency called through an alias of it,
           `Events.items()` for `dep Events = Chan<Event>`, by the node of the
           member as written, with the alias *)
+  generator_cursors : (Path.t * int) list;
+      (** generated cursor paths and their source type-argument arities;
+          internal frame/item/error arguments are not source type arguments *)
 }
 
 (* How the module writes the type [p] in a message or a signature: bare if

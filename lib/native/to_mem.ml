@@ -84,6 +84,14 @@ let rec written_as fns (p : Path.t) =
   | Some ({ origin = Copy q; _ } : C.fn_def) -> written_as fns q
   | _ -> Path.local p
 
+(* Generator frames are the native step of this stage, not the g1
+   interpreter implementation. Keep this refusal ahead of frame layout. *)
+let generators_not_native loc =
+  Diag.Error
+    (Diag.make loc
+       ~help:"run it with `ren run`; native generators arrive in the generators stage's native step"
+       "generator execution isn't native yet")
+
 (* What a native build says of a call [p] that starts tasks, at [loc]. *)
 let tasks_not_native fns loc p =
   Diag.Error
@@ -1324,6 +1332,9 @@ type fs = {
           a block it calls returns: [Some None] till one's needed, and
           [None] in code lifted out of one, which doesn't *)
   fails : bool;
+  return_target : Path.t option;
+      (** only a named function can return directly; an internal lifted body
+          needs the later control-value propagation through its caller *)
   mutable words : (int * var) list;
   mutable handler : handler_args option;
   known : (int * Path.t) list;
@@ -2139,9 +2150,22 @@ let rec expr fs env (e : C.expr) : atom =
   else expr_at fs env e
 
 and expr_at fs env (e : C.expr) : atom =
+  if Native_generators.cursor_type e.ty then
+    raise (generators_not_native (at fs e.loc));
   let cx = fs.cx in
   let lay t = layout_at fs e.loc t in
   match e.kind with
+  | Gen_create _ | Yield _ | Yield_from _ | Gen_step _ | Gen_close _ ->
+      raise (generators_not_native (at fs e.loc))
+  | Cleanup_scope _ | Instance_scope _ | Own _ | Owned_assign _ | Owner_alias _
+  | Source_view _ | Pattern_scope _ ->
+      bug "generator ownership was not erased before native lowering"
+  | C.Return (target, value) ->
+      if fs.return_target <> Some target then
+        unsupported_at fs e.loc "a `return` through an installed dependency's body";
+      let x = expr fs env value in
+      return_out fs env x;
+      dummy fs env (lay e.ty)
   | Int n -> Int n
   | Float f -> Float f
   | Bool b -> Bool b
@@ -2150,7 +2174,14 @@ and expr_at fs env (e : C.expr) : atom =
   | Local v -> read fs env v
   (* an arm's `finally`: natively, nothing is cancelled, so it's a `let`
      of what it covers *)
-  | Covered { body; result; after } ->
+  | Covered { body; result; after; _ } ->
+      let rec returns (x : C.expr) =
+        match x.kind with
+        | C.Return _ -> true
+        | _ -> List.exists returns (C.children x)
+      in
+      if returns body then
+        unsupported_at fs e.loc "a `return` through an outcome-aware `finally`";
       expr fs env { e with kind = Let (result, body, after) }
   | Let (v, value, body)
     when fs.cx.release && v.ty = Ty.array Ty.str && literal_strs value <> None
@@ -2598,6 +2629,37 @@ and break_out fs env =
             go rest
         | Catch_frame (_, None) | Scope -> go rest
         | Fn_frame -> bug "a `break` outside a loop")
+  in
+  go env.frames
+
+(* Return through the inline scopes of this function. Keep the result
+   rooted in its frame while cleanup runs: a cleanup that fails must also
+   release the abandoned return value. *)
+and return_out fs env x =
+  consume env x;
+  let frame =
+    match List.find_opt (fun fr -> fr.kind = Fn_frame) env.frames with
+    | Some frame -> frame
+    | None -> bug "a return outside a function"
+  in
+  let rooted = { env with frames = [ frame ] } in
+  let result = owned fs rooted "$return" (atom_layout x) (Atom x) in
+  let rec go = function
+    | [] -> bug "a return outside a function"
+    | fr :: rest ->
+        (match fr.kind with
+        | Fn_frame ->
+            consume rooted result;
+            drop_all fs fr;
+            emit fs (Return result)
+        | Catch_frame (_, Some after) ->
+            drop_all fs fr;
+            let outer = { env with frames = rest } in
+            drop fs outer (expr fs outer after);
+            go rest
+        | Catch_frame (_, None) | Loop_frame _ | Scope ->
+            drop_all fs fr;
+            go rest)
   in
   go env.frames
 
@@ -3901,6 +3963,7 @@ and lift fs env ~name ~(captures : C.var list) ~enter (body : C.expr) : atom =
       prelude = fs.prelude;
       saved = None;
       fails = true;
+      return_target = None;
       words = [];
       handler = None;
       known = fs.known;
@@ -4277,6 +4340,7 @@ and handler fs env (e : C.expr) ~ev ~captures body =
       prelude = fs.prelude;
       saved = None;
       fails = true;
+      return_target = None;
       words = [];
       handler = None;
       known = fs.known;
@@ -4435,6 +4499,7 @@ and method_code fs ~ev ~captures ~values ~size ~name (arm : C.expr) =
           prelude = fs.prelude;
           saved = None;
           fails = true;
+          return_target = None;
           words = [];
           handler = None;
           known = fs.known;
@@ -5168,6 +5233,7 @@ and match_ fs env (e : C.expr) (s : C.expr) (arms : C.arm list) =
    parameters first, a descriptor for each of its type variables and one
    for each of its requirements, then its evidence. *)
 let fn cx here (f : C.fn_def) : Mem.fn =
+  if f.generator <> None then raise (generators_not_native here);
   Hashtbl.reset literal_keys;
   with_words cx (List.length f.tys) (fun () ->
       let fs =
@@ -5181,6 +5247,7 @@ let fn cx here (f : C.fn_def) : Mem.fn =
           prelude = f.loc.file = Prelude.file;
           saved = Some None;
           fails = fn_fails f;
+          return_target = Some f.path;
           words = [];
           handler = None;
           known = List.map (fun (k : C.known) -> (k.kev.id, k.kdep)) f.known;
@@ -5411,6 +5478,7 @@ let compile ~release ~boxed (modules : C.program list) : Mem.program =
    later pass may find to box in turn; each pass boxes types none before
    did, so it ends. *)
 let program ?(release = false) (modules : C.program list) : Mem.program =
+  let modules = Native_generators.program modules in
   let boxed = Hashtbl.create 4 in
   let box t =
     if Hashtbl.mem boxed t then bug "a type kept boxed found again";

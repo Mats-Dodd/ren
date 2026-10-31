@@ -1,0 +1,17 @@
+dep Guard =
+  touch: fn()
+
+handler guard() for Guard uses Console =
+  finally(r) =>
+    print(r)
+    try r
+  touch() => ()
+
+fn choose() -> Int uses Console =
+  for x in [1]
+    with guard() in
+      return 7
+    print("unreached after return")
+  99
+
+fn main() uses Console = print(choose())

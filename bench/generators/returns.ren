@@ -1,0 +1,26 @@
+fn first(n: Int) -> Int =
+  for i in 0..n
+    if i == 3 then return i + 7
+  99
+
+fn identity<T>(value: T) -> T = return value
+
+fn bump(inout value: Int) -> Int =
+  value += 1
+  return 7
+
+fn nested(inout values: Array<Int>) -> Int =
+  for value in &values
+    while true
+      value += 10
+      return 23
+  99
+
+fn main() uses Console =
+  print(first(4))
+  print(first(1))
+  print(identity("kept"))
+  var values = [1, 2]
+  print(bump(&values[0]))
+  print(nested(&values))
+  print(values)

@@ -42,6 +42,9 @@
 
 [
   "fn"
+  "gen"
+  "yield"
+  "return"
   "type"
   "dep"
   "let"
@@ -80,6 +83,7 @@
 (block_mode) @keyword
 ; a word only before the call it lets go of the instance for
 (release_expression "release" @keyword)
+(yield_from_expression "from" @keyword)
 
 ; something changes here
 (reference "&" @keyword.mutation)
@@ -134,6 +138,7 @@
 (module_path (identifier) @namespace)
 (import alias: (identifier) @namespace)
 (type_name module: (identifier) @namespace)
+(type_name generator: (identifier) @function)
 (import (type_identifier) @type)
 
 ; ---- types and constructors ----

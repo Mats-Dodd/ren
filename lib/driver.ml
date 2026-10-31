@@ -83,11 +83,25 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
         Resolve.program sink ~home ~imports ~groups:items.pub_tests ?sees_all
           items.prog)
   in
-  checked "mut" (fun sink -> Mut.program sink r);
+  let for_places = ref [] in
+  checked "mut" (fun sink ->
+      Mut.program ~defer_for:(fun source check ->
+          for_places := (source, check) :: !for_places) sink r);
   let inferred =
     checked "infer" (fun sink ->
-        Infer.program sink ~imports ~reachable ?entry ?console ?sees_all
-          ~tests:items.tests ~bodies:items.bodies r)
+        let inferred = Infer.program sink ~imports ~reachable ?entry ?console ?sees_all
+          ~tests:items.tests ~bodies:items.bodies r in
+        (* A block source never takes [&]. Its inferred protocol supplies
+           that diagnostic; data sources keep the earlier place diagnostic. *)
+        checked "mut" (fun sink ->
+            List.iter (fun ((source : Ast.Resolved.expr), check) ->
+                let block = Path.Map.exists (fun _ nodes ->
+                    match Infer.Nodes.find_opt source.node nodes with
+                    | Some { Infer.ty = Ty.Fun _; _ } -> true
+                    | _ -> false) inferred.nodes in
+                if not block then Diag.recover sink ~default:() check)
+              (List.rev !for_places));
+        inferred)
   in
   (* exclusivity needs types: which values are copied, which arguments
      are blocks *)
@@ -100,7 +114,7 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
   checked "exhaust" (fun sink -> Exhaust.program sink ~reachable r inferred);
   let sets =
     Iface.sets_of
-      (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ r.types)
+      (List.concat_map (fun (i : Iface.t) -> i.types) reachable @ inferred.types)
   in
   (* what a public function needs of its type parameters isn't written,
      so the interface takes it from inference (operators.md, "Generic
@@ -111,7 +125,9 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
   in
   let has_eq p = List.mem p inferred.opaque_eq in
   let found path = Path.Map.find path inferred.schemes in
-  let iface = Iface.of_module ~home ~sets ~needs ~has_eq ~found r.prog in
+  let iface = Iface.of_module ~generators:inferred.generators
+      ~types:inferred.types ~replay_unsafe:inferred.replay_unsafe
+      ~home ~sets ~needs ~has_eq ~found r.prog in
   (* A public function's body was checked against its signature, so the
      type inference found for it is the one its interface states, with
      what it needs of its type parameters. Other modules see only the
@@ -182,6 +198,7 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
               let vname = Test_items.group_fn g.gname (i + 1) in
               {
                 Iface.vname;
+                generator = None;
                 scheme = Path.Map.find (Path.make home vname) inferred.schemes;
                 vparams = [];
               })
@@ -232,6 +249,7 @@ let check_module ~home ~imports ~reachable ?entry ?console ?sees_all
             in
             {
               Iface.vname = f;
+              generator = None;
               scheme = Path.Map.find (Path.make home f) inferred.schemes;
               vparams = Option.value params ~default:[];
             })
@@ -857,12 +875,27 @@ let types ?(lint = false) ?load ~file src =
     (fun { home; inferred; resolved; items; _ } ->
       let names = Resolve.type_name resolved in
       let fn_ ?outer ~name (f : Ast.Resolved.fn_def) =
-        Ty.signature ?outer ~names ~pub:f.pub ~name
+        let path = Ast.fn_path home f in
+        let scheme = Path.Map.find path inferred.schemes in
+        let scheme =
+          match f.fn_kind with
+          | Ordinary_fn -> scheme
+          | Generator_fn _ ->
+              let g = Path.Map.find path inferred.generators in
+              { scheme with ty = Ty.Fun (g.params, g.item, g.errors, g.uses) }
+        in
+        let shown = Ty.signature ?outer ~names ~pub:f.pub ~name
           ~params:
             (List.map
                (fun (p : Ast.Resolved.param) -> p.pname.ident.name)
                f.params)
-          (Path.Map.find (Ast.fn_path home f) inferred.schemes)
+          scheme
+        in
+        match f.fn_kind with
+        | Ordinary_fn -> shown
+        | Generator_fn _ when f.pub ->
+            "pub gen " ^ String.sub shown 4 (String.length shown - 4)
+        | Generator_fn _ -> "gen " ^ shown
       in
       (* a type's declaration, as Iface has it *)
       let decl (td : Ast.Resolved.type_def) =
@@ -1457,6 +1490,7 @@ let console ?(types_only = false) ?(col = 0) ~journal ~load ~dir ~home ~file
   in
   let fn : Ast.Parsed.fn_def =
     {
+      fn_kind = Ast.Ordinary_fn;
       pub = false;
       name = { name = console_fn; loc };
       tparams = [];

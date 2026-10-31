@@ -112,6 +112,8 @@ let walk ~ty ~errors ~pattern (prog : program) =
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
     | Piped ->
         ()
+    | Yield a | Yield_from a -> expr a
+    | Return a -> Option.iter expr a
     | Interp ps -> go (Ast.holes ps)
     | Named (_, a) -> expr a
     | Pipe { subject; step } -> go [ subject; step ]
@@ -318,7 +320,7 @@ let transparent_rows (params : Resolved.param list) ps =
    needs itself to be made. A function's edges are what resolve.ml found
    it uses, and the methods it calls with a dot, which [found] says (the
    context each function was checked in). *)
-let value_order env (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
+let value_order (env : Infer_env.env) (r : Resolve.t) (fns : fn_def list) ~is_value ~found =
   let home = r.home in
   let edges p =
     let dots =
@@ -404,7 +406,10 @@ type node = {
 }
 
 type t = {
-  schemes : Ty.scheme Path.Map.t;  (** each function's, by its path *)
+  schemes : Ty.scheme Path.Map.t;
+  generators : Ty.generator Path.Map.t;
+  replay_unsafe : Path.t list;
+  types : Iface.type_decl list;  (** each function's, by its path *)
   values : Path.t list;
       (** the module's associated values, in the order they're made when the
           program starts: each after every value it uses *)
@@ -442,7 +447,7 @@ type runner = {
    install one, with a function that makes an implementation if there is
    one: one of the module's own functions, [fns], whose type [schemes]
    has, or a member of the dependency. *)
-let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
+let check_installed (env : Infer_env.env) (r : Resolve.t) ~fns ~schemes ~withheld ~run
     (f : fn_def) ty cx =
   (* what it lists, if it lists any, and what its body uses: [check_uses]
      leaves a dependency the runtime doesn't install to this *)
@@ -588,7 +593,7 @@ let check_installed env (r : Resolve.t) ~fns ~schemes ~withheld ~run
 
 (* The runtime installs exactly the built-in dependencies `main` uses, as
    the outermost implementations (deps.md, "`main`"). *)
-let check_main env r ~fns ~schemes ~withheld (f : fn_def) ty cx =
+let check_main (env : Infer_env.env) r ~fns ~schemes ~withheld (f : fn_def) ty cx =
   check_installed env r ~fns ~schemes ~withheld f ty cx
     ~run:
       {
@@ -634,7 +639,7 @@ let test_world ~real =
   in
   (installs, real_of, faked)
 
-let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
+let check_test (env : Infer_env.env) r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
     ty cx =
   let installs, real_of, faked = test_world ~real:t.real in
   check_installed env r ~fns ~schemes ~withheld f ty cx
@@ -655,7 +660,7 @@ let check_test env r ~fns ~schemes ~withheld (t : Test_items.test) (f : fn_def)
 
 (* A `ren console` session, the function [f] (driver.ml), runs in a
    test's world, with the real implementation of the built-ins [real]. *)
-let check_console env r ~fns ~schemes ~withheld ~real (f : fn_def) ty cx =
+let check_console (env : Infer_env.env) r ~fns ~schemes ~withheld ~real (f : fn_def) ty cx =
   let installs, real_of, faked = test_world ~real in
   check_installed env r ~fns ~schemes ~withheld f ty cx
     ~run:{ installs; real_of; kind = Console { real; faked }; at = f.body.loc }
@@ -766,6 +771,22 @@ let new_env sink ~reachable (r : Resolve.t) =
         | _ -> None);
     visible;
     globals = Hashtbl.create 16;
+    generators = Hashtbl.create 8;
+    generator_signatures =
+      (let found = Hashtbl.create 8 in
+       List.iter (fun (i : Iface.t) -> List.iter (fun (v : Iface.value) ->
+           Option.iter (fun (g : Ty.generator) -> Hashtbl.replace found g.path g) v.generator)
+           (i.values @ i.tests)) reachable;
+       found);
+    replay_defs = Hashtbl.create 16;
+    replay_unsafe =
+      (let unsafe = Hashtbl.create 16 in
+       List.iter (fun (i : Iface.t) ->
+           List.iter (fun path -> Hashtbl.replace unsafe path ()) i.replay_unsafe)
+         reachable;
+       unsafe);
+    generator_early = [];
+    generator_late = [];
     group = [];
     hidden_calls = [];
     spelled = [];
@@ -817,7 +838,7 @@ let given_defaults ~method_ ds =
 
 (* The module's operations whose arm pins or posts ([env.pin_ops]), found
    as the arms that call a function that does, or one of these. *)
-let pinning_ops env (fns : fn_def list) =
+let pinning_ops (env : Infer_env.env) (fns : fn_def list) =
   (* whether [e] calls something that reaches a family as [r] *)
   let rec calls r (e : expr) =
     (match e.kind with
@@ -855,7 +876,7 @@ let pinning_ops env (fns : fn_def list) =
    it imports, and the members of every type of [reachable]; and those of
    its own methods, among [fns], whose signatures are written out in
    full. *)
-let add_globals env ~imports ~reachable fns =
+let add_globals (env : Infer_env.env) ~imports ~reachable fns =
   List.iter
     (fun (iface : Iface.t) ->
       List.iter
@@ -930,7 +951,9 @@ type so_far = {
    in. With it, a way to make the type its declaration gives it, which is
    how the group's other functions see it until the group is done.
    [is_value] says whether a function is an associated value. *)
-let setup env ~is_value (f : fn_def) =
+let setup (env : Infer_env.env) ~is_value (f : fn_def) =
+  let is_generator = match f.fn_kind with Generator_fn _ -> true | Ordinary_fn -> false in
+  let generator_kind = ref None in
   let skolems =
     List.map (fun (t : ident) -> (fresh_id env.st, t.name)) f.tparams
   in
@@ -1019,6 +1042,18 @@ let setup env ~is_value (f : fn_def) =
   in
   let path = Ast.fn_path env.home f in
   let ps, ret, errs, uses = signature ~seen:false () in
+  let generator ps item errors uses =
+    { gpath = path; gcursor = Ty.generator_cursor ~source_params:(List.length f.tparams) path;
+      gargs = tparams @ param_tys ps @ [item; TErrors errors];
+      gitem = item; gerrors = errors; guses = uses; gkind = generator_kind }
+  in
+  let result = if is_generator then TGen (generator ps ret errs uses) else ret in
+  let generator_nodes = Hashtbl.create 64 and generator_facts = Hashtbl.create 16 in
+  (if is_generator then
+     Hashtbl.replace env.generators path
+       { gen_fn = f; gen_type = generator ps ret errs uses; gen_params = ps;
+         gen_nodes = generator_nodes; gen_facts = generator_facts;
+         gen_with = Infer_generators.holds_with false f.body; gen_unsafe = false });
   let cx =
     {
       self = path;
@@ -1026,13 +1061,15 @@ let setup env ~is_value (f : fn_def) =
       binders = Hashtbl.create 8;
       let_blocks = Hashtbl.create 4;
       written_locals = Hashtbl.create 8;
-      nodes = Hashtbl.create 64;
-      found = Hashtbl.create 16;
+      nodes = generator_nodes;
+      found = generator_facts;
       narrowed = Hashtbl.create 4;
       coerced = Hashtbl.create 4;
       targs = Hashtbl.create 16;
       required = Hashtbl.create 4;
       errs;
+      return_ty = (if is_generator then unit else ret);
+      generator_item = (if is_generator then Some ret else None);
       uses;
       calls = ref [];
       lambdas = ref 0;
@@ -1052,10 +1089,12 @@ let setup env ~is_value (f : fn_def) =
       later = ref [];
     }
   in
-  Hashtbl.replace env.globals path (TFun (ps, ret, errs, uses));
+  Hashtbl.replace env.globals path
+    (TFun (ps, result, (if is_generator then REmpty else errs), uses));
   let declared () =
     let ps, ret, errs, uses = signature ~seen:true () in
-    TFun (ps, ret, errs, uses)
+    TFun (ps, (if is_generator then TGen (generator ps ret errs uses) else ret),
+          (if is_generator then REmpty else errs), uses)
   in
   (* its errors and uses, if it names the row each ends in, `! ..e`, and
      they don't end in it yet: the variable each ends in, and the named
@@ -1076,7 +1115,10 @@ let setup env ~is_value (f : fn_def) =
         (uses, Option.bind f.uses (fun (u : Resolved.uses) -> u.dtail));
       ]
   in
-  ( { fn = f; skolems; cx; ps; ret },
+  Hashtbl.replace env.replay_defs path
+    { replay_fn = f; replay_nodes = cx.nodes; replay_facts = cx.found;
+      replay_required = cx.required };
+  ( { fn = f; skolems; cx; ps; ret = (if is_generator then unit else ret) },
     ( path,
       {
         declared;
@@ -1086,7 +1128,7 @@ let setup env ~is_value (f : fn_def) =
       } ) )
 
 (* Check the body of [m], a function of the group, against its result. *)
-let check_body env ~is_value m =
+let check_body (env : Infer_env.env) ~is_value m =
   let f = m.fn in
   bind_params ~own:true m.cx f.params m.ps;
   (* each default is a literal of its parameter's type, as an argument
@@ -1131,7 +1173,34 @@ let check_body env ~is_value m =
 (* Generalize each function of the group [ms], once it's solved, into its
    type scheme. A function whose type holds another's type parameter, one
    of the group whose signature names it, is reported. *)
-let generalize_group env so_far ms =
+let publish_generator (env : Infer_env.env) path =
+  match Hashtbl.find_opt env.generators path with
+  | None -> ()
+  | Some d ->
+      let g = d.gen_type in
+      let c = canon env.st in
+      ignore (canon_ty c ~all:false (Hashtbl.find env.globals path));
+      let info : Ty.generator = {
+        path; cursor_path = g.gcursor;
+        cursor_args = List.map (canon_ty c ~all:false) g.gargs;
+        item = canon_ty c ~all:false g.gitem;
+        errors = canon_row c ~all:false g.gerrors;
+        uses = canon_row c ~all:false g.guses;
+        kind = Option.get !(g.gkind);
+        holds_instance = d.gen_with;
+        replay_unsafe = d.gen_unsafe;
+        params = List.map (fun (p : Types.param) ->
+            { Ty.mode = p.mode; ty = canon_ty c ~all:false p.ty }) d.gen_params;
+      } in
+      Hashtbl.replace env.generator_signatures path info;
+      if info.kind = Ty.Value_gen then (
+        let td = Iface.generator_type info in
+        Hashtbl.replace env.types td.path td;
+        Path.Map.iter (fun p (o : Iface.op) ->
+            Hashtbl.replace env.globals p (of_scheme env.st o.oscheme)) td.members);
+      Infer_generators.expand_declarations env
+
+let generalize_group (env : Infer_env.env) so_far ms =
   List.iter
     (fun m ->
       let f = m.fn and path = m.cx.self in
@@ -1158,11 +1227,12 @@ let generalize_group env so_far ms =
       Hashtbl.replace env.globals path scheme;
       Hashtbl.replace so_far.schemes path scheme;
       Hashtbl.replace so_far.tables path m.cx)
-    ms
+    ms;
+  List.iter (fun m -> publish_generator env m.cx.self) ms
 
 (* A public function of [ms] spells out its full contract, and a public
    value its type. *)
-let check_spelled env ~is_value so_far ms =
+let check_spelled (env : Infer_env.env) ~is_value so_far ms =
   List.iter
     (fun m ->
       let f = m.fn in
@@ -1199,7 +1269,7 @@ let check_spelled env ~is_value so_far ms =
    fail or use a dependency, whatever its body calls: `a + b` has no `try`
    in front, and `==` and `show` run wherever a value is compared or
    shown (resolve.ml, [reserved], checks what's written). *)
-let check_reserved env so_far ms =
+let check_reserved (env : Infer_env.env) so_far ms =
   List.iter
     (fun m ->
       let f = m.fn in
@@ -1236,7 +1306,7 @@ let check_reserved env so_far ms =
    private member's errors aren't written. The first such member is
    reported, once per type: the fix, making it opaque, is the same for
    all of them. *)
-let check_keeps_rules env so_far (r : Resolve.t) =
+let check_keeps_rules (env : Infer_env.env) so_far (r : Resolve.t) =
   let check (td : type_def) =
     let path = Path.make r.home td.type_name.name in
     let changes (f : fn_def) =
@@ -1345,7 +1415,7 @@ let check_keeps_rules env so_far (r : Resolve.t) =
    the start, as [Iface.of_module] makes the interface, with whether it's
    public. A named error set or a dependency is kept as it is: Resolve
    has already stopped test code naming a private one. *)
-let client_view env (r : Resolve.t) =
+let client_view (env : Infer_env.env) (r : Resolve.t) =
   let public =
     List.filter_map
       (function
@@ -1373,7 +1443,7 @@ let client_view env (r : Resolve.t) =
 (* Run [f] with the module seen through [client] (see [client_view]): its
    own types swapped for theirs, no representation revealed, and only its
    public types visible; then put back as it was. *)
-let as_client env client f =
+let as_client (env : Infer_env.env) client f =
   let mine =
     List.map
       (fun ((td : Iface.type_decl), _) -> Hashtbl.find env.types td.path)
@@ -1420,7 +1490,7 @@ let as_client env client f =
    call, as one that brings it in itself is (Infer_handlers.with_). What
    a function brings in counts every call in its body, those inside a
    `with` that installs the label too, so it's at most what it does. *)
-and check_hidden_calls env ms =
+and check_hidden_calls (env : Infer_env.env) ms =
   let calls = List.map (fun m -> (m.cx.self, !(m.cx.calls))) ms in
   let brings = Hashtbl.create 8 in
   let get p = Option.value (Hashtbl.find_opt brings p) ~default:[] in
@@ -1461,7 +1531,7 @@ and check_hidden_calls env ms =
    the module's associated values, and [main] the program's `main`, if
    the module is the program's entry. A group of test code is checked
    seeing the module through [client], unless [sees_all] (see [check]). *)
-let rec check_group env ~values ~main ~client ~sees_all so_far group =
+let rec check_group (env : Infer_env.env) ~values ~main ~client ~sees_all so_far group =
   (* a group is all test code or none of it: only test code calls test
      code (resolve.ml), so a group of both would need a call back *)
   match List.partition (fun (f : fn_def) -> f.test) group with
@@ -1472,7 +1542,7 @@ let rec check_group env ~values ~main ~client ~sees_all so_far group =
           check_group env ~values ~main ~client ~sees_all so_far group)
   | _ -> check_own_group env ~values ~main so_far group
 
-and check_own_group env ~values ~main so_far group =
+and check_own_group (env : Infer_env.env) ~values ~main so_far group =
   let is_value_path p = List.mem p values in
   let is_value f = is_value_path (Ast.fn_path env.home f) in
   enter_level env.st;
@@ -1506,7 +1576,7 @@ and check_own_group env ~values ~main so_far group =
    comparison without its `assert`, is reported, as any other dropped
    value is. Its value is that of the last line, inside the `with` a group
    puts around it. [bodies] are the functions that are tests' bodies. *)
-let check_test_body env so_far ~bodies (f : fn_def) =
+let check_test_body (env : Infer_env.env) so_far ~bodies (f : fn_def) =
   let path = Ast.fn_path env.home f in
   if List.mem path bodies then
     let rec last (e : expr) =
@@ -1530,7 +1600,7 @@ let check_test_body env so_far ~bodies (f : fn_def) =
 (* What the runtime installs around what it runs: the program's `main`,
    if the module is the program's entry, the file [entry], and each of
    [tests]. *)
-let check_runs env r so_far ?entry ?console ~tests fns =
+let check_runs (env : Infer_env.env) r so_far ?entry ?console ~tests fns =
   let find name =
     List.find_opt
       (fun (f : fn_def) -> Ast.fn_path env.home f = Path.make env.home name)
@@ -1573,9 +1643,11 @@ let check_runs env r so_far ?entry ?console ~tests fns =
    depend on a hash table's order, and their type arguments after all
    their types, so those number variables just as they did before there
    were type arguments. *)
-let canonical env so_far (f : fn_def) =
+let canonical (env : Infer_env.env) so_far (f : fn_def) =
   let path = Ast.fn_path env.home f in
   let c = canon env.st in
+  let canon_ty c ~all t = Infer_generators.expand_canonical env (Types.canon_ty c ~all t) in
+  let canon_row c ~all r = Infer_generators.expand_row env (Types.canon_row c ~all r) in
   Hashtbl.iter (fun _ t -> close_free_needs t)
     (Hashtbl.find so_far.tables path).nodes;
   (* a use's type arguments (Infer_env.targs), what each variable of the
@@ -1645,6 +1717,7 @@ let canonical env so_far (f : fn_def) =
   (* whether the type [t] has the skolem [id] in it *)
   let rec mentions id (t : ty) =
     match repr t with
+    | TGen g -> List.exists (mentions id) (generator_parts g)
     | TSkol (id', _) -> id' = id
     | TVar _ | TError -> false
     | TCon (_, ts) | TVariant (_, _, ts) -> List.exists (mentions id) ts
@@ -1778,6 +1851,8 @@ let canonical env so_far (f : fn_def) =
         | Ctor_of (p, c) -> Ctor_of (p, c)
         | Error_tag -> Error_tag
         | Method_of p -> Method_of p
+        | Gen_call p -> Gen_call p
+        | Gen_step p -> Gen_step p
         | Install_order is -> Install_order is
         | Handler_facts f -> Handler_facts f
         | Handles -> Handles
@@ -1889,7 +1964,7 @@ let overlap (a : Loc.t) (b : Loc.t) =
    if it's known. [handlers] are the module's handlers. A `ren console`
    session's function, [shown], gives its last line's value to be shown,
    which may be a block. [value] says [f] is an associated value. *)
-let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_finally ~shown ~value
+let check_blocks (env : Infer_env.env) (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_finally ~shown ~value
     (f : fn_def) nodes =
   let ty id =
     match Nodes.find_opt id nodes with Some n -> n.ty | None -> Ty.Error
@@ -2018,6 +2093,32 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
   (* the block [e] itself, at [pos] *)
   let here pos (e : expr) =
     match (e.kind, pos) with
+    | Call (callee, _), Kept place ->
+        let info = match callee.kind with
+          | Var (Global p) -> Hashtbl.find_opt env.generator_signatures p
+          | _ -> None in
+        (match info with
+        | Some (g : Ty.generator) ->
+            let action = match place with Returned -> "returned" | _ -> "stored" in
+            let dependencies = List.map (fun (l : Ty.label) ->
+                "`" ^ env.names (Ty.dep_path l.name) ^ "`") g.uses.labels in
+            let reason = if dependencies = [] then "is a block" else
+                "uses " ^ String.concat ", " dependencies in
+            let note =
+              if dependencies <> [] then
+                "a generator that uses a dependency runs in its caller's frame"
+              else if g.replay_unsafe then
+                "this generator reaches runtime state or a handler whose replay safety is unknown"
+              else if g.holds_instance then
+                "this generator retains a dependency instance across a yield"
+              else "a generator that uses a dependency runs in its caller's frame" in
+            let source = Option.value (env.source e) ~default:(Path.local g.path ^ "(...)") in
+            say e.loc (Diag.make e.loc
+              ~says:("a block, which can't be " ^ action)
+              ~notes:[note]
+              ~help:"to keep a position, keep a reader, which is data"
+              ("`" ^ source ^ "` " ^ reason ^ ", so its stream lives in this scope"))
+        | None -> say e.loc (Infer_msg.block_kept ~written:false e.loc place))
     | ( ( Block _ | With _ | Call _ | Index _ | Field _ | Try _ | Attempt _
         | Pipe _ ),
         _ ) ->
@@ -2080,6 +2181,9 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
     | Int _ | Float _ | Bool _ | Str _ | Unit | Var _ | Break | Todo | Tag_set _
     | Piped ->
         ()
+    | Yield a -> walk (Kept Elsewhere) a
+    | Yield_from a -> walk Arg a
+    | Return a -> Option.iter (walk (Kept Returned)) a
     | Interp ps ->
         (* each hole is given to `show`, whose `T` can't be a block *)
         List.iter
@@ -2222,8 +2326,17 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
         walk Said value
     | Let { name; value; mut; _ } when (state || mut) && is_block value ->
         (* at its name: `var f`, or a handler's `let` or `var` *)
+        let generated = match value.kind with
+          | Call (f, _) -> (match Option.bind (Nodes.find_opt f.node nodes) (fun n -> n.found) with
+              | Some (Gen_call _) -> true | _ -> false)
+          | _ -> false in
         say name.ident.loc
-          (Infer_msg.block_kept ~written:false name.ident.loc
+          (if generated && not state then
+             Diag.make name.ident.loc
+               ~help:("bind this block with `let`: `let " ^ name.ident.name ^ " = "
+                 ^ Option.value (env.source value) ~default:"generator(...)" ^ "`")
+               "a block can't be bound with `var`"
+           else Infer_msg.block_kept ~written:false name.ident.loc
              (if state then In_state else In_var));
         walk Said value
     | Let { name; value; _ } ->
@@ -2292,6 +2405,7 @@ let check_blocks env (r : Resolve.t) ~scheme_of ~handlers ~makers ~failing_final
 let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
     ~bodies (r : Resolve.t) =
   let env = new_env sink ~reachable r in
+  Infer_generators.expand_declarations env;
   let home = r.home in
   check_written sink ~sets:env.sets ~names:env.names r.prog;
   (* the module's functions, its types' members included; an associated
@@ -2359,6 +2473,33 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
   in
   let main = Option.map (fun _ -> Path.make home "main") entry in
   let client = client_view env r in
+  (* A written cursor needs its producer's inferred schema even if no call
+     to that producer occurs in this function. Follow declared data fields
+     too: a parameter of Saved may expose a generated cursor through it. *)
+  let cursor_dependencies (f : fn_def) =
+    let found = ref [] and seen = Hashtbl.create 8 in
+    let rec ty (t : Ty.ty) = match t with
+      | Con (p, args) | Variant (p, _, args) -> path p; List.iter ty args
+      | Fun (ps, ret, e, u) -> List.iter (fun (p : Ty.param) -> ty p.ty) ps; ty ret; row e; row u
+      | Errors r -> row r
+      | Impl i -> List.iter (fun (d : Ty.dep) -> path d.dpath; List.iter ty d.dargs) i.deps
+      | Var _ | Error -> ()
+    and row (r : Ty.row) = List.iter (fun (l : Ty.label) -> List.iter ty l.payload) r.labels
+    and path p =
+      if Ty.is_generator_cursor p then found := Infer_generators.producer_of_cursor p :: !found
+      else if not (Hashtbl.mem seen p) then (
+        Hashtbl.add seen p ();
+        match Hashtbl.find_opt env.types p with
+        | Some {body = Record fs | Dep fs; _} -> List.iter (fun (f : Iface.field) -> ty f.fty) fs
+        | Some {body = Sum cs; _} -> List.iter (fun (c : Iface.ctor) ->
+            List.iter (fun (f : Iface.field) -> ty f.fty) c.cfields) cs
+        | Some {body = Opaque (Rep t); _} -> ty t
+        | _ -> ())
+    in
+    walk ~ty:(function TyName ({tref = Named p; _}, _) | TyVariant ({tref = Named p; _}, _, _) -> path p | _ -> ())
+      ~errors:(fun _ -> ()) ~pattern:(fun _ -> ()) [Fn f];
+    List.sort_uniq compare !found
+  in
   List.iter
     (check_group env ~values ~main ~client ~sees_all so_far)
     (components ~home
@@ -2370,7 +2511,9 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
                   (fun (caller, m) -> if caller = f then Some m else None)
                   extra
               in
-              calls @ Path.Map.find f r.methods @ found)
+              let written = match List.find_opt (fun (fn : fn_def) -> Ast.fn_path home fn = f) fns with
+                | Some fn -> cursor_dependencies fn | None -> [] in
+              calls @ Path.Map.find f r.methods @ found @ written)
             r.calls)
        fns);
   check_keeps_rules env so_far r;
@@ -2379,6 +2522,9 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
     (check_test_body env so_far ~bodies:(List.map (Path.make home) bodies))
     fns;
   check_runs env r so_far ?entry ?console ~tests fns;
+  Infer_generators.expand_declarations env;
+  Infer_generators.validate_declarations env r.types;
+  Infer_generators.validate_annotations env fns;
   let schemes, nodes = List.split (List.map (canonical env so_far) fns) in
   (* the type scheme of a function a use names: the module's own, or an
      imported one's, or a member's of a type it can meet *)
@@ -2477,7 +2623,20 @@ let check sink ~extra ~imports ~reachable ?entry ?console ~sees_all ~tests
       | _ -> ())
     fns schemes;
   {
-    schemes = Path.Map.of_list schemes;
+    schemes = Path.Map.of_list
+      (schemes @ Hashtbl.fold (fun _ (g : Ty.generator) acc ->
+          if g.path.home = home && g.kind = Ty.Value_gen then
+            Path.Map.bindings (Iface.generator_type g).members
+            |> List.map (fun (p, (o : Iface.op)) -> p, o.oscheme)
+            |> fun xs -> xs @ acc
+          else acc) env.generator_signatures []);
+    generators = Path.Map.of_list
+      (Hashtbl.fold (fun p g acc -> (p, g) :: acc) env.generator_signatures []);
+    replay_unsafe = Hashtbl.fold (fun (p : Path.t) () acc ->
+        if p.home = home then p :: acc else acc) env.replay_unsafe []
+      |> List.sort compare;
+    types = List.map (fun (td : Iface.type_decl) ->
+        Option.value (Hashtbl.find_opt env.types td.path) ~default:td) r.types;
     values;
     nodes = Path.Map.of_list nodes;
     in_scope = List.sort compare env.in_scope;

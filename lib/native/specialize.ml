@@ -166,6 +166,32 @@ let rec map_vars f (e : C.expr) : C.expr =
   let desc = map_desc f and dict = map_dict f in
   let kind : C.kind =
     match e.kind with
+    | Source_view s -> Source_view { s with value = go s.value }
+    | Pattern_scope p ->
+        Pattern_scope { owner = f p.owner; receiving = f p.receiving;
+          binding = Option.map f p.binding; source = go p.source; pat = map_pat f p.pat;
+          on_match = go p.on_match; on_else = Option.map go p.on_else }
+    | Return (target, value) -> Return (target, go value)
+    | Gen_create g ->
+        Gen_create
+          { g with ev = f g.ev; tys = List.map desc g.tys;
+            places = List.map (fun (p : C.gen_place) ->
+              { C.param = f p.param; root = f p.root; read = go p.read; write = go p.write }) g.places;
+            dicts = List.map dict g.dicts;
+            args = List.map
+              (function C.Value a -> C.Value (go a) | Ref v -> Ref (f v)) g.args }
+    | Yield a -> Yield (go a)
+    | Yield_from y -> Yield_from { y with pull = go y.pull }
+    | Gen_step g -> Gen_step { g with cursor = f g.cursor; ev = f g.ev }
+    | Gen_close a -> Gen_close (go a)
+    | Cleanup_scope { owner; body } ->
+        Cleanup_scope { owner = f owner; body = go body }
+    | Instance_scope { owner; body } ->
+        Instance_scope { owner = f owner; body = go body }
+    | Own o -> Own { o with owner = f o.owner; value = go o.value; desc = desc o.desc }
+    | Owned_assign a -> Owned_assign { a with target = f a.target; value = go a.value }
+    | Owner_alias a ->
+        Owner_alias { target = f a.target; root = f a.root; body = go a.body }
     | (Int _ | Float _ | Bool _ | Str _ | Unit | Global_value _ | Break) as k ->
         k
     | Local v -> Local (f v)
@@ -218,8 +244,8 @@ let rec map_vars f (e : C.expr) : C.expr =
           }
     | Prim (p, args) -> Prim (map_prim f p, List.map go args)
     | Let (v, a, b) -> Let (f v, go a, go b)
-    | Covered { body; result; after } ->
-        Covered { body = go body; result = f result; after = go after }
+    | Covered { body; result; after; return_target } ->
+        Covered { body = go body; result = f result; after = go after; return_target }
     | Assign (v, a) -> Assign (f v, go a)
     | If (c, t, e) -> If (go c, go t, go e)
     | Match (s, arms) ->
@@ -346,7 +372,16 @@ let rec uses_of (e : C.expr) acc =
   let dict d acc = List.rev_append (C.dict_vars d) acc in
   let own =
     match e.kind with
-    | Local v | Assign (v, _) -> v :: acc
+    | Local v | Assign (v, _) | Owned_assign { target = v; _ } -> v :: acc
+    | Gen_create { args; places; ev; tys; dicts; _ } ->
+        let place_vars = List.concat_map (fun (p : C.gen_place) -> [ p.param; p.root ]) places in
+        let refs = List.filter_map (function C.Ref v -> Some v | Value _ -> None) args in
+        List.fold_left (fun acc d -> dict d acc)
+          (List.fold_right desc tys (ev :: refs @ place_vars @ acc)) dicts
+    | Gen_step { cursor; ev; _ } -> cursor :: ev :: acc
+    | Own { owner; desc = d; _ } -> desc d (owner :: acc)
+    | Pattern_scope { receiving; _ } -> receiving :: acc
+    | Owner_alias { target; root; _ } -> target :: root :: acc
     | Call (_, args, ev) ->
         (ev :: List.filter_map (function C.Ref v -> Some v | _ -> None) args)
         @ acc
@@ -380,8 +415,9 @@ let rec uses_of (e : C.expr) acc =
    with `&`. *)
 let rec changes (v : C.var) (e : C.expr) =
   (match e.kind with
-    | Assign (w, _) -> w.id = v.id
-    | Call (_, args, _) ->
+    | Assign (w, _) | Owned_assign { target = w; _ }
+    | Gen_step { cursor = w; _ } -> w.id = v.id
+    | Call (_, args, _) | Gen_create { args; _ } ->
         List.exists (function C.Ref w -> w.id = v.id | Value _ -> false) args
     | _ -> false)
   || List.exists (changes v) (C.children e)
@@ -811,7 +847,7 @@ let own_ev cx (f : C.fn_def) i =
 (* Whether [v] holds data, as a block's captures that are slots do, not
    evidence, a type or a dictionary. *)
 let is_data (v : C.var) =
-  not (List.mem v.ty [ C.evidence_ty; C.type_ty; C.dict_ty ])
+  not (List.mem v.ty [ C.evidence_ty; C.type_ty; C.dict_ty; C.owner_ty ])
 
 (* The variables here a block [x], rewritten, may use when it's called:
    what it captures, and what the blocks bound by `let` it uses may, or
@@ -831,6 +867,54 @@ let rec rw cx fb env (e : C.expr) : C.expr =
   let r = rw cx fb env in
   let arg = function C.Value a -> C.Value (r a) | Ref v -> Ref (cvar env v) in
   match e.kind with
+  | Source_view s -> mk (Source_view { s with value = r s.value })
+  | Pattern_scope p ->
+      let owner = cvar env p.owner and receiving = cvar env p.receiving in
+      let source_env = in_scope env owner in
+      let pat, match_env = pattern env p.pat in
+      mk (Pattern_scope { owner; receiving; binding = Option.map (cvar env) p.binding;
+        source = rw cx fb source_env p.source; pat;
+        on_match = rw cx fb match_env p.on_match;
+        on_else = Option.map (rw cx fb source_env) p.on_else })
+  | Return (_, value) -> mk (Return (fb.path, r value))
+  | Gen_create g ->
+      let type_args =
+        match Hashtbl.find_opt cx.fns g.producer with
+        | Some ({ generator = Some producer; _ } : C.fn_def) ->
+            args_ty env
+              (Fun (producer.params, producer.item, producer.errors, producer.uses))
+              g.type_args
+        | Some producer -> args_ty env producer.scheme.ty g.type_args
+        | None -> g.type_args
+      in
+      mk (Gen_create
+        { g with type_args; ev = cvar env g.ev; args = List.map arg g.args;
+          places = List.map (fun (p : C.gen_place) ->
+            { C.param = cvar env p.param; root = cvar env p.root;
+              read = r p.read; write = r p.write }) g.places;
+          tys = List.map (desc env) g.tys; dicts = List.map (dict env) g.dicts })
+  | Yield a -> mk (Yield (r a))
+  | Yield_from y -> mk (Yield_from { y with pull = r y.pull })
+  | Gen_step g ->
+      let errors, uses =
+        match ty env (Fun ([], Ty.unit, g.errors, g.uses)) with
+        | Fun (_, _, errors, uses) -> (errors, uses)
+        | _ -> bug "a generator step without rows"
+      in
+      mk (Gen_step { cursor = cvar env g.cursor; ev = cvar env g.ev; errors; uses })
+  | Gen_close a -> mk (Gen_close (r a))
+  | Cleanup_scope { owner; body } ->
+      let owner = cvar env owner in
+      mk (Cleanup_scope { owner; body = rw cx fb (in_scope env owner) body })
+  | Instance_scope { owner; body } ->
+      let owner = cvar env owner in
+      mk (Instance_scope { owner; body = rw cx fb (in_scope env owner) body })
+  | Own o ->
+      mk (Own { o with owner = cvar env o.owner; value = r o.value; desc = desc env o.desc })
+  | Owned_assign a ->
+      mk (Owned_assign { a with target = cvar env a.target; value = r a.value })
+  | Owner_alias a ->
+      mk (Owner_alias { target = cvar env a.target; root = cvar env a.root; body = r a.body })
   | Int _ | Float _ | Bool _ | Str _ | Unit | Break -> mk e.kind
   | Local v -> (
       match Ids.find_opt v.id env.blocks with
@@ -1020,11 +1104,12 @@ let rec rw cx fb env (e : C.expr) : C.expr =
         | _ -> env
       in
       mk (Let (v', a, rw cx fb env b))
-  | Covered { body; result; after } ->
+  | Covered { body; result; after; return_target } ->
       let body = r body in
       let result = cvar env result in
       let env = in_scope env result in
-      mk (Covered { body; result; after = rw cx fb env after })
+      let return_target = Option.map (fun _ -> fb.path) return_target in
+      mk (Covered { body; result; after = rw cx fb env after; return_target })
   | Assign (v, a) -> mk (Assign (cvar env v, r a))
   | If (c, t, f) -> mk (If (r c, r t, r f))
   | Match (s, arms) ->
@@ -1163,7 +1248,7 @@ and lambda cx fb env (e : C.expr) : C.expr * (unit -> lifted) option =
         && List.for_all
              (fun (v : C.var) ->
                closed v.ty
-               && not (List.mem v.ty [ C.evidence_ty; C.type_ty; C.dict_ty ]))
+               && not (List.mem v.ty [ C.evidence_ty; C.type_ty; C.dict_ty; C.owner_ty ]))
              caps
         && not (List.exists (fun (v : C.var) -> v.id = outer'.id) used)
       in
@@ -1232,6 +1317,7 @@ and add_lifted cx fb (writer : Path.t) (l : lifted) (ev : C.var) body loc =
       test = false;
       loc;
       origin = Lifted_block l.bname;
+      generator = None;
       known = known_in fb.kn ev body;
     };
   cx.st <- { cx.st with blocks = cx.st.blocks + 1 };
@@ -1659,6 +1745,7 @@ and make_copy cx key (src : C.fn_def) blocks slots shape =
         test = src.test;
         loc = src.loc;
         origin = Copy src.path;
+        generator = src.generator;
         known = known_in fb.kn ev body;
       }
   in
@@ -1771,6 +1858,9 @@ and make_spec cx h (a : Ty.args) dep =
       let simple (x : C.expr) =
         let rec ok (x : C.expr) =
           (match x.kind with
+            | Return _ | Gen_create _ | Yield _ | Yield_from _ | Gen_step _ | Gen_close _
+            | Cleanup_scope _ | Instance_scope _ | Own _ | Owned_assign _ | Owner_alias _
+            | Source_view _ | Pattern_scope _
             | Call _ | Dep_call _ | Lambda _ | Handler _ | With _
             | With_handler _ | Fail _ | Handle _ | Finally _ | Covered _ | While _
             | Assign _ | Assert _ | Assert_equal _ | Global_value _ | Instance _
@@ -1872,6 +1962,7 @@ and make_spec cx h (a : Ty.args) dep =
                               test = false;
                               loc = o.loc;
                               origin = Lifted_op { dep; handler = h; op = name };
+                              generator = None;
                               known = known_in fb.kn ev body;
                             };
                           (name, (path, t))
